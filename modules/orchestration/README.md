@@ -26,7 +26,7 @@ agents. So the module follows the `hnx_runtime` model for a file: the binary is 
 control host, pinned by sha256, copied to the guest, hashed where it landed and refused unless it is
 the pin** (a wrong binary never touches the release in use: it is hashed under its own name first).
 It then runs as the repository's own example unit, hardened (`ProtectSystem=strict`,
-`ProtectProc=invisible`, a seccomp filter, no capabilities, `TasksMax`/`MemoryMax`), under its own
+a seccomp filter, no capabilities, `TasksMax`/`MemoryMax`), under its own
 system user, inside the module role's slice (`hnx_module_slice`). That unit is also the better
 sandbox for the exec runner: the sessions the controller starts inherit the unit's filter, namespaces
 and bounds, which a container's would not add to.
@@ -45,7 +45,7 @@ which is a new pin, never a silent change.
 | `/etc/orchestration/api-tokens.yaml` | each caller's **sha256 digest**, never a token | root:service group, 0640 |
 | `/etc/orchestration/profiles/*.yaml` | the site's profile files (`orchestration_profiles_src`) plus, while the runner is the smoke session, the health check's one agent | root:service group, 0640 |
 | `/etc/orchestration/homes/<backend>/` | the runner home of each backend; with a gateway, a `config.yaml` naming the gateway's URL and the backend's role alias, and the gateway key | root:service group, 0750 / 0640 |
-| `/etc/orchestration/events.env` | the events forwarder's bearer token (only with a forwarder), read by systemd as root | root, 0600 |
+| `/etc/orchestration/events.token` | the events forwarder's bearer token (only with a forwarder); the unit's `LoadCredential=` reads it as root and the controller reads the copy under `/run/credentials/<unit>/` at start | root, 0600 |
 | `/var/lib/hnx-modules/orchestration/` | the data root: `controller.db`, `runs/`, `usage/`, `export/` | service user, 0750 / 0700 |
 | `/etc/systemd/system/hnx-<instance>.service` | the unit | root, 0644 |
 
@@ -121,7 +121,8 @@ docs say).
 * **Events**: with `orchestration_events_forwarder_url` the controller emits
   `homelabnext.agent.job.finished` and `agent.job.failed` through its durable outbox, source
   `svc:<instance>` ([orchestration telemetry](../../docs/orchestration-telemetry.md)). The bearer
-  token comes from `secret:orchestration/events-token` through a root-only environment file and is
+  token comes from `secret:orchestration/events-token` through a root-only file loaded as a systemd
+  credential (never an environment variable, so it is not in the controller's `/proc/<pid>/environ`) and is
   never given to a session. Empty: events are off.
 * **Status**: the status hub polls `GET /admin/queue-summary` with the read token (a status source
   the site adds to its copy of the row).
@@ -142,12 +143,14 @@ host, every credential in its form, the gateway in the registry.
 The store is one SQLite file. `backup` and `export` write `export/{controller.db, jobs.jsonl,
 listing.jsonl}` as the service user: a consistent online copy of the database, **every row as
 jsonl** (the slot's neutral format: one `{"table", "row"}` per line), and a sha256 listing with row
-counts; `backup` also names the data root and the configuration in `backup-manifest.json`. A
+counts; `backup` names only the data root in `backup-manifest.json`: the configuration directory holds the events token (`events.token`) and each runner home's `config.yaml` carries the gateway key, and it is re-rendered from the role's variables and the secret store by `install.yml`, so it is deliberately not in the file backup. A VM-level backup of the guest does carry them: protect that backup store accordingly. A
 database that is not a controller store, or fails `integrity_check`, is an error, never an empty
 export. `restore` (`orchestration_restore_source`) checks the export without writing (owner, modes,
 a closed file set, single-link regular files, sizes, sha256, row counts, integrity, the job count),
-stops the unit, installs only the database (staged, hashed as staged, `-wal` and `-shm` removed,
-renamed into place, 0600), and starts the unit again whatever happened. On start the controller
+stops the unit, installs only the database (staged, hashed as staged and integrity-checked;
+the replaced store, with its `-wal` and `-shm`, is moved aside whole as
+`controller.db.<YYYYMMDD>.before-restore` (a restore refuses when one exists, so it never overwrites
+a kept store; delete it yourself when you no longer need it), then the copy is renamed into place, 0600), and starts the unit again whatever happened. On start the controller
 reconciles: a job that was `running` becomes `failed` (never run a second time), `admitted` becomes
 `queued`. The export holds task text and answers: it is owner-only, like the database.
 
@@ -170,8 +173,16 @@ store needs its backup restored first.
 * **Sessions run as the controller's own user** (the exec runner): they can read `controller.db`,
   other runs' directories and the runner homes (the gateway key). That is the controller's documented
   trust boundary until the agent runtime's unit launcher exists; run only agents whose output you
-  would let read this host's controller state. The unit's filter, `ProtectProc=invisible` and an
-  empty environment allowlist are what holds.
+  would let read this host's controller state. What the unit does and does not give: the
+  controller sets itself not dumpable (`PR_SET_DUMPABLE 0`), so a session cannot read its
+  `/proc/<pid>/environ`, memory or descriptors, and it holds no secret in its environment (the
+  events token is a systemd credential file; caller tokens are only digests); the empty environment
+  allowlist keeps secrets out of a session's own environment. **It does not stop a session from
+  reading files its user can read**: `controller.db`, other runs' directories, the runner homes (the
+  gateway key) and the credential file under `/run/credentials/<unit>/`. `ProtectProc=invisible` is
+  not a boundary between them (it hides other users' processes, and sessions share the controller's
+  uid), so it is no longer claimed. A real boundary needs the sessions under another uid (the agent
+  runtime's unit launcher, not built).
 * **jsonl is export only.** The neutral copy leaves; the way back is the database copy. Importing
   jsonl into a controller is not built.
 * `deadline` is not claimed: the job API takes no per-run deadline (the runner's job timeout is one

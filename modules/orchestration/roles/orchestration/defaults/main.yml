@@ -104,7 +104,6 @@ orchestration_extra_callers: []
 # durable outbox; empty: events are off, and the telemetry page sees nothing.
 orchestration_events_forwarder_url: ""
 orchestration_events_ref: secret:orchestration/events-token
-orchestration_events_env_name: HNX_ORCHESTRATION_EVENTS_TOKEN
 orchestration_events_queue_size: 0
 orchestration_gateway_tag_prefix: "hnx/"
 

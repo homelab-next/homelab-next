@@ -2,8 +2,9 @@
 # Restore the store from an export (vars/main.yml orchestration_restore_script): the source is
 # checked first, without writing (owner, modes, the listing, single-link regular files, sizes,
 # sha256, row counts, integrity); then the controller is stopped, the database copied through the
-# descriptor that was opened, hashed and integrity-checked as staged, the stale -wal and -shm
-# removed and the copy renamed into place as the service user; the controller is started again
+# descriptor that was opened, hashed and integrity-checked as staged, the replaced store (and its
+# -wal and -shm) moved aside as controller.db.<date>.before-restore (refused when one exists), and the
+# copy renamed into place as the service user; the controller is started again
 # whatever happened, when orchestration_start is true. On start it reconciles what the copy says
 # was running (running becomes failed, admitted becomes queued).
 - block:

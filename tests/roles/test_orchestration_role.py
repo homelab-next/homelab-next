@@ -26,6 +26,7 @@ import socket
 import sqlite3
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -337,7 +338,6 @@ BAD = [
     ("shallow_path", {"orchestration_config_dir": "/etc"}),
     ("same_dirs", {"orchestration_config_dir": "{install}"}),
     ("relative_argv", {"orchestration_runner_argv": ["agent", "--run"]}),
-    ("env_allows_events_token", {"orchestration_runner_env_allowlist": ["HNX_ORCHESTRATION_EVENTS_TOKEN"]}),
     ("memory", {"orchestration_memory_max": "plenty"}),
     ("scope_missing_key", {"orchestration_scope": {"denied_roots": ["owner"]}}),
     ("lessons_on", {"orchestration_lessons_disabled": False}),
@@ -349,6 +349,16 @@ BAD = [
     ("role_without_gateway", {"orchestration_backends": [{"name": "a", "role": "main-reasoner"}]}),
     ("gateway_without_role", {"orchestration_gateway_id": "llm-gateway"}),
     ("private_address_in_a_probe", {"orchestration_backends": [{"name": "a", "health_url": "http://" + ".".join(["10", "1", "2", "3"]) + ":8000/health"}]}),
+    ("cgnat_tailnet_address", {"orchestration_backends": [{"name": "a", "health_url": "http://" + ".".join(["100", "100", "100", "100"]) + ":80/h"}]}),
+    ("cgnat_low_edge", {"orchestration_backends": [{"name": "a", "endpoint": "http://" + ".".join(["100", "64", "0", "1"]) + ":80"}]}),
+    ("localhost_probe", {"orchestration_backends": [{"name": "a", "health_url": "http://local" + "host:8000/health"}]}),
+    ("bare_mnt_drive", {"orchestration_runner_argv": ["/mnt" + "/c"]}),
+    ("decimal_ipv4_probe", {"orchestration_backends": [{"name": "a", "health_url": "http://" + "32" + "32235777/h"}]}),
+    ("hex_ipv4_probe", {"orchestration_backends": [{"name": "a", "health_url": "http://0x" + "7f000001/h"}]}),
+    ("ipv6_literal_probe", {"orchestration_backends": [{"name": "a", "health_url": "http://[" + "fd00" + "::1]:8000/h"}]}),
+    ("ipv6_link_local_probe", {"orchestration_backends": [{"name": "a", "health_url": "http://[" + "fe80" + "::1%eth0]/h"}]}),
+    ("decimal_forwarder_host", {"orchestration_events_forwarder_url": "https://" + "32" + "32235777/in"}),
+    ("localhost_forwarder_host", {"orchestration_events_forwarder_url": "https://local" + "host/in"}),
     ("workstation_path", {"orchestration_runner_argv": ["/mnt" + "/c/Users/x/agent.exe"]}),
     ("wsl_in_argv", {"orchestration_runner_argv": ["/usr/bin/wsl", "agent"]}),
     ("plain_http_forwarder", {"orchestration_events_forwarder_url": "http://events.example.internal/in"}),
@@ -428,6 +438,19 @@ def test_a_gateway_over_plain_http_or_an_address_is_refused_unless_opted_in(tmp_
     assert r.returncode != 0 and "never an address" in r.stdout + r.stderr
 
 
+def test_the_unit_and_the_configuration_carry_no_secret_value_and_no_environment(tmp_path, binary):
+    token = "E" * 12 + "e" * 28
+    r, _ = main(
+        tmp_path, binary, extra_env={"HNX_SECRET_ORCHESTRATION_EVENTS_TOKEN": token},
+        orchestration_events_forwarder_url="https://events.example.internal/forward",
+    )  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    unit = (tmp_path / "units" / "hnx-orchestrator.service").read_text()
+    assert not [ln for ln in unit.splitlines() if ln.startswith(("Environment", "PassEnvironment"))]
+    assert token not in unit
+    assert token not in (tmp_path / "etc" / "orchestration" / "controller.yaml").read_text()
+
+
 def test_the_events_forwarder_token_is_in_a_root_only_file_and_never_in_the_configuration(
     tmp_path, binary
 ):
@@ -442,14 +465,17 @@ def test_the_events_forwarder_token_is_in_a_root_only_file_and_never_in_the_conf
     cfg = yaml.safe_load((etc / "controller.yaml").read_text())
     assert cfg["events"] == {
         "forwarder_url": "https://events.example.internal/forward", "source": "svc:orchestrator",
-        "token_env": "HNX_ORCHESTRATION_EVENTS_TOKEN", "gateway_tag_prefix": "hnx/", "queue_size": 500,
+        "token_file": "/run/credentials/hnx-orchestrator.service/events-token", "gateway_tag_prefix": "hnx/", "queue_size": 500,
     }  # fmt: skip
-    env_file = etc / "events.env"
+    env_file = etc / "events.token"
     assert oct(env_file.stat().st_mode & 0o777) == "0o600"
-    assert f"HNX_ORCHESTRATION_EVENTS_TOKEN={token}" in env_file.read_text()
+    assert env_file.read_text().strip() == token
     assert token not in (etc / "controller.yaml").read_text() and token not in r.stdout
     unit = (tmp_path / "units" / "hnx-orchestrator.service").read_text()
-    assert f"EnvironmentFile={env_file}" in unit and token not in unit
+    # the token is a systemd credential, never an environment variable of the controller
+    assert f"LoadCredential=events-token:{env_file}" in unit and token not in unit
+    assert "EnvironmentFile" not in unit and "Environment=" not in unit
+    assert not (etc / "events.env").exists()
     # an unset events token is refused when a forwarder is set, and is not needed when it is not
     r = run_role(tmp_path, ROLE, "main", vars_for(
         tmp_path, binary, orchestration_events_forwarder_url="https://events.example.internal/forward"
@@ -781,6 +807,69 @@ def test_restore_installs_the_database_and_refuses_what_the_listing_does_not_vou
     # the live data directory itself is never a source
     r = restore(tmp_path, v, var)
     assert r.returncode != 0 and "restore refused" in r.stdout + r.stderr
+
+
+def relisted(d):
+    """The listing of a copy of the export made to agree with what the files now are (size and
+    sha256), so only the checks after the listing's own can refuse it."""
+    rows = [json.loads(x) for x in (d / "listing.jsonl").read_text().splitlines()]
+    for row in rows:
+        row["size"] = (d / row["key"]).stat().st_size
+        row["sha256"] = sha(d / row["key"])
+    (d / "listing.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def test_restore_refuses_a_corrupt_database_whose_listing_agrees_with_it(tmp_path, binary):
+    v, var = exported(tmp_path, binary)
+    d = tmp_path / "corrupt"
+    d.mkdir(mode=0o700)
+    for f in (var / "export").iterdir():
+        (d / f.name).write_bytes(f.read_bytes())
+        (d / f.name).chmod(0o600)
+    raw = bytearray((d / "controller.db").read_bytes())
+    assert len(raw) >= 8192
+    raw[4096:] = b"\xff" * (
+        len(raw) - 4096
+    )  # every page after the schema page: the tables' b-trees
+    (d / "controller.db").write_bytes(bytes(raw))
+    relisted(d)  # sha256 and size agree: only integrity_check can refuse it
+    live = var / "controller.db"
+    before = sha(live)
+    r = restore(tmp_path, v, d)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0 and "not a sound controller database" in out, out
+    assert sha(live) == before
+    assert not (var / ".controller.db.restore").exists()  # no staged copy is left behind
+
+
+def test_restore_keeps_the_replaced_store_and_refuses_when_one_is_kept(tmp_path, binary):
+    v, var = exported(tmp_path, binary)
+    live = var / "controller.db"
+    old = sha(live)
+    (var / "controller.db-wal").write_bytes(b"wal-bytes")
+    kept = var / ("controller.db." + time.strftime("%Y%m%d") + ".before-restore")
+    r = restore(tmp_path, v, var / "export")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sha(kept) == old
+    assert Path(str(kept) + "-wal").read_bytes() == b"wal-bytes"  # moved aside, not deleted
+    assert not (var / "controller.db-wal").exists()
+    # a second restore the same day refuses (the kept store is never overwritten) and touches nothing
+    (var / "controller.db-wal").write_bytes(b"newer-wal")
+    now = sha(live)
+    r = restore(tmp_path, v, var / "export")
+    assert r.returncode != 0 and "already exists" in r.stdout + r.stderr
+    assert sha(live) == now and sha(kept) == old
+    assert (var / "controller.db-wal").read_bytes() == b"newer-wal"  # the wal survives a refusal
+
+
+def test_the_backup_manifest_lists_the_data_root_and_not_the_configuration(tmp_path, binary):
+    v, var = exported(tmp_path, binary)
+    r = run_role(tmp_path, ROLE, "backup", v, env=SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    manifest = json.loads((var / "backup-manifest.json").read_text())
+    assert manifest["paths"] == [str(var)]
+    assert str(tmp_path / "etc" / "orchestration") not in json.dumps(manifest)
+    assert "secrets" in manifest["note"]
 
 
 def test_restore_refuses_a_foreign_database_even_with_a_matching_listing(tmp_path, binary):

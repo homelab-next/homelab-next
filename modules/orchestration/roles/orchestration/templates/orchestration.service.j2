@@ -19,7 +19,9 @@ Group={{ orchestration_group }}
 ExecStartPre={{ orchestration_bin }} check --config {{ orchestration_controller_yaml }}
 ExecStart={{ orchestration_bin }} serve --config {{ orchestration_controller_yaml }}
 {% if orchestration_events_forwarder_url != '' %}
-EnvironmentFile={{ orchestration_events_env_file }}
+# the token is a systemd credential (read as root, placed under /run/credentials/<unit>/), never an
+# environment variable: the controller reads the file at start and then is not dumpable
+LoadCredential=events-token:{{ orchestration_events_token_file }}
 {% endif %}
 # SIGHUP reloads the tokens file; a rotation needs no restart (which would end every running job)
 ExecReload=/bin/kill -HUP $MAINPID

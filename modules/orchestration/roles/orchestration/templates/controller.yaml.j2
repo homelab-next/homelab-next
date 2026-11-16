@@ -92,7 +92,7 @@ api_auth:
 events:
   forwarder_url: {{ orchestration_events_forwarder_url | to_json }}
   source: {{ ('svc:' ~ orchestration_logical_id) | to_json }}
-  token_env: {{ orchestration_events_env_name | to_json }}
+  token_file: {{ orchestration_events_credential_path | to_json }}
   gateway_tag_prefix: {{ orchestration_gateway_tag_prefix | to_json }}
 {% if orchestration_events_queue_size | int > 0 %}
   queue_size: {{ orchestration_events_queue_size | int }}

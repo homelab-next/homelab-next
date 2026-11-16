@@ -27,6 +27,7 @@
     that:
       - orchestration_gateway_url is match('^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?\Z')
       - (orchestration_gateway_url | urlsplit('hostname')) is not match(orchestration_ipv4_pattern)
+      - (orchestration_gateway_url | urlsplit('hostname')) is not match(orchestration_numeric_host_pattern)
       - orchestration_gateway_url is match('^https://') or orchestration_allow_plain_http | bool
     fail_msg: >-
       orchestration: the gateway {{ orchestration_gateway_id }} resolves to {{ orchestration_gateway_url }}:
@@ -54,13 +55,10 @@
     mode: "0640"
   register: orchestration_config_file
 
-- name: Write the events token's environment file
+- name: Write the events token's credential file
   ansible.builtin.copy:
-    dest: "{{ orchestration_events_env_file }}"
-    content: |
-      # Managed by homelabnext (role orchestration): the events forwarder's bearer token (systemd reads it as root).
-      {% set value = lookup('hnx_secret', orchestration_events_ref) %}
-      {{ orchestration_events_env_name }}={{ value }}
+    dest: "{{ orchestration_events_token_file }}"
+    content: "{{ lookup('hnx_secret', orchestration_events_ref) }}\n"
     owner: "{{ orchestration_owner }}"
     group: "{{ orchestration_owner_group }}"
     mode: "0600"

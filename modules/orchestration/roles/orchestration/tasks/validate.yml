@@ -42,10 +42,6 @@
       - orchestration_runner_kill_grace_seconds | int >= 0
       - orchestration_runner_env_allowlist is sequence and orchestration_runner_env_allowlist is not string
       - orchestration_runner_env_allowlist | reject('string') | list | length == 0
-      # a session may not inherit the events token, whatever its name is matched by
-      - >-
-        orchestration_runner_env_allowlist
-        | select('match', '^' ~ (orchestration_events_env_name | regex_escape) ~ '\Z') | list | length == 0
       - orchestration_tasks_max | int >= 16
       - orchestration_memory_max is match('^[1-9][0-9]{0,5}[KMGT]?\Z')
       - orchestration_scope is mapping
@@ -57,7 +53,6 @@
       - orchestration_health_timeout | int >= 1
       - orchestration_health_job_wait_seconds | int >= 1
       - orchestration_gateway_tag_prefix is match('^[A-Za-z0-9._/-]{0,32}\Z')
-      - orchestration_events_env_name is match(orchestration_env_name_pattern)
       - orchestration_events_queue_size | int >= 0
       - orchestration_gateway_id == '' or orchestration_gateway_id is match(orchestration_slug_pattern)
       - orchestration_gateway_path is match('^(/[A-Za-z0-9._-]+)*\Z')
@@ -147,7 +142,8 @@
                 and orchestration_events_forwarder_url is match('^http://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/%:@+-]*)?\Z')))
       - >-
         orchestration_events_forwarder_url == ''
-        or (orchestration_events_forwarder_url | urlsplit('hostname')) is not match(orchestration_ipv4_pattern)
+        or ((orchestration_events_forwarder_url | urlsplit('hostname')) is not match(orchestration_ipv4_pattern)
+            and (orchestration_events_forwarder_url | urlsplit('hostname')) is not match(orchestration_numeric_host_pattern))
     fail_msg: >-
       orchestration: orchestration_events_forwarder_url is empty (events off) or an https URL with a
       host name (never an address); http only with orchestration_allow_plain_http: true, which sends

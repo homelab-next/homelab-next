@@ -27,7 +27,7 @@
         state: absent
       loop:
         - "{{ orchestration_config_dir | default('/etc/orchestration') }}/api-tokens.yaml"
-        - "{{ orchestration_config_dir | default('/etc/orchestration') }}/events.env"
+        - "{{ orchestration_config_dir | default('/etc/orchestration') }}/events.token"
     - name: Reload systemd
       ansible.builtin.command:
         argv: ["{{ orchestration_systemctl_cli | default('systemctl') }}", daemon-reload]

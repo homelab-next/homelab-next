@@ -193,10 +193,6 @@ argument_specs:
         type: str
         description: 'secret: reference of the forwarder''s bearer token (used when the forwarder is set).'
         default: secret:orchestration/events-token
-      orchestration_events_env_name:
-        type: str
-        description: The environment variable the token reaches the controller in.
-        default: HNX_ORCHESTRATION_EVENTS_TOKEN
       orchestration_events_queue_size:
         type: int
         description: 'The durable outbox''s bound in undelivered events (0: the sender''s default).'

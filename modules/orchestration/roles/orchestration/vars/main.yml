@@ -23,7 +23,11 @@ orchestration_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){3,}\Z'
 orchestration_env_name_pattern: '^[A-Z][A-Z0-9_]{0,63}\Z'
 # an address or a workstation path in a value the role renders: a model or an engine is reached by
 # name through the gateway, and nothing here may depend on an operator's machine
-orchestration_forbidden_value_pattern: '(?i)(^|[^0-9.])(10|127|169\.254|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]{1,3}\.[0-9]{1,3}($|[^0-9])|\bwsl\b|/mnt/[a-z]/'
+# (private, loopback, link-local and the CGNAT/tailnet block of IPv4 literals; a decimal or 0x IPv4 host
+# in a URL; localhost; IPv6 literals in brackets, link-local fe80:, ::1; WSL; /mnt/<drive> with or without a slash)
+orchestration_forbidden_value_pattern: '(?i)(^|[^0-9.])(10|127|169\.254|192\.168|172\.(1[6-9]|2[0-9]|3[01])|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7]))\.[0-9]{1,3}\.[0-9]{1,3}($|[^0-9])|//([0-9]{4,10}|0x[0-9a-f]+)([:/"?#]|$)|\blocalhost\b|\[[0-9a-f:.%]*:[0-9a-f:.%]*\]|\bfe80:|(^|[^0-9a-z:])::1($|[^0-9a-z:])|\bwsl\b|/mnt/[a-z]($|[^A-Za-z0-9_])'
+# a URL host that is a number (decimal or 0x IPv4) or localhost, which the dotted pattern above does not see
+orchestration_numeric_host_pattern: '(?i)^((0x[0-9a-f]+|[0-9]+)|localhost|.*\.localhost)\Z'
 orchestration_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
 orchestration_release: "{{ orchestration_binary_sha256[:16] }}"
 orchestration_release_dir: "{{ orchestration_install_dir }}/releases/{{ orchestration_release }}"
@@ -32,7 +36,9 @@ orchestration_controller_yaml: "{{ orchestration_config_dir }}/controller.yaml"
 orchestration_callers_yaml: "{{ orchestration_config_dir }}/api-tokens.yaml"
 orchestration_profiles_dir: "{{ orchestration_config_dir }}/profiles"
 orchestration_homes_dir: "{{ orchestration_config_dir }}/homes"
-orchestration_events_env_file: "{{ orchestration_config_dir }}/events.env"
+orchestration_events_token_file: "{{ orchestration_config_dir }}/events.token"
+# where systemd puts the credential for the unit (LoadCredential=events-token:...): the controller reads it from here, so the token is never in its environment
+orchestration_events_credential_path: "/run/credentials/{{ orchestration_unit }}/events-token"
 orchestration_db_path: "{{ orchestration_data_root }}/controller.db"
 orchestration_export_dir: "{{ orchestration_data_root }}/export"
 orchestration_runtime_dir: "/run/hnx-{{ orchestration_logical_id }}"
@@ -127,12 +133,19 @@ orchestration_restore_script: |
       db, uid, gid = sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
   names = {"controller.db", "jobs.jsonl"}
   def fail(why):
+      if db is not None and os.path.lexists(os.path.join(db, ".controller.db.restore")):
+          os.unlink(os.path.join(db, ".controller.db.restore"))  # never leave a staged copy behind
       sys.exit("restore refused: " + why)
   def trusted(st, what):
       if st.st_uid not in (0, uid) or st.st_mode & 0o022:
           fail(what + " must belong to root or the service user and be writable by no one else")
   if db is not None and os.path.realpath(src) == os.path.realpath(db):
       fail("the source is the live data directory itself")
+  if db is not None:
+      import time
+      kept = os.path.join(db, "controller.db." + time.strftime("%Y%m%d") + ".before-restore")
+      if any(os.path.lexists(kept + x) for x in ("", "-wal", "-shm")):
+          fail(os.path.basename(kept) + " already exists: move it away first, it is the store a restore kept")
   nf = os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
   try:
       dfd = os.open(src, os.O_RDONLY | os.O_DIRECTORY | nf)
@@ -177,14 +190,18 @@ orchestration_restore_script: |
   def sound(path):
       c = sqlite3.connect(pathlib.Path(path).as_uri() + "?mode=ro&immutable=1", uri=True)
       try:
-          if c.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-              return None
-          have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-          if "jobs" not in have:
-              return None
-          return c.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+          return _sound(c)
+      except sqlite3.DatabaseError:
+          return None  # a page the engine cannot parse is a failed integrity check, not a crash
       finally:
           c.close()
+  def _sound(c):
+      if c.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+          return None
+      have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+      if "jobs" not in have:
+          return None
+      return c.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
   for name in sorted(names):
       r = listed[name]
       fd, st = opened(name)
@@ -228,8 +245,18 @@ orchestration_restore_script: |
           fail(name + ": holds " + str(jobs) + " jobs, the listing says " + str((r.get("tables") or {}).get("jobs")))
       os.chown(staged, uid, gid)
   if mode == "apply":
-      for suffix in ("-wal", "-shm"):
-          if os.path.lexists(os.path.join(db, "controller.db" + suffix)):
-              os.unlink(os.path.join(db, "controller.db" + suffix))
-      os.replace(os.path.join(db, ".controller.db.restore"), os.path.join(db, "controller.db"))
+      live = os.path.join(db, "controller.db")
+      moved = []
+      try:
+          # the replaced store is kept whole (database, -wal, -shm moved aside under one name, the
+          # trio SQLite opens together) and only then is the restored copy renamed into place
+          for suffix in ("", "-wal", "-shm"):
+              if os.path.lexists(live + suffix):
+                  os.rename(live + suffix, kept + suffix)
+                  moved.append(suffix)
+          os.replace(os.path.join(db, ".controller.db.restore"), live)
+      except BaseException:
+          for suffix in moved:
+              os.rename(kept + suffix, live + suffix)
+          raise
   print(json.dumps(sorted(listed)))
