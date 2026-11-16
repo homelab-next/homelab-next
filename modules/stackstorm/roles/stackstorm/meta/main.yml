@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The automation provider: StackStorm 3.9 as compose_app containers (st2 services, MongoDB, RabbitMQ, Redis) running the rendered workflow pack, with the event bridge and the broker socket forward as systemd services."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

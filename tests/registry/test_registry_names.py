@@ -45,5 +45,11 @@ def test_the_lab_topology_soar_is_an_automation_row():
 def test_the_vocabulary_names_the_automation_slot_s_product_and_no_orchestration_product():
     doc = yaml.safe_load((ROOT / "tools/product_names.yml").read_text(encoding="utf-8"))
     whys = [str(e.get("why", "")) for e in doc["products"] if isinstance(e, dict)]
-    assert any(w.startswith("the automation slot's reference product") for w in whys)
+    # the product is named here until a provider module ships, and by its manifest after that
+    provided = any(
+        "automation"
+        in (yaml.safe_load(m.read_text(encoding="utf-8")).get("provides") or {}).get("slots", {})
+        for m in (ROOT / "modules").glob("*/module.yml")
+    )
+    assert provided or any(w.startswith("the automation slot's reference product") for w in whys)
     assert not [w for w in whys if "orchestration" in w]

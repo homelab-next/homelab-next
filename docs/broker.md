@@ -1414,7 +1414,7 @@ hnx broker mcp --socket /run/user/1000/hnx-broker.sock
 
 The peer the broker sees is the forwarding `sshd` process, which runs as the logged-in user, so the
 mapping is the same as for a local agent. Restrict that user's SSH key to the forward
-(`restrict,port-forwarding,command="/bin/false"` in `authorized_keys`).
+(`restrict,port-forwarding,permitopen="<broker socket>",command="/bin/false"` in `authorized_keys`: without `permitopen` the key can forward to any socket its account can open).
 
 ## Walkthrough
 
