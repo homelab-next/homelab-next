@@ -1272,7 +1272,7 @@
   },
   "tests/compute/test_compute.py": {
    "prometheus": 1,
-   "proxmox": 6
+   "proxmox": 3
   },
   "tests/compute/test_firewall.py": {
    "proxmox": 8

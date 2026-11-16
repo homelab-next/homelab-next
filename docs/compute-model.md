@@ -10,7 +10,7 @@ render everything else from those files: infrastructure-as-code, hypervisor comm
 seeds, an Ansible inventory, registry hosts and backup jobs. Nothing here needs hardware: the
 whole chain is tested with golden files from a synthetic fleet.
 
-* Contract: `schemas/platform/guest.schema.json` (version 1.6, additive over 1.0 to 1.5; frozen copies in `schemas/_frozen/`).
+* Contract: `schemas/platform/guest.schema.json` (version 1.7, additive over 1.0 to 1.6; frozen copies in `schemas/_frozen/`).
 * Baseline set: `schemas/platform/baseline_set.schema.json` (version 1.2; `_baselines.yml` beside the guest files; [Baselines and defense layers](#baselines-and-defense-layers), ADR-0016).
 * Code: `homelabnext/compute/`. CLI: `hnx guests`.
 * Example fleet and goldens: `tests/compute/fleet/`, `tests/compute/golden/`.
@@ -78,6 +78,7 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | ids, `(node, vmid)` and ips are unique | |
 | each `network.extra_addresses` entry (guest 1.6) is canonical, with no IPv4 written inside IPv6; not loopback, link-local, multicast, reserved or a cloud metadata address; in IPv4, inside the guest's own zone subnet (or a zone-less overlay range, a tailnet's) and never inside another zone's; in IPv6, never an anycast address of its /64, and inside the guest's own zone's `subnet6` (site 1.4) and never inside another zone's, or, where the guest's zone has no `subnet6`, a unique-local or documentation address outside every zone's; not a zone's gateway, network or broadcast address, a gateway a guest names, or inside a DHCP pool; not an address the site's static DNS names for something else; and not the guest's own `ip` or an address (`ip` or extra) of any other guest, named once; a zone lookup that cannot list its zones (`ZoneLookup.all`) is itself a problem then | the log pipeline labels each one like `ip`, so it must name this guest and no other ([log pipeline](log-pipeline.md)); the network sensor counts each in `HOME_NET` and the topology map resolves each to its guest; nothing is configured from them |
 | `gpu` requires `kind: vm` | passthrough is a VM feature |
+| `gpu.count` (1 to 16, default 1) is an integer in range; with `gpu.count` stated, `gpu.tensor_parallel` is at most `count` | a guest cannot shard a model across more devices than it passes through; a guest that states no count keeps the one-device render it always had |
 | `provisioning: manual` requires `requires_root_steps` | the hand work is written down |
 | `capability` is a capability the platform names, or, with a registry, one a row on the guest's own host serves (a site's own capability names never enter the public class table; `render`, `plan` and `baselines` read the same registry as `validate`, so they accept the same guests; the same holds for its `cap_<capability>` group): one the capability-class table `homelabnext/agent/tool_classes.yml` classes (it classes every capability the registry, the conformance contracts, `capabilities.yml` and the module slots name), or a core or extended conformance suite; so an edge, DNS, backup or hypervisor guest says `cap:edge`, `cap:dns`, `cap:backup` or `cap:hypervisor`, not the nearest of the eighteen core capabilities in `docs/interfaces.md` | the registry's host `role`, the inventory's `hnx_capability` and the runtime labels are read from it, so a borrowed name is wrong data downstream; one vocabulary (the one the agent and MCP rules use), not a third list |
 | `capability_groups` are known inventory groups (`docs/role-interface.md` section 5, or `cap_<capability>`) | playbooks target groups |
@@ -492,6 +493,21 @@ rather than booting a guest without its sudo rule or packages. The `cloudinit` u
 `qemu-guest-agent` when it installs it (Debian's unit is bound to a device that appeared before the
 package was installed, so nothing else starts it until a reboot, and the provider's `agent` block
 waits for an agent that never answers).
+
+### GPU passthrough (`terraform-proxmox`)
+
+A VM's `gpu` renders `bios = "ovmf"`, `machine = "q35"` and one `hostpci` block per device:
+`gpu.count` (1 to 16, default 1; guest schema 1.7) blocks named `hostpci0` to `hostpci<count-1>`,
+each `mapping = <resource_mapping>`, `pcie = true`. A guest that states no count renders exactly
+the one block it always did.
+
+All of them name the **one** PVE resource mapping. A mapping may list several devices on a node;
+at start the hypervisor gives each `hostpciN` that names it a free device of the mapping
+(`PVE::QemuServer::PCI::choose_hostpci_devices`, which skips a device an earlier `hostpciN` took or
+another VM reserved, and fails the start with `could not find a free device for 'hostpciN'` when
+none is left). So the mapping must list at least `count` devices on the guest's node: growing a
+guest from 2 to 4 cards is "add two devices to the mapping, raise `count`". `count` is also an
+upper bound for `gpu.tensor_parallel`, checked when `count` is stated.
 
 ### libvirt
 
