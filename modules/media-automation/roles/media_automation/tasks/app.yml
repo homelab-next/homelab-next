@@ -1,0 +1,203 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). Every
+# container carries the module's hardening (cap_drop ALL, no-new-privileges, pinned by digest).
+# The VPN client is the only container with a network of its own beside the apps: the torrent and
+# usenet clients have network_mode service:gluetun, so they have no route but the tunnel and
+# publish nothing themselves; their two web interfaces are published on the VPN container.
+# The library is mounted writable at the same path in every app that reads or writes it (one
+# filesystem: an import is a hardlink); the extra bind sources are listed with their reasons.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    media_automation_app:
+      compose_app_name: media-automation
+      compose_app_dir: "{{ media_automation_dir }}"
+      compose_app_data_dir: "{{ media_automation_data_root }}"
+      compose_app_export_dir: "{{ media_automation_data_root }}/export"
+      compose_app_owner: "{{ media_automation_owner }}"
+      compose_app_group: "{{ media_automation_group }}"
+      compose_app_start: "{{ media_automation_start }}"
+      compose_app_validate_with_docker: "{{ media_automation_validate_with_docker }}"
+      compose_app_bind_extra:
+        - {path: "{{ media_automation_library_path }}", reason: "the media library the apps import into and the downloaders write under, mounted writable"}
+        - {path: "{{ media_automation_cache_dir }}", reason: "transcode scratch, rebuilt by the transcode node and not backed up"}
+      compose_app_spec:
+        services:
+          gluetun:
+            image: "{{ media_automation_gluetun_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ media_automation_gluetun_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ media_automation_gluetun_image.split('@')[1] }}"
+            cap_add: [NET_ADMIN]
+            devices: [/dev/net/tun]
+            environment: >-
+              {{ {'TZ': media_automation_timezone, 'VPN_SERVICE_PROVIDER': media_automation_vpn_provider,
+                    'VPN_TYPE': 'wireguard',
+                    'FIREWALL_OUTBOUND_SUBNETS': media_automation_vpn_outbound_subnets | join(',')}
+                  | combine({'FIREWALL_VPN_INPUT_PORTS': media_automation_vpn_input_ports | join(',')} if media_automation_vpn_input_ports | length > 0 else {})
+                  | combine({'SERVER_HOSTNAMES': media_automation_vpn_server_hostnames} if media_automation_vpn_server_hostnames | length > 0 else {}) }}
+            ports:
+              - "{{ media_automation_bind }}:{{ media_automation_qbittorrent_port | int }}:8080"
+              - "{{ media_automation_bind }}:{{ media_automation_nzbget_port | int }}:6789"
+            volumes:
+              - "{{ media_automation_data_root }}/config/gluetun:/gluetun"
+            healthcheck:
+              test: [CMD, /gluetun-entrypoint, healthcheck]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 60s
+          qbittorrent:
+            image: "{{ media_automation_qbittorrent_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ media_automation_qbittorrent_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ media_automation_qbittorrent_image.split('@')[1] }}"
+            network_mode: service:gluetun
+            depends_on: [gluetun]
+            user: "{{ media_automation_uid | int }}:{{ media_automation_gid | int }}"
+            environment: {TZ: "{{ media_automation_timezone }}", WEBUI_PORT: "8080"}
+            volumes:
+              - "{{ media_automation_data_root }}/config/qbittorrent:/config"
+              - "{{ media_automation_library_path }}:{{ media_automation_library_path }}"
+            healthcheck:
+              test: [CMD, curl, -sS, -o, /dev/null, --max-time, "5", "http://localhost:{{ media_automation_container_ports.qbittorrent }}/"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 60s
+          nzbget:
+            image: "{{ media_automation_nzbget_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ media_automation_nzbget_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ media_automation_nzbget_image.split('@')[1] }}"
+            network_mode: service:gluetun
+            depends_on: [gluetun]
+            user: "{{ media_automation_uid | int }}:{{ media_automation_gid | int }}"
+            environment: {TZ: "{{ media_automation_timezone }}"}
+            volumes:
+              - "{{ media_automation_data_root }}/config/nzbget:/config"
+              - "{{ media_automation_library_path }}:{{ media_automation_library_path }}"
+            healthcheck:
+              test: [CMD, curl, -sS, -o, /dev/null, --max-time, "5", "http://localhost:{{ media_automation_container_ports.nzbget }}/"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 60s
+          prowlarr:
+            image: "{{ media_automation_prowlarr_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ media_automation_prowlarr_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ media_automation_prowlarr_image.split('@')[1] }}"
+            user: "{{ media_automation_uid | int }}:{{ media_automation_gid | int }}"
+            environment: {TZ: "{{ media_automation_timezone }}"}
+            ports: ["{{ media_automation_bind }}:{{ media_automation_prowlarr_port | int }}:9696"]
+            volumes:
+              - "{{ media_automation_data_root }}/config/prowlarr:/config"
+            healthcheck:
+              test: [CMD, curl, -fsS, "http://localhost:{{ media_automation_container_ports.prowlarr }}/ping"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 60s
+          sonarr:
+            image: "{{ media_automation_sonarr_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ media_automation_sonarr_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ media_automation_sonarr_image.split('@')[1] }}"
+            user: "{{ media_automation_uid | int }}:{{ media_automation_gid | int }}"
+            environment: {TZ: "{{ media_automation_timezone }}"}
+            ports: ["{{ media_automation_bind }}:{{ media_automation_sonarr_port | int }}:8989"]
+            volumes:
+              - "{{ media_automation_data_root }}/config/sonarr:/config"
+              - "{{ media_automation_library_path }}:{{ media_automation_library_path }}"
+            healthcheck:
+              test: [CMD, curl, -fsS, "http://localhost:{{ media_automation_container_ports.sonarr }}/ping"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 60s
+          radarr:
+            image: "{{ media_automation_radarr_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ media_automation_radarr_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ media_automation_radarr_image.split('@')[1] }}"
+            user: "{{ media_automation_uid | int }}:{{ media_automation_gid | int }}"
+            environment: {TZ: "{{ media_automation_timezone }}"}
+            ports: ["{{ media_automation_bind }}:{{ media_automation_radarr_port | int }}:7878"]
+            volumes:
+              - "{{ media_automation_data_root }}/config/radarr:/config"
+              - "{{ media_automation_library_path }}:{{ media_automation_library_path }}"
+            healthcheck:
+              test: [CMD, curl, -fsS, "http://localhost:{{ media_automation_container_ports.radarr }}/ping"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 60s
+          lidarr:
+            image: "{{ media_automation_lidarr_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ media_automation_lidarr_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ media_automation_lidarr_image.split('@')[1] }}"
+            user: "{{ media_automation_uid | int }}:{{ media_automation_gid | int }}"
+            environment: {TZ: "{{ media_automation_timezone }}"}
+            ports: ["{{ media_automation_bind }}:{{ media_automation_lidarr_port | int }}:8686"]
+            volumes:
+              - "{{ media_automation_data_root }}/config/lidarr:/config"
+              - "{{ media_automation_library_path }}:{{ media_automation_library_path }}"
+            healthcheck:
+              test: [CMD, curl, -fsS, "http://localhost:{{ media_automation_container_ports.lidarr }}/ping"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 60s
+          flaresolverr:
+            image: "{{ media_automation_flaresolverr_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ media_automation_flaresolverr_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ media_automation_flaresolverr_image.split('@')[1] }}"
+            environment: {TZ: "{{ media_automation_timezone }}", LOG_LEVEL: info}
+            healthcheck:
+              test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://localhost:{{ media_automation_container_ports.flaresolverr }}/health', timeout=5)"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 30s
+          seerr:
+            image: "{{ media_automation_seerr_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ media_automation_seerr_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ media_automation_seerr_image.split('@')[1] }}"
+            init: true
+            user: "{{ media_automation_seerr_uid | int }}:{{ media_automation_seerr_gid | int }}"
+            environment: {TZ: "{{ media_automation_timezone }}"}
+            ports: ["{{ media_automation_bind }}:{{ media_automation_seerr_port | int }}:5055"]
+            volumes:
+              - "{{ media_automation_data_root }}/config/seerr:/app/config"
+            healthcheck:
+              test: [CMD-SHELL, "wget -qO- http://localhost:{{ media_automation_container_ports.seerr }}/api/v1/status || exit 1"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 30s
+          tdarr:
+            image: "{{ media_automation_tdarr_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ media_automation_tdarr_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ media_automation_tdarr_image.split('@')[1] }}"
+            # the image starts as root and drops to PUID/PGID itself (it has no user setting); the
+            # capabilities that takes are the only ones added, nothing else is
+            cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+            environment:
+              TZ: "{{ media_automation_timezone }}"
+              PUID: "{{ media_automation_uid | int }}"
+              PGID: "{{ media_automation_gid | int }}"
+              serverIP: 0.0.0.0
+              serverPort: "8266"
+              webUIPort: "8265"
+              internalNode: "true"
+              inContainer: "true"
+              nodeName: media-automation
+            ports:
+              - "{{ media_automation_bind }}:{{ media_automation_tdarr_port | int }}:8265"
+              - "{{ media_automation_bind }}:{{ media_automation_tdarr_server_port | int }}:8266"
+            volumes:
+              - "{{ media_automation_data_root }}/config/tdarr/configs:/app/configs"
+              - "{{ media_automation_data_root }}/config/tdarr/logs:/app/logs"
+              - "{{ media_automation_cache_dir }}:/temp"
+              - "{{ media_automation_library_path }}:{{ media_automation_library_path }}"
+            healthcheck:
+              test: [CMD, curl, -sS, -o, /dev/null, --max-time, "5", "http://localhost:{{ media_automation_container_ports.tdarr }}/"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 60s
+  tags: [health, backup, restore, export, upgrade]

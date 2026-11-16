@@ -1,0 +1,12 @@
+# Managed by Ansible (role media_automation). Do not edit.
+[Unit]
+Description=media-automation helper timer: {{ h.what }}
+
+[Timer]
+OnCalendar={{ h.calendar }}
+RandomizedDelaySec=300
+Persistent=true
+Unit=hnx-media-automation-{{ h.id }}.service
+
+[Install]
+WantedBy=timers.target

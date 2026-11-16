@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: every container runs and is healthy; every web interface answers; the torrent and
+# usenet clients are inside the VPN container's network and publish nothing themselves (the
+# kill-switch: with the tunnel down they have no route at all, which is the point); the library is
+# mounted and a hardlink can be made between the downloads directory and the library tree as the
+# apps' user (the one cheap live test that separates "imports fail" from "the mount is wrong",
+# LL-140); and the helper timers are active. It writes one probe file pair in downloads/ and
+# removes it; it signs in as no one.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: The library is still mounted
+      ansible.builtin.include_tasks: library.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: media-automation
+        compose_app_dir: "{{ media_automation_app.compose_app_dir }}"
+        compose_app_spec: "{{ media_automation_app.compose_app_spec }}"
+    - name: Every web interface answers
+      ansible.builtin.uri:
+        url: "http://{{ media_automation_bind }}:{{ item.port | int }}{{ item.path }}"
+        status_code: "{{ item.codes }}"
+        timeout: "{{ media_automation_health_timeout | int }}"
+      loop:
+        - {name: sonarr, port: "{{ media_automation_sonarr_port }}", path: /ping, codes: [200]}
+        - {name: radarr, port: "{{ media_automation_radarr_port }}", path: /ping, codes: [200]}
+        - {name: lidarr, port: "{{ media_automation_lidarr_port }}", path: /ping, codes: [200]}
+        - {name: prowlarr, port: "{{ media_automation_prowlarr_port }}", path: /ping, codes: [200]}
+        - {name: qbittorrent, port: "{{ media_automation_qbittorrent_port }}", path: /, codes: [200, 401, 403]}
+        - {name: nzbget, port: "{{ media_automation_nzbget_port }}", path: /, codes: [200, 401]}
+        - {name: seerr, port: "{{ media_automation_seerr_port }}", path: /api/v1/status, codes: [200]}
+        - {name: tdarr, port: "{{ media_automation_tdarr_port }}", path: /, codes: [200]}
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+    - name: Find the download clients' containers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ media_automation_dir }}/docker-compose.yml", ps, -q, "{{ item }}"]
+      loop: [qbittorrent, nzbget]
+      register: media_automation_client_ids
+      changed_when: false
+      check_mode: false
+    - name: Read how each download client is networked
+      ansible.builtin.command:
+        argv: [docker, inspect, --format, "{% raw %}{{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}{% endraw %}", "{{ item.stdout | trim }}"]
+      loop: "{{ media_automation_client_ids.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      register: media_automation_client_net
+      changed_when: false
+      check_mode: false
+    - name: The download clients share the VPN container's network and publish nothing
+      ansible.builtin.assert:
+        that:
+          - item.stdout | trim | regex_search('^container:\S+') is not none
+          - (item.stdout | trim).split(' ', 1)[1] in ['{}', 'null']
+        fail_msg: >-
+          media-automation: {{ item.item.item }} is not fail-closed behind the VPN client: its network mode
+          and published ports read "{{ item.stdout | trim | truncate(120) }}" (it must be
+          container:<the VPN client> with no ports of its own); recreate the stack from the rendered project
+      loop: "{{ media_automation_client_net.results }}"
+      loop_control:
+        label: "{{ item.item.item }}"
+    - name: A hardlink can be made inside the downloads directory as the apps' user
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ media_automation_dir }}/docker-compose.yml"
+          - exec
+          - -T
+          - sonarr
+          - sh
+          - -c
+          - 'set -e; d="$1"; touch "$d/.hnx-probe-a"; ln -f "$d/.hnx-probe-a" "$d/.hnx-probe-b"; rm -f "$d/.hnx-probe-a" "$d/.hnx-probe-b"'
+          - sh
+          - "{{ media_automation_downloads_dir }}"
+      changed_when: false
+    - name: The helper timers are active
+      ansible.builtin.command:
+        argv: ["{{ media_automation_systemctl_cli }}", is-active, "{{ item }}.timer"]
+      loop: >-
+        {{ (['hnx-media-automation-cleanup-downloads'] if media_automation_helper_cleanup_enabled | bool else [])
+           + (['hnx-media-automation-stalled-repair'] if media_automation_helper_stalled_enabled | bool else [])
+           + (['hnx-media-automation-rename-cleanup'] if media_automation_helper_rename_enabled | bool else []) }}
+      changed_when: false
+      check_mode: false
+      when: media_automation_helpers_enabled | bool
+  tags: [health]

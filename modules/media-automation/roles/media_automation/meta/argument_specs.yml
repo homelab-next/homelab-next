@@ -1,0 +1,1611 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the download-automation stack (VPN client, torrent and usenet clients, indexers, library managers, requests, transcode) as one compose_app project; the download clients share
+      the VPN container's network.
+    options:
+      media_automation_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds).
+        required: true
+      media_automation_gluetun_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the gluetun image.
+        default: docker.io/qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+      media_automation_qbittorrent_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the qbittorrent image.
+        default: ghcr.io/linuxserver/qbittorrent:5.3.0_v2.1.2-ls486@sha256:05c1454f9a32967affc1f34f67f8cc0cc57dd805dca45489fe797095a6286556
+      media_automation_nzbget_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the nzbget image.
+        default: ghcr.io/linuxserver/nzbget:v26.3-ls270@sha256:adea51082575ce3e09d3b636b320c039109df7e21afd1234ad7c97b9df7c79c8
+      media_automation_prowlarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the prowlarr image.
+        default: ghcr.io/linuxserver/prowlarr:2.7.0.5723-ls166@sha256:04be30163fbaf48d6aeee7b5893c9f6614ffbad6d853971df0d6dcdf01c7f104
+      media_automation_flaresolverr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the flaresolverr image.
+        default: ghcr.io/flaresolverr/flaresolverr:v3.5.2@sha256:c80ae007ce2ccdcd217a12426e4f039ef763ff90738c808d38810c3e59323767
+      media_automation_sonarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the sonarr image.
+        default: ghcr.io/linuxserver/sonarr:4.0.20.3014-ls329@sha256:44b06045a98bc1f237b9ffefc4b28dab64cb29305e4a2a94875ae93b5224e4cc
+      media_automation_radarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the radarr image.
+        default: ghcr.io/linuxserver/radarr:6.4.4.10685-ls325@sha256:ade5937813c6ae415b29db729386e53fea3ecf067a019849bafbe2d2a6ec02ba
+      media_automation_lidarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the lidarr image.
+        default: ghcr.io/linuxserver/lidarr:3.1.6.5079-ls46@sha256:9fddcf5c613361edfce390d4e6b7c364282e71e90a40ce7793077fed788f6e63
+      media_automation_seerr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the seerr image.
+        default: ghcr.io/seerr-team/seerr:v3.5.1@sha256:d8fab675b55ad293ded98fd71efcfd46054cbad9746534ae1cc4794a88c0b3be
+      media_automation_tdarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the tdarr image.
+        default: ghcr.io/haveagitgat/tdarr:3.04.00@sha256:0ea9217f69f40e49977dbcbc0319224e625c90d808d39bf075483fe45e9612f1
+      media_automation_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_automation_sonarr_port:
+        type: int
+        description: Host port of the sonarr web interface.
+        default: 8989
+      media_automation_radarr_port:
+        type: int
+        description: Host port of the radarr web interface.
+        default: 7878
+      media_automation_lidarr_port:
+        type: int
+        description: Host port of the lidarr web interface.
+        default: 8686
+      media_automation_prowlarr_port:
+        type: int
+        description: Host port of the prowlarr web interface.
+        default: 9696
+      media_automation_qbittorrent_port:
+        type: int
+        description: Host port of the qbittorrent web interface (published on the VPN container, whose network the container shares).
+        default: 8080
+      media_automation_nzbget_port:
+        type: int
+        description: Host port of the nzbget web interface (published on the VPN container, whose network the container shares).
+        default: 6789
+      media_automation_seerr_port:
+        type: int
+        description: Host port of the seerr web interface.
+        default: 5055
+      media_automation_tdarr_port:
+        type: int
+        description: Host port of the tdarr web interface.
+        default: 8265
+      media_automation_tdarr_server_port:
+        type: int
+        description: Host port of the transcode server's node endpoint.
+        default: 8266
+      media_automation_dir:
+        type: path
+        description: The compose project directory (also the helpers and the secret files).
+        default: /opt/compose/media-automation
+      media_automation_data_root:
+        type: path
+        description: 'The module''s data root: config/<app>/ (each app''s /config), state/ and export/. Backed up; the library is not here.'
+        default: /var/lib/hnx-modules/media-automation
+      media_automation_cache_dir:
+        type: path
+        description: 'Transcode scratch (the transcode node temp directory): rebuilt, never backed up.'
+        default: /var/cache/hnx-modules/media-automation
+      media_automation_library_path:
+        type: path
+        description: The library as the guest sees it, mounted WRITABLE into the apps at the same path (the guest mounts the host dataset here).
+        default: /srv/media
+      media_automation_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_automation_downloads_subdir:
+        type: str
+        description: The downloads directory, a directory directly inside the library (beside movies/, shows/, music/ ...) so an import is a hardlink on one filesystem.
+        default: downloads
+      media_automation_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_automation_group:
+        type: str
+        description: Group of the compose project and the data root (the apps' gid by default).
+        default: '{{ media_automation_gid }}'
+      media_automation_uid:
+        type: int
+        description: 'The user id the apps run as (the old library''s files are owned by 101000, an unprivileged-container shift); owns config/ and state/. The role never chowns the library: the overlay
+          decides it once (README).'
+        default: 101000
+      media_automation_gid:
+        type: int
+        description: The group id the apps run as; the library must be writable by it.
+        default: 101000
+      media_automation_seerr_uid:
+        type: int
+        description: The request app's user id (its image runs as its own non-root user 1000 and has no uid setting).
+        default: 1000
+      media_automation_seerr_gid:
+        type: int
+        description: The request app's group id.
+        default: 1000
+      media_automation_timezone:
+        type: str
+        description: The containers' TZ.
+        default: Etc/UTC
+      media_automation_vpn_provider:
+        type: str
+        description: The VPN service provider (gluetun VPN_SERVICE_PROVIDER); the credentials are WireGuard.
+        default: airvpn
+      media_automation_vpn_server_hostnames:
+        type: str
+        description: Optional plain list (comma separated) of VPN server hostnames to pin (gluetun SERVER_HOSTNAMES); empty lets the client pick from the provider pool. Not a secret.
+        default: ''
+      media_automation_vpn_input_ports:
+        type: list
+        description: 'Ports the VPN provider forwards to this account (gluetun FIREWALL_VPN_INPUT_PORTS): the one inbound exception on the tunnel; the torrent client''s listen port must be the same. Empty:
+          none.'
+        elements: str
+        default: []
+      media_automation_vpn_outbound_subnets:
+        type: list
+        description: 'IPv4 CIDRs the downloaders may answer through the tunnel kill-switch (gluetun FIREWALL_OUTBOUND_SUBNETS): the lab subnets the web interfaces and the apps are reached from. Required,
+          at least one.'
+        elements: str
+        required: true
+      media_automation_vpn_key_ref:
+        type: str
+        description: Secret reference of the WireGuard private key.
+        default: secret:media-automation/vpn-wireguard-private-key
+      media_automation_vpn_psk_ref:
+        type: str
+        description: Secret reference of the WireGuard preshared key (the provider mandates one).
+        default: secret:media-automation/vpn-wireguard-preshared-key
+      media_automation_vpn_addresses_ref:
+        type: str
+        description: Secret reference of the WireGuard interface address(es) the provider assigned (CIDR, comma separated).
+        default: secret:media-automation/vpn-wireguard-addresses
+      media_automation_qbittorrent_login_ref:
+        type: str
+        description: Secret reference of the torrent client web interface password the helper timers log in with (the same value the apps hold for their download client).
+        default: secret:media-automation/qbittorrent-password
+      media_automation_qbittorrent_user:
+        type: str
+        description: The torrent client web interface user the helper timers log in as.
+        default: admin
+      media_automation_helpers_enabled:
+        type: bool
+        description: Install the helper scripts and their systemd timers.
+        default: true
+      media_automation_helper_cleanup_enabled:
+        type: bool
+        description: Enable the completed-downloads cleanup timer.
+        default: true
+      media_automation_helper_stalled_enabled:
+        type: bool
+        description: Enable the stalled-torrent repair timer.
+        default: true
+      media_automation_helper_rename_enabled:
+        type: bool
+        description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
+        default: true
+      media_automation_helper_stall_hours:
+        type: int
+        description: Hours without progress before a torrent counts as stalled.
+        default: 24
+      media_automation_helper_min_age_hours:
+        type: int
+        description: Minimum age of a directory/partfile before the cleanup removes it.
+        default: 6
+      media_automation_helper_notify_url:
+        type: str
+        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
+        default: ''
+      media_automation_unit_dir:
+        type: path
+        description: Where the helper units are installed.
+        default: /etc/systemd/system
+      media_automation_systemctl_cli:
+        type: str
+        description: The systemctl command (a test fake).
+        default: systemctl
+      media_automation_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+      media_automation_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      media_automation_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+  health:
+    short_description: Fail unless every container is healthy, every web interface answers, the download clients share the VPN namespace and the library is writable and hardlinkable.
+    options:
+      media_automation_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds).
+        required: true
+      media_automation_gluetun_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the gluetun image.
+        default: docker.io/qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+      media_automation_qbittorrent_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the qbittorrent image.
+        default: ghcr.io/linuxserver/qbittorrent:5.3.0_v2.1.2-ls486@sha256:05c1454f9a32967affc1f34f67f8cc0cc57dd805dca45489fe797095a6286556
+      media_automation_nzbget_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the nzbget image.
+        default: ghcr.io/linuxserver/nzbget:v26.3-ls270@sha256:adea51082575ce3e09d3b636b320c039109df7e21afd1234ad7c97b9df7c79c8
+      media_automation_prowlarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the prowlarr image.
+        default: ghcr.io/linuxserver/prowlarr:2.7.0.5723-ls166@sha256:04be30163fbaf48d6aeee7b5893c9f6614ffbad6d853971df0d6dcdf01c7f104
+      media_automation_flaresolverr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the flaresolverr image.
+        default: ghcr.io/flaresolverr/flaresolverr:v3.5.2@sha256:c80ae007ce2ccdcd217a12426e4f039ef763ff90738c808d38810c3e59323767
+      media_automation_sonarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the sonarr image.
+        default: ghcr.io/linuxserver/sonarr:4.0.20.3014-ls329@sha256:44b06045a98bc1f237b9ffefc4b28dab64cb29305e4a2a94875ae93b5224e4cc
+      media_automation_radarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the radarr image.
+        default: ghcr.io/linuxserver/radarr:6.4.4.10685-ls325@sha256:ade5937813c6ae415b29db729386e53fea3ecf067a019849bafbe2d2a6ec02ba
+      media_automation_lidarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the lidarr image.
+        default: ghcr.io/linuxserver/lidarr:3.1.6.5079-ls46@sha256:9fddcf5c613361edfce390d4e6b7c364282e71e90a40ce7793077fed788f6e63
+      media_automation_seerr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the seerr image.
+        default: ghcr.io/seerr-team/seerr:v3.5.1@sha256:d8fab675b55ad293ded98fd71efcfd46054cbad9746534ae1cc4794a88c0b3be
+      media_automation_tdarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the tdarr image.
+        default: ghcr.io/haveagitgat/tdarr:3.04.00@sha256:0ea9217f69f40e49977dbcbc0319224e625c90d808d39bf075483fe45e9612f1
+      media_automation_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_automation_sonarr_port:
+        type: int
+        description: Host port of the sonarr web interface.
+        default: 8989
+      media_automation_radarr_port:
+        type: int
+        description: Host port of the radarr web interface.
+        default: 7878
+      media_automation_lidarr_port:
+        type: int
+        description: Host port of the lidarr web interface.
+        default: 8686
+      media_automation_prowlarr_port:
+        type: int
+        description: Host port of the prowlarr web interface.
+        default: 9696
+      media_automation_qbittorrent_port:
+        type: int
+        description: Host port of the qbittorrent web interface (published on the VPN container, whose network the container shares).
+        default: 8080
+      media_automation_nzbget_port:
+        type: int
+        description: Host port of the nzbget web interface (published on the VPN container, whose network the container shares).
+        default: 6789
+      media_automation_seerr_port:
+        type: int
+        description: Host port of the seerr web interface.
+        default: 5055
+      media_automation_tdarr_port:
+        type: int
+        description: Host port of the tdarr web interface.
+        default: 8265
+      media_automation_tdarr_server_port:
+        type: int
+        description: Host port of the transcode server's node endpoint.
+        default: 8266
+      media_automation_dir:
+        type: path
+        description: The compose project directory (also the helpers and the secret files).
+        default: /opt/compose/media-automation
+      media_automation_data_root:
+        type: path
+        description: 'The module''s data root: config/<app>/ (each app''s /config), state/ and export/. Backed up; the library is not here.'
+        default: /var/lib/hnx-modules/media-automation
+      media_automation_cache_dir:
+        type: path
+        description: 'Transcode scratch (the transcode node temp directory): rebuilt, never backed up.'
+        default: /var/cache/hnx-modules/media-automation
+      media_automation_library_path:
+        type: path
+        description: The library as the guest sees it, mounted WRITABLE into the apps at the same path (the guest mounts the host dataset here).
+        default: /srv/media
+      media_automation_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_automation_downloads_subdir:
+        type: str
+        description: The downloads directory, a directory directly inside the library (beside movies/, shows/, music/ ...) so an import is a hardlink on one filesystem.
+        default: downloads
+      media_automation_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_automation_group:
+        type: str
+        description: Group of the compose project and the data root (the apps' gid by default).
+        default: '{{ media_automation_gid }}'
+      media_automation_uid:
+        type: int
+        description: 'The user id the apps run as (the old library''s files are owned by 101000, an unprivileged-container shift); owns config/ and state/. The role never chowns the library: the overlay
+          decides it once (README).'
+        default: 101000
+      media_automation_gid:
+        type: int
+        description: The group id the apps run as; the library must be writable by it.
+        default: 101000
+      media_automation_seerr_uid:
+        type: int
+        description: The request app's user id (its image runs as its own non-root user 1000 and has no uid setting).
+        default: 1000
+      media_automation_seerr_gid:
+        type: int
+        description: The request app's group id.
+        default: 1000
+      media_automation_timezone:
+        type: str
+        description: The containers' TZ.
+        default: Etc/UTC
+      media_automation_vpn_provider:
+        type: str
+        description: The VPN service provider (gluetun VPN_SERVICE_PROVIDER); the credentials are WireGuard.
+        default: airvpn
+      media_automation_vpn_server_hostnames:
+        type: str
+        description: Optional plain list (comma separated) of VPN server hostnames to pin (gluetun SERVER_HOSTNAMES); empty lets the client pick from the provider pool. Not a secret.
+        default: ''
+      media_automation_vpn_input_ports:
+        type: list
+        description: 'Ports the VPN provider forwards to this account (gluetun FIREWALL_VPN_INPUT_PORTS): the one inbound exception on the tunnel; the torrent client''s listen port must be the same. Empty:
+          none.'
+        elements: str
+        default: []
+      media_automation_vpn_outbound_subnets:
+        type: list
+        description: 'IPv4 CIDRs the downloaders may answer through the tunnel kill-switch (gluetun FIREWALL_OUTBOUND_SUBNETS): the lab subnets the web interfaces and the apps are reached from. Required,
+          at least one.'
+        elements: str
+        required: true
+      media_automation_vpn_key_ref:
+        type: str
+        description: Secret reference of the WireGuard private key.
+        default: secret:media-automation/vpn-wireguard-private-key
+      media_automation_vpn_psk_ref:
+        type: str
+        description: Secret reference of the WireGuard preshared key (the provider mandates one).
+        default: secret:media-automation/vpn-wireguard-preshared-key
+      media_automation_vpn_addresses_ref:
+        type: str
+        description: Secret reference of the WireGuard interface address(es) the provider assigned (CIDR, comma separated).
+        default: secret:media-automation/vpn-wireguard-addresses
+      media_automation_qbittorrent_login_ref:
+        type: str
+        description: Secret reference of the torrent client web interface password the helper timers log in with (the same value the apps hold for their download client).
+        default: secret:media-automation/qbittorrent-password
+      media_automation_qbittorrent_user:
+        type: str
+        description: The torrent client web interface user the helper timers log in as.
+        default: admin
+      media_automation_helpers_enabled:
+        type: bool
+        description: Install the helper scripts and their systemd timers.
+        default: true
+      media_automation_helper_cleanup_enabled:
+        type: bool
+        description: Enable the completed-downloads cleanup timer.
+        default: true
+      media_automation_helper_stalled_enabled:
+        type: bool
+        description: Enable the stalled-torrent repair timer.
+        default: true
+      media_automation_helper_rename_enabled:
+        type: bool
+        description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
+        default: true
+      media_automation_helper_stall_hours:
+        type: int
+        description: Hours without progress before a torrent counts as stalled.
+        default: 24
+      media_automation_helper_min_age_hours:
+        type: int
+        description: Minimum age of a directory/partfile before the cleanup removes it.
+        default: 6
+      media_automation_helper_notify_url:
+        type: str
+        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
+        default: ''
+      media_automation_unit_dir:
+        type: path
+        description: Where the helper units are installed.
+        default: /etc/systemd/system
+      media_automation_systemctl_cli:
+        type: str
+        description: The systemctl command (a test fake).
+        default: systemctl
+      media_automation_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+      media_automation_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      media_automation_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+  readiness:
+    short_description: Fail unless the container engine is ready, the inputs valid, the library mounted and every credential resolves.
+    options:
+      media_automation_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds).
+        required: true
+      media_automation_gluetun_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the gluetun image.
+        default: docker.io/qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+      media_automation_qbittorrent_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the qbittorrent image.
+        default: ghcr.io/linuxserver/qbittorrent:5.3.0_v2.1.2-ls486@sha256:05c1454f9a32967affc1f34f67f8cc0cc57dd805dca45489fe797095a6286556
+      media_automation_nzbget_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the nzbget image.
+        default: ghcr.io/linuxserver/nzbget:v26.3-ls270@sha256:adea51082575ce3e09d3b636b320c039109df7e21afd1234ad7c97b9df7c79c8
+      media_automation_prowlarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the prowlarr image.
+        default: ghcr.io/linuxserver/prowlarr:2.7.0.5723-ls166@sha256:04be30163fbaf48d6aeee7b5893c9f6614ffbad6d853971df0d6dcdf01c7f104
+      media_automation_flaresolverr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the flaresolverr image.
+        default: ghcr.io/flaresolverr/flaresolverr:v3.5.2@sha256:c80ae007ce2ccdcd217a12426e4f039ef763ff90738c808d38810c3e59323767
+      media_automation_sonarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the sonarr image.
+        default: ghcr.io/linuxserver/sonarr:4.0.20.3014-ls329@sha256:44b06045a98bc1f237b9ffefc4b28dab64cb29305e4a2a94875ae93b5224e4cc
+      media_automation_radarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the radarr image.
+        default: ghcr.io/linuxserver/radarr:6.4.4.10685-ls325@sha256:ade5937813c6ae415b29db729386e53fea3ecf067a019849bafbe2d2a6ec02ba
+      media_automation_lidarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the lidarr image.
+        default: ghcr.io/linuxserver/lidarr:3.1.6.5079-ls46@sha256:9fddcf5c613361edfce390d4e6b7c364282e71e90a40ce7793077fed788f6e63
+      media_automation_seerr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the seerr image.
+        default: ghcr.io/seerr-team/seerr:v3.5.1@sha256:d8fab675b55ad293ded98fd71efcfd46054cbad9746534ae1cc4794a88c0b3be
+      media_automation_tdarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the tdarr image.
+        default: ghcr.io/haveagitgat/tdarr:3.04.00@sha256:0ea9217f69f40e49977dbcbc0319224e625c90d808d39bf075483fe45e9612f1
+      media_automation_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_automation_sonarr_port:
+        type: int
+        description: Host port of the sonarr web interface.
+        default: 8989
+      media_automation_radarr_port:
+        type: int
+        description: Host port of the radarr web interface.
+        default: 7878
+      media_automation_lidarr_port:
+        type: int
+        description: Host port of the lidarr web interface.
+        default: 8686
+      media_automation_prowlarr_port:
+        type: int
+        description: Host port of the prowlarr web interface.
+        default: 9696
+      media_automation_qbittorrent_port:
+        type: int
+        description: Host port of the qbittorrent web interface (published on the VPN container, whose network the container shares).
+        default: 8080
+      media_automation_nzbget_port:
+        type: int
+        description: Host port of the nzbget web interface (published on the VPN container, whose network the container shares).
+        default: 6789
+      media_automation_seerr_port:
+        type: int
+        description: Host port of the seerr web interface.
+        default: 5055
+      media_automation_tdarr_port:
+        type: int
+        description: Host port of the tdarr web interface.
+        default: 8265
+      media_automation_tdarr_server_port:
+        type: int
+        description: Host port of the transcode server's node endpoint.
+        default: 8266
+      media_automation_dir:
+        type: path
+        description: The compose project directory (also the helpers and the secret files).
+        default: /opt/compose/media-automation
+      media_automation_data_root:
+        type: path
+        description: 'The module''s data root: config/<app>/ (each app''s /config), state/ and export/. Backed up; the library is not here.'
+        default: /var/lib/hnx-modules/media-automation
+      media_automation_cache_dir:
+        type: path
+        description: 'Transcode scratch (the transcode node temp directory): rebuilt, never backed up.'
+        default: /var/cache/hnx-modules/media-automation
+      media_automation_library_path:
+        type: path
+        description: The library as the guest sees it, mounted WRITABLE into the apps at the same path (the guest mounts the host dataset here).
+        default: /srv/media
+      media_automation_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_automation_downloads_subdir:
+        type: str
+        description: The downloads directory, a directory directly inside the library (beside movies/, shows/, music/ ...) so an import is a hardlink on one filesystem.
+        default: downloads
+      media_automation_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_automation_group:
+        type: str
+        description: Group of the compose project and the data root (the apps' gid by default).
+        default: '{{ media_automation_gid }}'
+      media_automation_uid:
+        type: int
+        description: 'The user id the apps run as (the old library''s files are owned by 101000, an unprivileged-container shift); owns config/ and state/. The role never chowns the library: the overlay
+          decides it once (README).'
+        default: 101000
+      media_automation_gid:
+        type: int
+        description: The group id the apps run as; the library must be writable by it.
+        default: 101000
+      media_automation_seerr_uid:
+        type: int
+        description: The request app's user id (its image runs as its own non-root user 1000 and has no uid setting).
+        default: 1000
+      media_automation_seerr_gid:
+        type: int
+        description: The request app's group id.
+        default: 1000
+      media_automation_timezone:
+        type: str
+        description: The containers' TZ.
+        default: Etc/UTC
+      media_automation_vpn_provider:
+        type: str
+        description: The VPN service provider (gluetun VPN_SERVICE_PROVIDER); the credentials are WireGuard.
+        default: airvpn
+      media_automation_vpn_server_hostnames:
+        type: str
+        description: Optional plain list (comma separated) of VPN server hostnames to pin (gluetun SERVER_HOSTNAMES); empty lets the client pick from the provider pool. Not a secret.
+        default: ''
+      media_automation_vpn_input_ports:
+        type: list
+        description: 'Ports the VPN provider forwards to this account (gluetun FIREWALL_VPN_INPUT_PORTS): the one inbound exception on the tunnel; the torrent client''s listen port must be the same. Empty:
+          none.'
+        elements: str
+        default: []
+      media_automation_vpn_outbound_subnets:
+        type: list
+        description: 'IPv4 CIDRs the downloaders may answer through the tunnel kill-switch (gluetun FIREWALL_OUTBOUND_SUBNETS): the lab subnets the web interfaces and the apps are reached from. Required,
+          at least one.'
+        elements: str
+        required: true
+      media_automation_vpn_key_ref:
+        type: str
+        description: Secret reference of the WireGuard private key.
+        default: secret:media-automation/vpn-wireguard-private-key
+      media_automation_vpn_psk_ref:
+        type: str
+        description: Secret reference of the WireGuard preshared key (the provider mandates one).
+        default: secret:media-automation/vpn-wireguard-preshared-key
+      media_automation_vpn_addresses_ref:
+        type: str
+        description: Secret reference of the WireGuard interface address(es) the provider assigned (CIDR, comma separated).
+        default: secret:media-automation/vpn-wireguard-addresses
+      media_automation_qbittorrent_login_ref:
+        type: str
+        description: Secret reference of the torrent client web interface password the helper timers log in with (the same value the apps hold for their download client).
+        default: secret:media-automation/qbittorrent-password
+      media_automation_qbittorrent_user:
+        type: str
+        description: The torrent client web interface user the helper timers log in as.
+        default: admin
+      media_automation_helpers_enabled:
+        type: bool
+        description: Install the helper scripts and their systemd timers.
+        default: true
+      media_automation_helper_cleanup_enabled:
+        type: bool
+        description: Enable the completed-downloads cleanup timer.
+        default: true
+      media_automation_helper_stalled_enabled:
+        type: bool
+        description: Enable the stalled-torrent repair timer.
+        default: true
+      media_automation_helper_rename_enabled:
+        type: bool
+        description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
+        default: true
+      media_automation_helper_stall_hours:
+        type: int
+        description: Hours without progress before a torrent counts as stalled.
+        default: 24
+      media_automation_helper_min_age_hours:
+        type: int
+        description: Minimum age of a directory/partfile before the cleanup removes it.
+        default: 6
+      media_automation_helper_notify_url:
+        type: str
+        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
+        default: ''
+      media_automation_unit_dir:
+        type: path
+        description: Where the helper units are installed.
+        default: /etc/systemd/system
+      media_automation_systemctl_cli:
+        type: str
+        description: The systemctl command (a test fake).
+        default: systemctl
+      media_automation_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+      media_automation_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      media_automation_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+  backup:
+    short_description: Write the backup manifest (the data root).
+    options:
+      media_automation_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds).
+        required: true
+      media_automation_gluetun_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the gluetun image.
+        default: docker.io/qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+      media_automation_qbittorrent_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the qbittorrent image.
+        default: ghcr.io/linuxserver/qbittorrent:5.3.0_v2.1.2-ls486@sha256:05c1454f9a32967affc1f34f67f8cc0cc57dd805dca45489fe797095a6286556
+      media_automation_nzbget_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the nzbget image.
+        default: ghcr.io/linuxserver/nzbget:v26.3-ls270@sha256:adea51082575ce3e09d3b636b320c039109df7e21afd1234ad7c97b9df7c79c8
+      media_automation_prowlarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the prowlarr image.
+        default: ghcr.io/linuxserver/prowlarr:2.7.0.5723-ls166@sha256:04be30163fbaf48d6aeee7b5893c9f6614ffbad6d853971df0d6dcdf01c7f104
+      media_automation_flaresolverr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the flaresolverr image.
+        default: ghcr.io/flaresolverr/flaresolverr:v3.5.2@sha256:c80ae007ce2ccdcd217a12426e4f039ef763ff90738c808d38810c3e59323767
+      media_automation_sonarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the sonarr image.
+        default: ghcr.io/linuxserver/sonarr:4.0.20.3014-ls329@sha256:44b06045a98bc1f237b9ffefc4b28dab64cb29305e4a2a94875ae93b5224e4cc
+      media_automation_radarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the radarr image.
+        default: ghcr.io/linuxserver/radarr:6.4.4.10685-ls325@sha256:ade5937813c6ae415b29db729386e53fea3ecf067a019849bafbe2d2a6ec02ba
+      media_automation_lidarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the lidarr image.
+        default: ghcr.io/linuxserver/lidarr:3.1.6.5079-ls46@sha256:9fddcf5c613361edfce390d4e6b7c364282e71e90a40ce7793077fed788f6e63
+      media_automation_seerr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the seerr image.
+        default: ghcr.io/seerr-team/seerr:v3.5.1@sha256:d8fab675b55ad293ded98fd71efcfd46054cbad9746534ae1cc4794a88c0b3be
+      media_automation_tdarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the tdarr image.
+        default: ghcr.io/haveagitgat/tdarr:3.04.00@sha256:0ea9217f69f40e49977dbcbc0319224e625c90d808d39bf075483fe45e9612f1
+      media_automation_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_automation_sonarr_port:
+        type: int
+        description: Host port of the sonarr web interface.
+        default: 8989
+      media_automation_radarr_port:
+        type: int
+        description: Host port of the radarr web interface.
+        default: 7878
+      media_automation_lidarr_port:
+        type: int
+        description: Host port of the lidarr web interface.
+        default: 8686
+      media_automation_prowlarr_port:
+        type: int
+        description: Host port of the prowlarr web interface.
+        default: 9696
+      media_automation_qbittorrent_port:
+        type: int
+        description: Host port of the qbittorrent web interface (published on the VPN container, whose network the container shares).
+        default: 8080
+      media_automation_nzbget_port:
+        type: int
+        description: Host port of the nzbget web interface (published on the VPN container, whose network the container shares).
+        default: 6789
+      media_automation_seerr_port:
+        type: int
+        description: Host port of the seerr web interface.
+        default: 5055
+      media_automation_tdarr_port:
+        type: int
+        description: Host port of the tdarr web interface.
+        default: 8265
+      media_automation_tdarr_server_port:
+        type: int
+        description: Host port of the transcode server's node endpoint.
+        default: 8266
+      media_automation_dir:
+        type: path
+        description: The compose project directory (also the helpers and the secret files).
+        default: /opt/compose/media-automation
+      media_automation_data_root:
+        type: path
+        description: 'The module''s data root: config/<app>/ (each app''s /config), state/ and export/. Backed up; the library is not here.'
+        default: /var/lib/hnx-modules/media-automation
+      media_automation_cache_dir:
+        type: path
+        description: 'Transcode scratch (the transcode node temp directory): rebuilt, never backed up.'
+        default: /var/cache/hnx-modules/media-automation
+      media_automation_library_path:
+        type: path
+        description: The library as the guest sees it, mounted WRITABLE into the apps at the same path (the guest mounts the host dataset here).
+        default: /srv/media
+      media_automation_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_automation_downloads_subdir:
+        type: str
+        description: The downloads directory, a directory directly inside the library (beside movies/, shows/, music/ ...) so an import is a hardlink on one filesystem.
+        default: downloads
+      media_automation_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_automation_group:
+        type: str
+        description: Group of the compose project and the data root (the apps' gid by default).
+        default: '{{ media_automation_gid }}'
+      media_automation_uid:
+        type: int
+        description: 'The user id the apps run as (the old library''s files are owned by 101000, an unprivileged-container shift); owns config/ and state/. The role never chowns the library: the overlay
+          decides it once (README).'
+        default: 101000
+      media_automation_gid:
+        type: int
+        description: The group id the apps run as; the library must be writable by it.
+        default: 101000
+      media_automation_seerr_uid:
+        type: int
+        description: The request app's user id (its image runs as its own non-root user 1000 and has no uid setting).
+        default: 1000
+      media_automation_seerr_gid:
+        type: int
+        description: The request app's group id.
+        default: 1000
+      media_automation_timezone:
+        type: str
+        description: The containers' TZ.
+        default: Etc/UTC
+      media_automation_vpn_provider:
+        type: str
+        description: The VPN service provider (gluetun VPN_SERVICE_PROVIDER); the credentials are WireGuard.
+        default: airvpn
+      media_automation_vpn_server_hostnames:
+        type: str
+        description: Optional plain list (comma separated) of VPN server hostnames to pin (gluetun SERVER_HOSTNAMES); empty lets the client pick from the provider pool. Not a secret.
+        default: ''
+      media_automation_vpn_input_ports:
+        type: list
+        description: 'Ports the VPN provider forwards to this account (gluetun FIREWALL_VPN_INPUT_PORTS): the one inbound exception on the tunnel; the torrent client''s listen port must be the same. Empty:
+          none.'
+        elements: str
+        default: []
+      media_automation_vpn_outbound_subnets:
+        type: list
+        description: 'IPv4 CIDRs the downloaders may answer through the tunnel kill-switch (gluetun FIREWALL_OUTBOUND_SUBNETS): the lab subnets the web interfaces and the apps are reached from. Required,
+          at least one.'
+        elements: str
+        required: true
+      media_automation_vpn_key_ref:
+        type: str
+        description: Secret reference of the WireGuard private key.
+        default: secret:media-automation/vpn-wireguard-private-key
+      media_automation_vpn_psk_ref:
+        type: str
+        description: Secret reference of the WireGuard preshared key (the provider mandates one).
+        default: secret:media-automation/vpn-wireguard-preshared-key
+      media_automation_vpn_addresses_ref:
+        type: str
+        description: Secret reference of the WireGuard interface address(es) the provider assigned (CIDR, comma separated).
+        default: secret:media-automation/vpn-wireguard-addresses
+      media_automation_qbittorrent_login_ref:
+        type: str
+        description: Secret reference of the torrent client web interface password the helper timers log in with (the same value the apps hold for their download client).
+        default: secret:media-automation/qbittorrent-password
+      media_automation_qbittorrent_user:
+        type: str
+        description: The torrent client web interface user the helper timers log in as.
+        default: admin
+      media_automation_helpers_enabled:
+        type: bool
+        description: Install the helper scripts and their systemd timers.
+        default: true
+      media_automation_helper_cleanup_enabled:
+        type: bool
+        description: Enable the completed-downloads cleanup timer.
+        default: true
+      media_automation_helper_stalled_enabled:
+        type: bool
+        description: Enable the stalled-torrent repair timer.
+        default: true
+      media_automation_helper_rename_enabled:
+        type: bool
+        description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
+        default: true
+      media_automation_helper_stall_hours:
+        type: int
+        description: Hours without progress before a torrent counts as stalled.
+        default: 24
+      media_automation_helper_min_age_hours:
+        type: int
+        description: Minimum age of a directory/partfile before the cleanup removes it.
+        default: 6
+      media_automation_helper_notify_url:
+        type: str
+        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
+        default: ''
+      media_automation_unit_dir:
+        type: path
+        description: Where the helper units are installed.
+        default: /etc/systemd/system
+      media_automation_systemctl_cli:
+        type: str
+        description: The systemctl command (a test fake).
+        default: systemctl
+      media_automation_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+      media_automation_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      media_automation_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+  export:
+    short_description: Archive every app's config with the stack stopped.
+    options:
+      media_automation_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds).
+        required: true
+      media_automation_gluetun_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the gluetun image.
+        default: docker.io/qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+      media_automation_qbittorrent_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the qbittorrent image.
+        default: ghcr.io/linuxserver/qbittorrent:5.3.0_v2.1.2-ls486@sha256:05c1454f9a32967affc1f34f67f8cc0cc57dd805dca45489fe797095a6286556
+      media_automation_nzbget_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the nzbget image.
+        default: ghcr.io/linuxserver/nzbget:v26.3-ls270@sha256:adea51082575ce3e09d3b636b320c039109df7e21afd1234ad7c97b9df7c79c8
+      media_automation_prowlarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the prowlarr image.
+        default: ghcr.io/linuxserver/prowlarr:2.7.0.5723-ls166@sha256:04be30163fbaf48d6aeee7b5893c9f6614ffbad6d853971df0d6dcdf01c7f104
+      media_automation_flaresolverr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the flaresolverr image.
+        default: ghcr.io/flaresolverr/flaresolverr:v3.5.2@sha256:c80ae007ce2ccdcd217a12426e4f039ef763ff90738c808d38810c3e59323767
+      media_automation_sonarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the sonarr image.
+        default: ghcr.io/linuxserver/sonarr:4.0.20.3014-ls329@sha256:44b06045a98bc1f237b9ffefc4b28dab64cb29305e4a2a94875ae93b5224e4cc
+      media_automation_radarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the radarr image.
+        default: ghcr.io/linuxserver/radarr:6.4.4.10685-ls325@sha256:ade5937813c6ae415b29db729386e53fea3ecf067a019849bafbe2d2a6ec02ba
+      media_automation_lidarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the lidarr image.
+        default: ghcr.io/linuxserver/lidarr:3.1.6.5079-ls46@sha256:9fddcf5c613361edfce390d4e6b7c364282e71e90a40ce7793077fed788f6e63
+      media_automation_seerr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the seerr image.
+        default: ghcr.io/seerr-team/seerr:v3.5.1@sha256:d8fab675b55ad293ded98fd71efcfd46054cbad9746534ae1cc4794a88c0b3be
+      media_automation_tdarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the tdarr image.
+        default: ghcr.io/haveagitgat/tdarr:3.04.00@sha256:0ea9217f69f40e49977dbcbc0319224e625c90d808d39bf075483fe45e9612f1
+      media_automation_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_automation_sonarr_port:
+        type: int
+        description: Host port of the sonarr web interface.
+        default: 8989
+      media_automation_radarr_port:
+        type: int
+        description: Host port of the radarr web interface.
+        default: 7878
+      media_automation_lidarr_port:
+        type: int
+        description: Host port of the lidarr web interface.
+        default: 8686
+      media_automation_prowlarr_port:
+        type: int
+        description: Host port of the prowlarr web interface.
+        default: 9696
+      media_automation_qbittorrent_port:
+        type: int
+        description: Host port of the qbittorrent web interface (published on the VPN container, whose network the container shares).
+        default: 8080
+      media_automation_nzbget_port:
+        type: int
+        description: Host port of the nzbget web interface (published on the VPN container, whose network the container shares).
+        default: 6789
+      media_automation_seerr_port:
+        type: int
+        description: Host port of the seerr web interface.
+        default: 5055
+      media_automation_tdarr_port:
+        type: int
+        description: Host port of the tdarr web interface.
+        default: 8265
+      media_automation_tdarr_server_port:
+        type: int
+        description: Host port of the transcode server's node endpoint.
+        default: 8266
+      media_automation_dir:
+        type: path
+        description: The compose project directory (also the helpers and the secret files).
+        default: /opt/compose/media-automation
+      media_automation_data_root:
+        type: path
+        description: 'The module''s data root: config/<app>/ (each app''s /config), state/ and export/. Backed up; the library is not here.'
+        default: /var/lib/hnx-modules/media-automation
+      media_automation_cache_dir:
+        type: path
+        description: 'Transcode scratch (the transcode node temp directory): rebuilt, never backed up.'
+        default: /var/cache/hnx-modules/media-automation
+      media_automation_library_path:
+        type: path
+        description: The library as the guest sees it, mounted WRITABLE into the apps at the same path (the guest mounts the host dataset here).
+        default: /srv/media
+      media_automation_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_automation_downloads_subdir:
+        type: str
+        description: The downloads directory, a directory directly inside the library (beside movies/, shows/, music/ ...) so an import is a hardlink on one filesystem.
+        default: downloads
+      media_automation_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_automation_group:
+        type: str
+        description: Group of the compose project and the data root (the apps' gid by default).
+        default: '{{ media_automation_gid }}'
+      media_automation_uid:
+        type: int
+        description: 'The user id the apps run as (the old library''s files are owned by 101000, an unprivileged-container shift); owns config/ and state/. The role never chowns the library: the overlay
+          decides it once (README).'
+        default: 101000
+      media_automation_gid:
+        type: int
+        description: The group id the apps run as; the library must be writable by it.
+        default: 101000
+      media_automation_seerr_uid:
+        type: int
+        description: The request app's user id (its image runs as its own non-root user 1000 and has no uid setting).
+        default: 1000
+      media_automation_seerr_gid:
+        type: int
+        description: The request app's group id.
+        default: 1000
+      media_automation_timezone:
+        type: str
+        description: The containers' TZ.
+        default: Etc/UTC
+      media_automation_vpn_provider:
+        type: str
+        description: The VPN service provider (gluetun VPN_SERVICE_PROVIDER); the credentials are WireGuard.
+        default: airvpn
+      media_automation_vpn_server_hostnames:
+        type: str
+        description: Optional plain list (comma separated) of VPN server hostnames to pin (gluetun SERVER_HOSTNAMES); empty lets the client pick from the provider pool. Not a secret.
+        default: ''
+      media_automation_vpn_input_ports:
+        type: list
+        description: 'Ports the VPN provider forwards to this account (gluetun FIREWALL_VPN_INPUT_PORTS): the one inbound exception on the tunnel; the torrent client''s listen port must be the same. Empty:
+          none.'
+        elements: str
+        default: []
+      media_automation_vpn_outbound_subnets:
+        type: list
+        description: 'IPv4 CIDRs the downloaders may answer through the tunnel kill-switch (gluetun FIREWALL_OUTBOUND_SUBNETS): the lab subnets the web interfaces and the apps are reached from. Required,
+          at least one.'
+        elements: str
+        required: true
+      media_automation_vpn_key_ref:
+        type: str
+        description: Secret reference of the WireGuard private key.
+        default: secret:media-automation/vpn-wireguard-private-key
+      media_automation_vpn_psk_ref:
+        type: str
+        description: Secret reference of the WireGuard preshared key (the provider mandates one).
+        default: secret:media-automation/vpn-wireguard-preshared-key
+      media_automation_vpn_addresses_ref:
+        type: str
+        description: Secret reference of the WireGuard interface address(es) the provider assigned (CIDR, comma separated).
+        default: secret:media-automation/vpn-wireguard-addresses
+      media_automation_qbittorrent_login_ref:
+        type: str
+        description: Secret reference of the torrent client web interface password the helper timers log in with (the same value the apps hold for their download client).
+        default: secret:media-automation/qbittorrent-password
+      media_automation_qbittorrent_user:
+        type: str
+        description: The torrent client web interface user the helper timers log in as.
+        default: admin
+      media_automation_helpers_enabled:
+        type: bool
+        description: Install the helper scripts and their systemd timers.
+        default: true
+      media_automation_helper_cleanup_enabled:
+        type: bool
+        description: Enable the completed-downloads cleanup timer.
+        default: true
+      media_automation_helper_stalled_enabled:
+        type: bool
+        description: Enable the stalled-torrent repair timer.
+        default: true
+      media_automation_helper_rename_enabled:
+        type: bool
+        description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
+        default: true
+      media_automation_helper_stall_hours:
+        type: int
+        description: Hours without progress before a torrent counts as stalled.
+        default: 24
+      media_automation_helper_min_age_hours:
+        type: int
+        description: Minimum age of a directory/partfile before the cleanup removes it.
+        default: 6
+      media_automation_helper_notify_url:
+        type: str
+        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
+        default: ''
+      media_automation_unit_dir:
+        type: path
+        description: Where the helper units are installed.
+        default: /etc/systemd/system
+      media_automation_systemctl_cli:
+        type: str
+        description: The systemctl command (a test fake).
+        default: systemctl
+      media_automation_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+      media_automation_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      media_automation_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+  restore:
+    short_description: Restore the configs from an export (archive hash checked, no link, staged then swapped, the previous config kept).
+    options:
+      media_automation_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds).
+        required: true
+      media_automation_gluetun_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the gluetun image.
+        default: docker.io/qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+      media_automation_qbittorrent_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the qbittorrent image.
+        default: ghcr.io/linuxserver/qbittorrent:5.3.0_v2.1.2-ls486@sha256:05c1454f9a32967affc1f34f67f8cc0cc57dd805dca45489fe797095a6286556
+      media_automation_nzbget_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the nzbget image.
+        default: ghcr.io/linuxserver/nzbget:v26.3-ls270@sha256:adea51082575ce3e09d3b636b320c039109df7e21afd1234ad7c97b9df7c79c8
+      media_automation_prowlarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the prowlarr image.
+        default: ghcr.io/linuxserver/prowlarr:2.7.0.5723-ls166@sha256:04be30163fbaf48d6aeee7b5893c9f6614ffbad6d853971df0d6dcdf01c7f104
+      media_automation_flaresolverr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the flaresolverr image.
+        default: ghcr.io/flaresolverr/flaresolverr:v3.5.2@sha256:c80ae007ce2ccdcd217a12426e4f039ef763ff90738c808d38810c3e59323767
+      media_automation_sonarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the sonarr image.
+        default: ghcr.io/linuxserver/sonarr:4.0.20.3014-ls329@sha256:44b06045a98bc1f237b9ffefc4b28dab64cb29305e4a2a94875ae93b5224e4cc
+      media_automation_radarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the radarr image.
+        default: ghcr.io/linuxserver/radarr:6.4.4.10685-ls325@sha256:ade5937813c6ae415b29db729386e53fea3ecf067a019849bafbe2d2a6ec02ba
+      media_automation_lidarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the lidarr image.
+        default: ghcr.io/linuxserver/lidarr:3.1.6.5079-ls46@sha256:9fddcf5c613361edfce390d4e6b7c364282e71e90a40ce7793077fed788f6e63
+      media_automation_seerr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the seerr image.
+        default: ghcr.io/seerr-team/seerr:v3.5.1@sha256:d8fab675b55ad293ded98fd71efcfd46054cbad9746534ae1cc4794a88c0b3be
+      media_automation_tdarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the tdarr image.
+        default: ghcr.io/haveagitgat/tdarr:3.04.00@sha256:0ea9217f69f40e49977dbcbc0319224e625c90d808d39bf075483fe45e9612f1
+      media_automation_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_automation_sonarr_port:
+        type: int
+        description: Host port of the sonarr web interface.
+        default: 8989
+      media_automation_radarr_port:
+        type: int
+        description: Host port of the radarr web interface.
+        default: 7878
+      media_automation_lidarr_port:
+        type: int
+        description: Host port of the lidarr web interface.
+        default: 8686
+      media_automation_prowlarr_port:
+        type: int
+        description: Host port of the prowlarr web interface.
+        default: 9696
+      media_automation_qbittorrent_port:
+        type: int
+        description: Host port of the qbittorrent web interface (published on the VPN container, whose network the container shares).
+        default: 8080
+      media_automation_nzbget_port:
+        type: int
+        description: Host port of the nzbget web interface (published on the VPN container, whose network the container shares).
+        default: 6789
+      media_automation_seerr_port:
+        type: int
+        description: Host port of the seerr web interface.
+        default: 5055
+      media_automation_tdarr_port:
+        type: int
+        description: Host port of the tdarr web interface.
+        default: 8265
+      media_automation_tdarr_server_port:
+        type: int
+        description: Host port of the transcode server's node endpoint.
+        default: 8266
+      media_automation_dir:
+        type: path
+        description: The compose project directory (also the helpers and the secret files).
+        default: /opt/compose/media-automation
+      media_automation_data_root:
+        type: path
+        description: 'The module''s data root: config/<app>/ (each app''s /config), state/ and export/. Backed up; the library is not here.'
+        default: /var/lib/hnx-modules/media-automation
+      media_automation_cache_dir:
+        type: path
+        description: 'Transcode scratch (the transcode node temp directory): rebuilt, never backed up.'
+        default: /var/cache/hnx-modules/media-automation
+      media_automation_library_path:
+        type: path
+        description: The library as the guest sees it, mounted WRITABLE into the apps at the same path (the guest mounts the host dataset here).
+        default: /srv/media
+      media_automation_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_automation_downloads_subdir:
+        type: str
+        description: The downloads directory, a directory directly inside the library (beside movies/, shows/, music/ ...) so an import is a hardlink on one filesystem.
+        default: downloads
+      media_automation_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_automation_group:
+        type: str
+        description: Group of the compose project and the data root (the apps' gid by default).
+        default: '{{ media_automation_gid }}'
+      media_automation_uid:
+        type: int
+        description: 'The user id the apps run as (the old library''s files are owned by 101000, an unprivileged-container shift); owns config/ and state/. The role never chowns the library: the overlay
+          decides it once (README).'
+        default: 101000
+      media_automation_gid:
+        type: int
+        description: The group id the apps run as; the library must be writable by it.
+        default: 101000
+      media_automation_seerr_uid:
+        type: int
+        description: The request app's user id (its image runs as its own non-root user 1000 and has no uid setting).
+        default: 1000
+      media_automation_seerr_gid:
+        type: int
+        description: The request app's group id.
+        default: 1000
+      media_automation_timezone:
+        type: str
+        description: The containers' TZ.
+        default: Etc/UTC
+      media_automation_vpn_provider:
+        type: str
+        description: The VPN service provider (gluetun VPN_SERVICE_PROVIDER); the credentials are WireGuard.
+        default: airvpn
+      media_automation_vpn_server_hostnames:
+        type: str
+        description: Optional plain list (comma separated) of VPN server hostnames to pin (gluetun SERVER_HOSTNAMES); empty lets the client pick from the provider pool. Not a secret.
+        default: ''
+      media_automation_vpn_input_ports:
+        type: list
+        description: 'Ports the VPN provider forwards to this account (gluetun FIREWALL_VPN_INPUT_PORTS): the one inbound exception on the tunnel; the torrent client''s listen port must be the same. Empty:
+          none.'
+        elements: str
+        default: []
+      media_automation_vpn_outbound_subnets:
+        type: list
+        description: 'IPv4 CIDRs the downloaders may answer through the tunnel kill-switch (gluetun FIREWALL_OUTBOUND_SUBNETS): the lab subnets the web interfaces and the apps are reached from. Required,
+          at least one.'
+        elements: str
+        required: true
+      media_automation_vpn_key_ref:
+        type: str
+        description: Secret reference of the WireGuard private key.
+        default: secret:media-automation/vpn-wireguard-private-key
+      media_automation_vpn_psk_ref:
+        type: str
+        description: Secret reference of the WireGuard preshared key (the provider mandates one).
+        default: secret:media-automation/vpn-wireguard-preshared-key
+      media_automation_vpn_addresses_ref:
+        type: str
+        description: Secret reference of the WireGuard interface address(es) the provider assigned (CIDR, comma separated).
+        default: secret:media-automation/vpn-wireguard-addresses
+      media_automation_qbittorrent_login_ref:
+        type: str
+        description: Secret reference of the torrent client web interface password the helper timers log in with (the same value the apps hold for their download client).
+        default: secret:media-automation/qbittorrent-password
+      media_automation_qbittorrent_user:
+        type: str
+        description: The torrent client web interface user the helper timers log in as.
+        default: admin
+      media_automation_helpers_enabled:
+        type: bool
+        description: Install the helper scripts and their systemd timers.
+        default: true
+      media_automation_helper_cleanup_enabled:
+        type: bool
+        description: Enable the completed-downloads cleanup timer.
+        default: true
+      media_automation_helper_stalled_enabled:
+        type: bool
+        description: Enable the stalled-torrent repair timer.
+        default: true
+      media_automation_helper_rename_enabled:
+        type: bool
+        description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
+        default: true
+      media_automation_helper_stall_hours:
+        type: int
+        description: Hours without progress before a torrent counts as stalled.
+        default: 24
+      media_automation_helper_min_age_hours:
+        type: int
+        description: Minimum age of a directory/partfile before the cleanup removes it.
+        default: 6
+      media_automation_helper_notify_url:
+        type: str
+        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
+        default: ''
+      media_automation_unit_dir:
+        type: path
+        description: Where the helper units are installed.
+        default: /etc/systemd/system
+      media_automation_systemctl_cli:
+        type: str
+        description: The systemctl command (a test fake).
+        default: systemctl
+      media_automation_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+      media_automation_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      media_automation_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      media_automation_restore_source:
+        type: path
+        description: Directory holding media-automation-config.tar.gz and listing.jsonl (restore).
+        required: true
+  upgrade:
+    short_description: Validate and record one app's pinned image bump.
+    options:
+      media_automation_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds).
+        required: true
+      media_automation_gluetun_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the gluetun image.
+        default: docker.io/qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+      media_automation_qbittorrent_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the qbittorrent image.
+        default: ghcr.io/linuxserver/qbittorrent:5.3.0_v2.1.2-ls486@sha256:05c1454f9a32967affc1f34f67f8cc0cc57dd805dca45489fe797095a6286556
+      media_automation_nzbget_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the nzbget image.
+        default: ghcr.io/linuxserver/nzbget:v26.3-ls270@sha256:adea51082575ce3e09d3b636b320c039109df7e21afd1234ad7c97b9df7c79c8
+      media_automation_prowlarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the prowlarr image.
+        default: ghcr.io/linuxserver/prowlarr:2.7.0.5723-ls166@sha256:04be30163fbaf48d6aeee7b5893c9f6614ffbad6d853971df0d6dcdf01c7f104
+      media_automation_flaresolverr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the flaresolverr image.
+        default: ghcr.io/flaresolverr/flaresolverr:v3.5.2@sha256:c80ae007ce2ccdcd217a12426e4f039ef763ff90738c808d38810c3e59323767
+      media_automation_sonarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the sonarr image.
+        default: ghcr.io/linuxserver/sonarr:4.0.20.3014-ls329@sha256:44b06045a98bc1f237b9ffefc4b28dab64cb29305e4a2a94875ae93b5224e4cc
+      media_automation_radarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the radarr image.
+        default: ghcr.io/linuxserver/radarr:6.4.4.10685-ls325@sha256:ade5937813c6ae415b29db729386e53fea3ecf067a019849bafbe2d2a6ec02ba
+      media_automation_lidarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the lidarr image.
+        default: ghcr.io/linuxserver/lidarr:3.1.6.5079-ls46@sha256:9fddcf5c613361edfce390d4e6b7c364282e71e90a40ce7793077fed788f6e63
+      media_automation_seerr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the seerr image.
+        default: ghcr.io/seerr-team/seerr:v3.5.1@sha256:d8fab675b55ad293ded98fd71efcfd46054cbad9746534ae1cc4794a88c0b3be
+      media_automation_tdarr_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the tdarr image.
+        default: ghcr.io/haveagitgat/tdarr:3.04.00@sha256:0ea9217f69f40e49977dbcbc0319224e625c90d808d39bf075483fe45e9612f1
+      media_automation_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_automation_sonarr_port:
+        type: int
+        description: Host port of the sonarr web interface.
+        default: 8989
+      media_automation_radarr_port:
+        type: int
+        description: Host port of the radarr web interface.
+        default: 7878
+      media_automation_lidarr_port:
+        type: int
+        description: Host port of the lidarr web interface.
+        default: 8686
+      media_automation_prowlarr_port:
+        type: int
+        description: Host port of the prowlarr web interface.
+        default: 9696
+      media_automation_qbittorrent_port:
+        type: int
+        description: Host port of the qbittorrent web interface (published on the VPN container, whose network the container shares).
+        default: 8080
+      media_automation_nzbget_port:
+        type: int
+        description: Host port of the nzbget web interface (published on the VPN container, whose network the container shares).
+        default: 6789
+      media_automation_seerr_port:
+        type: int
+        description: Host port of the seerr web interface.
+        default: 5055
+      media_automation_tdarr_port:
+        type: int
+        description: Host port of the tdarr web interface.
+        default: 8265
+      media_automation_tdarr_server_port:
+        type: int
+        description: Host port of the transcode server's node endpoint.
+        default: 8266
+      media_automation_dir:
+        type: path
+        description: The compose project directory (also the helpers and the secret files).
+        default: /opt/compose/media-automation
+      media_automation_data_root:
+        type: path
+        description: 'The module''s data root: config/<app>/ (each app''s /config), state/ and export/. Backed up; the library is not here.'
+        default: /var/lib/hnx-modules/media-automation
+      media_automation_cache_dir:
+        type: path
+        description: 'Transcode scratch (the transcode node temp directory): rebuilt, never backed up.'
+        default: /var/cache/hnx-modules/media-automation
+      media_automation_library_path:
+        type: path
+        description: The library as the guest sees it, mounted WRITABLE into the apps at the same path (the guest mounts the host dataset here).
+        default: /srv/media
+      media_automation_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_automation_downloads_subdir:
+        type: str
+        description: The downloads directory, a directory directly inside the library (beside movies/, shows/, music/ ...) so an import is a hardlink on one filesystem.
+        default: downloads
+      media_automation_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_automation_group:
+        type: str
+        description: Group of the compose project and the data root (the apps' gid by default).
+        default: '{{ media_automation_gid }}'
+      media_automation_uid:
+        type: int
+        description: 'The user id the apps run as (the old library''s files are owned by 101000, an unprivileged-container shift); owns config/ and state/. The role never chowns the library: the overlay
+          decides it once (README).'
+        default: 101000
+      media_automation_gid:
+        type: int
+        description: The group id the apps run as; the library must be writable by it.
+        default: 101000
+      media_automation_seerr_uid:
+        type: int
+        description: The request app's user id (its image runs as its own non-root user 1000 and has no uid setting).
+        default: 1000
+      media_automation_seerr_gid:
+        type: int
+        description: The request app's group id.
+        default: 1000
+      media_automation_timezone:
+        type: str
+        description: The containers' TZ.
+        default: Etc/UTC
+      media_automation_vpn_provider:
+        type: str
+        description: The VPN service provider (gluetun VPN_SERVICE_PROVIDER); the credentials are WireGuard.
+        default: airvpn
+      media_automation_vpn_server_hostnames:
+        type: str
+        description: Optional plain list (comma separated) of VPN server hostnames to pin (gluetun SERVER_HOSTNAMES); empty lets the client pick from the provider pool. Not a secret.
+        default: ''
+      media_automation_vpn_input_ports:
+        type: list
+        description: 'Ports the VPN provider forwards to this account (gluetun FIREWALL_VPN_INPUT_PORTS): the one inbound exception on the tunnel; the torrent client''s listen port must be the same. Empty:
+          none.'
+        elements: str
+        default: []
+      media_automation_vpn_outbound_subnets:
+        type: list
+        description: 'IPv4 CIDRs the downloaders may answer through the tunnel kill-switch (gluetun FIREWALL_OUTBOUND_SUBNETS): the lab subnets the web interfaces and the apps are reached from. Required,
+          at least one.'
+        elements: str
+        required: true
+      media_automation_vpn_key_ref:
+        type: str
+        description: Secret reference of the WireGuard private key.
+        default: secret:media-automation/vpn-wireguard-private-key
+      media_automation_vpn_psk_ref:
+        type: str
+        description: Secret reference of the WireGuard preshared key (the provider mandates one).
+        default: secret:media-automation/vpn-wireguard-preshared-key
+      media_automation_vpn_addresses_ref:
+        type: str
+        description: Secret reference of the WireGuard interface address(es) the provider assigned (CIDR, comma separated).
+        default: secret:media-automation/vpn-wireguard-addresses
+      media_automation_qbittorrent_login_ref:
+        type: str
+        description: Secret reference of the torrent client web interface password the helper timers log in with (the same value the apps hold for their download client).
+        default: secret:media-automation/qbittorrent-password
+      media_automation_qbittorrent_user:
+        type: str
+        description: The torrent client web interface user the helper timers log in as.
+        default: admin
+      media_automation_helpers_enabled:
+        type: bool
+        description: Install the helper scripts and their systemd timers.
+        default: true
+      media_automation_helper_cleanup_enabled:
+        type: bool
+        description: Enable the completed-downloads cleanup timer.
+        default: true
+      media_automation_helper_stalled_enabled:
+        type: bool
+        description: Enable the stalled-torrent repair timer.
+        default: true
+      media_automation_helper_rename_enabled:
+        type: bool
+        description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
+        default: true
+      media_automation_helper_stall_hours:
+        type: int
+        description: Hours without progress before a torrent counts as stalled.
+        default: 24
+      media_automation_helper_min_age_hours:
+        type: int
+        description: Minimum age of a directory/partfile before the cleanup removes it.
+        default: 6
+      media_automation_helper_notify_url:
+        type: str
+        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
+        default: ''
+      media_automation_unit_dir:
+        type: path
+        description: Where the helper units are installed.
+        default: /etc/systemd/system
+      media_automation_systemctl_cli:
+        type: str
+        description: The systemctl command (a test fake).
+        default: systemctl
+      media_automation_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+      media_automation_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      media_automation_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      media_automation_target_image:
+        type: str
+        description: 'The new pinned image (upgrade): repository:tag@sha256:<digest>, the same repository as the app named in upgrade_app.'
+        required: true
+      media_automation_upgrade_app:
+        type: str
+        description: 'The app whose image is bumped (upgrade): one of the keys of the image variables.'
+        required: true

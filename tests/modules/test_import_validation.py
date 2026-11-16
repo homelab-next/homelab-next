@@ -259,6 +259,7 @@ MIGRATION_PROOF = {
     "idp": "reference: the idp protocol has no export/import_ yet",
     "lake-catalog": "reference: the lake protocol has no export/import_ yet",
     "media": "reference: the slot is provisional (no contract), so nothing can add export/import_",
+    "media-automation": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "object-store": "reference: the object_store protocol has no export/import_ yet",
     "orchestration": "reference: the orchestration protocol has no export/import_ yet",
     "projects": "reference: the projects protocol has no export/import_ yet",

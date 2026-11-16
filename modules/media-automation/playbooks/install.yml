@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the media automation stack on the guest the site placed the module's
+# `server` role on. The apply path (docs/modules/apply.md) renders its own modules.yml from the
+# selection and does not import this file; it is the module's own entry point:
+#   ansible-playbook -i <inventory with --selection> modules/media-automation/playbooks/install.yml
+# docker_engine is applied to the guest first; the role's readiness hook refuses to go on without
+# it, without the library mounted at media_automation_library_path, without /dev/net/tun and with
+# any of the four secrets unset.
+- name: Install the media automation stack
+  hosts: mod_media_automation_server
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: media_automation
+        tasks_from: readiness
+      tags: [mod_media_automation]
+  roles:
+    - role: media_automation
+      tags: [mod_media_automation]

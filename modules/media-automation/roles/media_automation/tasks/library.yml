@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# The library is really there: a directory that is a mount point, or that holds the marker file
+# the operator placed on the library. An unmounted mount point is an existing, empty directory,
+# and the downloaders and the managers would write into it (onto the guest's own disk) and the
+# managers would mark every title missing; so "is a directory" proves nothing. Run before the
+# containers start (main), by health (an unmounted library turns it red) and readiness.
+- block:
+    - name: Look at the library path and its marker
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ media_automation_library_path }}"
+        - "{{ media_automation_library_path }}/{{ media_automation_library_marker }}"
+      register: media_automation_library_stats
+      check_mode: false
+    - name: Ask whether the library path is a mount point
+      ansible.builtin.command:
+        argv: [mountpoint, -q, "{{ media_automation_library_path }}"]
+      register: media_automation_library_mountpoint
+      changed_when: false
+      failed_when: false
+      check_mode: false
+    - name: The library is a mounted or marked directory
+      ansible.builtin.assert:
+        that:
+          - media_automation_library_stats.results[0].stat.isdir | default(false)
+          - >-
+            media_automation_library_mountpoint.rc == 0 or
+            (media_automation_library_stats.results[1].stat.isreg | default(false))
+        fail_msg: >-
+          media-automation: {{ media_automation_library_path }} is not a mounted library: it is not a
+          directory, or it is neither a mount point nor holds the file {{ media_automation_library_marker }}.
+          Mount the library there (the site's source) and place the marker on it (touch
+          {{ media_automation_library_path }}/{{ media_automation_library_marker }}), or the downloaders
+          would fill the guest's own disk and the managers would mark every title missing.
+  tags: [health, readiness]
