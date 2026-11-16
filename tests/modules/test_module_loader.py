@@ -1126,7 +1126,10 @@ def test_the_cli_exits_0_clean_and_names_what_it_did_not_check(capsys):
     assert "note: the core registry is the repository's example" in out.out
     # the public modules/ tree ships modules/ntfy and modules/caddy, so it is neither missing nor empty
     assert "note: the public modules/ tree" not in out.out
-    assert out.out.rstrip().endswith("24 module(s), 0 problem(s)")
+    # every example module and every public module: counted from the trees, so a new module
+    # does not move this line
+    shipped = sum(len(list(d.glob("*/module.yml"))) for d in (EXAMPLES, ROOT / "modules"))
+    assert out.out.rstrip().endswith(f"{shipped} module(s), 0 problem(s)")
 
 
 def test_the_cli_exits_1_on_a_problem_and_prints_json(capsys):

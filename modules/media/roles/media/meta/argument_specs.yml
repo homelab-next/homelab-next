@@ -1,0 +1,647 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run Jellyfin as a compose_app with local accounts, Quick Connect on, a read-only library mount and CPU transcoding.
+    options:
+      media_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. media).
+        required: true
+      media_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Jellyfin image.
+        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+      media_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8096
+      media_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/media
+      media_library_path:
+        type: path
+        description: The library as the guest sees it, mounted read-only into the container at the same path.
+        default: /srv/media
+      media_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_group:
+        type: str
+        description: Group of the compose project and the data root (the container's gid by default).
+        default: '{{ media_gid }}'
+      media_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the container''s /config) and export/.'
+        default: /var/lib/hnx-modules/media
+      media_cache_dir:
+        type: path
+        description: 'Transcode scratch and image cache: rebuilt by the server, never backed up.'
+        default: /var/cache/hnx-modules/media
+      media_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/, the cache and export/.
+        default: 61010
+      media_gid:
+        type: int
+        description: The container's group id; the library must be readable by it.
+        default: 61010
+      media_timezone:
+        type: str
+        description: The container's TZ.
+        default: Etc/UTC
+      media_published_url:
+        type: str
+        description: The URL clients are told to use (JELLYFIN_PublishedServerUrl); empty for none.
+        default: ''
+      media_quick_connect:
+        type: bool
+        description: Keep Quick Connect enabled (seeded on a fresh install, checked by health).
+        default: true
+      media_hwaccel:
+        type: str
+        description: 'Hardware transcoding: none (the only supported value; CPU transcoding).'
+        default: none
+      media_expected_server_id:
+        type: str
+        description: The server id (32 hex) health requires; empty = not checked.
+        default: ''
+      media_mem_limit:
+        type: str
+        description: Container memory limit, like 8g.
+        default: 8g
+      media_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      media_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      media_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+  health:
+    short_description: Fail unless the container is healthy, /health says Healthy, the system info answers (the expected server id) and Quick Connect is on.
+    options:
+      media_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. media).
+        required: true
+      media_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Jellyfin image.
+        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+      media_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8096
+      media_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/media
+      media_library_path:
+        type: path
+        description: The library as the guest sees it, mounted read-only into the container at the same path.
+        default: /srv/media
+      media_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_group:
+        type: str
+        description: Group of the compose project and the data root (the container's gid by default).
+        default: '{{ media_gid }}'
+      media_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the container''s /config) and export/.'
+        default: /var/lib/hnx-modules/media
+      media_cache_dir:
+        type: path
+        description: 'Transcode scratch and image cache: rebuilt by the server, never backed up.'
+        default: /var/cache/hnx-modules/media
+      media_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/, the cache and export/.
+        default: 61010
+      media_gid:
+        type: int
+        description: The container's group id; the library must be readable by it.
+        default: 61010
+      media_timezone:
+        type: str
+        description: The container's TZ.
+        default: Etc/UTC
+      media_published_url:
+        type: str
+        description: The URL clients are told to use (JELLYFIN_PublishedServerUrl); empty for none.
+        default: ''
+      media_quick_connect:
+        type: bool
+        description: Keep Quick Connect enabled (seeded on a fresh install, checked by health).
+        default: true
+      media_hwaccel:
+        type: str
+        description: 'Hardware transcoding: none (the only supported value; CPU transcoding).'
+        default: none
+      media_expected_server_id:
+        type: str
+        description: The server id (32 hex) health requires; empty = not checked.
+        default: ''
+      media_mem_limit:
+        type: str
+        description: Container memory limit, like 8g.
+        default: 8g
+      media_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      media_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      media_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+  readiness:
+    short_description: Fail unless the container engine is ready and the inputs are valid.
+    options:
+      media_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. media).
+        required: true
+      media_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Jellyfin image.
+        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+      media_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8096
+      media_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/media
+      media_library_path:
+        type: path
+        description: The library as the guest sees it, mounted read-only into the container at the same path.
+        default: /srv/media
+      media_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_group:
+        type: str
+        description: Group of the compose project and the data root (the container's gid by default).
+        default: '{{ media_gid }}'
+      media_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the container''s /config) and export/.'
+        default: /var/lib/hnx-modules/media
+      media_cache_dir:
+        type: path
+        description: 'Transcode scratch and image cache: rebuilt by the server, never backed up.'
+        default: /var/cache/hnx-modules/media
+      media_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/, the cache and export/.
+        default: 61010
+      media_gid:
+        type: int
+        description: The container's group id; the library must be readable by it.
+        default: 61010
+      media_timezone:
+        type: str
+        description: The container's TZ.
+        default: Etc/UTC
+      media_published_url:
+        type: str
+        description: The URL clients are told to use (JELLYFIN_PublishedServerUrl); empty for none.
+        default: ''
+      media_quick_connect:
+        type: bool
+        description: Keep Quick Connect enabled (seeded on a fresh install, checked by health).
+        default: true
+      media_hwaccel:
+        type: str
+        description: 'Hardware transcoding: none (the only supported value; CPU transcoding).'
+        default: none
+      media_expected_server_id:
+        type: str
+        description: The server id (32 hex) health requires; empty = not checked.
+        default: ''
+      media_mem_limit:
+        type: str
+        description: Container memory limit, like 8g.
+        default: 8g
+      media_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      media_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      media_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+  backup:
+    short_description: Name the data root (not the library, not the cache) for the backup.
+    options:
+      media_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. media).
+        required: true
+      media_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Jellyfin image.
+        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+      media_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8096
+      media_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/media
+      media_library_path:
+        type: path
+        description: The library as the guest sees it, mounted read-only into the container at the same path.
+        default: /srv/media
+      media_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_group:
+        type: str
+        description: Group of the compose project and the data root (the container's gid by default).
+        default: '{{ media_gid }}'
+      media_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the container''s /config) and export/.'
+        default: /var/lib/hnx-modules/media
+      media_cache_dir:
+        type: path
+        description: 'Transcode scratch and image cache: rebuilt by the server, never backed up.'
+        default: /var/cache/hnx-modules/media
+      media_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/, the cache and export/.
+        default: 61010
+      media_gid:
+        type: int
+        description: The container's group id; the library must be readable by it.
+        default: 61010
+      media_timezone:
+        type: str
+        description: The container's TZ.
+        default: Etc/UTC
+      media_published_url:
+        type: str
+        description: The URL clients are told to use (JELLYFIN_PublishedServerUrl); empty for none.
+        default: ''
+      media_quick_connect:
+        type: bool
+        description: Keep Quick Connect enabled (seeded on a fresh install, checked by health).
+        default: true
+      media_hwaccel:
+        type: str
+        description: 'Hardware transcoding: none (the only supported value; CPU transcoding).'
+        default: none
+      media_expected_server_id:
+        type: str
+        description: The server id (32 hex) health requires; empty = not checked.
+        default: ''
+      media_mem_limit:
+        type: str
+        description: Container memory limit, like 8g.
+        default: 8g
+      media_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      media_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      media_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+  restore:
+    short_description: Check an export (listing, sha256, members) and restore the config directory from it, the server stopped meanwhile.
+    options:
+      media_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. media).
+        required: true
+      media_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Jellyfin image.
+        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+      media_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8096
+      media_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/media
+      media_library_path:
+        type: path
+        description: The library as the guest sees it, mounted read-only into the container at the same path.
+        default: /srv/media
+      media_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_group:
+        type: str
+        description: Group of the compose project and the data root (the container's gid by default).
+        default: '{{ media_gid }}'
+      media_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the container''s /config) and export/.'
+        default: /var/lib/hnx-modules/media
+      media_cache_dir:
+        type: path
+        description: 'Transcode scratch and image cache: rebuilt by the server, never backed up.'
+        default: /var/cache/hnx-modules/media
+      media_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/, the cache and export/.
+        default: 61010
+      media_gid:
+        type: int
+        description: The container's group id; the library must be readable by it.
+        default: 61010
+      media_timezone:
+        type: str
+        description: The container's TZ.
+        default: Etc/UTC
+      media_published_url:
+        type: str
+        description: The URL clients are told to use (JELLYFIN_PublishedServerUrl); empty for none.
+        default: ''
+      media_quick_connect:
+        type: bool
+        description: Keep Quick Connect enabled (seeded on a fresh install, checked by health).
+        default: true
+      media_hwaccel:
+        type: str
+        description: 'Hardware transcoding: none (the only supported value; CPU transcoding).'
+        default: none
+      media_expected_server_id:
+        type: str
+        description: The server id (32 hex) health requires; empty = not checked.
+        default: ''
+      media_mem_limit:
+        type: str
+        description: Container memory limit, like 8g.
+        default: 8g
+      media_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      media_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      media_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+      media_restore_source:
+        type: path
+        description: Directory holding an export (media-config.tar.gz and listing.jsonl).
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest) and record it as pending.
+    options:
+      media_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. media).
+        required: true
+      media_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Jellyfin image.
+        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+      media_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8096
+      media_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/media
+      media_library_path:
+        type: path
+        description: The library as the guest sees it, mounted read-only into the container at the same path.
+        default: /srv/media
+      media_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_group:
+        type: str
+        description: Group of the compose project and the data root (the container's gid by default).
+        default: '{{ media_gid }}'
+      media_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the container''s /config) and export/.'
+        default: /var/lib/hnx-modules/media
+      media_cache_dir:
+        type: path
+        description: 'Transcode scratch and image cache: rebuilt by the server, never backed up.'
+        default: /var/cache/hnx-modules/media
+      media_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/, the cache and export/.
+        default: 61010
+      media_gid:
+        type: int
+        description: The container's group id; the library must be readable by it.
+        default: 61010
+      media_timezone:
+        type: str
+        description: The container's TZ.
+        default: Etc/UTC
+      media_published_url:
+        type: str
+        description: The URL clients are told to use (JELLYFIN_PublishedServerUrl); empty for none.
+        default: ''
+      media_quick_connect:
+        type: bool
+        description: Keep Quick Connect enabled (seeded on a fresh install, checked by health).
+        default: true
+      media_hwaccel:
+        type: str
+        description: 'Hardware transcoding: none (the only supported value; CPU transcoding).'
+        default: none
+      media_expected_server_id:
+        type: str
+        description: The server id (32 hex) health requires; empty = not checked.
+        default: ''
+      media_mem_limit:
+        type: str
+        description: Container memory limit, like 8g.
+        default: 8g
+      media_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      media_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      media_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10
+      media_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> to move to.
+        required: true
+  export:
+    short_description: Write the exit copy (object-tree) of the config directory to <data root>/export, the server stopped meanwhile.
+    options:
+      media_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. media).
+        required: true
+      media_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Jellyfin image.
+        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+      media_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      media_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8096
+      media_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/media
+      media_library_path:
+        type: path
+        description: The library as the guest sees it, mounted read-only into the container at the same path.
+        default: /srv/media
+      media_library_marker:
+        type: str
+        description: File that proves the library is mounted when its path is not a mount point; placed by the operator on the library itself.
+        default: .hnx-media-library
+      media_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      media_group:
+        type: str
+        description: Group of the compose project and the data root (the container's gid by default).
+        default: '{{ media_gid }}'
+      media_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the container''s /config) and export/.'
+        default: /var/lib/hnx-modules/media
+      media_cache_dir:
+        type: path
+        description: 'Transcode scratch and image cache: rebuilt by the server, never backed up.'
+        default: /var/cache/hnx-modules/media
+      media_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/, the cache and export/.
+        default: 61010
+      media_gid:
+        type: int
+        description: The container's group id; the library must be readable by it.
+        default: 61010
+      media_timezone:
+        type: str
+        description: The container's TZ.
+        default: Etc/UTC
+      media_published_url:
+        type: str
+        description: The URL clients are told to use (JELLYFIN_PublishedServerUrl); empty for none.
+        default: ''
+      media_quick_connect:
+        type: bool
+        description: Keep Quick Connect enabled (seeded on a fresh install, checked by health).
+        default: true
+      media_hwaccel:
+        type: str
+        description: 'Hardware transcoding: none (the only supported value; CPU transcoding).'
+        default: none
+      media_expected_server_id:
+        type: str
+        description: The server id (32 hex) health requires; empty = not checked.
+        default: ''
+      media_mem_limit:
+        type: str
+        description: Container memory limit, like 8g.
+        default: 8g
+      media_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      media_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      media_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 10

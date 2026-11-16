@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+media_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+media_hwaccel_values: [none]
+media_repository: "{{ media_image.split('@')[0].rsplit(':', 1)[0] }}"
+media_tag: "{{ media_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+media_digest: "{{ media_image.split('@')[1] | default('') }}"
+# the minimal system.xml seeded on a fresh install (never over an existing one): the server fills
+# every other setting with its defaults and runs its first-run wizard
+media_system_xml_seed: |
+  <?xml version="1.0" encoding="utf-8"?>
+  <ServerConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <QuickConnectAvailable>true</QuickConnectAvailable>
+  </ServerConfiguration>
+# what the export leaves out: rebuilt by the server, or logs
+media_export_excludes: [./log, ./cache, ./transcodes]

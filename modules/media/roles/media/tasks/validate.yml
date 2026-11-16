@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - media_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - media_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - media_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - media_bind != '0.0.0.0'
+      - media_port | int >= 1 and media_port | int <= 65535
+      - media_uid | int >= 1000 and media_gid | int >= 1000
+      # absolute, canonical paths (no //, no . or .. component, no trailing /)
+      - >-
+        [media_dir, media_data_root, media_cache_dir, media_library_path] | reject('match', media_path_pattern) | list | length == 0
+      # the library is never inside the module's own state, and a state directory never inside it
+      - media_library_path != media_data_root and not (media_library_path ~ '/').startswith(media_data_root ~ '/')
+      - not (media_data_root ~ '/').startswith(media_library_path ~ '/')
+      - not (media_cache_dir ~ '/').startswith(media_library_path ~ '/')
+      - media_library_path not in ['/srv', '/mnt', '/media', '/home', '/opt', '/var', '/usr', '/etc']
+      - media_library_marker is match('^\.?[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}\Z')
+      - media_quick_connect is boolean
+      - media_hwaccel in media_hwaccel_values
+      - media_timezone is match('^[A-Za-z][A-Za-z0-9_+/-]{0,63}\Z')
+      - media_published_url == '' or media_published_url is match('^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9_.-]*)*\Z')
+      - media_expected_server_id == '' or media_expected_server_id is match('^[0-9a-f]{32}\Z')
+      - media_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      media: a registry id, an image pinned by tag and digest, the guest's IPv4 address to publish
+      on (not all interfaces), a port, a container uid and gid of 1000 or more, absolute canonical
+      directories with the library outside the data root and not a host-wide directory,
+      media_quick_connect true or false, media_hwaccel none (hardware transcoding is not supported
+      yet), a timezone, an http(s) published URL or empty, a 32-hex expected server id or empty,
+      and a memory limit like 8g
+  tags: [health, backup, restore, export, upgrade]

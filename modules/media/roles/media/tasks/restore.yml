@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the config directory from an export (media_restore_source: media-config.tar.gz and
+# listing.jsonl): the archive's hash must equal the listing and it may hold no member that leaves the
+# directory, no link and no special file. It is extracted beside the config and checked (no link, the
+# expected server id when set) while the server still runs; only then is the server stopped, the live
+# config moved aside (never deleted) and the staged one moved in. The server is started only after a
+# complete swap; a failure leaves it stopped and says so. A source tree from another host or an older
+# server goes through tools/migrate/jellyfin.py instead, which maps library paths.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Read the listing and hash the archive
+      ansible.builtin.slurp:
+        src: "{{ media_restore_source }}/listing.jsonl"
+      register: media_listing
+    - name: Hash the archive
+      ansible.builtin.stat:
+        path: "{{ media_restore_source }}/media-config.tar.gz"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: media_restore_archive
+    - name: Refuse an archive that differs from its listing
+      ansible.builtin.assert:
+        that:
+          - (media_listing.content | b64decode | from_json).sha256 == media_restore_archive.stat.checksum
+        fail_msg: "media: the export is not intact (its hash differs from the listing)"
+    - name: List the archive's members (names, and kinds for the links)
+      ansible.builtin.command:
+        argv: [tar, -tzf, "{{ media_restore_source }}/media-config.tar.gz"]
+      register: media_members
+      changed_when: false
+    - name: List the archive's member types
+      ansible.builtin.command:
+        argv: [tar, -tvzf, "{{ media_restore_source }}/media-config.tar.gz"]
+      register: media_member_types
+      changed_when: false
+    - name: Refuse an archive that leaves its directory, holds a link or a special file, or has no server id
+      ansible.builtin.assert:
+        that:
+          - media_members.stdout_lines | select('match', '^/') | list | length == 0
+          - media_members.stdout_lines | select('search', '(^|/)\.\.(/|$)') | list | length == 0
+          # a symlink (l), hard link (h), device, fifo: only regular files and directories are restored
+          - media_member_types.stdout_lines | reject('match', '^[-d]') | list | length == 0
+          - "'data/device.txt' in (media_members.stdout_lines | map('regex_replace', '^\\./', '') | list)"
+        fail_msg: "media: the archive leaves its directory, holds a link or special file, or holds no data/device.txt (the server id)"
+    - name: Look for a staging directory an earlier restore left
+      ansible.builtin.stat:
+        path: "{{ media_data_root }}/config.restoring"
+      register: media_stale_staging
+    - name: Refuse to extract over it
+      ansible.builtin.assert:
+        that: not media_stale_staging.stat.exists
+        fail_msg: "media: {{ media_data_root }}/config.restoring is left from an earlier restore; inspect it and move it away"
+    - name: Extract into a fresh directory beside the config (the server keeps running meanwhile)
+      block:
+        - name: Create the staging directory
+          ansible.builtin.file:
+            path: "{{ media_data_root }}/config.restoring"
+            state: directory
+            mode: "0700"
+        - name: Extract the archive
+          ansible.builtin.command:
+            argv: [tar, -xzf, "{{ media_restore_source }}/media-config.tar.gz", -C, "{{ media_data_root }}/config.restoring", --no-same-owner, --no-same-permissions]
+          changed_when: true
+        - name: Look for links in what was extracted
+          ansible.builtin.command:
+            argv: [find, "{{ media_data_root }}/config.restoring", -type, l]
+          register: media_staged_links
+          changed_when: false
+        - name: Read the restored server id
+          ansible.builtin.slurp:
+            src: "{{ media_data_root }}/config.restoring/data/device.txt"
+          register: media_restored_id
+        - name: The staged config is what it should be
+          ansible.builtin.assert:
+            that:
+              - media_staged_links.stdout_lines | length == 0
+              - media_expected_server_id == '' or (media_restored_id.content | b64decode | trim) == media_expected_server_id
+            fail_msg: >-
+              media: the staged config holds a link, or its server id
+              ({{ media_restored_id.content | b64decode | trim }}) is not the expected
+              {{ media_expected_server_id | default('(not set)', true) }}. Nothing was changed; the
+              staging directory {{ media_data_root }}/config.restoring is left for inspection.
+        - name: Give the staged config to the container's user
+          ansible.builtin.command:
+            argv: [chown, -R, "{{ media_uid | int }}:{{ media_gid | int }}", "{{ media_data_root }}/config.restoring"]
+          changed_when: true
+    - name: Swap the staged config in with the server stopped
+      block:
+        - name: Stop the server
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ media_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Move the live config aside (never deleted)
+          ansible.builtin.command:
+            argv: [mv, "{{ media_data_root }}/config", "{{ media_data_root }}/config.before-restore"]
+            removes: "{{ media_data_root }}/config"
+          changed_when: true
+        - name: Move the verified config into place
+          ansible.builtin.command:
+            argv: [mv, "{{ media_data_root }}/config.restoring", "{{ media_data_root }}/config"]
+          changed_when: true
+      rescue:
+        - name: Say that the server was left stopped
+          ansible.builtin.fail:
+            msg: >-
+              media: the swap failed part way. The server is LEFT STOPPED. The previous config is at
+              {{ media_data_root }}/config.before-restore (or still at config) and the verified one
+              at {{ media_data_root }}/config.restoring; put them right by hand, then start the server.
+    - name: Start the server on the restored config
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ media_dir }}/docker-compose.yml", up, -d]
+      changed_when: true
+      when: media_start | bool
+  tags: [restore]

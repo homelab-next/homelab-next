@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the config (export_first), then stop and remove the container. The data root
+# (with the export in it), the cache and the compose project are kept for the operator to archive
+# or delete; the library is never touched. The decommission audit (module.yml lifecycle.remove.audit)
+# checks nothing still names the service.
+- name: Remove the media server
+  hosts: mod_media_server
+  become: true
+  tasks:
+    - name: Export the config first
+      ansible.builtin.include_role:
+        name: media
+        tasks_from: export
+    - name: Stop and remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ media_dir | default('/opt/compose/media') }}/docker-compose.yml", down]
+      changed_when: true

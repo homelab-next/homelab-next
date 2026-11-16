@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). The library
+# is mounted read-only; the cache outside the data root; the extra bind sources are listed with
+# their reasons because they are not under the application's own directories.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    media_app:
+      compose_app_name: media
+      compose_app_dir: "{{ media_dir }}"
+      compose_app_data_dir: "{{ media_data_root }}"
+      compose_app_export_dir: "{{ media_data_root }}/export"
+      compose_app_owner: "{{ media_owner }}"
+      compose_app_group: "{{ media_group }}"
+      compose_app_start: "{{ media_start }}"
+      compose_app_validate_with_docker: "{{ media_validate_with_docker }}"
+      compose_app_bind_extra:
+        - {path: "{{ media_library_path }}", reason: "the media library the server reads, mounted read-only"}
+        - {path: "{{ media_cache_dir }}", reason: "transcode scratch and image cache, rebuilt by the server and not backed up"}
+      compose_app_spec:
+        services:
+          media:
+            image: "{{ media_repository }}"
+            tag: "{{ media_tag }}"
+            digest: "{{ media_digest }}"
+            user: "{{ media_uid | int }}:{{ media_gid | int }}"
+            environment: >-
+              {{ {'TZ': media_timezone} | combine(
+                   {'JELLYFIN_PublishedServerUrl': media_published_url} if media_published_url | length > 0 else {}) }}
+            ports: ["{{ media_bind }}:{{ media_port | int }}:8096"]
+            volumes:
+              - "{{ media_data_root }}/config:/config"
+              - "{{ media_cache_dir }}:/cache"
+              - "{{ media_library_path }}:{{ media_library_path }}:ro"
+            mem_limit: "{{ media_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, 'curl --noproxy "*" -fsS "$HEALTHCHECK_URL"']  # the image sets HEALTHCHECK_URL to its own /health
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 60s
+  tags: [health, backup, restore, export, upgrade]
