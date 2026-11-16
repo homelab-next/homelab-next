@@ -20,3 +20,6 @@
 - Export (pg_dump plus the attachments' tar, sha256 listing), backup, a checked restore (the web
   app and the worker stopped, one transaction, the attachments replaced) that can be run again
   for a final delta, and the generic migration tool `tools/migrate/openproject.py`.
+- `openproject_secret_key_base_migrated` (default false): an explicit opt-in that accepts a short key carried
+  over from a source instance (1 to 256 printable characters, no whitespace or quotes) and warns to rotate it
+  after the cutover. The README says how to read the source's effective key and how to rotate.

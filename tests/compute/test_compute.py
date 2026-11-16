@@ -94,6 +94,11 @@ def libvirt_fleet(libvirt_dir):
     return load_fleet(libvirt_dir, STUB, keys_path=KEYS)
 
 
+def _tf(fleet):
+    """The Terraform render of ``fleet``, one file per resource."""
+    return render(fleet, "terraform-proxmox")
+
+
 def mutate(tmp_path: Path, name: str, edit) -> Path:
     d = tmp_path / "fleet"
     shutil.copytree(FLEET, d)
@@ -209,6 +214,30 @@ CASES = [
         lambda d: d.update(gpu={"profile": "accel-a"}),
         "gpu requires kind vm",
     ),
+    (
+        "gpu-count-zero",
+        "infer-core",
+        lambda d: d["gpu"].update(count=0),
+        "count",
+    ),
+    (
+        "gpu-count-too-many",
+        "infer-core",
+        lambda d: d["gpu"].update(count=17),
+        "count",
+    ),
+    (
+        "gpu-count-not-an-integer",
+        "infer-core",
+        lambda d: d["gpu"].update(count="4"),
+        "count",
+    ),
+    (
+        "gpu-tensor-parallel-above-count",
+        "infer-core",
+        lambda d: d["gpu"].update(count=1, tensor_parallel=2),
+        "tensor_parallel 2 exceeds gpu.count 1",
+    ),
     ("manual-without-steps", "secrets-core", lambda d: d.pop("lifecycle"), "requires_root_steps"),
     (
         "unknown-capability",
@@ -265,7 +294,7 @@ def test_inherit_gateway_needs_zone_gateway(tmp_path):
 
 
 def test_manual_guest_excluded_from_iac_but_listed(good):
-    tf = render(good, "terraform-proxmox")
+    tf = _tf(good)
     assert not any("secrets-core" in k for k in tf if k.endswith(".tf"))
     assert "pct create 131 as a privileged container" in tf["MANUAL.md"]
     assert "secrets-core" in render(good, "inventory")["hosts.yml"]
@@ -378,7 +407,7 @@ def test_validate_checks_key_names_when_keys_given(tmp_path, capsys):
 
 
 def test_terraform_shapes(good):
-    tf = render(good, "terraform-proxmox")
+    tf = _tf(good)
     vm = tf["vm-infer-core.tf"]
     assert 'resource "proxmox_virtual_environment_vm" "infer_core"' in vm
     assert 'mapping = "gpu-a"' in vm and "bios" in vm
@@ -388,6 +417,21 @@ def test_terraform_shapes(good):
     assert "ignore_changes = [clone, operating_system]" in tf["vm-bus-core.tf"]
     assert '"${var.default_bridge}v20"' in tf["vm-bus-core.tf"]
     assert "endpoint" in tf["providers.tf"] and "198." not in tf["providers.tf"]
+
+
+def test_terraform_gpu_default_is_one_hostpci(good):
+    vm = _tf(good)["vm-infer-core.tf"]
+    assert vm.count("hostpci {") == 1 and 'device  = "hostpci0"' in vm and "hostpci1" not in vm
+
+
+def test_terraform_gpu_count_emits_one_hostpci_per_device(tmp_path):
+    d = mutate(tmp_path, "infer-core", lambda x: x["gpu"].update(count=4, tensor_parallel=4))
+    vm = _tf(load_fleet(d, STUB))["vm-infer-core.tf"]
+    assert vm.count("hostpci {") == 4
+    for i in range(4):
+        assert f'device  = "hostpci{i}"' in vm
+    assert "hostpci4" not in vm
+    assert vm.count('mapping = "gpu-a"') == 4 and vm.count("pcie    = true") == 4
 
 
 def test_libvirt_skips_non_vm_and_manual(libvirt_fleet):
@@ -471,7 +515,7 @@ def test_registry_merge_conflict_is_an_error(good):
 
 # ---------------------------------------------------------------- plan
 def test_plan_reports_add_change_remove(good):
-    old = render(good, "terraform-proxmox")
+    old = _tf(good)
     new = dict(old)
     new["vm-edge-core.tf"] = old["vm-edge-core.tf"].replace("cores = 2", "cores = 4")
     del new["vm-bus-core.tf"]
@@ -618,7 +662,7 @@ def test_hcl_quote_escapes_template_sequences():
 
 
 def test_terraform_provider_constraint_is_bounded(good):
-    tf = render(good, "terraform-proxmox")["providers.tf"]
+    tf = _tf(good)["providers.tf"]
     assert 'version = "~> 0.60"' in tf and ">=" not in tf
 
 

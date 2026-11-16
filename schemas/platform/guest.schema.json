@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.6",
+  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.7",
   "title": "Guest (compute) descriptor",
   "description": "One VM, container or physical host, described in vendor-neutral values. Zones are referenced by id (a site model owns them); capabilities by cap: id. Generators render Terraform, libvirt, cloud-init, an Ansible inventory, registry hosts and backup jobs from a directory of these files.",
   "type": "object",
@@ -244,7 +244,14 @@
         "profile": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
         "resource_mapping": {"type": ["string", "null"], "pattern": "^[a-z][a-z0-9_-]*$"},
         "power_limit_w": {"type": ["integer", "null"], "minimum": 1},
-        "tensor_parallel": {"type": ["integer", "null"], "minimum": 1}
+        "tensor_parallel": {"type": ["integer", "null"], "minimum": 1},
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 1,
+          "description": "(1.7) How many devices of resource_mapping the guest takes: the renderer emits hostpci0..hostpci<count-1>, each naming the one mapping, and the hypervisor gives each a free device of it (so the mapping must list at least count devices on the node, or the guest will not start). Default 1; 16 is the hypervisor's hostpci limit. When tensor_parallel is also set, validation requires count >= tensor_parallel."
+        }
       }
     },
     "capability": {
