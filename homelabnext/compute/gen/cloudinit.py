@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from homelabnext.compute.model import Fleet, Guest
 
-from ._text import HEADER, q
+from ._text import HEADER, q, qlist
 
 #: one hypervisor node applies this output: ``hnx guests render --node`` may narrow it to one
 PER_NODE = True
@@ -37,6 +37,24 @@ def _runcmd(ci: dict) -> list[str]:
     return cmds
 
 
+def virtiofs_mounts(g: Guest) -> list[tuple[str, str, str]]:
+    """``(tag, mount_path, options)`` per directory a VM shares by virtiofs: the tag is the PVE
+    directory mapping id, the options carry ``ro`` when ``read_only``."""
+    return [
+        (d["mapping"], d["mount_path"], "defaults,nofail" + (",ro" if d.get("read_only") else ""))
+        for d in g.shared_dirs
+        if d.get("mapping")
+    ]
+
+
+def fstab_virtiofs(g: Guest) -> str:
+    """``fstab-virtiofs``: the same mounts as fstab lines, for a VM whose guest has no cloud-init
+    seed (the baseline or an overlay appends them)."""
+    L = [f"# {HEADER}"]
+    L += [f"{t} {p} virtiofs {o} 0 0" for t, p, o in virtiofs_mounts(g)]
+    return "\n".join(L) + "\n"
+
+
 def user_data(fleet: Fleet, g: Guest) -> str:
     ci = g.cloudinit
     L = ["#cloud-config", f"# {HEADER}"]
@@ -55,6 +73,9 @@ def user_data(fleet: Fleet, g: Guest) -> str:
     pk = ci.get("packages", [])
     if pk:
         L += ["package_update: true", "packages:"] + [f"  - {q(p)}" for p in sorted(pk)]
+    mounts = virtiofs_mounts(g)
+    if mounts:
+        L += ["mounts:"] + [f"  - {qlist([t, p, 'virtiofs', o, '0', '0'])}" for t, p, o in mounts]
     runcmd = _runcmd(ci)
     if runcmd:
         L += ["runcmd:"] + [f"  - {c}" for c in runcmd]
@@ -77,6 +98,8 @@ def network_config(fleet: Fleet, g: Guest) -> str:
 def render(fleet: Fleet) -> dict[str, str]:
     out: dict[str, str] = {}
     for g in fleet.iac():
+        if g.kind == "vm" and not g.cloudinit and virtiofs_mounts(g):
+            out[f"{g.name}/fstab-virtiofs"] = fstab_virtiofs(g)
         if g.kind != "vm" or not g.cloudinit:
             continue  # containers take cloud-init-like settings from the provider's own block
         out[f"{g.name}/user-data"] = user_data(fleet, g)

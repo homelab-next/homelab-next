@@ -1,6 +1,6 @@
 ---
 summary: 'The compute model: one vendor-neutral file per guest, its validation, generators for IaC, cloud-init, inventory, firewall and baselines, and applying them.'
-summary_of: outline:sha256:0ace345ae82a5357
+summary_of: outline:sha256:4172cf09f0756737
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compute (guest) model
@@ -10,7 +10,7 @@ render everything else from those files: infrastructure-as-code, hypervisor comm
 seeds, an Ansible inventory, registry hosts and backup jobs. Nothing here needs hardware: the
 whole chain is tested with golden files from a synthetic fleet.
 
-* Contract: `schemas/platform/guest.schema.json` (version 1.7, additive over 1.0 to 1.6; frozen copies in `schemas/_frozen/`).
+* Contract: `schemas/platform/guest.schema.json` (version 1.8, additive over 1.0 to 1.7; frozen copies in `schemas/_frozen/`).
 * Baseline set: `schemas/platform/baseline_set.schema.json` (version 1.2; `_baselines.yml` beside the guest files; [Baselines and defense layers](#baselines-and-defense-layers), ADR-0016).
 * Code: `homelabnext/compute/`. CLI: `hnx guests`.
 * Example fleet and goldens: `tests/compute/fleet/`, `tests/compute/golden/`.
@@ -508,6 +508,23 @@ another VM reserved, and fails the start with `could not find a free device for 
 none is left). So the mapping must list at least `count` devices on the guest's node: growing a
 guest from 2 to 4 cards is "add two devices to the mapping, raise `count`". `count` is also an
 upper bound for `gpu.tensor_parallel`, checked when `count` is stated.
+
+### Shared directories (`shared_dirs`)
+
+A container's `shared_dirs` render as LXC `mount_point` blocks (`host_path`, `mount_path`,
+`read_only`). A VM shares a host directory by virtiofs (guest schema 1.8): each item names a
+`mapping`, the id of a PVE directory mapping (Datacenter, Resource Mappings, Directory;
+`pvesh /cluster/mapping/dir`), and the `terraform-proxmox` target renders one
+`virtiofs { mapping = "<id>" }` block per item. The mapping, created by hand like a GPU resource
+mapping, names the host path, so a VM's `host_path` is documentation. The IaC API token needs
+`Mapping.Use` on `/mapping/dir/<id>`.
+
+`mount_path` and `read_only` are applied in the guest: the `cloudinit` target writes a `mounts:`
+entry per share (tag = mapping id, type `virtiofs`, options `defaults,nofail`, plus `ro` when
+`read_only`); a VM without a cloud-init seed gets a `<name>/fstab-virtiofs` file with the same
+lines for the baseline or overlay to apply. A VM item without `mapping` is refused by the render
+(the error names the guest), never dropped; validation holds each mapping to once per guest
+(the tag must be unique). The libvirt target is unchanged (it uses `host_path`).
 
 ### libvirt
 
