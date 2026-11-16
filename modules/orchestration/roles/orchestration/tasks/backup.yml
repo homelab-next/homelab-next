@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's
+# paths). The configuration directory is NOT in the manifest: it holds the events token
+# (events.token) and each runner home's config.yaml carries the model gateway key, and it is
+# re-rendered from the role's variables and the secret store by install.yml, so a backup of it
+# would only copy secrets into the backup store. (A VM-level backup still catches the whole disk:
+# the guest's backup policy and its store are then where those secrets are protected.) The export first writes a consistent copy of the store into the data root
+# (export/), so a restore never depends on the live file being caught between two writes.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Copy the database and dump its rows (the export)
+      ansible.builtin.include_tasks: copy_out.yml
+    - name: Write the backup manifest
+      ansible.builtin.copy:
+        dest: "{{ orchestration_data_root }}/backup-manifest.json"
+        content: "{{ {'service': orchestration_logical_id,
+                      'paths': [orchestration_data_root],
+                      'note': 'the configuration directory is not listed: it holds secrets and is re-rendered by install.yml; export/ holds a consistent copy of the store (controller.db), its rows as jsonl and a sha256 listing; the live controller.db and its -wal are caught between writes, so restore from export/'} | to_nice_json }}\n"
+        owner: "{{ orchestration_user }}"
+        group: "{{ orchestration_group }}"
+        mode: "0600"
+  tags: [backup]

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+# a reference with no secret behind it is refused here, before any file is written
+- name: Refuse an unset or malformed credential
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Create the accounts and the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Install the pinned binary
+  ansible.builtin.include_tasks: binary.yml
+
+- name: Render the configuration, the token digests, the profiles and the homes
+  ansible.builtin.include_tasks: config.yml
+
+- name: Have the controller check what was rendered
+  ansible.builtin.include_tasks: check.yml
+
+- name: Write the unit and move the running controller onto what changed
+  ansible.builtin.include_tasks: units.yml

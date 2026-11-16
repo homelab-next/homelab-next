@@ -1,0 +1,7 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role orchestration): each caller's token digest (sha256 of the token,
+# hex), never the token.
+tokens:
+{% for c in orchestration_callers %}
+  - {caller: {{ c.name | to_json }}, sha256: {{ lookup('hnx_secret', c.secret) | hash('sha256') | to_json }}, scopes: {{ c.scopes | to_json }}}
+{% endfor %}

@@ -141,6 +141,11 @@ type Events struct {
 	Source string `yaml:"source"`
 	// TokenEnv names an environment variable holding a bearer token for the forwarder.
 	TokenEnv string `yaml:"token_env"`
+	// TokenFile names a file holding the forwarder's bearer token (one line), read once at start.
+	// Prefer it to TokenEnv: an environment variable is visible to every process of the same user
+	// through /proc, a file under a systemd credential directory is not in the environment at all.
+	// Setting both is refused.
+	TokenFile string `yaml:"token_file"`
 	// QueueSize bounds the durable outbox (undelivered events); 0 is the sender's default.
 	QueueSize int `yaml:"queue_size"`
 	// GatewayTagPrefix prefixes the run id in the gateway tag every model request of a job
@@ -454,6 +459,12 @@ func (c Config) check() error {
 	}
 	if c.LockPath != "" && (!filepath.IsAbs(c.LockPath) || filepath.Clean(c.LockPath) != c.LockPath) {
 		return fmt.Errorf("lock_path %q: want a clean absolute path (every caller of the backend must name the same file)", c.LockPath)
+	}
+	if c.Events.TokenEnv != "" && c.Events.TokenFile != "" {
+		return errors.New("events.token_env and events.token_file are both set: name the token once")
+	}
+	if c.Events.TokenFile != "" && (!filepath.IsAbs(c.Events.TokenFile) || filepath.Clean(c.Events.TokenFile) != c.Events.TokenFile) {
+		return fmt.Errorf("events.token_file %q: want a clean absolute path", c.Events.TokenFile)
 	}
 	if !gatewaytag.ValidPrefix(c.Events.GatewayTagPrefix) {
 		return fmt.Errorf("events.gateway_tag_prefix %q: want at most 64 of [A-Za-z0-9._:/-]", c.Events.GatewayTagPrefix)
