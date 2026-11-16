@@ -1,0 +1,26 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role llamacpp). Do not edit.
+# compose file sha256: {{ llamacpp_compose_sum }}
+# Starts {{ llamacpp_served_model_name }} ({{ llamacpp_model_repo }}/{{ llamacpp_model_file }}, {{ llamacpp_model_digest }}) on the
+# {{ llamacpp_backend }} backend. The container has no restart policy of its own: this unit is its only
+# starter, so the power-cap and byte checks below run before every start, a reboot and a crash included.
+[Unit]
+Description=llama-server {{ llamacpp_logical_id }} ({{ llamacpp_served_model_name }})
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Nothing loads onto the card until its power cap is within the limit and the weights are the pinned
+# bytes (minutes per hundred GB: within TimeoutStartSec).
+ExecStartPre={{ llamacpp_precheck_bin }} {{ llamacpp_precheck_full | join(' ') }}
+ExecStart=/usr/bin/docker compose -f {{ llamacpp_dir }}/docker-compose.yml up --no-color --no-log-prefix --abort-on-container-exit
+ExecStop=/usr/bin/docker compose -f {{ llamacpp_dir }}/docker-compose.yml stop --timeout 30
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec={{ llamacpp_start_timeout_s | int }}
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "llama-server for one GGUF model: a compose_app container, started only by a unit that refuses to load onto a GPU whose power cap is above the limit or whose weights are not the pinned bytes."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []
