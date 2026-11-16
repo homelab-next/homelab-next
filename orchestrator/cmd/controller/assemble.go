@@ -126,6 +126,11 @@ func loadSite(path string) (*site, []error) {
 			problems = append(problems, fmt.Errorf("lock_path: %w", err))
 		}
 	}
+	if cfg.Events.ForwarderURL != "" && cfg.Events.TokenFile != "" {
+		if err := checkSecretFile(cfg.Events.TokenFile); err != nil {
+			problems = append(problems, fmt.Errorf("events.token_file: %w", err))
+		}
+	}
 	for _, name := range secretEnv(cfg) {
 		// a name every facts command or session gets anyway would hand them the secret, and a
 		// session variable would be overwritten in the session by the runner's own value

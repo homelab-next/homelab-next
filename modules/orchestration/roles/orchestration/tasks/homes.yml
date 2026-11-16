@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# One runner home per backend under <config dir>/homes/<name>. With a gateway the home's
+# config.yaml names the gateway's URL and the backend's role alias and holds the gateway key (0640,
+# the service group reads it: a session runs as the service user, the trust boundary in the docs).
+# Without one the home is an empty directory and the sessions get no model endpoint.
+- name: Create each backend's home
+  ansible.builtin.file:
+    path: "{{ orchestration_homes_dir }}/{{ item.name }}"
+    state: directory
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_group }}"
+    mode: "0750"
+  loop: "{{ orchestration_backends }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Write each backend's gateway configuration
+  ansible.builtin.template:
+    src: home-config.yaml.j2
+    dest: "{{ orchestration_homes_dir }}/{{ item.name }}/config.yaml"
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_group }}"
+    mode: "0640"
+  loop: "{{ orchestration_backends }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: orchestration_home_files
+  no_log: true
+  diff: false
+  when: orchestration_gateway_id != ''
+
+- name: Remove a gateway configuration the site no longer asks for
+  ansible.builtin.file:
+    path: "{{ orchestration_homes_dir }}/{{ item.name }}/config.yaml"
+    state: absent
+  loop: "{{ orchestration_backends }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: orchestration_gateway_id == ''
+
+- name: Find the homes
+  ansible.builtin.find:
+    paths: "{{ orchestration_homes_dir }}"
+    file_type: directory
+    recurse: false
+  register: orchestration_found_homes
+
+- name: Remove the home of a backend the pool no longer names (only a plain directory directly under the homes directory)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: >-
+    {{ orchestration_found_homes.files | rejectattr('islnk')
+       | selectattr('path', 'match', '^' ~ (orchestration_homes_dir ~ '/') | regex_escape ~ '[^/]+\Z')
+       | rejectattr('path', 'in', orchestration_backends | map(attribute='name') | map('regex_replace', '^(.*)$', orchestration_homes_dir ~ '/\1') | list)
+       | list }}
+  loop_control:
+    label: "{{ item.path | basename }}"
