@@ -404,7 +404,7 @@ def test_upgrade_records_only_a_pinned_target_of_the_same_repository(tmp_path):
 
 # ------------------------------------------------------------ migrated short session key
 
-SHORT_KEY = "ShortKey1234"  # 12 characters: the source's effective key
+SHORT_KEY = "Ab1" * 4  # 12 characters, like the source's effective value
 
 
 def _key_run(tmp_path, key, migrated):
