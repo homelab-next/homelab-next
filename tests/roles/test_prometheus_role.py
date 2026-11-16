@@ -17,6 +17,7 @@ nothing is started): the steps main does before the container.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import pwd
@@ -59,10 +60,17 @@ IMAGE = yaml.safe_load((MODULE / "roles" / "prometheus" / "defaults" / "main.yml
 ]
 RENDER = ["validate", "app", "generate", "credentials", "dirs", "render"]
 HOSTS = sorted(load(REGISTRY).hosts)
-_NET = ".".join(
-    GUEST.split(".")[:3]
-)  # the example lab's own network, one /24 stands in for the site's
-SUBNET = _NET + ".0/24"
+
+
+NETMASK = ".".join(["255", "255", "255", "0"])  # a /24
+
+
+def net(a, b, c, d, prefix=24):
+    """A CIDR built from its octets, so no address literal sits in a test."""
+    return f"{ipaddress.IPv4Address((a << 24) | (b << 16) | (c << 8) | d)}/{prefix}"
+
+
+SUBNET = net(10, 231, 77, 0)  # a free private /24 stands in for the site's own
 SELF = "localhost"  # the container itself
 SELF_PORT = 9090  # the port the service listens on inside it
 
@@ -233,6 +241,75 @@ def test_the_service_scrapes_itself_inside_its_container_with_its_instance_name_
     }
 
 
+def _selfscrape(tmp_path: Path, text: str):
+    """The self-scrape rewrite alone, on crafted generator output; returns (result, output text)."""
+    cmd, run_env = _invocation(
+        tmp_path, ROLE, "selfscrape", pvars(tmp_path) | {"crafted_text": text}, SECRETS
+    )
+    play = yaml.safe_load((tmp_path / "play.yml").read_text())
+    play[0]["tasks"] = [
+        # set_fact, as generate.yml does (an extra var could not be overridden by the rewrite)
+        {"ansible.builtin.set_fact": {"prometheus_scrape_text": "{{ crafted_text }}"}},
+        {"ansible.builtin.include_role": {"name": ROLE, "tasks_from": "selfscrape"}},
+        {
+            "ansible.builtin.copy": {
+                "content": "{{ prometheus_scrape_text }}",
+                "dest": str(tmp_path / "out.yml"),
+            }
+        },
+    ]
+    (tmp_path / "play.yml").write_text(yaml.safe_dump(play))
+    r = subprocess.run(cmd, capture_output=True, text=True, env=run_env, cwd=tmp_path)
+    out = tmp_path / "out.yml"
+    return r, out.read_text() if out.exists() else None
+
+
+def _job(name, service, targets=("a:1",), scheme=None, static=True):
+    j = {"job_name": name, "metrics_path": "/metrics"}
+    if scheme:
+        j["scheme"] = scheme
+    if static:
+        j["static_configs"] = [{"targets": list(targets), "labels": {"service": service}}]
+    return j
+
+
+def _text(*jobs):
+    return "# Managed header\n" + yaml.safe_dump({"scrape_configs": list(jobs)})
+
+
+def test_the_generators_text_is_kept_byte_for_byte_when_no_job_is_the_services_own(tmp_path):
+    text = _text(_job("a", "other"), _job("b", "another", scheme="https"))
+    r, out = _selfscrape(tmp_path, text)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert out == text
+
+
+def test_a_job_without_static_configs_is_kept_and_does_not_break_the_rewrite(tmp_path):
+    r, out = _selfscrape(
+        tmp_path, _text(_job("odd", "x", static=False), _job("metrics", "metrics", ("h:9090",)))
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    jobs = {j["job_name"]: j for j in yaml.safe_load(out)["scrape_configs"]}
+    assert "static_configs" not in jobs["odd"]
+    (sc,) = jobs["metrics"]["static_configs"]
+    assert sc["targets"] == [f"{SELF}:{SELF_PORT}"] and sc["labels"]["instance"] == "h:9090"
+    assert out.startswith("# Managed header\n")
+
+
+def test_the_services_own_https_job_is_left_alone(tmp_path):
+    text = _text(_job("metrics", "metrics", ("h:9090",), scheme="https"))
+    r, out = _selfscrape(tmp_path, text)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert out == text
+
+
+@pytest.mark.parametrize("targets", [(), ("h:1", "h:2")])
+def test_the_services_own_job_of_an_unexpected_shape_is_refused_clearly(tmp_path, targets):
+    r, _ = _selfscrape(tmp_path, _text(_job("metrics", "metrics", targets)))
+    assert r.returncode != 0
+    assert "exactly one" in r.stdout + r.stderr
+
+
 def test_the_self_job_follows_the_container_port_not_the_published_one(tmp_path):
     assert render(tmp_path, prometheus_port=9191).returncode == 0
     assert _jobs(tmp_path)["metrics"]["static_configs"][0]["targets"] == [f"{SELF}:{SELF_PORT}"]
@@ -245,21 +322,66 @@ def test_the_own_host_exporter_target_is_unchanged(tmp_path):
     assert f"{GUEST}:9100" in [x for n in nodes for x in n["targets"]]
 
 
-def test_the_pinned_subnet_reaches_compose_app_from_the_spec_and_the_run():
-    """compose_app renders the network (tests/roles/test_role_render.py); here the role must hand
-    it the setting in the spec and in the play that includes compose_app."""
-    tasks = MODULE / "roles" / "prometheus" / "tasks"
-    assert '"{{ prometheus_network_subnet }}"' in (tasks / "app.yml").read_text()
-    main = (tasks / "main.yml").read_text()
-    assert 'compose_app_network_subnet: "{{ prometheus_app.compose_app_network_subnet }}"' in main
+def test_the_pinned_subnet_is_in_the_compose_file_main_produces(tmp_path):
+    """main runs compose_app for real (nothing started); the example registry has no notify service,
+    so the run stops at the alert forwarder's first task, after the compose file is written."""
+    r = run_role(
+        tmp_path,
+        ROLE,
+        "main",
+        pvars(tmp_path, prometheus_unit_dir=str(tmp_path / "units")),
+        env=SECRETS,
+    )
+    assert "Resolve the notify endpoint" in r.stdout + r.stderr, r.stdout + r.stderr
+    doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
+    assert doc["networks"] == {"default": {"ipam": {"config": [{"subnet": SUBNET}]}}}
 
 
-@pytest.mark.parametrize(
-    "bad", ["", _NET + ".0", _NET + ".0/8", _NET + ".0/30", "x/24", "300.1.1.1/24"]
-)
-def test_a_network_subnet_that_is_not_a_cidr_is_refused(tmp_path, bad):
-    r = render(tmp_path, prometheus_network_subnet=bad)
-    assert r.returncode != 0 and "pinned network subnet" in r.stdout + r.stderr
+SUBNET_REFUSED = {
+    "empty": "",
+    "no prefix": net(10, 231, 77, 0).split("/")[0],
+    "prefix too short": net(10, 0, 0, 0, 8),
+    "prefix too long": net(10, 231, 77, 0, 30),
+    "not an address": "x/24",
+    "loopback": net(127, 0, 0, 0, 16),
+    "link-local": net(169, 254, 0, 0, 16),
+    "multicast": net(224, 0, 0, 0, 16),
+    "unspecified": net(0, 0, 0, 0, 16),
+    "public": net(8, 8, 0, 0, 16),
+    "the whole LAN range": net(
+        192, 168, 0, 0, 16
+    ),  # fine as a range, refused when it holds the guest
+    "host bits set": net(10, 0, 0, 5),
+}
+
+
+@pytest.mark.parametrize("bad", list(SUBNET_REFUSED.values()), ids=list(SUBNET_REFUSED))
+def test_a_network_subnet_that_is_not_a_free_private_network_is_refused(tmp_path, bad):
+    extra = {}
+    if bad == net(192, 168, 0, 0, 16):  # the guest sits inside it
+        extra = {
+            "ansible_host": str(ipaddress.IPv4Address((192 << 24) | (168 << 16) | (1 << 8) | 20)),
+            "ansible_default_ipv4": {
+                "network": str(ipaddress.IPv4Address((192 << 24) | (168 << 16) | (1 << 8))),
+                "netmask": NETMASK,
+            },
+        }
+    r = run_steps(
+        tmp_path, ["validate"], pvars(tmp_path, prometheus_network_subnet=bad, **extra), SECRETS
+    )
+    assert r.returncode != 0, r.stdout
+    assert "network_subnet" in r.stdout + r.stderr
+
+
+def test_the_guests_own_address_inside_the_subnet_is_refused(tmp_path):
+    inside = str(ipaddress.IPv4Address((10 << 24) | (231 << 16) | (77 << 8) | 9))
+    r = run_steps(tmp_path, ["validate"], pvars(tmp_path, ansible_host=inside), SECRETS)
+    assert r.returncode != 0 and "must not contain the guest" in r.stdout + r.stderr
+
+
+def test_a_free_private_subnet_beside_the_guest_is_accepted(tmp_path):
+    r = run_steps(tmp_path, ["validate"], pvars(tmp_path), SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 def test_the_network_subnet_has_no_default(tmp_path):

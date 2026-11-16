@@ -12,8 +12,6 @@
       - prometheus_uid | int >= 1000 and prometheus_gid | int >= 1000
       - >-
         [prometheus_dir, prometheus_data_root, prometheus_state_dir] | reject('match', prometheus_path_pattern) | list | length == 0
-      # a /16 to /29 IPv4 network
-      - prometheus_network_subnet is match('^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(?:1[6-9]|2[0-9])\Z')
       - prometheus_retention_time is match(prometheus_duration_pattern)
       - prometheus_retention_size == '' or prometheus_retention_size is match('^[1-9][0-9]{0,5}[KMGT]B\Z')
       - prometheus_scrape_interval is match(prometheus_interval_pattern)
@@ -46,9 +44,29 @@
     fail_msg: >-
       prometheus: a registry id, an image pinned by tag and digest, the guest's IPv4 address to
       publish on (not all interfaces), ports, a container uid and gid of 1000 or more, absolute
-      canonical directories, a pinned network subnet (an IPv4 CIDR, /16 to /29), a retention like 30d (and a size like 20GB or nothing), scrape and
+      canonical directories, a retention like 30d (and a size like 20GB or nothing), scrape and
       evaluation intervals like 30s, a memory limit like 768m, the hnx command (bare or by absolute
       path, or an absolute python running homelabnext.cli), an absolute registry path, plain host names to exclude, alert durations like 10m and
       percentages 1-99, a notify logical id and topic, a priority 1-5, a secret:<name> token
       reference, an alert schedule of every minute or every 30 seconds, a read-only mount-point pattern of plain regex characters and a positive number of minutes
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+# The pinned compose network is judged in ONE place, compose_app's network_subnet.yml (RFC 1918,
+# /16 to /29, host bits zero, not overlapping the guest's own network or address); a second copy of
+# those rules here would drift from it. Empty is refused: the subnet is required (no default).
+- name: Require the pinned network subnet
+  ansible.builtin.assert:
+    that:
+      - prometheus_network_subnet | string != ''
+    fail_msg: "prometheus_network_subnet is required: a free private /16 to /29 of the site's own (README, The guest's own exporter)"
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Judge the pinned network subnet with compose_app's rules
+  ansible.builtin.include_role:
+    name: compose_app
+    tasks_from: network_subnet
+    apply:
+      tags: [health, backup, restore, export, upgrade, readiness]
+  vars:
+    compose_app_network_subnet: "{{ prometheus_network_subnet }}"
   tags: [health, backup, restore, export, upgrade, readiness]

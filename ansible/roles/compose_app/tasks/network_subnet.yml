@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+# The ONE place a pinned compose network is judged (compose_app's own validate.yml includes it, and
+# a role that takes the subnet as its own setting includes it too, with compose_app_network_subnet
+# set from that setting). Docker installs a route for the pinned bridge on the guest, so a range
+# that is loopback, link-local, multicast, public or overlaps the guest's own network would
+# blackhole that traffic for the whole guest, and a wide or host-bit-set range would make a firewall
+# rule written for "the container" admit far more. Hence: RFC 1918 space only (10/8, 172.16/12,
+# 192.168/16), prefix /16 to /29, host bits zero (the network address), and not overlapping the
+# guest's own default network (ansible_default_ipv4, when facts are gathered) or its own address
+# (ansible_host, when an IPv4 literal). An empty subnet is "not pinned" and always valid.
+- name: Validate the pinned network subnet's form (an IPv4 CIDR with a prefix from /16 to /29, or none)
+  ansible.builtin.assert:
+    that:
+      - compose_app_network_subnet is string
+      - compose_app_network_subnet == '' or compose_app_network_subnet is match(compose_app_subnet_pattern)
+    fail_msg: >-
+      compose_app_network_subnet must be empty or an IPv4 CIDR with a prefix from /16 to /29;
+      not {{ compose_app_network_subnet | string | truncate(40) | to_json }}
+
+- name: Validate the pinned network subnet's range
+  when: compose_app_network_subnet != ''
+  vars:
+    _cns_o: "{{ compose_app_network_subnet.split('/')[0].split('.') | map('int') | list }}"
+    _cns_prefix: "{{ compose_app_network_subnet.split('/')[1] | int }}"
+    _cns_start: "{{ ((_cns_o[0] * 256 + _cns_o[1]) * 256 + _cns_o[2]) * 256 + _cns_o[3] }}"
+    _cns_size: "{{ 2 ** (32 - (_cns_prefix | int)) }}"
+    _cns_guest_net: "{{ (ansible_default_ipv4 | default({})).network | default('') }}"
+    _cns_guest_mask: "{{ (ansible_default_ipv4 | default({})).netmask | default('') }}"
+    _cns_host: "{{ ansible_host | default('') | string }}"
+  block:
+    - name: Require RFC 1918 space
+      ansible.builtin.assert:
+        that:
+          - >-
+            _cns_o[0] == 10 or (_cns_o[0] == 172 and 16 <= _cns_o[1] <= 31)
+            or (_cns_o[0] == 192 and _cns_o[1] == 168)
+        fail_msg: >-
+          compose_app_network_subnet must be private (RFC 1918: 10/8, 172.16/12 or 192.168/16);
+          {{ compose_app_network_subnet }} is loopback, link-local, multicast, public or reserved space
+    - name: Require the network address (no host bits set)
+      ansible.builtin.assert:
+        that:
+          - (_cns_start | int) % (_cns_size | int) == 0
+        fail_msg: >-
+          compose_app_network_subnet must be the network address of its range (host bits zero);
+          {{ compose_app_network_subnet }} has host bits set
+    - name: Refuse a range that overlaps the guest's own default network
+      ansible.builtin.assert:
+        that:
+          - >-
+            _cns_guest_net == '' or _cns_guest_mask == '' or
+            (_cns_start | int) >= (_gs | int) + (_gz | int) or (_gs | int) >= (_cns_start | int) + (_cns_size | int)
+        fail_msg: >-
+          compose_app_network_subnet must not overlap the guest's own network
+          {{ _cns_guest_net }}/{{ _cns_guest_mask }}: the pinned bridge's route would shadow it
+      vars:
+        _gn: "{{ (_cns_guest_net or '0.0.0.0').split('.') | map('int') | list }}"
+        _gm: "{{ _cns_guest_mask.split('.') | map('int') | list if _cns_guest_mask != '' else [255, 255, 255, 255] }}"
+        _gs: "{{ ((_gn[0] * 256 + _gn[1]) * 256 + _gn[2]) * 256 + _gn[3] }}"
+        _gz: "{{ 4294967296 - (((_gm[0] * 256 + _gm[1]) * 256 + _gm[2]) * 256 + _gm[3]) }}"
+    - name: Refuse a range that contains the guest's own address
+      ansible.builtin.assert:
+        that:
+          - >-
+            _cns_host is not match('^[0-9]{1,3}(\.[0-9]{1,3}){3}\Z') or
+            not ((_cns_start | int) <= (_hv | int) < (_cns_start | int) + (_cns_size | int))
+        fail_msg: >-
+          compose_app_network_subnet must not contain the guest's own address {{ _cns_host }}
+      vars:
+        _h: "{{ _cns_host.split('.') | map('int') | list if _cns_host is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}\\Z') else [0, 0, 0, 0] }}"
+        _hv: "{{ ((_h[0] * 256 + _h[1]) * 256 + _h[2]) * 256 + _h[3] }}"

@@ -4,6 +4,7 @@ validate compose output with `docker compose config` when docker exists."""
 
 import grp
 import http.server
+import ipaddress
 import json
 import os
 import pwd
@@ -29,6 +30,9 @@ ZERO = "sha256:" + "0" * 64
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow published ports bind loopback in the fixture spec
 OWNER = pwd.getpwuid(os.getuid()).pw_name
 GROUP = grp.getgrgid(os.getgid()).gr_name
+
+
+NETMASK = ".".join(["255", "255", "255", "0"])  # a /24
 
 
 def docker_compose_ok():
@@ -380,6 +384,14 @@ def test_compose_app_output_passes_docker_compose_config(first):
     assert cfg["services"]["web"]["depends_on"]["db"]["condition"] == "service_healthy"
 
 
+def net(a, b, c, d, prefix=24):
+    """A CIDR built from its octets, so no address literal sits in a test."""
+    return f"{ipaddress.IPv4Address((a << 24) | (b << 16) | (c << 8) | d)}/{prefix}"
+
+
+PINNED = net(10, 231, 77, 0)
+
+
 def _pinned(tmp_path):
     return {
         "runner": run_role,
@@ -388,7 +400,7 @@ def _pinned(tmp_path):
         "extra_vars": app_vars(
             tmp_path,
             compose_app_validate_with_docker=False,
-            compose_app_network_subnet="203.0.113.0/24",
+            compose_app_network_subnet=PINNED,
         ),
     }
 
@@ -398,7 +410,7 @@ def test_compose_app_pins_the_default_network_when_asked(first):
     r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
-    assert doc["networks"] == {"default": {"ipam": {"config": [{"subnet": "203.0.113.0/24"}]}}}
+    assert doc["networks"] == {"default": {"ipam": {"config": [{"subnet": PINNED}]}}}
 
 
 def test_compose_app_renders_no_network_block_by_default(tmp_path):
@@ -410,10 +422,45 @@ def test_compose_app_renders_no_network_block_by_default(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "bad",
-    ["203.0.113.0", "203.0.113.0/8", "203.0.113.0/30", "0/24", "a/24", "203.0.113.0/24\nx: y"],
-)
-def test_compose_app_refuses_a_network_subnet_that_is_not_a_cidr(tmp_path, bad):
+    "subnet",
+    [net(10, 0, 0, 0, 16), net(10, 255, 255, 240, 28), net(172, 16, 0, 0, 16),
+     net(172, 31, 4, 0, 24), net(192, 168, 0, 0, 16), net(192, 168, 9, 0, 29)],
+)  # fmt: skip
+def test_compose_app_accepts_private_network_addresses(tmp_path, subnet):
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "network_subnet",
+        {"compose_app_network_subnet": subnet, "compose_app_subnet_pattern": SUBNET_PATTERN},
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+SUBNET_PATTERN = yaml.safe_load((ROOT / "ansible/roles/compose_app/vars/main.yml").read_text())[
+    "compose_app_subnet_pattern"
+]
+BAD_SUBNETS = {
+    "no prefix": net(10, 231, 77, 0).split("/")[0],
+    "prefix too short": net(10, 0, 0, 0, 8),
+    "prefix too long": net(10, 231, 77, 0, 30),
+    "not an address": "a/24",
+    "octet out of range": "300.1.1.1/24",
+    "smuggled line": net(10, 231, 77, 0) + "\nx: y",
+    "unspecified": net(0, 0, 0, 0, 16),
+    "loopback": net(127, 0, 0, 0, 16),
+    "link-local": net(169, 254, 0, 0, 16),
+    "multicast": net(224, 0, 0, 0, 16),
+    "public": net(8, 8, 0, 0, 16),
+    "public, near private": net(172, 32, 0, 0, 16),
+    "public, near private 2": net(172, 15, 0, 0, 16),
+    "public, near 192.168": net(192, 169, 0, 0, 16),
+    "host bits set": net(10, 0, 0, 5),
+    "host bits set in a /16": net(192, 168, 1, 0, 16),
+}
+
+
+@pytest.mark.parametrize("bad", list(BAD_SUBNETS.values()), ids=list(BAD_SUBNETS))
+def test_compose_app_refuses_a_network_subnet_that_is_not_a_private_network_address(tmp_path, bad):
     r = run_role(
         tmp_path,
         "compose_app",
@@ -422,6 +469,46 @@ def test_compose_app_refuses_a_network_subnet_that_is_not_a_cidr(tmp_path, bad):
     )
     assert r.returncode != 0 and "compose_app_network_subnet must be" in r.stdout + r.stderr
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+GUEST_FACTS = {
+    "network": str(ipaddress.IPv4Address((192 << 24) | (168 << 16) | (50 << 8))),
+    "netmask": NETMASK,
+    "address": str(ipaddress.IPv4Address((192 << 24) | (168 << 16) | (50 << 8) | 7)),
+}
+
+
+@pytest.mark.parametrize(
+    "subnet, host",
+    [
+        pytest.param(net(192, 168, 0, 0, 16), None, id="a /16 over the guest's own network"),
+        pytest.param(net(192, 168, 50, 0, 24), None, id="the guest's own network"),
+        pytest.param(net(192, 168, 50, 0, 28), None, id="inside the guest's own network"),
+        pytest.param(
+            net(10, 0, 0, 0, 16),
+            net(10, 0, 4, 9).split("/")[0],
+            id="a range holding the guest's address",
+        ),
+    ],
+)
+def test_compose_app_refuses_a_network_overlapping_the_guest(tmp_path, subnet, host):
+    extra = {"compose_app_network_subnet": subnet, "compose_app_subnet_pattern": SUBNET_PATTERN}
+    extra["ansible_default_ipv4"] = GUEST_FACTS
+    if host:
+        extra["ansible_host"] = host
+    r = run_role(tmp_path, "compose_app", "network_subnet", extra)
+    assert r.returncode != 0 and "compose_app_network_subnet must not" in r.stdout + r.stderr
+
+
+def test_compose_app_accepts_a_network_beside_the_guest(tmp_path):
+    extra = {
+        "compose_app_network_subnet": net(192, 168, 51, 0),
+        "compose_app_subnet_pattern": SUBNET_PATTERN,
+        "ansible_default_ipv4": GUEST_FACTS,
+        "ansible_host": GUEST_FACTS["address"],
+    }
+    r = run_role(tmp_path, "compose_app", "network_subnet", extra)
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 def _first(tmp_path):

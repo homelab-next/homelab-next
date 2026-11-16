@@ -136,9 +136,14 @@ guest admits the container. The platform has no hook by which a module contribut
 guest's firewall (the rules are the guest file's `firewall_rules`, one language for the hypervisor
 and the guest), so the module does two things and the site does one:
 
-1. **The module pins the network** (`prometheus_network_subnet`, **required**, an IPv4 CIDR from
-   /16 to /29, no default: an address range is the site's), so the source address is stable across
-   recreates. The first apply after pinning recreates the network and the container.
+1. **The module pins the network** (`prometheus_network_subnet`, **required**, no default: an
+   address range is the site's), so the source address is stable across recreates. It is judged in
+   one place (`compose_app`'s `network_subnet.yml`): an RFC 1918 network address (host bits zero)
+   with a prefix from /16 to /29, never loopback, link-local, multicast or public space, and not
+   overlapping the guest's own network (`ansible_default_ipv4`, when facts are gathered) or
+   containing its address. A /24 is plenty for one project, and the narrower the range the fewer
+   sources the guest's rule admits. The first apply after pinning recreates the network and the
+   container.
 2. **The site admits exactly that subnet to exactly that port** on the metrics guest, nothing wider
    (the overlay's guest file, beside the other readers):
 
@@ -151,7 +156,7 @@ and the guest), so the module does two things and the site does one:
    The rule's `ports` is `prometheus_node_exporter_port`. The container's own port 9090 needs no
    rule (see "What it does").
 
-Pick a range that overlaps neither the guest's networks nor docker's other bridges.
+Still pick a range no other docker bridge on the guest uses (the role cannot see them).
 
 ## Reaching the interface (the decision)
 

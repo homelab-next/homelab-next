@@ -26,14 +26,8 @@
       the name homelabnext.modules.limits gives it), and in a module play its own role's slice
       (hnx_module_slice), never another module's; not {{ compose_app_cgroup_parent | string | truncate(80) | to_json }}
 
-- name: Validate the pinned network subnet (an IPv4 CIDR from /16 to /29, or none)
-  ansible.builtin.assert:
-    that:
-      - compose_app_network_subnet is string
-      - compose_app_network_subnet == '' or compose_app_network_subnet is match(compose_app_subnet_pattern)
-    fail_msg: >-
-      compose_app_network_subnet must be empty or an IPv4 CIDR with a prefix from /16 to /29;
-      not {{ compose_app_network_subnet | string | truncate(40) | to_json }}
+- name: Validate the pinned network subnet (one shared judgement, network_subnet.yml)
+  ansible.builtin.include_tasks: network_subnet.yml
 
 - name: Validate services exist
   ansible.builtin.assert:
