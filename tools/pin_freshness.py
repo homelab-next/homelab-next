@@ -109,6 +109,12 @@ SOURCES: dict[str, tuple[str, str]] = {
     "role:media/media_image": ("github", "jellyfin/jellyfin"),
     "role:nifi/nifi_image": ("github", "apache/nifi"),
     "role:ntfy/ntfy_image": ("github", "binwiederhier/ntfy"),
+    "role:llamacpp/llamacpp_image": (
+        "none",
+        "ggml-org/llama.cpp tags builds bNNNNN, which the github source does not parse, and only "
+        "some builds have an image: compare with the server-<backend>-bNNNNN tags of "
+        "ghcr.io/ggml-org/llama.cpp by hand",
+    ),
     "role:openproject/openproject_image": ("github", "opf/openproject"),
     "role:openproject/openproject_postgres_image": (
         "none",
@@ -186,6 +192,12 @@ NOTES: dict[str, str] = {
         "modules/nifi/module.yml, nifi_product_version in the role's vars and the lab registry's "
         "version; the upgrade playbook exports the state first and a newer version migrates its "
         "repositories forward only (the role refuses an older target)"
+    ),
+    "role:llamacpp/llamacpp_image": (
+        "an image (modules/llamacpp, the vulkan build): bump the tag and its digest together, with "
+        "product.version in modules/llamacpp/module.yml (0.<build>.0), the lab registry's version "
+        "and the three other backends' pins in the README; a build at least 14 days old that has "
+        "an image for every backend"
     ),
     "role:ntfy/ntfy_image": (
         "an image (modules/ntfy): bump the tag and its digest together, with product.version in "

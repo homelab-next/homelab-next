@@ -382,8 +382,11 @@ without the hardware. Each item is a test to run before promising capacity:
 
 ## Not covered here
 
-- llama-server units: the plan validates `llama-server` backends and the gateway routes to them,
-  but no role renders them yet.
+- llama-server from the serving plan: the plan validates `llama-server` backends and the gateway
+  routes to them, but `hnx models serving render` writes no instance file for them. They are
+  served by the `llamacpp` provider module ([modules/llamacpp](../modules/llamacpp/README.md): one
+  GGUF model on one GPU, a power-cap and byte check before every start), configured by the
+  overlay's group variables to match the plan's port and the role table's model id.
 - The NFS/SMB export of the store to the workstation (the file server's role).
 - vLLM Playground (a launch-settings GUI, test instance only) and benchmarking harnesses.
 - A live run of any of this on a GPU host. CI proves the roles against fakes, and the K-14 probe

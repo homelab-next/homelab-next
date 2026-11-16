@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (llamacpp_target_image, tag and digest of the same
+# backend), then converge with the new pin (set llamacpp_image to the target in the overlay). The
+# weights do not move; run the health hook and the inference suite through the gateway after.
+#   ansible-playbook -i <inventory> modules/llamacpp/playbooks/upgrade.yml -e llamacpp_target_image=<ref>
+- name: Upgrade llama-server
+  hosts: mod_llamacpp_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: llamacpp
+        tasks_from: upgrade
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: llamacpp
+      vars:
+        llamacpp_image: "{{ llamacpp_target_image }}"
