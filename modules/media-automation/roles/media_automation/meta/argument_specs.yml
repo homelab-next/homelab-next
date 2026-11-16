@@ -205,10 +205,10 @@ argument_specs:
         type: int
         description: Minimum age of a directory/partfile before the cleanup removes it.
         default: 6
-      media_automation_helper_notify_url:
-        type: str
-        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
-        default: ''
+      media_automation_libexec_dir:
+        type: path
+        description: Where the helper scripts are installed (root-owned; the units run them at this path, fixed in the unit templates).
+        default: /usr/local/libexec/homelabnext
       media_automation_unit_dir:
         type: path
         description: Where the helper units are installed.
@@ -433,10 +433,10 @@ argument_specs:
         type: int
         description: Minimum age of a directory/partfile before the cleanup removes it.
         default: 6
-      media_automation_helper_notify_url:
-        type: str
-        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
-        default: ''
+      media_automation_libexec_dir:
+        type: path
+        description: Where the helper scripts are installed (root-owned; the units run them at this path, fixed in the unit templates).
+        default: /usr/local/libexec/homelabnext
       media_automation_unit_dir:
         type: path
         description: Where the helper units are installed.
@@ -661,10 +661,10 @@ argument_specs:
         type: int
         description: Minimum age of a directory/partfile before the cleanup removes it.
         default: 6
-      media_automation_helper_notify_url:
-        type: str
-        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
-        default: ''
+      media_automation_libexec_dir:
+        type: path
+        description: Where the helper scripts are installed (root-owned; the units run them at this path, fixed in the unit templates).
+        default: /usr/local/libexec/homelabnext
       media_automation_unit_dir:
         type: path
         description: Where the helper units are installed.
@@ -889,10 +889,10 @@ argument_specs:
         type: int
         description: Minimum age of a directory/partfile before the cleanup removes it.
         default: 6
-      media_automation_helper_notify_url:
-        type: str
-        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
-        default: ''
+      media_automation_libexec_dir:
+        type: path
+        description: Where the helper scripts are installed (root-owned; the units run them at this path, fixed in the unit templates).
+        default: /usr/local/libexec/homelabnext
       media_automation_unit_dir:
         type: path
         description: Where the helper units are installed.
@@ -1117,10 +1117,10 @@ argument_specs:
         type: int
         description: Minimum age of a directory/partfile before the cleanup removes it.
         default: 6
-      media_automation_helper_notify_url:
-        type: str
-        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
-        default: ''
+      media_automation_libexec_dir:
+        type: path
+        description: Where the helper scripts are installed (root-owned; the units run them at this path, fixed in the unit templates).
+        default: /usr/local/libexec/homelabnext
       media_automation_unit_dir:
         type: path
         description: Where the helper units are installed.
@@ -1345,10 +1345,10 @@ argument_specs:
         type: int
         description: Minimum age of a directory/partfile before the cleanup removes it.
         default: 6
-      media_automation_helper_notify_url:
-        type: str
-        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
-        default: ''
+      media_automation_libexec_dir:
+        type: path
+        description: Where the helper scripts are installed (root-owned; the units run them at this path, fixed in the unit templates).
+        default: /usr/local/libexec/homelabnext
       media_automation_unit_dir:
         type: path
         description: Where the helper units are installed.
@@ -1577,10 +1577,10 @@ argument_specs:
         type: int
         description: Minimum age of a directory/partfile before the cleanup removes it.
         default: 6
-      media_automation_helper_notify_url:
-        type: str
-        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
-        default: ''
+      media_automation_libexec_dir:
+        type: path
+        description: Where the helper scripts are installed (root-owned; the units run them at this path, fixed in the unit templates).
+        default: /usr/local/libexec/homelabnext
       media_automation_unit_dir:
         type: path
         description: Where the helper units are installed.
@@ -1805,10 +1805,10 @@ argument_specs:
         type: int
         description: Minimum age of a directory/partfile before the cleanup removes it.
         default: 6
-      media_automation_helper_notify_url:
-        type: str
-        description: 'Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).'
-        default: ''
+      media_automation_libexec_dir:
+        type: path
+        description: Where the helper scripts are installed (root-owned; the units run them at this path, fixed in the unit templates).
+        default: /usr/local/libexec/homelabnext
       media_automation_unit_dir:
         type: path
         description: Where the helper units are installed.

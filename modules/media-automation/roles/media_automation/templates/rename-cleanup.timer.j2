@@ -1,13 +1,13 @@
 {# SPDX-License-Identifier: Apache-2.0 -#}
 # Managed by Ansible (role media_automation). Do not edit.
 [Unit]
-Description=media-automation helper timer: {{ h.what }}
+Description=media-automation helper timer: clean release-style file names in the library
 
 [Timer]
-OnCalendar={{ h.calendar }}
+OnCalendar=*-*-* 05:30:00
 RandomizedDelaySec=300
 Persistent=true
-Unit=hnx-media-automation-{{ h.id }}.service
+Unit=hnx-media-automation-rename-cleanup.service
 
 [Install]
 WantedBy=timers.target

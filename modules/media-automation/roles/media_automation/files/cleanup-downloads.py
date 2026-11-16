@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: media-cleanup-downloads
+#   kind: job
+#   purpose: Remove completed downloads whose data is already hardlinked into the library and not loaded in the torrent client, the filename-blacklisted executables and scripts, orphaned partfiles and empty directories, only under downloads/.
+#   owner: operator
+#   trigger: [timer:media_automation/cleanup-downloads, role:media_automation]
+#   inputs: the downloads directory and the library tree (read only), the torrent client web interface (QBIT_URL, login from the unit environment), the filename blacklist
+#   outputs: removals under downloads/ logged to the journal; nothing outside downloads/ is ever changed
+#   installs_to: /usr/local/libexec/homelabnext/hnx-media-cleanup-downloads
+#   exit:
+#     "0": ran (or skipped because the torrent client could not be asked, which fails closed)
+#     "2": refused to run, the completed root is a link or lies outside downloads/
 """Carried by the media-automation module (modules/media-automation/roles/media_automation/files): do not edit on the host.
 
 Replaces cleanuparr (the user reported it never worked reliably) for the

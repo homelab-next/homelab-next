@@ -1,7 +1,7 @@
 {# SPDX-License-Identifier: Apache-2.0 -#}
 # Managed by Ansible (role media_automation). Do not edit.
 [Unit]
-Description=media-automation helper: {{ h.what }}
+Description=media-automation helper: remove completed downloads already hardlinked into the library
 After=docker.service
 ConditionPathIsDirectory={{ media_automation_library_path }}
 
@@ -10,6 +10,7 @@ Type=oneshot
 User={{ media_automation_uid | int }}
 Group={{ media_automation_gid | int }}
 EnvironmentFile={{ media_automation_helpers_dir }}/helper.env
+Environment=BLACKLIST_FILE=/usr/local/libexec/homelabnext/hnx-media-excluded-file-names.txt
 Environment=APP_CONFIG_ROOT={{ media_automation_data_root }}/config
 Environment=MEDIA_ROOT={{ media_automation_library_path }}
 Environment=QBIT_URL=http://{{ media_automation_bind }}:{{ media_automation_qbittorrent_port | int }}
@@ -17,10 +18,8 @@ Environment=SONARR_URL=http://{{ media_automation_bind }}:{{ media_automation_so
 Environment=RADARR_URL=http://{{ media_automation_bind }}:{{ media_automation_radarr_port | int }}
 Environment=STALLED_TORRENT_STATE={{ media_automation_state_dir }}/stalled-torrents.json
 Environment=STALLED_TORRENT_HOURS={{ media_automation_helper_stall_hours | int }}
-{% if h.id == 'cleanup-downloads' %}
 Environment=COMPLETED_ROOT={{ media_automation_downloads_dir }}/qbittorrent/completed
-{% endif %}
-ExecStart=/usr/bin/python3 -I {{ media_automation_helpers_dir }}/{{ h.script }}{{ h.args }}
+ExecStart=/usr/local/libexec/homelabnext/hnx-media-cleanup-downloads --min-age-hours {{ media_automation_helper_min_age_hours | int }}
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
@@ -44,13 +43,7 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 UMask=0077
-{% if h.id == 'cleanup-downloads' %}
 # the library is read-only for it: it may only delete under downloads/ (and write its state)
 ReadOnlyPaths={{ media_automation_library_path }}
 ReadWritePaths={{ media_automation_downloads_dir }} {{ media_automation_state_dir }}
-{% elif h.id == 'rename-cleanup' %}
-ReadWritePaths={{ media_automation_library_path }} {{ media_automation_state_dir }}
-{% else %}
-ReadWritePaths={{ media_automation_state_dir }}
-{% endif %}
 ReadOnlyPaths={{ media_automation_data_root }}/config

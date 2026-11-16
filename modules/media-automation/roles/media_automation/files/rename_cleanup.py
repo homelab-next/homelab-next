@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: media-rename-cleanup
+#   kind: job
+#   purpose: Rename release-style file names in the library to the library managers' own naming, then ask them to rescan.
+#   owner: operator
+#   trigger: [timer:media_automation/rename-cleanup, role:media_automation]
+#   inputs: the two library managers over their web interfaces (API keys read from each config.xml)
+#   outputs: renames inside each series or movie folder of the library (a name that leaves its folder or a link is refused), rescan commands, and journal lines
+#   installs_to: /usr/local/libexec/homelabnext/hnx-media-rename-cleanup
+#   exit:
+#     "0": ran
+#     "1": a manager could not be asked (the renames of the other are not attempted)
 """Cleans up messy torrent-release-style filenames (brackets, duplicated
 extensions, site tags) across the whole Sonarr/Radarr library, using each
 app's own /rename preview endpoint to compute the CORRECT clean name

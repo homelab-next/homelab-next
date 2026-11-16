@@ -308,7 +308,6 @@ def test_main_refuses_a_credential_in_the_wrong_form(tmp_path, var, bad):
         {"media_automation_vpn_outbound_subnets": [SUBNET] * 9},
         {"media_automation_vpn_input_ports": [0]},
         {"media_automation_vpn_server_hostnames": "bad host"},
-        {"media_automation_helper_notify_url": "javascript:alert(1)"},
         {
             "media_automation_qbittorrent_login_ref": "secret:media-automation/vpn-wireguard-addresses"
         },
@@ -780,7 +779,9 @@ def test_the_helper_scripts_are_carried_and_run_by_hardened_timers():
         text = p.read_text()
         compile(text, str(p), "exec")
         assert "media-core" not in text and "/mnt/media" not in text and "gluck" not in text
-    tmpl = (MODULE / "roles" / "media_automation" / "templates" / "helper.service.j2").read_text()
+    tmpl = (
+        MODULE / "roles" / "media_automation" / "templates" / "cleanup-downloads.service.j2"
+    ).read_text()
     for hardening in (
         "NoNewPrivileges=yes",
         "ProtectSystem=strict",
@@ -789,7 +790,9 @@ def test_the_helper_scripts_are_carried_and_run_by_hardened_timers():
     ):
         assert hardening in tmpl
     assert "User={{ media_automation_uid | int }}" in tmpl  # never root
-    timer = (MODULE / "roles" / "media_automation" / "templates" / "helper.timer.j2").read_text()
+    timer = (
+        MODULE / "roles" / "media_automation" / "templates" / "cleanup-downloads.timer.j2"
+    ).read_text()
     assert "Persistent=true" in timer and "OnCalendar=" in timer
 
 
@@ -801,6 +804,7 @@ def test_the_helper_env_file_holds_the_client_password_0600_and_nothing_else_sec
         tmp_path,
         media_automation_helpers_enabled=True,
         media_automation_unit_dir=str(units),
+        media_automation_libexec_dir=str(tmp_path / "libexec"),
         media_automation_systemctl_cli=str(tmp_path / "bin" / "systemctl"),
     )
     r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
@@ -809,7 +813,12 @@ def test_the_helper_env_file_holds_the_client_password_0600_and_nothing_else_sec
     body = env_file.read_text()
     assert f"QBIT_PASS={PASSWORD}" in body and PRIVATE not in body
     assert oct(env_file.stat().st_mode & 0o777) == "0o600"
-    assert os.access(tmp_path / "app" / "helpers" / "cleanup-downloads.py", os.X_OK)
+    assert os.access(tmp_path / "libexec" / "hnx-media-cleanup-downloads", os.X_OK)
+    assert (tmp_path / "libexec" / "hnx-media-excluded-file-names.txt").is_file()
+    assert (
+        "ExecStart=/usr/local/libexec/homelabnext/hnx-media-cleanup-downloads"
+        in (units / "hnx-media-automation-cleanup-downloads.service").read_text()
+    )
     names = sorted(p.name for p in units.iterdir())
     assert names == sorted(
         f"hnx-media-automation-{h}.{k}"

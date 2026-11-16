@@ -75,6 +75,10 @@ contributes:
     - file: roles/media_automation
   services:
     - file: registry/services.yml
+  scheduler_jobs:
+    - {timer: timer:media_automation/cleanup-downloads}
+    - {timer: timer:media_automation/stalled-repair}
+    - {timer: timer:media_automation/rename-cleanup}
   preflight:
     - {role: role:media_automation, hook: readiness}
   docs:

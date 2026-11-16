@@ -7,7 +7,6 @@ media_automation_cidr_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\
 # loopback ranges, each with a prefix no shorter than its own range (a /8 spelt in the 192.168 block is a public range)
 media_automation_lan_cidr_pattern: '^(10\.[0-9.]+/([89]|[12][0-9]|3[0-2])|172\.(1[6-9]|2[0-9]|3[01])\.[0-9.]+/(1[2-9]|2[0-9]|3[0-2])|192\.168\.[0-9.]+/(1[6-9]|2[0-9]|3[0-2])|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9.]+/(1[0-9]|2[0-9]|3[0-2])|169\.254\.[0-9.]+/(1[6-9]|2[0-9]|3[0-2])|127\.[0-9.]+/([89]|[12][0-9]|3[0-2]))\Z'
 media_automation_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
-media_automation_url_pattern: '^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9_./-]*)?\Z'
 # the credential forms: a WireGuard key is 32 bytes in base64; the address list is CIDRs; the
 # password carries no quote, space, backslash or $ (it goes through an env file)
 media_automation_key_pattern: '^[A-Za-z0-9+/]{43}=\Z'

@@ -14,22 +14,32 @@
     group: "{{ media_automation_group }}"
     mode: "0750"
 
+- name: Create the libexec directory the scripts run from
+  ansible.builtin.file:
+    path: "{{ media_automation_libexec_dir }}"
+    state: directory
+    mode: "0755"
+
+# root-owned code the units run as the apps' user: the apps cannot change what runs
 - name: Install the helper scripts and the filename blacklist
   ansible.builtin.copy:
-    src: "{{ item }}"
-    dest: "{{ media_automation_helpers_dir }}/{{ item }}"
-    owner: "{{ media_automation_owner }}"
-    group: "{{ media_automation_group }}"
-    mode: "{{ '0750' if item.endswith('.py') else '0640' }}"
-  loop: [cleanup-downloads.py, stalled-torrent-repair.py, rename_cleanup.py, qbittorrent-excluded-file-names.txt]
+    src: "{{ item.src }}"
+    dest: "{{ media_automation_libexec_dir }}/{{ item.dest }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {src: cleanup-downloads.py, dest: hnx-media-cleanup-downloads, mode: "0755"}
+    - {src: stalled-torrent-repair.py, dest: hnx-media-stalled-repair, mode: "0755"}
+    - {src: rename_cleanup.py, dest: hnx-media-rename-cleanup, mode: "0755"}
+    - {src: qbittorrent-excluded-file-names.txt, dest: hnx-media-excluded-file-names.txt, mode: "0644"}
+  loop_control:
+    label: "{{ item.dest }}"
 
-- name: Write the helper environment (the torrent client login; the optional notification URL)
+- name: Write the helper environment (the torrent client login; nothing else)
   ansible.builtin.copy:
     dest: "{{ media_automation_helpers_dir }}/helper.env"
     content: |
       QBIT_USER={{ media_automation_qbittorrent_user }}
       QBIT_PASS={{ lookup('hnx_secret', media_automation_qbittorrent_login_ref) }}
-      STALLED_TORRENT_NOTIFY={{ media_automation_helper_notify_url }}
     owner: "{{ media_automation_owner }}"
     group: "{{ media_automation_group }}"
     mode: "0600"
@@ -47,11 +57,9 @@
 
 - name: Render the units
   ansible.builtin.template:
-    src: "helper.{{ item.1 }}.j2"
+    src: "{{ item.0.id }}.{{ item.1 }}.j2"
     dest: "{{ media_automation_unit_dir }}/hnx-media-automation-{{ item.0.id }}.{{ item.1 }}"
     mode: "0644"
-  vars:
-    h: "{{ item.0 }}"
   loop: "{{ media_automation_helper_table | selectattr('enabled') | list | product(['service', 'timer']) | list }}"
   loop_control:
     label: "{{ item.0.id }}.{{ item.1 }}"

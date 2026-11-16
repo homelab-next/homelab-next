@@ -1,0 +1,13 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role media_automation). Do not edit.
+[Unit]
+Description=media-automation helper timer: remove completed downloads already hardlinked into the library
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=300
+Persistent=true
+Unit=hnx-media-automation-cleanup-downloads.service
+
+[Install]
+WantedBy=timers.target

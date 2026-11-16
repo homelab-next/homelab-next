@@ -52,9 +52,9 @@
          media_automation_helper_stalled_enabled, media_automation_helper_rename_enabled,
          media_automation_start, media_automation_validate_with_docker] | map('type_debug') | unique | list == ['bool']
       - media_automation_helper_stall_hours | int >= 1 and media_automation_helper_min_age_hours | int >= 1
-      - media_automation_helper_notify_url == '' or media_automation_helper_notify_url is match(media_automation_url_pattern)
       - media_automation_systemctl_cli is match('^[A-Za-z0-9_/.-]+\Z')
       - media_automation_unit_dir is match(media_automation_path_pattern)
+      - media_automation_libexec_dir is match(media_automation_path_pattern)
     fail_msg: >-
       media-automation: a registry id, every image pinned by tag and digest, the guest's IPv4 address
       to publish on (not all interfaces), ports, uids and gids of 1000 or more, absolute canonical

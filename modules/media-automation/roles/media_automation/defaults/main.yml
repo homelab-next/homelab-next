@@ -97,8 +97,8 @@ media_automation_helper_rename_enabled: true
 media_automation_helper_stall_hours: 24
 # Minimum age of a directory/partfile before the cleanup removes it.
 media_automation_helper_min_age_hours: 6
-# Optional notification URL the stalled-torrent repair posts to; empty: none (no default endpoint).
-media_automation_helper_notify_url: ''
+# Where the helper scripts are installed (root-owned; the units run them at this path, fixed in the unit templates).
+media_automation_libexec_dir: /usr/local/libexec/homelabnext
 # Where the helper units are installed.
 media_automation_unit_dir: /etc/systemd/system
 # The systemctl command (a test fake).

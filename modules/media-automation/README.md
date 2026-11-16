@@ -132,8 +132,9 @@ the torrent client's address that only the guest's network reaches; all three ar
 runs them from StackStorm would only add a hop (and the new StackStorm's rules ship disabled). They can
 move later as actions without changing the scripts. Each helper has a switch
 (`media_automation_helper_*_enabled`). The scripts read the managers' keys from `config.xml`; the torrent
-client login comes from `helpers/helper.env`. `media_automation_helper_notify_url` (stalled repair) is optional and empty by default: no default
-endpoint, no `.150` path. (The rename script can also nudge the media server's library scan when
+client login comes from `helpers/helper.env`. The stalled-torrent repair reports to the journal only: there is no notification endpoint and no `.150`
+path. The scripts are root-owned code in `/usr/local/libexec/homelabnext/` (`hnx-media-cleanup-downloads`,
+`hnx-media-stalled-repair`, `hnx-media-rename-cleanup`) that the apps' user cannot change. (The rename script can also nudge the media server's library scan when
 `MEDIA_SERVER_URL` and `MEDIA_SERVER_ACCESS_KEY` are put in `helpers/helper.env` by hand; the role does not
 wire it, as the key is the media server's.)
 
@@ -206,7 +207,7 @@ mounted target, an unrelated non-empty target, a leftover `.partial`; it follows
   lab subnets the interfaces are reached from, as CIDRs), `media_automation_vpn_input_ports` (the provider's
   forwarded port, if any), `media_automation_vpn_server_hostnames` (optional), `media_automation_timezone`,
   `media_automation_uid`/`_gid` (the ownership decision above), `media_automation_library_path` if not
-  `/srv/media`, `media_automation_helper_notify_url` if wanted.
+  `/srv/media`.
 * Secrets seeded in the store: the four above.
 * Firewall: the guest admits the lab clients (and the operator) to 8989, 7878, 8686, 9696, 8080, 6789, 5055,
   8265; nothing inbound from outside the lab. **Egress** from the guest: the VPN endpoint (UDP, the provider's

@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: media-stalled-repair
+#   kind: job
+#   purpose: Remove and re-search a torrent whose progress has not moved for the stall window, and clear already-imported or unimportable queue items.
+#   owner: operator
+#   trigger: [timer:media_automation/stalled-repair, role:media_automation]
+#   inputs: the torrent client and the two library managers over their web interfaces (their API keys read from each config.xml), the state file
+#   outputs: removals and re-searches through those interfaces, the state file, and journal lines
+#   installs_to: /usr/local/libexec/homelabnext/hnx-media-stalled-repair
+#   exit:
+#     "0": ran
+#     "2": the torrent client could not be reached
 """Carried by the media-automation module (modules/media-automation/roles/media_automation/files): do not edit on the host.
 
 Remove + re-search any torrent whose download progress has not moved in >=24h (operator
@@ -57,7 +69,6 @@ STATE_FILE = Path(
     )
 )
 STALL_HOURS = float(os.environ.get("STALLED_TORRENT_HOURS", "24"))
-NOTIFY = os.environ.get("STALLED_TORRENT_NOTIFY", "")  # empty: no notification
 
 # Paused/queued/checking states are BY DESIGN not progressing -- never accumulate stall age.
 EXEMPT_STATES = {
@@ -355,17 +366,8 @@ def repair_one(cookie: str, torrent: dict, sonarr_key: str, radarr_key: str) -> 
 
 
 def notify(title: str, body: str) -> None:
-    if not NOTIFY:
-        return
-    try:
-        urllib.request.urlopen(
-            urllib.request.Request(
-                NOTIFY, data=body.encode(), headers={"Title": title, "Tags": "recycle,robot"}
-            ),
-            timeout=10,
-        )
-    except Exception as exc:
-        logger.warning("notification failed: %s", exc)
+    """The result of a pass goes to the journal (the unit's log); there is no notification endpoint."""
+    logger.info("%s: %s", title, body)
 
 
 def main() -> int:
