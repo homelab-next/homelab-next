@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the inference suite through
+# the shared single-server adapter, which resolves the endpoint from HNX_ENDPOINT_INFERENCE (never a
+# URL here). The server has no key, so the target names none.
+#   HNX_ENDPOINT_INFERENCE=http://<host>:8001 \
+#     hnx conform run inference --target modules/llamacpp/conformance/target.yml
+# The server answers any model id with the one model it serves and never rejects another, so run
+# directly the check unknown-model-rejected fails (README.md, "Conformance"); the gateway in front
+# of it holds the role allow-list, and the suite passes there. Add `model: <served id>` in a copy of
+# this file to name the model the checks call.
+name: llamacpp
+capabilities:
+  inference:
+    adapter: homelabnext.conform.adapters.inference_server:make
+    config: {features: [streaming]}
+    features: [streaming]

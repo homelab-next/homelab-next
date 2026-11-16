@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore from an export (nifi_restore_source: state.tar.gz, flows/ and listing.jsonl), by mode.
+#
+# state (the default): the archive's hash must equal the listing and it may hold no member that leaves
+# the data root, no link and no special file, and only the state's own paths. It is extracted beside
+# the live data and checked while the service still runs; only then is the service stopped, every live
+# path the archive replaces moved aside under <data root>/before-restore (never deleted) and the staged
+# ones moved in. The service is started only after a complete swap; a failure leaves it stopped and
+# says so. The sensitive-props key the export was taken under must be the one in the secret store
+# (the stored flow's sensitive values are encrypted with it).
+#
+# flows: the portable flow definitions in flows/, each checked against the listing, are imported by name
+# into the running service when no process group of that name exists (nothing is replaced).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: A source is given
+      ansible.builtin.assert:
+        that: nifi_restore_source | default('') != ''
+        fail_msg: "nifi: nifi_restore_source (an export directory) is required to restore"
+    - name: Read the listing
+      ansible.builtin.slurp:
+        src: "{{ nifi_restore_source }}/listing.jsonl"
+      register: nifi_listing
+    - name: Parse the listing
+      ansible.builtin.set_fact:
+        nifi_rows: "{{ nifi_listing.content | b64decode | trim | split('\n') | map('from_json') | list }}"
+    - name: Refuse an unreadable listing
+      ansible.builtin.assert:
+        that:
+          - nifi_rows | length > 0
+          - nifi_rows | map(attribute='key') | select('match', '^(state\.tar\.gz|flows/[A-Za-z0-9._-]+\.json)\Z') | list | length == nifi_rows | length
+          - nifi_rows | map(attribute='sha256') | select('match', '^[0-9a-f]{64}\Z') | list | length == nifi_rows | length
+        fail_msg: "nifi: {{ nifi_restore_source }}/listing.jsonl is empty or names a file this export never holds"
+    - name: Restore the state archive
+      ansible.builtin.include_tasks: restore_state.yml
+      when: nifi_restore_mode == 'state'
+    - name: Import the flow definitions
+      ansible.builtin.include_tasks: restore_flows.yml
+      when: nifi_restore_mode == 'flows'
+  tags: [restore]

@@ -1,0 +1,266 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run llama-server for one GGUF model as a compose_app container behind a unit that checks the GPU power cap and the weights before every start.
+    options:
+      llamacpp_logical_id: &logical
+        type: str
+        description: "The instance's registry id (the service row the site binds, e.g. inference-small)."
+        required: true
+      llamacpp_backend: &a_backend
+        type: str
+        description: 'The engine backend: vulkan (Mesa), sycl (Intel oneAPI), cuda (NVIDIA, CDI devices) or cpu; the image must be that backend''s build.'
+        default: vulkan
+      llamacpp_image: &a_image
+        type: str
+        description: repository:tag@sha256:<digest> of the llama-server image (the tag server-vulkan-b<N>, server-intel-b<N>, server-cuda-b<N> or server-b<N> for the backend).
+        default: ghcr.io/ggml-org/llama.cpp:server-vulkan-b12033@sha256:421137599beb2135a9e1d664fa8991a3f4f5f953440a9d7622c7a61b63185fe8
+      llamacpp_image_archive: &a_image_archive
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks the digest (the guest cannot pull: its egress is default-deny); empty: pull.'
+        default: ''
+      llamacpp_bind: &a_bind
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      llamacpp_port: &a_port
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8001
+      llamacpp_dir: &a_dir
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/llamacpp
+      llamacpp_data_root: &a_data_root
+        type: path
+        description: 'The module''s data root on the host: cache/, the container''s only writable path.'
+        default: /var/lib/hnx-modules/llamacpp
+      llamacpp_owner: &a_owner
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      llamacpp_uid: &a_uid
+        type: int
+        description: The container's user id (no account on the host has it); owns cache/.
+        default: 61000
+      llamacpp_gid: &a_gid
+        type: int
+        description: The container's group id.
+        default: 61000
+      llamacpp_store_root: &a_store_root
+        type: path
+        description: The model store root (role model_store), mounted read-only (only the entry's directory).
+        default: /srv/models
+      llamacpp_model_repo: &a_model_repo
+        type: str
+        description: 'The GGUF entry''s source repository (org/name): its directory under <store>/gguf/.'
+        default: ggml-org/Clef-GGUF
+      llamacpp_model_file: &a_model_file
+        type: str
+        description: The single .gguf file of the entry that is served.
+        default: Clef-Q4_K_M.gguf
+      llamacpp_model_store_id: &a_model_store_id
+        type: str
+        description: 'The entry''s id in the store manifest: names its listing under manifests/listings/.'
+        default: clef-q4-k-m
+      llamacpp_model_digest: &a_model_digest
+        type: str
+        description: 'The entry''s digest, sha256: of its sha256sum listing (hnx models store list); the unit checks the bytes against it before every start.'
+        default: sha256:e29796ca3b3e2b31cdd32f32347a464d562ae9efaa74f82e21d6610f84b6bf02
+      llamacpp_served_model_name: &a_served_model_name
+        type: str
+        description: 'The model id /v1/models lists and a reply names: the role table''s model id for this backend.'
+        default: clef
+      llamacpp_context_size: &a_context_size
+        type: int
+        description: The context each parallel slot gets, in tokens (the server is started with this times the slots; K-14 compares it with /v1/models meta.n_ctx).
+        default: 8192
+      llamacpp_parallel: &a_parallel
+        type: int
+        description: The number of parallel slots (concurrent requests), 1 to 32.
+        default: 2
+      llamacpp_n_gpu_layers: &a_n_gpu_layers
+        type: str
+        description: 'Layers kept in VRAM: a count, all or auto (ignored, 0, on the cpu backend).'
+        default: '99'
+      llamacpp_flash_attn: &a_flash_attn
+        type: str
+        description: 'Flash attention: on, off or auto.'
+        default: auto
+      llamacpp_render_node: &a_render_node
+        type: str
+        description: 'vulkan and sycl: the DRM render node handed to the container (renderD<NNN> under /dev/dri).'
+        default: renderD128
+      llamacpp_render_gid: &a_render_gid
+        type: str
+        description: 'vulkan and sycl: the render node''s group id; empty: read from the node (the group the container joins to open it).'
+        default: ''
+      llamacpp_gpu_index: &a_gpu_index
+        type: int
+        description: 'cuda: the card''s index in the container toolkit''s CDI spec (nvidia.com/gpu=<index>), and nvidia-smi''s -i.'
+        default: 0
+      llamacpp_models_gid: &a_models_gid
+        type: str
+        description: 'The model store''s readers'' group id; empty: read from the model''s directory.'
+        default: ''
+      llamacpp_power_cap_max_watts: &a_power_cap_max_watts
+        type: int
+        description: 'The most the card''s power cap may be before any load starts (and at every health run): the operator''s rule, 200 W.'
+        default: 200
+      llamacpp_power_cap_attrs: &a_power_cap_attrs
+        type: list
+        description: The hwmon power attributes (microwatts) that must each exist, be above 0 and be within the limit on vulkan and sycl; power1_cap is the card's cap.
+        elements: str
+        default: [power1_cap]
+      llamacpp_precheck_bin: &a_precheck_bin
+        type: path
+        description: Where the pre-start check (power cap, then the weights' sha256) is installed.
+        default: /usr/local/libexec/homelabnext/hnx-llamacpp-precheck
+      llamacpp_unit_dir: &a_unit_dir
+        type: path
+        description: Where the systemd unit is written.
+        default: /etc/systemd/system
+      llamacpp_systemctl_cli: &a_systemctl_cli
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      llamacpp_start_timeout_s: &a_start_timeout_s
+        type: int
+        description: 'The unit''s start timeout in seconds: it reads every byte of the weights first.'
+        default: 1800
+      llamacpp_start: &a_start
+        type: bool
+        description: 'Enable, start and restart the unit (false: write it only).'
+        default: true
+      llamacpp_validate_with_docker: &a_validate_with_docker
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      llamacpp_health_timeout: &a_health_timeout
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+  health:
+    short_description: Fail unless the unit is active, the power cap holds, the model is loaded with its context and one token comes back.
+    options:
+      llamacpp_logical_id: *logical
+      llamacpp_backend: *a_backend
+      llamacpp_image: *a_image
+      llamacpp_image_archive: *a_image_archive
+      llamacpp_bind: *a_bind
+      llamacpp_port: *a_port
+      llamacpp_dir: *a_dir
+      llamacpp_data_root: *a_data_root
+      llamacpp_owner: *a_owner
+      llamacpp_uid: *a_uid
+      llamacpp_gid: *a_gid
+      llamacpp_store_root: *a_store_root
+      llamacpp_model_repo: *a_model_repo
+      llamacpp_model_file: *a_model_file
+      llamacpp_model_store_id: *a_model_store_id
+      llamacpp_model_digest: *a_model_digest
+      llamacpp_served_model_name: *a_served_model_name
+      llamacpp_context_size: *a_context_size
+      llamacpp_parallel: *a_parallel
+      llamacpp_n_gpu_layers: *a_n_gpu_layers
+      llamacpp_flash_attn: *a_flash_attn
+      llamacpp_render_node: *a_render_node
+      llamacpp_render_gid: *a_render_gid
+      llamacpp_gpu_index: *a_gpu_index
+      llamacpp_models_gid: *a_models_gid
+      llamacpp_power_cap_max_watts: *a_power_cap_max_watts
+      llamacpp_power_cap_attrs: *a_power_cap_attrs
+      llamacpp_precheck_bin: *a_precheck_bin
+      llamacpp_unit_dir: *a_unit_dir
+      llamacpp_systemctl_cli: *a_systemctl_cli
+      llamacpp_start_timeout_s: *a_start_timeout_s
+      llamacpp_start: *a_start
+      llamacpp_validate_with_docker: *a_validate_with_docker
+      llamacpp_health_timeout: *a_health_timeout
+  readiness:
+    short_description: Fail unless the container engine is ready, the weights and their listing are in the store and the render node is there.
+    options:
+      llamacpp_logical_id: *logical
+      llamacpp_backend: *a_backend
+      llamacpp_image: *a_image
+      llamacpp_image_archive: *a_image_archive
+      llamacpp_bind: *a_bind
+      llamacpp_port: *a_port
+      llamacpp_dir: *a_dir
+      llamacpp_data_root: *a_data_root
+      llamacpp_owner: *a_owner
+      llamacpp_uid: *a_uid
+      llamacpp_gid: *a_gid
+      llamacpp_store_root: *a_store_root
+      llamacpp_model_repo: *a_model_repo
+      llamacpp_model_file: *a_model_file
+      llamacpp_model_store_id: *a_model_store_id
+      llamacpp_model_digest: *a_model_digest
+      llamacpp_served_model_name: *a_served_model_name
+      llamacpp_context_size: *a_context_size
+      llamacpp_parallel: *a_parallel
+      llamacpp_n_gpu_layers: *a_n_gpu_layers
+      llamacpp_flash_attn: *a_flash_attn
+      llamacpp_render_node: *a_render_node
+      llamacpp_render_gid: *a_render_gid
+      llamacpp_gpu_index: *a_gpu_index
+      llamacpp_models_gid: *a_models_gid
+      llamacpp_power_cap_max_watts: *a_power_cap_max_watts
+      llamacpp_power_cap_attrs: *a_power_cap_attrs
+      llamacpp_precheck_bin: *a_precheck_bin
+      llamacpp_unit_dir: *a_unit_dir
+      llamacpp_systemctl_cli: *a_systemctl_cli
+      llamacpp_start_timeout_s: *a_start_timeout_s
+      llamacpp_start: *a_start
+      llamacpp_validate_with_docker: *a_validate_with_docker
+      llamacpp_health_timeout: *a_health_timeout
+  backup:
+    short_description: Nothing to back up; the weights are the model store's.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-run main.
+    options: {}
+  export:
+    short_description: Nothing to export; the model store's manifest is the open-format copy.
+    options: {}
+  upgrade:
+    short_description: Validate a pinned image bump of the same backend and record it as pending.
+    options:
+      llamacpp_logical_id: *logical
+      llamacpp_backend: *a_backend
+      llamacpp_image: *a_image
+      llamacpp_image_archive: *a_image_archive
+      llamacpp_bind: *a_bind
+      llamacpp_port: *a_port
+      llamacpp_dir: *a_dir
+      llamacpp_data_root: *a_data_root
+      llamacpp_owner: *a_owner
+      llamacpp_uid: *a_uid
+      llamacpp_gid: *a_gid
+      llamacpp_store_root: *a_store_root
+      llamacpp_model_repo: *a_model_repo
+      llamacpp_model_file: *a_model_file
+      llamacpp_model_store_id: *a_model_store_id
+      llamacpp_model_digest: *a_model_digest
+      llamacpp_served_model_name: *a_served_model_name
+      llamacpp_context_size: *a_context_size
+      llamacpp_parallel: *a_parallel
+      llamacpp_n_gpu_layers: *a_n_gpu_layers
+      llamacpp_flash_attn: *a_flash_attn
+      llamacpp_render_node: *a_render_node
+      llamacpp_render_gid: *a_render_gid
+      llamacpp_gpu_index: *a_gpu_index
+      llamacpp_models_gid: *a_models_gid
+      llamacpp_power_cap_max_watts: *a_power_cap_max_watts
+      llamacpp_power_cap_attrs: *a_power_cap_attrs
+      llamacpp_precheck_bin: *a_precheck_bin
+      llamacpp_unit_dir: *a_unit_dir
+      llamacpp_systemctl_cli: *a_systemctl_cli
+      llamacpp_start_timeout_s: *a_start_timeout_s
+      llamacpp_start: *a_start
+      llamacpp_validate_with_docker: *a_validate_with_docker
+      llamacpp_health_timeout: *a_health_timeout
+      llamacpp_target_image:
+        type: str
+        description: "repository:tag@sha256:<digest> of the build to move to (same backend, a newer b<N>)."
+        required: true
