@@ -843,24 +843,19 @@ def _load_shim(name: str, monkeypatch):
     return getattr(mod, name.title())
 
 
-def test_the_rendered_shims_delegate_to_the_runtime(monkeypatch):
-    class Service:
-        def __init__(self):
-            self.kv = {}
+def test_the_rendered_shims_delegate_to_the_runtime(monkeypatch, tmp_path):
+    monkeypatch.setenv("HNX_RUNNER_STATE_DIR", str(tmp_path))
 
-        def get_value(self, name, local=True):
-            assert local is False
-            return self.kv.get(name)
+    class Service:  # the datastore surface: the runtime must not touch it
+        def get_value(self, *a, **k):
+            raise AssertionError("the runtime's state is not in the datastore")
 
-        def set_value(self, name, value, ttl=None, local=True):
-            assert local is False
-            assert ttl == (600 if name.startswith("homelabnext.coalesce.") else 86400)
-            self.kv[name] = value
+        set_value = get_value
 
     a02 = pack("agent-job-retry")
     co = _a02(binding())["coalesce"]
     service = Service()
-    with pytest.raises(ValueError, match="kv_key"):  # no key, no datastore
+    with pytest.raises(ValueError, match="kv_key"):  # no key, no state
         _load_shim("admit", monkeypatch)(config={}, action_service=service).run(pack="x", event="")
     admit = _load_shim("admit", monkeypatch)(config=KV_CONFIG, action_service=service)
     ev = a02["fixtures"][0]["event"]
@@ -874,7 +869,9 @@ def test_the_rendered_shims_delegate_to_the_runtime(monkeypatch):
         "duplicate",
         "coalesced",
     )
-    assert st2_runtime.seen_name(a02["pack"], ev["id"]) not in service.kv  # keyed, not plain
+    plain = StateKV(tmp_path, KV_CONFIG)  # keyed, not plain
+    assert plain._read(st2_runtime.seen_name(a02["pack"], ev["id"])) is None
+    assert plain.get(st2_runtime.seen_name(a02["pack"], ev["id"])) is not None
     step = _load_shim("step", monkeypatch)(
         config=KV_CONFIG | {"broker_socket": "/nonexistent"}, action_service=Service()
     )
@@ -1291,38 +1288,30 @@ def test_a_broker_status_without_the_approver_kind_refuses(tmp_path):
     assert getattr(client, "runs", 0) == 0
 
 
-class ActionService:
-    """StackStorm's ``action_service`` datastore surface (system scope), over :class:`KV`."""
-
-    def __init__(self):
-        self.kv = KV()
-
-    def get_value(self, name, local=True):
-        assert local is False
-        return self.kv.get(name)
-
-    def set_value(self, name, value, ttl=None, local=True):
-        assert local is False
-        self.kv.set(name, value, ttl)
-
-
+StateKV = st2_runtime.StateKV
 KV_CONFIG = {"broker_socket": "/s", "kv_key": "fake-kv-key-" + "0" * 32}
 
 
-def test_the_datastore_names_are_keyed_so_a_writer_cannot_forge_or_pre_seed_them(tmp_path):
-    """Anyone with datastore write can compute a plain-hash name from a predictable input (a
+def test_the_state_names_are_keyed_so_a_writer_cannot_forge_or_pre_seed_them(tmp_path):
+    """Anyone able to write the state file can compute a plain-hash name from a predictable input (a
     broker request id, a schedule's event id).  The actions key every runtime name with the pack
     config's kv_key: a forged submit record and a pre-seeded seen key are never read."""
+    sdir = tmp_path / "state"
+    sdir.mkdir()
     for config in (None, {}, {"kv_key": "short"}):
         with pytest.raises(ValueError, match="kv_key"):
-            st2_runtime.ActionServiceKV(ActionService(), config)
-    svc, store = broker_service(tmp_path), ActionService()
-    kv = st2_runtime.ActionServiceKV(store, KV_CONFIG)
+            StateKV(sdir, config)
+    with pytest.raises(ValueError, match="state directory"):
+        StateKV(tmp_path / "missing", KV_CONFIG)
+    with pytest.raises(ValueError, match="state directory"):
+        StateKV("relative", KV_CONFIG)
+    svc = broker_service(tmp_path)
+    kv = StateKV(sdir, KV_CONFIG)
     pdir = approved_run_dir(tmp_path)
     rid = _held(svc, pdir, kv, 1)
     plain = st2_runtime.submitted_name(rid)
-    assert plain not in store.kv.items and kv.stored_name(plain) in store.kv.items
-    other = st2_runtime.ActionServiceKV(store, {"kv_key": "fake-other-key-" + "1" * 32})
+    assert kv._read(plain) is None and kv._read(kv.stored_name(plain)) is not None
+    other = StateKV(sdir, {"kv_key": "fake-other-key-" + "1" * 32})
     assert other.stored_name(plain) != kv.stored_name(plain)
     # the reviewer's forge: a record for another request, written where a plain hash points
     forged = svc.submit("profile:triage", "service.restart", {"grace_s": 5}, target="svc:queue")
@@ -1333,14 +1322,14 @@ def test_the_datastore_names_are_keyed_so_a_writer_cannot_forge_or_pre_seed_them
         "action": "service.restart",
         "fingerprint": st2_runtime.fingerprint(client.status(forged)["request"]),
     }
-    store.set_value(st2_runtime.submitted_name(forged), st2_runtime.encode(record), 60, False)
+    kv._write(st2_runtime.submitted_name(forged), st2_runtime.encode(record), 60)
     svc.approve(forged, "sso:operator-one")
     rec = _run(pdir, kv, _returned(forged), client)
     assert (rec["result"], rec["reason"]) == ("refused", "not-st2-submitted")
     assert svc.state.state_of(forged) == "pending"
     # a pre-seeded seen key does not suppress the event
     ev = _job_failed(2)
-    store.set_value(st2_runtime.seen_name("restart-queue", ev["id"]), "x", 60, False)
+    kv._write(st2_runtime.seen_name("restart-queue", ev["id"]), "x", 60)
     got = st2_runtime.admit_event(pack="restart-queue", trigger=RESTART["trigger"], event=ev, kv=kv)
     assert got["admitted"]
     # the genuine record still runs once approved
@@ -1360,10 +1349,7 @@ def test_the_rendered_config_carries_the_kv_key_as_a_datastore_secret():
     values = yaml.safe_load(res.files["configs/homelabnext.yaml"])
     assert values["kv_key"] == "{{ st2kv.system.homelabnext.kv_key }}"
     for shim in ("admit", "step"):
-        assert (
-            "ActionServiceKV(self.action_service, self.config)"
-            in (res.files[f"homelabnext/actions/{shim}.py"])
-        )
+        assert "runner_state(self.config)" in (res.files[f"homelabnext/actions/{shim}.py"])
     b = binding()
     b["config"] = {"kv_key": {"st2kv": "elsewhere"}}
     assert ("st2-binding", "config: kv_key is the runtime's own datastore secret") in {
@@ -1703,3 +1689,25 @@ def test_the_controller_source_is_one_constant():
     renderer = inspect.getmodule(render)
     assert renderer.ORCHESTRATOR_SOURCE == CONTROLLER_SOURCE
     assert CONTROLLER_SOURCE not in inspect.getsource(renderer)
+
+
+def test_the_state_file_holds_values_until_their_ttl_and_never_touches_the_datastore(tmp_path):
+    """The runtime's state is a file on the runner's volume: a rule-run execution then needs no
+    datastore grant but the one view of the pack config's key (role vars: hnx_runner)."""
+    sdir = tmp_path / "state"
+    sdir.mkdir()
+    now = [1000.0]
+    kv = StateKV(sdir, KV_CONFIG, clock=lambda: now[0])
+    name = st2_runtime.seen_name("restart-queue", "evt-1")
+    assert kv.get(name) is None
+    kv.set(name, "v", 60)
+    assert kv.get(name) == "v"
+    again = StateKV(sdir, KV_CONFIG, clock=lambda: now[0])  # another process, same file
+    assert again.get(name) == "v"
+    now[0] += 61
+    assert kv.get(name) is None and again.get(name) is None
+    kv.set(name, "w", 60)
+    assert kv.get(name) == "w"
+    res_files = go(binding()).files
+    shim = res_files["homelabnext/actions/admit.py"]
+    assert "action_service.get_value" not in shim and "self.action_service" not in shim

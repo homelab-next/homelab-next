@@ -23,6 +23,7 @@ import ipaddress
 import json
 import os
 import pwd
+import re
 import shutil
 import subprocess
 import sys
@@ -30,7 +31,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import run_cases, run_role
+from rolerun import fake, run_cases, run_role
 
 from homelabnext.registry.model import secret_env_name
 
@@ -72,6 +73,11 @@ RELEASE_REPOSITORY = DEFAULTS[f"{ID}_release_repository"]
 FRONT = next(n for n in SERVICES if n.endswith("web"))
 API = next(n for n in SERVICES if n.endswith("api"))
 RUNNER = next(n for n in SERVICES if n.endswith("actionrunner"))
+# the exit copy's file name, as the role's restore hook names it (the role is the one place it is set)
+_ARCHIVE = re.search(
+    r"'mongo/([\w.]+\.archive\.gz)'", (ROLE_DIR / "tasks" / "restore.yml").read_text()
+)
+ARCHIVE = _ARCHIVE.group(1) if _ARCHIVE else ""
 
 
 def v(name: str) -> str:
@@ -215,9 +221,9 @@ def test_main_renders_the_stack_pinned_contained_and_without_a_secret_in_the_com
         f"{staged(tmp_path)}:{DEFAULTS_PACK_MOUNT}:ro"
     ]
     writable = [x for x in runner if not x.endswith(":ro")]
-    assert (
-        len(writable) == 1 and "/virtualenvs" in writable[0]
-    )  # the pack's runtime: the runner's only write
+    assert len(writable) == 2 and sorted(
+        "virtualenvs" if "/virtualenvs" in w else "state" if "/state:" in w else w for w in writable
+    ) == ["state", "virtualenvs"]  # the pack's runtime and the runtime's own state: its only writes
     assert all(x.endswith(":ro") for x in svc[API]["volumes"])
     again = run_role(tmp_path, ROLE, "main", pv(tmp_path), env=SECRETS)
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
@@ -296,12 +302,19 @@ def test_the_rbac_definitions_bound_who_may_do_what(tmp_path):
     assert run_role(tmp_path, ROLE, "main", pv(tmp_path, **kw), env=SECRETS).returncode == 0
     rbac = tmp_path / "data" / "rbac"
     roles = {p.stem: yaml.safe_load(p.read_text()) for p in (rbac / "roles").glob("*.yaml")}
-    assert sorted(roles) == ["hnx_bridge", "hnx_operator", "hnx_status"]
+    assert sorted(roles) == ["hnx_bridge", "hnx_operator", "hnx_runner", "hnx_status"]
     grants = {
         n: {t for g in r["permission_grants"] for t in g["permission_types"]}
         for n, r in roles.items()
     }
     assert grants["hnx_bridge"] == {"webhook_send"}
+    # stanley (what rule-run executions are checked as): view of the one datastore key the pack
+    # config reads, nothing else; never a system role (StackStorm 3.9: the config loader checks
+    # key_value_pair_view per key; the runtime's own state is a file on the runner's volume)
+    [only_grant] = roles["hnx_runner"]["permission_grants"]
+    assert only_grant["permission_types"] == ["key_value_pair_view"]
+    assert only_grant["resource_uid"].startswith("key_value_pair:")
+    assert only_grant["resource_uid"].endswith(":homelabnext.kv_key")  # one key, never a type
     for n in ("hnx_status", "hnx_operator"):  # readers: nothing that runs or writes
         assert not {
             t
@@ -311,10 +324,17 @@ def test_the_rbac_definitions_bound_who_may_do_what(tmp_path):
     users = {p.stem: yaml.safe_load(p.read_text()) for p in (rbac / "assignments").glob("*.yaml")}
     admin, status, bridge = (DEFAULTS[v(n)] for n in ("admin_user", "status_user", "webhook_user"))
     assert {n: u["roles"] for n, u in users.items()} == {
-        admin: ["system_admin"], "stanley": ["system_admin"], status: ["hnx_status"],
+        admin: ["system_admin"], "stanley": ["hnx_runner"], status: ["hnx_status"],
         bridge: ["hnx_bridge"], "pete": ["hnx_operator"],
     }  # fmt: skip
     assert all(u["username"] == n for n, u in users.items())  # the loader's key is username
+    assert [n for n, u in users.items() if "system_admin" in u["roles"]] == [admin]
+    state = f"{tmp_path / 'data' / 'state'}:"
+    services = compose(tmp_path)["services"]
+    holders = [
+        n for n, svc in services.items() if any(m.startswith(state) for m in svc.get("volumes", []))
+    ]
+    assert holders == [RUNNER]  # the runtime's state is mounted into the runner only
 
 
 # ----------------------------------------------------------------------------- refusals
@@ -392,6 +412,46 @@ def test_a_pack_with_a_live_rule_is_refused_unless_the_site_says_so(tmp_path):
     )
     ok = run_role(
         tmp_path, ROLE, "main", pv(tmp_path, **kw, **{v("allow_live_rules"): True}), env=SECRETS
+    )
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
+def test_a_pin_set_to_live_under_a_provenance_saying_shadow_is_refused(tmp_path):
+    """The runtime obeys pinned/<name>.json, not provenance.json: the gate reads the pins."""
+    src = tmp_path / "pack"
+    shutil.copytree(PACK_SRC, src)
+    pin = src / "homelabnext" / "pinned" / "agent_job_retry.json"
+    doc = json.loads(pin.read_text())
+    doc["mode"] = "live"
+    pin.write_text(json.dumps(doc))
+    prov = json.loads((src / "provenance.json").read_text())
+    assert {p["mode"] for p in prov["packs"].values()} == {"shadow"}  # provenance still says shadow
+    kw = {v("pack_src"): str(src)}
+    r = run_role(tmp_path, ROLE, "main", pv(tmp_path, **kw), env=SECRETS)
+    assert r.returncode != 0 and "pinned" in r.stdout + r.stderr
+    # allowing live rules is not enough: that rule must also be turned on by name
+    r = run_role(
+        tmp_path, ROLE, "main", pv(tmp_path, **kw, **{v("allow_live_rules"): True}), env=SECRETS
+    )
+    assert r.returncode != 0 and "pinned" in r.stdout + r.stderr
+    r = run_role(
+        tmp_path,
+        ROLE,
+        "main",
+        pv(tmp_path, **kw, **{v("enabled_rules"): ["on_agent_job_retry"]}),
+        env=SECRETS,
+    )
+    assert r.returncode != 0 and "pinned" in r.stdout + r.stderr  # a rule on without the allowance
+    ok = run_role(
+        tmp_path,
+        ROLE,
+        "main",
+        pv(
+            tmp_path,
+            **kw,
+            **{v("allow_live_rules"): True, v("enabled_rules"): ["on_agent_job_retry"]},
+        ),
+        env=SECRETS,
     )
     assert ok.returncode == 0, ok.stdout + ok.stderr
 
@@ -532,6 +592,101 @@ def test_restore_refuses_a_source_that_is_not_what_its_listing_says_before_touch
         tmp_path, ROLE, "restore", pv(tmp_path, **{v("restore_source"): str(live)}), env=SECRETS
     )
     assert r.returncode != 0  # the database's own files are never a source
+
+
+FAKE_DOCKER = r"""
+import os, sys
+args = sys.argv[1:]
+log = LOG
+open(log, "a").write(" ".join(args) + "\n")
+text = " ".join(args)
+if "mongodump" in text:
+    n = sum(1 for l in open(log) if "mongodump" in l)
+    open(PARTIAL, "wb").write((b"gen%d" % n).ljust(1024, b"."))
+if "mongorestore" in text and os.path.exists(FAILS):
+    sys.stderr.write("mongorestore: simulated failure\n")
+    sys.exit(1)
+"""
+
+
+def _fake_docker(tmp_path: Path) -> dict:
+    """A ``docker`` on PATH that logs its argv to ``docker.log``, writes the dump's archive where
+    mongodump would and fails mongorestore while ``restore.fails`` exists."""
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir(exist_ok=True)
+    body = (
+        FAKE_DOCKER.replace("LOG", repr(str(tmp_path / "docker.log")))
+        .replace("PARTIAL", repr(str(tmp_path / "data/export/mongo" / f".{ARCHIVE}.partial")))
+        .replace("FAILS", repr(str(tmp_path / "restore.fails")))
+    )
+    fake(bin_dir / "docker", body)
+    return {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+
+
+def _real_export(tmp_path: Path) -> Path:
+    src = tmp_path / "exp"
+    (src / "mongo").mkdir(parents=True, exist_ok=True)
+    body = b"s" * 2048
+    (src / "mongo" / ARCHIVE).write_bytes(body)
+    row = {"key": f"mongo/{ARCHIVE}", "size": len(body), "sha256": hashlib.sha256(body).hexdigest()}
+    (src / "listing.jsonl").write_text(json.dumps(row) + "\n")
+    return src
+
+
+def _docker_calls(tmp_path: Path) -> list[str]:
+    log = tmp_path / "docker.log"
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def test_a_failed_restore_leaves_the_services_stopped_and_names_the_archive(tmp_path):
+    env = SECRETS | _fake_docker(tmp_path)
+    src = _real_export(tmp_path)
+    (tmp_path / "restore.fails").write_text("")
+    r = run_role(
+        tmp_path, ROLE, "restore", pv(tmp_path, **{v("restore_source"): str(src)}), env=env
+    )
+    out = r.stdout + r.stderr
+    assert r.returncode != 0 and "NOT started" in out and str(src) in out
+    calls_ = _docker_calls(tmp_path)
+    assert any(" stop " in c for c in calls_) and any("mongorestore" in c for c in calls_)
+    # nothing started the stack again after the failed restore (only the database's own `up ... mongo`)
+    after = calls_[next(i for i, c in enumerate(calls_) if "mongorestore" in c) + 1 :]
+    assert not [c for c in after if " up " in f" {c} "], after
+    assert not (tmp_path / "data/export/mongo/.restore.gz").exists()  # the staged copy is gone
+
+
+def test_a_successful_restore_starts_the_services_only_after_it(tmp_path):
+    env = SECRETS | _fake_docker(tmp_path)
+    src = _real_export(tmp_path)
+    run_role(tmp_path, ROLE, "restore", pv(tmp_path, **{v("restore_source"): str(src)}), env=env)
+    calls_ = _docker_calls(tmp_path)
+    restored = [i for i, c in enumerate(calls_) if "mongorestore" in c]
+    ups = [i for i, c in enumerate(calls_) if " up " in f" {c} " and "--remove-orphans" in c]
+    assert restored and ups and min(ups) > restored[0]  # health may fail on the fake: not the point
+
+
+def test_the_export_keeps_the_previous_archive_and_refuses_an_empty_new_one(tmp_path):
+    env = SECRETS | _fake_docker(tmp_path)
+    kw = pv(tmp_path)
+    mongo = tmp_path / "data/export/mongo"
+    for _ in range(2):
+        r = run_role(tmp_path, ROLE, "export", kw, env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+    assert (mongo / ARCHIVE).read_bytes().startswith(b"gen2")
+    assert (mongo / f"{ARCHIVE}.prev").read_bytes().startswith(b"gen1")
+    # a dump that wrote nothing replaces nothing
+    (tmp_path / "docker.log").write_text("mongodump\n" * 5)
+    short = FAKE_DOCKER.replace('(b"gen%d" % n).ljust(1024, b".")', 'b"x"')
+    assert short != FAKE_DOCKER
+    body = (
+        short.replace("LOG", repr(str(tmp_path / "docker.log")))
+        .replace("PARTIAL", repr(str(mongo / f".{ARCHIVE}.partial")))
+        .replace("FAILS", repr(str(tmp_path / "restore.fails")))
+    )
+    fake(tmp_path / "fakebin" / "docker", body)
+    r = run_role(tmp_path, ROLE, "export", kw, env=env)
+    assert r.returncode != 0 and "untouched" in r.stdout + r.stderr
+    assert (mongo / ARCHIVE).read_bytes().startswith(b"gen2")
 
 
 @pytest.mark.parametrize(
