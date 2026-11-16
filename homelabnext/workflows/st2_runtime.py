@@ -64,7 +64,6 @@ import json
 import logging
 import os
 import re
-import sqlite3
 import time
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
@@ -77,6 +76,7 @@ from homelabnext.agent.digest import digest_of
 from homelabnext.broker import request_digest
 from homelabnext.broker.state import is_id
 from homelabnext.events.envelope import build_event, event_problems
+from homelabnext.state import StateStore
 
 from .runner import (
     SCHEDULE_EVENT,
@@ -117,7 +117,7 @@ KV_KEY_MIN = 32
 #: the runner-only state volume (inside the container) and the file in it
 DEFAULT_STATE_DIR = "/opt/hnx-state"
 STATE_DIR_ENV = "HNX_RUNNER_STATE_DIR"
-STATE_DB = "runtime.sqlite3"
+STATE_FILE = "runtime-state.json"
 _KEYED_PREFIXES = (SEEN_PREFIX, COALESCE_PREFIX, SUBMITTED_PREFIX)
 
 log = logging.getLogger("homelabnext.st2_runtime")
@@ -185,7 +185,7 @@ class Broker(Protocol):
 
 
 class StateKV:
-    """:class:`KeyValue` in a small SQLite file on the action runner's own state volume.
+    """:class:`KeyValue` in one crash-safe, locked file on the action runner's own state volume.
 
     The runtime's state (``homelabnext.seen.*``, ``.coalesce.*``, ``.submitted.*``) is NOT kept in
     the engine's datastore: its RBAC is per key (a grant names one key's uid), and these names are
@@ -217,17 +217,9 @@ class StateKV:
             raise ValueError(
                 f"the runtime's state directory {str(root)!r} is not an existing absolute directory"
             )
-        self._db = root / STATE_DB
+        self._store = StateStore(root / STATE_FILE, clock=clock)
         self._key = key.encode("utf-8")
         self._clock = clock
-
-    def _conn(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self._db, timeout=30, isolation_level=None)
-        con.execute(
-            "CREATE TABLE IF NOT EXISTS kv (name TEXT PRIMARY KEY, value TEXT NOT NULL, "
-            "expires REAL NOT NULL)"
-        )
-        return con
 
     def stored_name(self, name: str) -> str:
         for prefix in _KEYED_PREFIXES:
@@ -237,26 +229,21 @@ class StateKV:
         return name
 
     def _read(self, stored: str) -> str | None:
-        con = self._conn()
-        try:
-            row = con.execute(
-                "SELECT value FROM kv WHERE name = ? AND expires > ?", (stored, self._clock())
-            ).fetchone()
-        finally:
-            con.close()
-        return None if row is None else str(row[0])
+        entry = self._store.get(stored)
+        if not isinstance(entry, dict) or float(entry.get("expires", 0)) <= self._clock():
+            return None
+        return str(entry["value"])
 
     def _write(self, stored: str, value: str, ttl: int) -> None:
         now = self._clock()
-        con = self._conn()
-        try:
-            con.execute("DELETE FROM kv WHERE expires <= ?", (now,))
-            con.execute(
-                "INSERT OR REPLACE INTO kv (name, value, expires) VALUES (?, ?, ?)",
-                (stored, value, now + ttl),
-            )
-        finally:
-            con.close()
+
+        def put(data: dict[str, Any]) -> bool:
+            for name in [n for n, e in data.items() if float(e.get("expires", 0)) <= now]:
+                del data[name]  # expired entries go with every write (TTLs are days)
+            data[stored] = {"expires": now + ttl, "value": value}
+            return True
+
+        self._store.rewrite(put)  # one locked, atomic read-modify-write of the map
 
     def get(self, name: str) -> str | None:
         return self._read(self.stored_name(name))

@@ -343,7 +343,7 @@ homelabnext.step` with an event of their own. The step still runs only pinned st
 mode, and the broker still decides, but the event is theirs.
 
 **Where the runtime's state is, and who may run a runner action.** The runtime keeps its state in a
-small SQLite file on a volume that only the action runner mounts (`<data root>/state`, mounted at
+small locked file (`homelabnext.state.StateStore`) on a volume that only the action runner mounts (`<data root>/state`, mounted at
 `/opt/hnx-state`; `st2_runtime.StateKV`): `homelabnext.seen.*` (an event id already taken),
 `homelabnext.coalesce.*` (an open window) and `homelabnext.submitted.*` (what a live step submitted,
 which A03 trusts). It is not in StackStorm's datastore on purpose. StackStorm checks a run's

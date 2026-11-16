@@ -172,7 +172,7 @@ rule runs executions as (no password, no token anyone holds), is **not**: it hol
 one: StackStorm's config loader checks `key_value_pair_view` for the run's user before it decrypts
 a datastore reference in a pack config (`st2common` `KeyValueLookup._get_kv`, 3.9.0), and the pack
 config's `kv_key` is such a reference. Everything else a run needs is not the datastore: the
-runtime keeps its dedupe, coalesce and submitted-request state in a SQLite file on a volume only
+runtime keeps its dedupe, coalesce and submitted-request state in a locked file on a volume only
 the action runner mounts (`<data root>/state`, `/opt/hnx-state`), because datastore grants
 name one key's uid and the runtime's names are HMACs nobody can list in advance, so reaching them
 through the datastore API (`action_service.get_value`/`set_value`) needs `system_admin` (the
