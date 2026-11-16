@@ -95,11 +95,31 @@ hashes from the package index's JSON API, and regenerate `roles/stackstorm/files
 5. **Firewall**: the guest's own nftables and the per-VM `.fw` (three applies, README of the
    overlay's deploy flow): **9101/tcp** from the status hub and the operator's tooling only; the
    guest's egress for the interpreter and index (the grant above); SSH from the guest to the broker
-   host's port. Nothing else on the guest listens. On the **broker host**: an account for the
-   forward (`stackstorm_broker_ssh_user`) whose key is restricted to the forward
-   (`restrict,port-forwarding,command="/bin/false"`), mapped to `profile:workflow-agents` (the
-   binding's `actor`) in the broker's manifest; on the **bus**: the bridge's user (a pull durable
-   per `bridge.json` subject, `max_deliver: 100`, `ack_wait: 30`; docs/stackstorm.md).
+   host's port. Nothing else on the guest listens.
+
+   **Deploy gate, not advice: the restriction of 9101 must be in force before the first
+   `install.yml`.** The port is plain HTTP (`tls: none`) and `/auth/tokens` takes the admin
+   password and returns tokens in the clear, so anything that can reach 9101 can sniff or replay
+   them. The module cannot check a firewall rule; the operator confirms it (a connection to 9101
+   from a host that is not allowed is refused or times out) before deploying, and signs in to
+   StackStorm only from the guest itself or through the tailnet, never across the LAN. An `st2web`
+   TLS front is a later change; until then this is the written exception.
+
+   On the **broker host**: a **dedicated account** for the forward (`stackstorm_broker_ssh_user`),
+   used for nothing else, a member of no group that can reach another socket (never `docker`, never
+   the group of any other service's socket), mapped to `profile:workflow-agents` (the binding's
+   `actor`) in the broker's manifest. Its `authorized_keys` line is
+   `restrict,port-forwarding,permitopen="<the broker socket path>",command="/bin/false" <key>`
+   (path form, e.g. `permitopen="/run/hnx-broker/broker.sock"`; needs OpenSSH 8.9 or newer for
+   unix-socket targets, and the rehearsal must confirm a `-L` to any other socket is refused).
+   `restrict,port-forwarding` alone stops a shell but still lets the key holder (the key is on this
+   guest, readable by root and by `hnx-st2-broker`) ask sshd to forward to any socket that account
+   can open: `permitopen` is what limits it to the broker's. On the **guest** the forward's
+   socket is group-owned by gid **104** (StackStorm's `st2` group, the same gid the containers run
+   as): **any local process in gid 104 reaches the broker as the pack's actor**, so no other
+   service, user or container on this guest may run with that gid (the role fails if another group
+   already owns it). On the **bus**: the bridge's user (a pull durable per `bridge.json` subject,
+   `max_deliver: 100`, `ack_wait: 30`; docs/stackstorm.md).
 6. **Secrets** (OpenBao KV v2, field `value`; the role refuses a missing one by name, before any
    file is written; every secret is a different value):
 
@@ -108,7 +128,7 @@ hashes from the package index's JSON API, and regenerate `roles/stackstorm/files
    | `stackstorm/admin-password` | 16-128 of `A-Za-z0-9._~-`: `openssl rand -base64 24 \| tr '+/' '._' \| tr -d '='` |
    | `stackstorm/mongo-root-password`, `stackstorm/mongo-password`, `stackstorm/rabbitmq-password` | 24-128 of the same set (they go into URLs and `st2.user.conf`): `openssl rand -hex 24` |
    | `stackstorm/datastore-key` | the JSON `st2-generate-symmetric-crypto-key --key-path <file>` writes (run it from any `st2api` container); store the file's content |
-   | `stackstorm/kv-key` | 32-128 of the same set: `openssl rand -hex 32` (the runtime names its datastore entries with it) |
+   | `stackstorm/kv-key` | 32-128 of the same set: `openssl rand -hex 32` (the runtime names its own state entries with it; it is also the one datastore key `stanley` may view) |
    | `stackstorm/webhook-key`, `stackstorm/status-token` | 32-128 of the same set: `openssl rand -hex 32`. **You choose these; the role registers them** (by StackStorm's hash, for `st2bridge` and `st2status`), so there is no `st2 apikey create` step |
    | `stackstorm/events-password` | the bridge's bus user's password |
    | `stackstorm/broker-ssh-key` | an OpenSSH private key (`ssh-keygen -t ed25519`), its public half on the broker host as above |
@@ -137,19 +157,30 @@ executions for 30 days (`stackstorm_retention_days`, 7 or more).
 `stackstorm_enabled_rules` is empty: **every rule is disabled** (`enabled: false` in the staged
 release; the rendered tree ships them enabled, the site decides). Turning one on is a one-line
 overlay change (`[on_proposal_validate]`), re-run `install.yml`: the rule runs in the mode the
-binding pins, which is `shadow` for all three (the role refuses a pack with a live rule unless
-`stackstorm_allow_live_rules`). A shadow run does everything up to the broker, records the request
+binding pins, which is `shadow` for all three. The role's shadow gate reads what the runtime
+obeys, **every `pinned/*.json`**: a pin that is not `shadow` is refused unless
+`stackstorm_allow_live_rules` is set **and** its rule (`on_<pin name>`) is in
+`stackstorm_enabled_rules`; `provenance.json` is checked too, but it is not what decides. A shadow run does everything up to the broker, records the request
 it would have made (`result: shadow`, its `request_id` and `request_digest`) and sends nothing:
 compare it with the timer it replaces (docs/stackstorm.md, "Shadow, then live"). Going live is a
 **binding change in git** with a `promotion` entry (a shadow window of at least 7 days and parity
 evidence), then a re-render, a new pinned pack and this setting.
 
-The RBAC the role applies (`[rbac] enable`): `st2admin` is `system_admin`; **`stanley`**, the user a
-rule runs executions as (no password, no token anyone holds), is `system_admin` too (default
-`stackstorm_runner_roles`): the runtime names its datastore entries by an HMAC, so no per-key grant
-can name them, and StackStorm checks a run's datastore calls as that user (observed on 3.9.0);
-`st2status` can list executions and view the actions of `stackstorm_status_packs`, never start one;
-`st2bridge` can only post the pack's webhook; `stackstorm_operator_users` read the pack and its rules.
+The RBAC the role applies (`[rbac] enable`): `st2admin` is `system_admin`. **`stanley`**, the user a
+rule runs executions as (no password, no token anyone holds), is **not**: it holds the custom role
+`hnx_runner`, one grant, `key_value_pair_view` on `st2kv.system:homelabnext.kv_key`. Why that
+one: StackStorm's config loader checks `key_value_pair_view` for the run's user before it decrypts
+a datastore reference in a pack config (`st2common` `KeyValueLookup._get_kv`, 3.9.0), and the pack
+config's `kv_key` is such a reference. Everything else a run needs is not the datastore: the
+runtime keeps its dedupe, coalesce and submitted-request state in a SQLite file on a volume only
+the action runner mounts (`<data root>/state`, `/opt/hnx-state`), because datastore grants
+name one key's uid and the runtime's names are HMACs nobody can list in advance, so reaching them
+through the datastore API (`action_service.get_value`/`set_value`) needs `system_admin` (the
+`admin` role grants the same on keys, so it is no narrower there). `st2status` can list executions
+and view the actions of `stackstorm_status_packs`, never start one; `st2bridge` can only post the
+pack's webhook; `stackstorm_operator_users` read the pack and its rules. A pack action still runs
+as `stanley` with the broker socket and the pack config (`docs/stackstorm.md`, "Who may write the
+datastore"), so no command-running action may be executable by anyone who signs in.
 
 ## The event bridge and the broker socket
 
@@ -180,13 +211,19 @@ Both are systemd services on the guest, off with `stackstorm_bridge_enabled: fal
   run and the socket is there.
 * **Backup / export**: `mongodump` of the `st2` database inside its container (password via a 0600
   config in the container, never an argument), renamed into `export/mongo/st2.archive.gz` when
-  complete, with `listing.jsonl` (size, sha256). The pack is git's, the secrets the secret store's and
-  the runtime the wheel's, so none of them is in it. An empty archive is refused.
+  complete, with `listing.jsonl` (size, sha256). The previous archive is kept as
+  `st2.archive.gz.prev` (one generation; the VM backup is the history) and an empty new one is refused
+  before it replaces anything. `mongodump` is consistent per collection only (no `--oplog`: that needs
+  a replica set); with the rules disabled nothing writes across collections, so the skew is harmless.
+  The pack is git's, the secrets the secret store's, the runtime the wheel's and the runtime's own
+  dedupe state is a disposable file under `state/` (not in the dump), so none of them is in it.
 * **Restore** (`restore` hook, `stackstorm_restore_source`): the listing is checked first and nothing
   is written until it passes; with the st2 services stopped the archive is staged, hashed again and
-  restored with `--drop` for the `st2` database only; the services start again whatever happened,
-  then health runs. A restored datastore carries the dedupe and coalesce windows, so a restored run
-  answers `coalesced`/`duplicate` for events it already saw: that is the datastore doing its job.
+  restored with `--drop` for the `st2` database only. **The services start only after a restore that
+  succeeded**; if `mongorestore` fails the st2 services stay stopped (MongoDB is up) and the run fails
+  naming the archive, so the rules engine never runs on a half-restored database. Health runs after a
+  good restore. The dedupe and coalesce windows live in the state file, not the database, so they
+  survive a restore as they are.
 * **Upgrade**: `upgrade.yml` exports first. The st2 services move **together** (a patch of the
   same minor line, one digest per service: `stackstorm_target_release_tag` +
   `stackstorm_target_release_digests`); a minor or major bump reads StackStorm's release notes first

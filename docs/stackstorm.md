@@ -120,7 +120,7 @@ pin (`docs/workflows.md`, Deploying) just as the render does (`st2-handler`, `st
 **Actions and approvals.** In `live` mode a risky action goes to the broker as `submit`. Risky means
 the manifest gives it tier `execute` or `privileged`, or sets `requires_approval`. The broker holds
 the request and emits `homelabnext.decision.requested`, and the run ends `held`. The step records
-the held request in the datastore (`homelabnext.submitted.<keyed hash of the broker's request id>`, kept
+the held request in the runner's state file (`homelabnext.submitted.<keyed hash of the broker's request id>`, kept
 7 days): its pack, step, action and a fingerprint of what it asks for. Once a person approves it,
 the [approved-run rule](#running-an-approved-request-a03) runs it. Any other action is
 a `call`, and the broker decides it as usual (`executed` or `denied`). The approval and its digest
@@ -229,7 +229,7 @@ sequenceDiagram
     participant Bus as Event bus
     participant Bridge as Event bridge
     participant St2 as StackStorm
-    participant KV as st2 datastore
+    participant KV as runner state file
     participant Broker
     participant Hub as Approvals page
     Bus->>Bridge: homelabnext.agent.job.failed (svc:orchestrator)
@@ -255,7 +255,7 @@ sequenceDiagram
 A StackStorm webhook starts one run for every POST and ignores an `Idempotency-Key` header, and the
 event bridge delivers at least once (a POST that timed out after StackStorm took it is sent
 again). So `admit` drops an event id it has already taken for the same pack: it remembers the id
-in the datastore (`homelabnext.seen.<keyed hash of pack and id>`) for a day, or for the coalesce window
+in the runner's state file (`homelabnext.seen.<keyed hash of pack and id>`) for a day, or for the coalesce window
 when that is longer, and a second delivery ends its run `duplicate` before any step runs. A
 CronTimer that fires twice for the same time builds the same event id, so it is one run too. The
 bound that holds when two deliveries race inside the same instant is the same as for coalescing
@@ -270,14 +270,14 @@ hand, under a new id from its producer.
 
 ## Coalescing bursts
 
-`coalesce: {key, window_s}` on a rule. The first event of a key opens a window. That is a datastore
-key `homelabnext.coalesce.<keyed hash of pack and key>` with TTL `window_s`. Every later event of the key
+`coalesce: {key, window_s}` on a rule. The first event of a key opens a window. That is a state
+entry `homelabnext.coalesce.<keyed hash of pack and key>` with TTL `window_s`. Every later event of the key
 inside the window ends its run `coalesced`, before any step runs, and records which event it was
 folded into. A02 keys on `$event.data.agent_key` with a ten-minute window. When a backend goes down
 and fails every running job of an agent at once, A02 makes one resubmit, not one per failure. A01
-keys on `$event.data.proposal_id`, so a redelivered event is a no-op. The datastore key also
+keys on `$event.data.proposal_id`, so a redelivered event is a no-op. The state key also
 hashes the event's `source`, and an event from another producer is `not-triggered` before the
-datastore is touched, so it opens no window.
+state is touched, so it opens no window.
 
 A forged event that names the right source can still open a window and fold the genuine one into
 it (an A02 resubmit lost for ten minutes). StackStorm cannot tell the two apart: it does not ask
@@ -286,7 +286,7 @@ them: the bridge's webhook-only API key and the bus's publish permissions decide
 event, and the controller refuses a submit whose `retry_of_run_id` is not one of its own runs that failed
 for a resubmittable class and was not resubmitted yet, whatever the event said (above).
 
-The StackStorm datastore has no compare-and-set, so two events in the same instant can both pass
+The runner state has no compare-and-set (get then set), so two events in the same instant can both pass
 the window. Two things still hold in that case:
 
 - the controller's idempotency key (A01: the event id; A02: the failed run's id), so a redelivered
@@ -331,9 +331,10 @@ can only post webhooks.
 
 **Who may run the pack's actions.** Turn StackStorm RBAC on (`[rbac] enable = True`, backend
 `default`). Rules run their actions as the system user (`stanley` by default), which has no password
-and no token anyone holds. Observed on 3.9.0: StackStorm checks a run's datastore calls (the config's
-own key read, and the runtime's `seen`/`coalesce`/`submitted` entries, named by an HMAC so no per-key
-grant can name them) as that user, so the user needs the datastore permissions of a system admin;
+and no token anyone holds. StackStorm checks a run's datastore reads as that user (3.9.0: the
+config loader needs `key_value_pair_view` on the key behind a secret config value), so it holds the
+role `hnx_runner`: that one grant, nothing else (the runtime's own state is a file, see "Where the
+runtime's state is" below);
 nobody who signs in gets `action_execute`. Operators get `pack_view`, `action_view` and `rule_view`
 for the shadow logs (the executions list needs `execution_list`; there is no per-pack
 `execution_view`), never `action_execute`; the status key lists executions and views the actions of
@@ -341,25 +342,37 @@ the packs it names; the bridge's user gets `webhook_send` and nothing else. With
 homelabnext.step` with an event of their own. The step still runs only pinned steps in their pinned
 mode, and the broker still decides, but the event is theirs.
 
-**Who may write the datastore, or run a runner action.** The runtime keeps its state in the
-datastore's system scope: `homelabnext.seen.*` (an event id already taken), `homelabnext.coalesce.*`
-(an open window) and `homelabnext.submitted.*` (what a live step submitted, which A03 trusts). Its
-inputs are predictable (a schedule's event id is built from the schedule and the time; a broker
-request id is in the `decision.requested` event), so with a plain hash anyone who can write the
-datastore could pre-seed a `seen` or `coalesce` key and suppress an event, or write a `submitted`
-record that makes A03 run a request StackStorm never submitted. The actions therefore key every one
-of those names with an HMAC under the pack config's `kv_key`, an encrypted datastore value
-(`homelabnext.kv_key`, at least 32 characters; the actions refuse to run without it). Someone who
-cannot decrypt it cannot compute a name. That is a bound only while RBAC holds:
+**Where the runtime's state is, and who may run a runner action.** The runtime keeps its state in a
+small SQLite file on a volume that only the action runner mounts (`<data root>/state`, mounted at
+`/opt/hnx-state`; `st2_runtime.StateKV`): `homelabnext.seen.*` (an event id already taken),
+`homelabnext.coalesce.*` (an open window) and `homelabnext.submitted.*` (what a live step submitted,
+which A03 trusts). It is not in StackStorm's datastore on purpose. StackStorm checks a run's
+datastore calls as the run's user (`stanley`), and its RBAC grants name one key's uid, while these
+names are HMACs nobody can list in advance: reaching them through the datastore would need
+`system_admin`, which is also persistent API keys, rules, the `core` pack's `local` action and every decrypted value.
+With the state in a file, `stanley` holds one grant (role `hnx_runner`): `key_value_pair_view` on
+`homelabnext.kv_key`, which the config loader checks before it decrypts the pack config's `kv_key`
+(StackStorm 3.9.0, `KeyValueLookup._get_kv`).
 
-- grant `key_value_pair_set` and `key_value_pair_delete` on the system scope to nobody but
-  StackStorm's own service and an administrator, and keep decrypting system-scope values to
-  administrators (`st2.kv.set` is an action too: deny `action_execute` on it);
+The inputs of the names are predictable (a schedule's event id is built from the schedule and the
+time; a broker request id is in the `decision.requested` event), so with a plain hash anyone who can
+write the file could pre-seed a `seen` or `coalesce` entry and suppress an event, or write a
+`submitted` record that makes A03 run a request StackStorm never submitted. The runtime therefore
+keys every one of those names with an HMAC under the pack config's `kv_key`, an encrypted datastore
+value (`homelabnext.kv_key`, at least 32 characters; the actions refuse to run without it). Only the
+st2 user in the runner can read the file. That is a bound only while nobody else can run a
+command as that user:
+
 - deny `action_execute` on the `core` pack's `local`, `local_sudo`, `remote` and `remote_sudo`
   actions and every other runner action (all of `core`, `linux`, any pack that runs a command or
-  a script) to everyone. They run as the runner user (`stanley`), which can read the datastore's encryption key
-  and the pack config, so it holds `kv_key`, and which is the peer the broker maps to the binding's
-  `actor`: a shell as that user reaches the broker socket directly, as StackStorm.
+  a script) to everyone. They run as the runner user (`stanley`), which can read the state file, the
+  datastore's encryption key and the pack config, so it holds `kv_key`, and which is the peer the
+  broker maps to the binding's `actor`: a shell as that user reaches the broker socket directly, as
+  StackStorm. The role's RBAC gives nobody who signs in `action_execute` (operators and the status
+  hub only view);
+- keep `key_value_pair_set` and `key_value_pair_delete` on the system scope to administrators, and
+  `st2.kv.set` (an action too) unexecutable: the datastore no longer holds the runtime's state, but
+  it does hold `kv_key`.
 
 The broker still bounds the damage of a forgery: it shows and runs a request only to its owner,
 only while it is pending, only with a matching approval, and at most once. What a forger gains is
