@@ -219,6 +219,14 @@ orchestration-conformance:
 	rm -rf build/orchestration-conformance
 	$(PY) tools/orchestration_conformance.py run --controller build/controller --work $(CURDIR)/build/orchestration-conformance --strict
 
+# the pinned artefact the orchestration module deploys (modules/orchestration): the controller as a
+# static, reproducible binary (no VCS stamp, no build id, trimmed paths) and its sha256, which the
+# site pins as orchestration_binary_sha256. The same source and Go toolchain give the same bytes.
+.PHONY: orchestration-binary
+orchestration-binary:
+	cd orchestrator && CGO_ENABLED=0 GOFLAGS=-mod=readonly GOWORK=off go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o ../build/hnx-controller ./cmd/controller
+	sha256sum build/hnx-controller
+
 .PHONY: controller-check
 controller-check:
 	cd orchestrator && GOFLAGS=-mod=readonly GOWORK=off go run ./cmd/controller check --config deploy/examples/controller.yaml

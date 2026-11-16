@@ -1,0 +1,235 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+orchestration_unit: "hnx-{{ orchestration_logical_id }}.service"
+orchestration_scopes_allowed: [jobs, read, metrics, admin]
+# the smoke session (defaults/main.yml orchestration_runner_argv): the health job is safe to run
+# only while this is the runner's command
+orchestration_smoke_argv:
+  - /bin/sh
+  - -c
+  - "while read -r line; do :; done; echo hnx-orchestration-ok"
+orchestration_health_agent_key: hnx-health
+orchestration_health_answer: hnx-orchestration-ok
+orchestration_health_job_on: >-
+  {{ orchestration_health_job == 'yes' or
+     (orchestration_health_job == 'auto' and orchestration_runner_argv == orchestration_smoke_argv) }}
+orchestration_slug_pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+orchestration_backend_name_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z'
+orchestration_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+# 32 or more of the characters a bearer token may hold: no space, no control character, none of
+# the quote characters a header or a file could trip on
+orchestration_bearer_pattern: '^[A-Za-z0-9._~+/=-]{32,256}\Z'
+orchestration_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){3,}\Z'
+orchestration_env_name_pattern: '^[A-Z][A-Z0-9_]{0,63}\Z'
+# an address or a workstation path in a value the role renders: a model or an engine is reached by
+# name through the gateway, and nothing here may depend on an operator's machine
+orchestration_forbidden_value_pattern: '(?i)(^|[^0-9.])(10|127|169\.254|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]{1,3}\.[0-9]{1,3}($|[^0-9])|\bwsl\b|/mnt/[a-z]/'
+orchestration_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+orchestration_release: "{{ orchestration_binary_sha256[:16] }}"
+orchestration_release_dir: "{{ orchestration_install_dir }}/releases/{{ orchestration_release }}"
+orchestration_bin: "{{ orchestration_install_dir }}/bin/controller"
+orchestration_controller_yaml: "{{ orchestration_config_dir }}/controller.yaml"
+orchestration_callers_yaml: "{{ orchestration_config_dir }}/api-tokens.yaml"
+orchestration_profiles_dir: "{{ orchestration_config_dir }}/profiles"
+orchestration_homes_dir: "{{ orchestration_config_dir }}/homes"
+orchestration_events_env_file: "{{ orchestration_config_dir }}/events.env"
+orchestration_db_path: "{{ orchestration_data_root }}/controller.db"
+orchestration_export_dir: "{{ orchestration_data_root }}/export"
+orchestration_runtime_dir: "/run/hnx-{{ orchestration_logical_id }}"
+orchestration_databases: [controller.db]
+orchestration_base_url: "http://{{ orchestration_bind }}:{{ orchestration_port | int }}"
+orchestration_callers_fixed:
+  - {name: operator, secret: "{{ orchestration_admin_ref }}", scopes: [admin]}
+  - {name: broker, secret: "{{ orchestration_jobs_ref }}", scopes: [jobs]}
+  - {name: status-hub, secret: "{{ orchestration_status_ref }}", scopes: [read]}
+  - {name: metrics, secret: "{{ orchestration_metrics_ref }}", scopes: [metrics]}
+orchestration_callers: "{{ orchestration_callers_fixed + orchestration_extra_callers }}"
+# The export (docs/modules/data.md; the slot's neutral format is jsonl): <data root>/export/
+# {controller.db, jobs.jsonl, listing.jsonl}. controller.db is SQLite's online backup of the store
+# (consistent while the controller writes); jobs.jsonl is every row of every table of that copy, one
+# {"table", "row"} object per line (a blob as {"$b64": ...}), the open-format exit copy; listing.jsonl
+# names each with its size and sha256, and the jsonl with its row counts. Run as the service user
+# (setpriv), so no file appears that the controller cannot open. A database that is not a controller
+# store (no jobs table) or fails integrity_check is an ERROR, never an empty export.
+orchestration_export_script: |
+  import base64, hashlib, json, os, pathlib, sqlite3, sys
+  src, dst = sys.argv[1], sys.argv[2]
+  if not os.path.isfile(src) or os.path.islink(src):
+      sys.exit("export refused: " + src + " is missing (or a link)")
+  tmp_db = os.path.join(dst, ".controller.db.tmp")
+  if os.path.lexists(tmp_db):
+      os.unlink(tmp_db)
+  a = sqlite3.connect(pathlib.Path(src).as_uri() + "?mode=ro", uri=True)
+  b = sqlite3.connect(tmp_db)
+  a.backup(b)
+  a.close()
+  if b.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+      sys.exit("export refused: SQLite integrity_check failed on the copy")
+  tables = [r[0] for r in b.execute(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+  if "jobs" not in tables:
+      sys.exit("export refused: " + src + " is not a controller database (no jobs table)")
+  def cell(v):
+      return {"$b64": base64.b64encode(v).decode()} if isinstance(v, (bytes, bytearray)) else v
+  tmp_jl = os.path.join(dst, ".jobs.jsonl.tmp")
+  counts = {}
+  with open(tmp_jl, "w", encoding="utf-8") as f:
+      for t in tables:
+          cur = b.execute('SELECT * FROM "' + t.replace('"', '""') + '" ORDER BY rowid')
+          cols = [d[0] for d in cur.description]
+          n = 0
+          for row in cur:
+              f.write(json.dumps({"table": t, "row": {c: cell(v) for c, v in zip(cols, row)}},
+                                 sort_keys=True) + "\n")
+              n += 1
+          counts[t] = n
+  b.close()
+  os.chmod(tmp_db, 0o600)
+  os.chmod(tmp_jl, 0o600)
+  os.replace(tmp_db, os.path.join(dst, "controller.db"))
+  os.replace(tmp_jl, os.path.join(dst, "jobs.jsonl"))
+  def digest(path):
+      h = hashlib.sha256()
+      with open(path, "rb") as f:
+          for chunk in iter(lambda: f.read(1 << 20), b""):
+              h.update(chunk)
+      return h.hexdigest()
+  rows = [{"key": "controller.db", "size": os.path.getsize(os.path.join(dst, "controller.db")),
+           "sha256": digest(os.path.join(dst, "controller.db")), "tables": counts},
+          {"key": "jobs.jsonl", "size": os.path.getsize(os.path.join(dst, "jobs.jsonl")),
+           "sha256": digest(os.path.join(dst, "jobs.jsonl")), "rows": sum(counts.values())}]
+  tmp = os.path.join(dst, ".listing.jsonl.tmp")
+  with open(tmp, "w", encoding="utf-8") as f:
+      for r in rows:
+          f.write(json.dumps(r, sort_keys=True) + "\n")
+  os.chmod(tmp, 0o600)
+  os.replace(tmp, os.path.join(dst, "listing.jsonl"))
+  print(json.dumps(rows))
+# The restore: one script, run as root, in two passes (docs/modules/data.md, import).
+#   check SRC UID                  reads, never writes
+#   apply SRC DBDIR UID GID        the controller stopped: copies, re-verifies, replaces
+# Both open the source directory once (O_NOFOLLOW) and every file from that descriptor, so a link or
+# a swap after the check is never followed. The source and each file must belong to root or the
+# service user and be writable by no one else; listing.jsonl must name exactly controller.db and
+# jobs.jsonl, each a single-link regular file of its listed size and sha256, and the jsonl must hold
+# the listed number of rows. The database must pass integrity_check, hold a jobs table, and hold as
+# many jobs as the listing says (an empty or foreign database is refused, never installed). apply
+# stages beside the live file, hashes the staged copy (what is installed is what was hashed),
+# removes the stale -wal and -shm and renames it into place, owned by the service user, 0600. Only
+# the database is installed; the jsonl is verified and left where it is. Nothing is ever deleted
+# but the staged file, the -wal and the -shm.
+orchestration_restore_script: |
+  import hashlib, json, os, pathlib, sqlite3, stat, sys
+  mode, src = sys.argv[1], sys.argv[2]
+  if mode == "check":
+      uid, db, gid = int(sys.argv[3]), None, None
+  else:
+      db, uid, gid = sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
+  names = {"controller.db", "jobs.jsonl"}
+  def fail(why):
+      sys.exit("restore refused: " + why)
+  def trusted(st, what):
+      if st.st_uid not in (0, uid) or st.st_mode & 0o022:
+          fail(what + " must belong to root or the service user and be writable by no one else")
+  if db is not None and os.path.realpath(src) == os.path.realpath(db):
+      fail("the source is the live data directory itself")
+  nf = os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+  try:
+      dfd = os.open(src, os.O_RDONLY | os.O_DIRECTORY | nf)
+  except OSError:
+      fail("the source is not a directory (or is a link)")
+  trusted(os.fstat(dfd), "the source directory")
+  def opened(name):
+      try:
+          fd = os.open(name, os.O_RDONLY | nf, dir_fd=dfd)
+      except OSError:
+          fail(name + ": cannot be opened (missing, or a link)")
+      st = os.fstat(fd)
+      if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+          fail(name + ": not a single-link regular file")
+      trusted(st, name)
+      return fd, st
+  fd, _ = opened("listing.jsonl")
+  with os.fdopen(fd, encoding="utf-8") as f:
+      text = f.read(1 << 16)
+  listed = {}
+  for line in text.splitlines():
+      if line.strip():
+          r = json.loads(line)
+          if r.get("key") not in names or r["key"] in listed:
+              fail("the listing names an unknown or repeated file")
+          listed[r["key"]] = r
+  if set(listed) != names:
+      fail("the listing must name controller.db and jobs.jsonl")
+  if set(os.listdir(dfd)) - {"listing.jsonl"} != names:
+      fail("the source holds files the listing does not name, or misses one it does")
+  def digest(fd, out=None, lines=None):
+      h, n = hashlib.sha256(), 0
+      while True:
+          chunk = os.read(fd, 1 << 20)
+          if not chunk:
+              return h.hexdigest(), n
+          h.update(chunk); n += len(chunk)
+          if out is not None:
+              out.write(chunk)
+          if lines is not None:
+              lines[0] += chunk.count(b"\n")
+  def sound(path):
+      c = sqlite3.connect(pathlib.Path(path).as_uri() + "?mode=ro&immutable=1", uri=True)
+      try:
+          if c.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+              return None
+          have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+          if "jobs" not in have:
+              return None
+          return c.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+      finally:
+          c.close()
+  for name in sorted(names):
+      r = listed[name]
+      fd, st = opened(name)
+      if st.st_size != r.get("size"):
+          fail(name + ": not the listed size")
+      if name == "jobs.jsonl":
+          count = [0]
+          got, _ = digest(fd, lines=count)
+          os.close(fd)
+          if got != r.get("sha256"):
+              fail(name + ": sha256 differs from the listing")
+          if count[0] != r.get("rows"):
+              fail(name + ": not the listed number of rows")
+          continue
+      if mode == "check":
+          got, _ = digest(fd)
+          os.close(fd)
+          if got != r.get("sha256"):
+              fail(name + ": sha256 differs from the listing")
+          continue
+      staged = os.path.join(db, "." + name + ".restore")
+      if os.path.lexists(staged):
+          os.unlink(staged)
+      ofd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nf, 0o600)
+      with os.fdopen(ofd, "wb") as out:
+          digest(fd, out)
+          out.flush(); os.fsync(out.fileno())
+      os.close(fd)
+      sfd = os.open(staged, os.O_RDONLY | nf)
+      got, n = digest(sfd)
+      os.close(sfd)
+      if got != r.get("sha256") or n != r.get("size"):
+          os.unlink(staged)
+          fail(name + ": the staged copy differs from the listing")
+      jobs = sound(staged)
+      if jobs is None:
+          os.unlink(staged)
+          fail(name + ": not a sound controller database (integrity_check, or no jobs table)")
+      if jobs != (r.get("tables") or {}).get("jobs"):
+          os.unlink(staged)
+          fail(name + ": holds " + str(jobs) + " jobs, the listing says " + str((r.get("tables") or {}).get("jobs")))
+      os.chown(staged, uid, gid)
+  if mode == "apply":
+      for suffix in ("-wal", "-shm"):
+          if os.path.lexists(os.path.join(db, "controller.db" + suffix)):
+              os.unlink(os.path.join(db, "controller.db" + suffix))
+      os.replace(os.path.join(db, ".controller.db.restore"), os.path.join(db, "controller.db"))
+  print(json.dumps(sorted(listed)))

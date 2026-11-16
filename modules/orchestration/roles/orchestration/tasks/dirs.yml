@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# The accounts, then the directories. The data root, the database and the exports are the service
+# user's alone (0700 / 0750); the configuration is root's, read by the service group, never
+# writable by it (the controller refuses a tokens file or a directory it could rewrite).
+- name: Create the service group
+  ansible.builtin.group:
+    name: "{{ orchestration_group }}"
+    system: true
+  when: orchestration_manage_accounts | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the service user
+  ansible.builtin.user:
+    name: "{{ orchestration_user }}"
+    group: "{{ orchestration_group }}"
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+  when: orchestration_manage_accounts | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the data root and the directories under it
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ orchestration_user }}"
+    group: "{{ orchestration_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ orchestration_data_root }}", mode: "0750"}
+    - {path: "{{ orchestration_data_root }}/runs", mode: "0700"}
+    - {path: "{{ orchestration_export_dir }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore, upgrade]

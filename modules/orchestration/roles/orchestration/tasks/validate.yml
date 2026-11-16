@@ -1,0 +1,155 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value lands in a path, a unit, a YAML document or a URL: refuse anything that could add a
+# key, a path component or a dependency on an address or an operator's machine.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - orchestration_logical_id is match(orchestration_slug_pattern)
+      - orchestration_binary is match('^/') and '..' not in orchestration_binary.split('/')
+      - orchestration_binary_sha256 is match('^[0-9a-f]{64}\Z')
+      - orchestration_profiles_src is match('^/') and '..' not in orchestration_profiles_src.split('/')
+      - orchestration_grants_catalog_src == '' or orchestration_grants_catalog_src is match('^/')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - orchestration_bind is match(orchestration_ipv4_pattern)
+      - orchestration_bind != '0.0.0.0'
+      - orchestration_port | int >= 1 and orchestration_port | int <= 65535
+      - orchestration_user is match('^[a-z_][a-z0-9_-]{0,31}\Z') and orchestration_user != 'root'
+      - orchestration_group is match('^[a-z_][a-z0-9_-]{0,31}\Z') and orchestration_group != 'root'
+      # absolute, canonical paths of at least three components (never / or a shallow system path)
+      - >-
+        [orchestration_install_dir, orchestration_config_dir, orchestration_data_root,
+         orchestration_systemd_dir] | reject('match', orchestration_path_pattern) | list | length == 0
+      - orchestration_install_dir != orchestration_config_dir
+      - orchestration_install_dir != orchestration_data_root
+      - orchestration_config_dir != orchestration_data_root
+      - orchestration_keep_releases | int >= 0
+      - orchestration_concurrency | int >= 1 and orchestration_concurrency | int <= 512
+      - orchestration_interlock_wait_timeout_seconds | int >= 0
+      - orchestration_orphan_grace_seconds | int >= -1
+      - orchestration_api_max_unfinished_per_caller | int >= 1
+      - orchestration_runner_argv is sequence and orchestration_runner_argv is not string
+      - orchestration_runner_argv | length >= 1
+      - orchestration_runner_argv | reject('string') | list | length == 0
+      - orchestration_runner_argv[0] is match('^/')
+      - orchestration_runner_usage_args is sequence and orchestration_runner_usage_args is not string
+      - orchestration_runner_toolsets_args is sequence and orchestration_runner_toolsets_args is not string
+      - orchestration_runner_exit_classes is mapping
+      - orchestration_runner_timeout_seconds | int >= 1
+      - orchestration_runner_job_timeout_seconds | int >= 0
+      - orchestration_runner_stall_timeout_seconds | int >= 0
+      - orchestration_runner_max_turns | int >= 0
+      - orchestration_runner_max_response_bytes | int >= 0
+      - orchestration_runner_kill_grace_seconds | int >= 0
+      - orchestration_runner_env_allowlist is sequence and orchestration_runner_env_allowlist is not string
+      - orchestration_runner_env_allowlist | reject('string') | list | length == 0
+      # a session may not inherit the events token, whatever its name is matched by
+      - >-
+        orchestration_runner_env_allowlist
+        | select('match', '^' ~ (orchestration_events_env_name | regex_escape) ~ '\Z') | list | length == 0
+      - orchestration_tasks_max | int >= 16
+      - orchestration_memory_max is match('^[1-9][0-9]{0,5}[KMGT]?\Z')
+      - orchestration_scope is mapping
+      - >-
+        ['denied_roots', 'findings_root', 'shared_write', 'reserved_names']
+        | reject('in', orchestration_scope.keys() | list) | list | length == 0
+      - orchestration_lessons_disabled | bool
+      - orchestration_health_job in ['auto', 'yes', 'no']
+      - orchestration_health_timeout | int >= 1
+      - orchestration_health_job_wait_seconds | int >= 1
+      - orchestration_gateway_tag_prefix is match('^[A-Za-z0-9._/-]{0,32}\Z')
+      - orchestration_events_env_name is match(orchestration_env_name_pattern)
+      - orchestration_events_queue_size | int >= 0
+      - orchestration_gateway_id == '' or orchestration_gateway_id is match(orchestration_slug_pattern)
+      - orchestration_gateway_path is match('^(/[A-Za-z0-9._-]+)*\Z')
+      - orchestration_gateway_key_ref is match(orchestration_ref_pattern)
+      - orchestration_events_ref is match(orchestration_ref_pattern)
+      - orchestration_allow_plain_http | bool is boolean
+    fail_msg: >-
+      orchestration: a registry id, the controller binary (an absolute path on the control host) and
+      its sha256 (64 hex), a profiles directory, the guest's IPv4 address to bind (not all
+      interfaces) and a port, a service user and group other than root, canonical absolute
+      directories of three components or more that differ from each other, a concurrency of 1 or
+      more, an absolute runner command, a runner timeout of 1 second or more, an environment
+      allowlist that does not cover the events token, a memory bound like 2G, a scope that names
+      all four keys, lessons off, and well-formed references
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Validate the pool
+  ansible.builtin.assert:
+    that:
+      - orchestration_backends is sequence and orchestration_backends is not string
+      - orchestration_backends | length >= 1
+      - orchestration_backends | reject('mapping') | list | length == 0
+      - orchestration_backends | map(attribute='name', default='') | reject('match', orchestration_backend_name_pattern) | list | length == 0
+      - orchestration_backends | map(attribute='name') | unique | list | length == orchestration_backends | length
+      - >-
+        orchestration_backends | map('dict2items') | flatten | map(attribute='key')
+        | reject('in', ['name', 'role', 'max_concurrent', 'max_context', 'weight', 'tags', 'needs_interlock',
+                        'endpoint', 'health_url', 'load_probe_urls', 'context_length'])
+        | list | length == 0
+      - orchestration_backends | selectattr('max_concurrent', 'defined') | map(attribute='max_concurrent') | map('int') | select('lt', 1) | list | length == 0
+      - orchestration_backends | selectattr('max_context', 'defined') | map(attribute='max_context') | map('int') | select('lt', 0) | list | length == 0
+      - orchestration_backends | selectattr('needs_interlock', 'defined') | map(attribute='needs_interlock') | reject('boolean') | list | length == 0
+      # with a gateway every backend's home names a role alias (a plain word), without one none does
+      - >-
+        (orchestration_gateway_id == '' and orchestration_backends | selectattr('role', 'defined') | list | length == 0)
+        or (orchestration_gateway_id != '' and orchestration_backends | selectattr('role', 'defined') | list | length == orchestration_backends | length)
+      - orchestration_backends | selectattr('role', 'defined') | map(attribute='role') | reject('match', '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z') | list | length == 0
+    fail_msg: >-
+      orchestration: orchestration_backends is a list of one or more mappings with a distinct name
+      (letters, digits, . _ -), the keys name, role, max_concurrent, max_context, weight, tags,
+      needs_interlock (a boolean), endpoint, health_url, load_probe_urls and context_length; with
+      orchestration_gateway_id every backend names its role alias, without it none does
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Refuse a value that names an address or an operator's machine
+  ansible.builtin.assert:
+    that: >-
+      ([orchestration_runner_argv, orchestration_runner_usage_args, orchestration_runner_toolsets_args,
+        orchestration_runner_env_allowlist, orchestration_backends, orchestration_scope,
+        orchestration_events_forwarder_url, orchestration_gateway_id, orchestration_gateway_path,
+        orchestration_binary, orchestration_profiles_src, orchestration_grants_catalog_src]
+       | map('to_json') | select('search', orchestration_forbidden_value_pattern) | list | length) == 0
+    fail_msg: >-
+      orchestration: a setting names an address (a private IPv4 literal) or a workstation path
+      (WSL, /mnt/<drive>/); the controller, its sessions and its callers are reached by registry
+      name, and nothing here may depend on an operator's machine
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Validate the callers
+  ansible.builtin.assert:
+    that:
+      - orchestration_extra_callers is sequence and orchestration_extra_callers is not string
+      - orchestration_callers | reject('mapping') | list | length == 0
+      - orchestration_callers | map(attribute='name', default='') | reject('match', orchestration_slug_pattern) | list | length == 0
+      - orchestration_callers | map(attribute='name') | unique | list | length == orchestration_callers | length
+      - orchestration_callers | map(attribute='secret', default='') | reject('match', orchestration_ref_pattern) | list | length == 0
+      - orchestration_callers | map(attribute='secret') | unique | list | length == orchestration_callers | length
+      - orchestration_callers | map(attribute='scopes', default=[]) | reject('sequence') | list | length == 0
+      - orchestration_callers | map(attribute='scopes') | flatten | reject('in', orchestration_scopes_allowed) | list | length == 0
+      - orchestration_callers | map(attribute='scopes') | map('length') | select('lt', 1) | list | length == 0
+      - >-
+        [orchestration_events_ref, orchestration_gateway_key_ref]
+        | select('in', orchestration_callers | map(attribute='secret') | list) | list | length == 0
+    fail_msg: >-
+      orchestration: each caller (the four the module defines and orchestration_extra_callers) has a
+      distinct name (a slug), a distinct secret: reference, and one or more of the scopes jobs, read,
+      metrics and admin; the events token and the gateway key are not a caller's token
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Refuse a forwarder or a gateway that is plain http without the opt-in, and an address as a host
+  ansible.builtin.assert:
+    that:
+      - >-
+        orchestration_events_forwarder_url == ''
+        or (orchestration_events_forwarder_url is match('^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/%:@+-]*)?\Z')
+            or (orchestration_allow_plain_http | bool
+                and orchestration_events_forwarder_url is match('^http://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/%:@+-]*)?\Z')))
+      - >-
+        orchestration_events_forwarder_url == ''
+        or (orchestration_events_forwarder_url | urlsplit('hostname')) is not match(orchestration_ipv4_pattern)
+    fail_msg: >-
+      orchestration: orchestration_events_forwarder_url is empty (events off) or an https URL with a
+      host name (never an address); http only with orchestration_allow_plain_http: true, which sends
+      the bearer token in clear on the LAN
+  tags: [readiness, health, backup, restore, export, upgrade]

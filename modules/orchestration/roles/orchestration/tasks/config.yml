@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# The configuration directory and what is rendered into it: the controller's configuration, the
+# job API's token digests, the profiles (the site's, plus the health check's one agent while the
+# runner is the smoke session), the optional MCP catalog, the events token's environment file and
+# each backend's runner home. Every file is root's and read by the service group; the check below
+# is the controller's own judgement of the whole set, run as the service user, before anything
+# restarts onto it.
+- name: Create the configuration directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_group }}"
+    mode: "0750"
+  loop:
+    - "{{ orchestration_config_dir }}"
+    - "{{ orchestration_profiles_dir }}"
+    - "{{ orchestration_homes_dir }}"
+
+- name: Resolve the gateway's URL from the registry
+  ansible.builtin.set_fact:
+    orchestration_gateway_url: "{{ lookup('hnx_registry', orchestration_gateway_id, field='url') ~ orchestration_gateway_path }}"
+  when: orchestration_gateway_id != ''
+
+- name: Refuse a gateway that is an address, or plain http without the opt-in
+  ansible.builtin.assert:
+    that:
+      - orchestration_gateway_url is match('^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?\Z')
+      - (orchestration_gateway_url | urlsplit('hostname')) is not match(orchestration_ipv4_pattern)
+      - orchestration_gateway_url is match('^https://') or orchestration_allow_plain_http | bool
+    fail_msg: >-
+      orchestration: the gateway {{ orchestration_gateway_id }} resolves to {{ orchestration_gateway_url }}:
+      an http(s) URL with a host name (never an address), https unless orchestration_allow_plain_http
+      is true (the gateway key then travels in clear)
+  when: orchestration_gateway_id != ''
+
+- name: Write the controller's token digests
+  ansible.builtin.template:
+    src: tokens.yaml.j2
+    dest: "{{ orchestration_callers_yaml }}"
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_group }}"
+    mode: "0640"
+  register: orchestration_digests_file
+  no_log: true
+  diff: false
+
+- name: Write the controller's configuration
+  ansible.builtin.template:
+    src: controller.yaml.j2
+    dest: "{{ orchestration_controller_yaml }}"
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_group }}"
+    mode: "0640"
+  register: orchestration_config_file
+
+- name: Write the events token's environment file
+  ansible.builtin.copy:
+    dest: "{{ orchestration_events_env_file }}"
+    content: |
+      # Managed by homelabnext (role orchestration): the events forwarder's bearer token (systemd reads it as root).
+      {% set value = lookup('hnx_secret', orchestration_events_ref) %}
+      {{ orchestration_events_env_name }}={{ value }}
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_owner_group }}"
+    mode: "0600"
+  register: orchestration_events_env
+  no_log: true
+  diff: false
+  when: orchestration_events_forwarder_url != ''
+
+- name: Copy the MCP catalog
+  ansible.builtin.copy:
+    src: "{{ orchestration_grants_catalog_src }}"
+    dest: "{{ orchestration_config_dir }}/mcp-catalog.yaml"
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_group }}"
+    mode: "0640"
+  register: orchestration_catalog_file
+  when: orchestration_grants_catalog_src != ''
+
+- name: Write each backend's runner home (the gateway's URL and the backend's role alias)
+  ansible.builtin.include_tasks: homes.yml
+
+- name: Install the profiles
+  ansible.builtin.include_tasks: profiles.yml

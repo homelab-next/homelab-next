@@ -1,0 +1,268 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the orchestration controller as a hardened systemd unit from a pinned binary, with its token digests, profiles and runner homes rendered.
+    options: &opts
+      orchestration_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. orchestrator).
+        required: true
+      orchestration_binary:
+        type: path
+        description: Absolute path, on the control host, of the controller binary built for the guest's architecture (make orchestration-binary).
+        required: true
+      orchestration_binary_sha256:
+        type: str
+        description: 'The binary''s sha256 (64 hex): the bytes on the host must hash to it.'
+        required: true
+      orchestration_profiles_src:
+        type: path
+        description: Absolute path, on the control host, of the directory of profile files (*.yaml); the site's agents, never the module's.
+        required: true
+      orchestration_bind:
+        type: str
+        description: The guest's own IPv4 address the API listens on (never all interfaces).
+        default: '{{ ansible_host }}'
+      orchestration_port:
+        type: int
+        description: The API's port (the registry row's port).
+        default: 8088
+      orchestration_user:
+        type: str
+        description: The service user (a system account, created).
+        default: hnx-orchestrator
+      orchestration_group:
+        type: str
+        description: The service group.
+        default: hnx-orchestrator
+      orchestration_manage_accounts:
+        type: bool
+        description: Create the service group and user (a system account, no login); false when the guest image has them.
+        default: true
+      orchestration_owner:
+        type: str
+        description: Owner of what is root's (releases, configuration, unit); root on a host.
+        default: root
+      orchestration_owner_group:
+        type: str
+        description: Group of what is root's (releases, unit); root on a host.
+        default: root
+      orchestration_install_dir:
+        type: path
+        description: Where releases, the current link and bin/controller live.
+        default: /opt/hnx-orchestration
+      orchestration_keep_releases:
+        type: int
+        description: Older releases kept besides the current one.
+        default: 2
+      orchestration_config_dir:
+        type: path
+        description: 'The configuration directory: controller.yaml, the token digests, profiles/ and homes/ (root''s, read by the service group).'
+        default: /etc/orchestration
+      orchestration_data_root:
+        type: path
+        description: 'The module''s data root: the database, runs/, usage/ and export/ (the service user''s).'
+        default: /var/lib/hnx-modules/orchestration
+      orchestration_systemd_dir:
+        type: path
+        description: Where the unit is written.
+        default: /etc/systemd/system
+      orchestration_systemctl_cli:
+        type: str
+        description: The systemctl command (a stand-in in tests).
+        default: systemctl
+      orchestration_start:
+        type: bool
+        description: Start, restart or reload the unit; false only writes the files.
+        default: true
+      orchestration_concurrency:
+        type: int
+        description: Jobs running at once over every backend.
+        default: 2
+      orchestration_backends:
+        type: list
+        elements: dict
+        description: 'The pool: a list of {name, role, max_concurrent, max_context, weight, tags, needs_interlock, endpoint, health_url, load_probe_urls, context_length}; the first is the local backend, the rest are additional.'
+        default: [{max_concurrent: 2, name: exec, needs_interlock: false}]
+      orchestration_interlock_wait_timeout_seconds:
+        type: int
+        description: 'Seconds a job waits for the interlock lease before it falls over to the next backend (0: unbounded).'
+        default: 0
+      orchestration_orphan_grace_seconds:
+        type: int
+        description: 'Seconds a job may have no live executor before the orphan sweep ends it (0: the controller''s default, negative: no sweep).'
+        default: 0
+      orchestration_api_max_unfinished_per_caller:
+        type: int
+        description: One submitter's queued, admitted and running jobs at most.
+        default: 1000
+      orchestration_runner_argv:
+        type: list
+        elements: str
+        description: The exec runner's command, one process per attempt, the prompt on stdin; the default is the smoke session (no model).
+        default: [/bin/sh, -c, 'while read -r line; do :; done; echo hnx-orchestration-ok']
+      orchestration_runner_usage_args:
+        type: list
+        elements: str
+        description: Arguments appended to the command to name the usage file.
+        default: []
+      orchestration_runner_toolsets_args:
+        type: list
+        elements: str
+        description: Arguments appended to the command to name the toolsets.
+        default: []
+      orchestration_runner_exit_classes:
+        type: dict
+        description: A non-zero exit status mapped to a runner class name.
+        default: {}
+      orchestration_runner_timeout_seconds:
+        type: int
+        description: Seconds one attempt may run.
+        default: 1800
+      orchestration_runner_job_timeout_seconds:
+        type: int
+        description: 'Seconds a job''s whole attempt chain may run (0: twice the attempt).'
+        default: 0
+      orchestration_runner_stall_timeout_seconds:
+        type: int
+        description: 'Seconds without progress that end a session (0: off).'
+        default: 0
+      orchestration_runner_max_turns:
+        type: int
+        description: 'Model turns one session may take (0: no cap).'
+        default: 0
+      orchestration_runner_env_allowlist:
+        type: list
+        elements: str
+        description: Environment variables a session inherits (none by default; never the events token).
+        default: []
+      orchestration_runner_max_response_bytes:
+        type: int
+        description: 'The largest answer a session may return (0: the runner''s default).'
+        default: 0
+      orchestration_runner_kill_grace_seconds:
+        type: int
+        description: 'Seconds between SIGTERM and SIGKILL of a cancelled session (0: the runner''s default).'
+        default: 0
+      orchestration_tasks_max:
+        type: int
+        description: Systemd TasksMax over the controller and its sessions together.
+        default: 512
+      orchestration_memory_max:
+        type: str
+        description: Systemd MemoryMax over the controller and its sessions together.
+        default: 2G
+      orchestration_scope:
+        type: dict
+        description: 'The shared tree''s zones: denied_roots, findings_root, shared_write and reserved_names, each present.'
+        default: {denied_roots: [owner], findings_root: '', reserved_names: [], shared_write: []}
+      orchestration_grants_catalog_src:
+        type: path
+        description: 'Optional file on the control host: the MCP catalog of kinds profiles'' grants are judged against.'
+        default: ''
+      orchestration_lessons_disabled:
+        type: bool
+        description: Read no lessons or runbooks into a job's prompt (must be true here).
+        default: true
+      orchestration_admin_ref:
+        type: str
+        description: 'secret: reference of the operator''s admin token.'
+        default: secret:orchestration/admin-token
+      orchestration_jobs_ref:
+        type: str
+        description: 'secret: reference of the broker''s jobs token (ORCHESTRATOR_JOBS_TOKEN).'
+        default: secret:orchestration/jobs-token
+      orchestration_status_ref:
+        type: str
+        description: 'secret: reference of the status hub''s read token.'
+        default: secret:orchestration/status-token
+      orchestration_metrics_ref:
+        type: str
+        description: 'secret: reference of the metrics scraper''s token (the registry row''s metrics.auth).'
+        default: secret:orchestration/metrics-token
+      orchestration_extra_callers:
+        type: list
+        elements: dict
+        description: 'Further callers: a list of {name, secret, scopes}.'
+        default: []
+      orchestration_events_forwarder_url:
+        type: str
+        description: 'The events forwarder''s URL (https, a host name); empty: events off.'
+        default: ''
+      orchestration_events_ref:
+        type: str
+        description: 'secret: reference of the forwarder''s bearer token (used when the forwarder is set).'
+        default: secret:orchestration/events-token
+      orchestration_events_env_name:
+        type: str
+        description: The environment variable the token reaches the controller in.
+        default: HNX_ORCHESTRATION_EVENTS_TOKEN
+      orchestration_events_queue_size:
+        type: int
+        description: 'The durable outbox''s bound in undelivered events (0: the sender''s default).'
+        default: 0
+      orchestration_gateway_tag_prefix:
+        type: str
+        description: Prefix of the run id in the gateway tag every model request of a job carries.
+        default: hnx/
+      orchestration_gateway_id:
+        type: str
+        description: 'The gateway''s registry id; empty: sessions get no model endpoint.'
+        default: ''
+      orchestration_gateway_path:
+        type: str
+        description: The path appended to the gateway's registry URL (its API root).
+        default: /v1
+      orchestration_gateway_key_ref:
+        type: str
+        description: 'secret: reference of the key each runner home carries for the gateway.'
+        default: secret:orchestration/gateway-key
+      orchestration_allow_plain_http:
+        type: bool
+        description: Opt in to a forwarder or gateway without TLS (the token or key then travels in clear on the LAN).
+        default: false
+      orchestration_health_timeout:
+        type: int
+        description: Seconds for each health request.
+        default: 10
+      orchestration_health_job:
+        type: str
+        description: 'auto: the round-trip job runs only with the smoke session as the runner; yes or no force it.'
+        default: auto
+      orchestration_health_job_wait_seconds:
+        type: int
+        description: Seconds the health job may take to finish.
+        default: 60
+  health:
+    short_description: "Fail unless the unit is active, authentication is in force with each caller's scope, the token file holds the current digests, and the smoke round-trip job runs to done."
+    options: *opts
+
+  readiness:
+    short_description: "Fail unless systemd and setpriv exist, the pinned binary and the profiles are on the control host, and every credential resolves in its form."
+    options: *opts
+
+  backup:
+    short_description: "Export the store consistently (database copy, jsonl rows, sha256 listing), then write the backup manifest naming the data root and the configuration."
+    options: *opts
+
+  restore:
+    short_description: "Check an export (listing, sizes, sha256, row counts, integrity) and restore the database from it, the controller stopped meanwhile."
+    options:
+      <<: *opts
+      orchestration_restore_source:
+        type: path
+        description: Directory holding an export (listing.jsonl, controller.db, jobs.jsonl).
+        required: true
+
+  upgrade:
+    short_description: "Validate a binary bump (a different, well-formed sha256 the target file hashes to) and record it as pending."
+    options:
+      <<: *opts
+      orchestration_target_binary_sha256:
+        type: str
+        description: The sha256 of the binary to move to.
+        required: true
+
+  export:
+    short_description: "Write the open-format exit copy (jsonl rows plus the database copy) to <data root>/export."
+    options: *opts
