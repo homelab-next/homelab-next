@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: Apache-2.0
+# The unit, and what changed decides how the running controller is moved onto it: a new binary,
+# unit, configuration, home, catalog or events token restarts it (which ends the running jobs, the
+# controller cancelling them itself); a changed token file is SIGHUP (systemctl reload); a changed
+# profile set is POST /admin/reload-profiles. Nothing restarts a controller that is converged.
+- name: Write the unit
+  ansible.builtin.template:
+    src: orchestration.service.j2
+    dest: "{{ orchestration_systemd_dir }}/{{ orchestration_unit }}"
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_owner_group }}"
+    mode: "0644"
+  register: orchestration_unit_file
+
+- name: Reload systemd when the unit changed
+  ansible.builtin.command:
+    argv: ["{{ orchestration_systemctl_cli }}", daemon-reload]
+  changed_when: true
+  when: orchestration_unit_file is changed and orchestration_start | bool
+
+- name: Ask whether the unit is enabled
+  ansible.builtin.command:
+    argv: ["{{ orchestration_systemctl_cli }}", is-enabled, "{{ orchestration_unit }}"]
+  register: orchestration_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: orchestration_start | bool
+
+- name: Enable the unit
+  ansible.builtin.command:
+    argv: ["{{ orchestration_systemctl_cli }}", enable, "{{ orchestration_unit }}"]
+  changed_when: true
+  when: orchestration_start | bool and orchestration_enabled.rc != 0
+
+- name: Ask whether the unit is running
+  ansible.builtin.command:
+    argv: ["{{ orchestration_systemctl_cli }}", is-active, "{{ orchestration_unit }}"]
+  register: orchestration_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: orchestration_start | bool
+
+- name: Decide how the running controller moves onto what was written
+  ansible.builtin.set_fact:
+    orchestration_do_start: "{{ orchestration_start | bool and orchestration_active.stdout | trim != 'active' }}"
+    orchestration_do_restart: >-
+      {{ orchestration_start | bool and orchestration_active.stdout | trim == 'active'
+         and (orchestration_unit_file is changed or orchestration_current_link is changed
+              or orchestration_config_file is changed or orchestration_catalog_file | default({}) is changed
+              or orchestration_events_env | default({}) is changed
+              or orchestration_home_files | default({}) is changed) }}
+    orchestration_do_reload: >-
+      {{ orchestration_start | bool and orchestration_active.stdout | trim == 'active'
+         and orchestration_digests_file is changed }}
+
+- name: Start the controller
+  ansible.builtin.command:
+    argv: ["{{ orchestration_systemctl_cli }}", start, "{{ orchestration_unit }}"]
+  changed_when: true
+  when: orchestration_do_start | bool
+
+- name: Restart the controller onto the new binary, unit or configuration
+  ansible.builtin.command:
+    argv: ["{{ orchestration_systemctl_cli }}", restart, "{{ orchestration_unit }}"]
+  changed_when: true
+  when: orchestration_do_restart | bool
+
+- name: Tell the controller to reload its token digests (SIGHUP, no restart)
+  ansible.builtin.command:
+    argv: ["{{ orchestration_systemctl_cli }}", reload, "{{ orchestration_unit }}"]
+  changed_when: true
+  when: orchestration_do_reload | bool and not orchestration_do_restart | bool
+
+- name: Wait until the controller answers /healthz
+  ansible.builtin.uri:
+    url: "{{ orchestration_base_url }}/healthz"
+    status_code: 200
+    timeout: "{{ orchestration_health_timeout | int }}"
+  register: orchestration_up
+  until: orchestration_up.status | default(0) == 200
+  retries: 30
+  delay: 1
+  changed_when: false
+  when: orchestration_start | bool and not ansible_check_mode
+
+- name: Reload the profiles through the admin route (a converged set is not touched)
+  ansible.builtin.uri:
+    url: "{{ orchestration_base_url }}/admin/reload-profiles"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ lookup('hnx_secret', orchestration_admin_ref) }}"
+    status_code: 200
+    timeout: "{{ orchestration_health_timeout | int }}"
+  changed_when: true
+  no_log: true
+  when: >-
+    orchestration_start | bool and not ansible_check_mode and orchestration_profiles_changed | bool
+    and not (orchestration_do_start | bool or orchestration_do_restart | bool)
