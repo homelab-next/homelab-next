@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Pick the flow rows
+  ansible.builtin.set_fact:
+    nifi_flow_rows: "{{ nifi_rows | selectattr('key', 'match', '^flows/') | list }}"
+
+- name: Refuse a listing with no flow, or a flow whose name is not a name
+  ansible.builtin.assert:
+    that:
+      - nifi_flow_rows | length > 0
+      - nifi_flow_rows | map(attribute='name') | reject('match', nifi_name_pattern) | list | length == 0
+    fail_msg: "nifi: the listing holds no flow definition, or one with an unusable name"
+
+- name: Hash each flow file
+  ansible.builtin.stat:
+    path: "{{ nifi_restore_source }}/{{ item.key }}"
+    checksum_algorithm: sha256
+    get_checksum: true
+  loop: "{{ nifi_flow_rows }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: nifi_flow_stats
+
+- name: Refuse a flow file that differs from its listing
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.checksum == item.item.sha256
+    fail_msg: "nifi: {{ item.item.key }} is missing or differs from the listing"
+  loop: "{{ nifi_flow_stats.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+
+- name: Read each flow file
+  ansible.builtin.slurp:
+    src: "{{ nifi_restore_source }}/{{ item.key }}"
+  loop: "{{ nifi_flow_rows }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: nifi_flow_files
+
+- name: Start the items to import empty
+  ansible.builtin.set_fact:
+    nifi_import_items: []
+
+- name: Name each flow and its text
+  ansible.builtin.set_fact:
+    nifi_import_items: "{{ nifi_import_items + [{'name': item.item.name, 'text': item.content | b64decode}] }}"
+  loop: "{{ nifi_flow_files.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+
+- name: Import the flows the service lacks, by name
+  ansible.builtin.include_tasks: api.yml
+  vars:
+    nifi_api_command: import-flows
+    nifi_api_extra:
+      flows: "{{ nifi_import_items }}"
+  when: nifi_start | bool

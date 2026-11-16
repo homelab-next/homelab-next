@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: Apache-2.0
+# The event bridge (docs/stackstorm.md, "The event bridge"): the bus's durable consumers to the pack's
+# webhook, as `hnx workflows st2 bridge` under systemd, as its own user. The subjects, the producers
+# each pins and the webhook come from the rendered pack's bridge.json (never typed here); its API
+# key is the webhook key registered for the bridge's StackStorm user, and its bus password the
+# bridge's own, each by the environment name the bridge resolves, in an owner-only file.
+- name: Read the rendered bridge file
+  ansible.builtin.set_fact:
+    stackstorm_bridge_doc: "{{ lookup('ansible.builtin.file', stackstorm_pack_src ~ '/bridge.json') | from_json }}"
+
+- name: Compare the rendered bridge file with the key reference this role registers
+  ansible.builtin.set_fact:
+    stackstorm_bridge_names_ok: >-
+      {{ stackstorm_bridge_doc['api_key'] == stackstorm_webhook_key_ref
+         and stackstorm_bridge_doc.webhook == '/api/v1/webhooks/' ~ stackstorm_pack_ref
+         and stackstorm_bridge_doc.subscriptions | length > 0 }}
+  no_log: true
+
+- name: The rendered bridge file names the webhook key this role registers
+  ansible.builtin.assert:
+    that: stackstorm_bridge_names_ok | bool
+    fail_msg: >-
+      stackstorm: bridge.json names another webhook key reference or path than this role registers
+      (/api/v1/webhooks/{{ stackstorm_pack_ref }} and the reference stackstorm_webhook_key_ref names): set
+      stackstorm_webhook_key_ref to the binding's bridge_api_key, or re-render the pack
+
+- name: The bridge's own user
+  ansible.builtin.user:
+    name: "{{ stackstorm_bridge_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: The bridge's configuration directory
+  ansible.builtin.file:
+    path: "{{ stackstorm_bridge_conf_dir }}"
+    state: directory
+    owner: root
+    group: "{{ stackstorm_bridge_user }}"
+    mode: "0750"
+
+- name: Install the rendered bridge file
+  ansible.builtin.copy:
+    src: "{{ stackstorm_pack_src }}/bridge.json"
+    dest: "{{ stackstorm_bridge_conf_dir }}/bridge.json"
+    owner: root
+    group: "{{ stackstorm_bridge_user }}"
+    mode: "0640"
+  register: stackstorm_bridge_file
+
+- name: Write the bridge's secrets (owner-only; the names are the ones the bridge resolves)
+  ansible.builtin.copy:
+    dest: "{{ stackstorm_bridge_conf_dir }}/secrets.env"
+    content: |
+      {{ 'HNX_SECRET_' ~ (stackstorm_webhook_key_ref | regex_replace('^secret:', '') | upper | regex_replace('[^A-Z0-9]', '_')) }}={{ lookup('hnx_secret', stackstorm_webhook_key_ref) }}
+      {{ 'HNX_SECRET_' ~ (stackstorm_events_login_ref | regex_replace('^secret:', '') | upper | regex_replace('[^A-Z0-9]', '_')) }}={{ lookup('hnx_secret', stackstorm_events_login_ref) }}
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  register: stackstorm_bridge_env_written
+
+- name: Write the bridge's unit
+  ansible.builtin.template:
+    src: bridge.service.j2
+    dest: "{{ stackstorm_unit_dir }}/hnx-st2-bridge.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: stackstorm_bridge_unit
+
+- name: Start the bridge
+  ansible.builtin.systemd_service:
+    name: hnx-st2-bridge.service
+    enabled: true
+    state: "{{ 'restarted' if (stackstorm_bridge_unit is changed or stackstorm_bridge_file is changed or stackstorm_bridge_env_written is changed) else 'started' }}"
+    daemon_reload: "{{ stackstorm_bridge_unit is changed }}"
+  when: stackstorm_start | bool and not ansible_check_mode
+  no_log: true

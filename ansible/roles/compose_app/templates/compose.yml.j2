@@ -34,6 +34,12 @@ services:
 {% if svc.read_only is defined %}
     read_only: {{ svc.read_only | bool | to_json }}
 {% endif %}
+{% if svc.devices | default([]) | length > 0 %}
+    devices: {{ ql(svc.devices) }}
+{% endif %}
+{% if svc.group_add | default([]) | length > 0 %}
+    group_add: {{ ql(svc.group_add) }}
+{% endif %}
 {% if svc.mem_limit is defined %}
     mem_limit: {{ q(svc.mem_limit) }}
 {% endif %}

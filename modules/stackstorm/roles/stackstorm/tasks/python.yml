@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: Apache-2.0
+# The interpreter the pack's runtime needs. homelabnext requires Python 3.11 and the st2 3.9 images
+# carry 3.10 (their pack virtualenvs would fail to import it), so a relocatable CPython 3.11 is
+# provisioned ONCE into <data root>/python by a one-shot run of a pinned image, and mounted
+# read-only into the action runner; st2's python_binary setting points the pack's virtualenv at it.
+# It is built beside the final directory and renamed into place only when it ran, so an
+# interrupted download never leaves a half-built interpreter that would be taken for a good one.
+# Needs egress to the interpreter's download host while it runs (once per version).
+- name: Look for the interpreter
+  ansible.builtin.stat:
+    path: "{{ stackstorm_data_root }}/python/.installed-{{ stackstorm_python_version }}"
+  register: stackstorm_python_done
+
+- name: Provision the interpreter
+  when: not stackstorm_python_done.stat.exists and not ansible_check_mode
+  block:
+    - name: The staging directory is the one this task owns (never a path outside the data root)
+      ansible.builtin.assert:
+        that:
+          - stackstorm_data_root is match(stackstorm_path_pattern)
+          - stackstorm_data_root.split('/') | length > 3
+          - stackstorm_data_root | length > 1
+        fail_msg: "stackstorm: the data root {{ stackstorm_data_root }} is too shallow to build in"
+    - name: Create an empty staging directory
+      ansible.builtin.tempfile:
+        state: directory
+        path: "{{ stackstorm_data_root }}"
+        prefix: ".python-build-"
+      register: stackstorm_python_stage
+    - name: Give the staging directory to the container's user
+      ansible.builtin.file:
+        path: "{{ stackstorm_python_stage.path }}"
+        state: directory
+        owner: "{{ stackstorm_uid | int }}"
+        group: "{{ stackstorm_gid | int }}"
+        mode: "0750"
+    - name: Download the interpreter (uv's pinned build, its hash checked by uv)
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --cap-drop=ALL
+          - --security-opt=no-new-privileges:true
+          - --user={{ stackstorm_uid | int }}:{{ stackstorm_gid | int }}
+          - --env=HOME=/tmp
+          - --env=UV_PYTHON_PREFERENCE=only-managed
+          - --env=UV_PYTHON_INSTALL_DIR=/out
+          - --volume={{ stackstorm_python_stage.path }}:/out
+          - "{{ stackstorm_python_provisioner_image }}"
+          - uv
+          - python
+          - install
+          - "{{ stackstorm_python_version }}"
+      changed_when: true
+    - name: Mark it installed
+      ansible.builtin.copy:
+        dest: "{{ stackstorm_python_stage.path }}/.installed-{{ stackstorm_python_version }}"
+        content: "{{ stackstorm_python_version }}\n"
+        mode: "0644"
+    - name: Look for a previous interpreter directory
+      ansible.builtin.stat:
+        path: "{{ stackstorm_data_root }}/python"
+        follow: false
+      register: stackstorm_python_before
+    - name: Keep a previous interpreter directory beside the new one (it is never deleted)
+      ansible.builtin.command:
+        argv: [mv, -T, "{{ stackstorm_data_root }}/python", "{{ stackstorm_data_root }}/python.before-{{ stackstorm_python_version }}"]
+      changed_when: true
+      when: stackstorm_python_before.stat.exists
+    - name: Make the new one readable by the container's group
+      ansible.builtin.file:
+        path: "{{ stackstorm_python_stage.path }}"
+        state: directory
+        mode: "0755"
+    - name: Put it in place (renamed, so a half-built interpreter is never at the final path)
+      ansible.builtin.command:
+        argv: [mv, -T, "{{ stackstorm_python_stage.path }}", "{{ stackstorm_data_root }}/python"]
+      changed_when: true
+  always:
+    - name: Remove the staging directory when it is still there (only the one created above)
+      ansible.builtin.file:
+        path: "{{ stackstorm_python_stage.path }}"
+        state: absent
+      when:
+        - stackstorm_python_stage is defined
+        - stackstorm_python_stage.path is defined
+        - stackstorm_python_stage.path is match('^' ~ (stackstorm_data_root | regex_escape) ~ '/\.python-build-[A-Za-z0-9_]+\Z')
+
+- name: The interpreter directory exists for the mount (check mode, or a first run that has not built it)
+  ansible.builtin.file:
+    path: "{{ stackstorm_data_root }}/python"
+    state: directory
+    mode: "0755"
+  when: not stackstorm_python_done.stat.exists and ansible_check_mode

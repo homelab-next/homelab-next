@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: export the database first, validate and record a pinned image bump, then converge with the
+# new pin (set the pins in the site's variables to the target):
+#   ansible-playbook -i <inventory> modules/stackstorm/playbooks/upgrade.yml \
+#     -e stackstorm_target_release_tag=3.9.1 -e '{"stackstorm_target_release_digests": {...every service...}}'
+#   ansible-playbook -i <inventory> modules/stackstorm/playbooks/upgrade.yml \
+#     -e stackstorm_target_service=redis -e stackstorm_target_image=<repository:tag@sha256:...>
+- name: Upgrade the automation service
+  hosts: mod_stackstorm_server
+  become: true
+  tasks:
+    - name: Export the database first
+      ansible.builtin.include_role:
+        name: stackstorm
+        tasks_from: export
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: stackstorm
+        tasks_from: upgrade
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: stackstorm

@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Find the archive's row
+  ansible.builtin.set_fact:
+    nifi_state_row: "{{ nifi_rows | selectattr('key', 'equalto', 'state.tar.gz') | list }}"
+
+- name: Refuse a listing without the archive
+  ansible.builtin.assert:
+    that: nifi_state_row | length == 1
+    fail_msg: "nifi: the listing has no state.tar.gz row"
+
+- name: Hash the archive
+  ansible.builtin.stat:
+    path: "{{ nifi_restore_source }}/state.tar.gz"
+    checksum_algorithm: sha256
+    get_checksum: true
+  register: nifi_restore_archive
+
+- name: Refuse an archive that differs from its listing
+  ansible.builtin.assert:
+    that:
+      - nifi_restore_archive.stat.exists
+      - nifi_restore_archive.stat.checksum == nifi_state_row[0].sha256
+      - nifi_restore_archive.stat.size == nifi_state_row[0].size
+    fail_msg: "nifi: the export is not intact (the archive is missing or its hash differs from the listing)"
+
+- name: List the archive's members (names, and kinds for the links)
+  ansible.builtin.command:
+    argv: [tar, -tzf, "{{ nifi_restore_source }}/state.tar.gz"]
+  register: nifi_members
+  changed_when: false
+
+- name: List the archive's member types
+  ansible.builtin.command:
+    argv: [tar, -tvzf, "{{ nifi_restore_source }}/state.tar.gz"]
+  register: nifi_member_types
+  changed_when: false
+
+- name: Refuse an archive that leaves its directory, holds a link or special file, or holds more than the state
+  ansible.builtin.assert:
+    that:
+      - nifi_members.stdout_lines | select('match', '^/') | list | length == 0
+      - nifi_members.stdout_lines | select('search', '(^|/)\.\.(/|$)') | list | length == 0
+      # a symlink (l), hard link (h), device, fifo: only regular files and directories are restored
+      - nifi_member_types.stdout_lines | reject('match', '^[-d]') | list | length == 0
+      - >-
+        nifi_members.stdout_lines | reject('match', '^(conf/(flow\.json\.gz|users\.xml|authorizations\.xml)|(state|flowfile_repository|content_repository|database_repository|provenance_repository)(/.*)?)\Z')
+        | list | length == 0
+      - "'conf/flow.json.gz' in nifi_members.stdout_lines"
+    fail_msg: "nifi: the archive leaves its directory, holds a link or special file, holds a path outside the state's own, or holds no conf/flow.json.gz"
+
+- name: Look for a staging or before-restore directory an earlier restore left
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: ["{{ nifi_data_root }}/restoring", "{{ nifi_data_root }}/before-restore"]
+  register: nifi_stale
+
+- name: Refuse to go on over them
+  ansible.builtin.assert:
+    that: nifi_stale.results | selectattr('stat.exists') | list | length == 0
+    fail_msg: "nifi: {{ nifi_data_root }}/restoring or {{ nifi_data_root }}/before-restore is left from an earlier restore; inspect it and move it away"
+
+- name: Extract into a fresh directory beside the data (the service keeps running meanwhile)
+  block:
+    - name: Create the staging directory
+      ansible.builtin.file:
+        path: "{{ nifi_data_root }}/restoring"
+        state: directory
+        mode: "0700"
+    - name: Extract the archive
+      ansible.builtin.command:
+        argv: [tar, -xzf, "{{ nifi_restore_source }}/state.tar.gz", -C, "{{ nifi_data_root }}/restoring", --no-same-owner, --no-same-permissions]
+      changed_when: true
+    - name: Look for links in what was extracted
+      ansible.builtin.command:
+        argv: [find, "{{ nifi_data_root }}/restoring", -type, l]
+      register: nifi_staged_links
+      changed_when: false
+    - name: The staged state is what it should be
+      ansible.builtin.assert:
+        that: nifi_staged_links.stdout_lines | length == 0
+        fail_msg: "nifi: the staged state holds a link. Nothing was changed; {{ nifi_data_root }}/restoring is left for inspection."
+    - name: Give the staged state to the container's user
+      ansible.builtin.command:
+        argv: [chown, -R, "{{ nifi_uid | int }}:{{ nifi_gid | int }}", "{{ nifi_data_root }}/restoring"]
+      changed_when: true
+
+- name: Swap the staged state in with the service stopped
+  block:
+    - name: Stop the service
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ nifi_dir }}/docker-compose.yml", stop]
+      changed_when: true
+    - name: Create the place the replaced state goes
+      ansible.builtin.file:
+        path: "{{ nifi_data_root }}/before-restore/conf"
+        state: directory
+        mode: "0700"
+    - name: Move each live path the archive replaces aside (never deleted)
+      ansible.builtin.command:
+        argv: [mv, "{{ nifi_data_root }}/{{ item }}", "{{ nifi_data_root }}/before-restore/{{ item }}"]
+        removes: "{{ nifi_data_root }}/{{ item }}"
+      loop: "{{ nifi_state_files + nifi_restore_dirs }}"
+      when: (nifi_members.stdout_lines | select('equalto', item) | list | length > 0) or (nifi_members.stdout_lines | select('match', '^' ~ (item | regex_escape) ~ '/') | list | length > 0)
+    - name: Move each verified path into place
+      ansible.builtin.command:
+        argv: [mv, "{{ nifi_data_root }}/restoring/{{ item }}", "{{ nifi_data_root }}/{{ item }}"]
+        removes: "{{ nifi_data_root }}/restoring/{{ item }}"
+      loop: "{{ nifi_state_files + nifi_restore_dirs }}"
+    - name: Remove the staging directories, which are empty now (rmdir refuses one that is not)
+      ansible.builtin.command:
+        argv: [rmdir, "{{ nifi_data_root }}/restoring/{{ item }}"]
+        removes: "{{ nifi_data_root }}/restoring/{{ item }}"
+      loop: [conf]
+    - name: Remove the staging directory itself
+      ansible.builtin.command:
+        argv: [rmdir, "{{ nifi_data_root }}/restoring"]
+      changed_when: true
+  rescue:
+    - name: Say that the service was left stopped
+      ansible.builtin.fail:
+        msg: >-
+          nifi: the swap failed part way. The service is LEFT STOPPED. What was replaced is under
+          {{ nifi_data_root }}/before-restore and the verified state under {{ nifi_data_root }}/restoring
+          (or already in place); put them right by hand, then start the service.
+
+- name: Start the service on the restored state
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ nifi_dir }}/docker-compose.yml", up, -d]
+  changed_when: true
+  when: nifi_start | bool

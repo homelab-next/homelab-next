@@ -65,7 +65,10 @@ IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
 IPV6 = re.compile(r"(?<![\w:])(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{0,4}(?![\w:])")
 HOSTNAME = re.compile(
     r"(?<![\w./@-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+"
-    r"(?:internal|lan|local|home|lab|example|com|net|org|io|dev|corp)(?![\w-])",
+    r"(?:internal|lan|local|home|lab|example|com|net|org|io|dev|corp)(?![\w-])"
+    # a CDI device name is <vendor domain>/<class>=<id> (nvidia.com/gpu=0), the container
+    # runtime's name for a device, never a host
+    r"(?!/[a-z][a-z0-9-]*=)",
     re.I,
 )
 IMAGE_KEY = re.compile(r"(_image|_images|_repository|_repo)$")

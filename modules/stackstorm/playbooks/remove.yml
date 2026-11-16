@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the database first (lifecycle.remove.export_first), stop the bridge and the broker
+# forward and delete their units, key and secrets file, then stop and remove the containers. The data
+# root (the database, the export, the pack releases) and the compose project are kept for the operator
+# to archive or delete; the decommission audit (module.yml lifecycle.remove.audit) checks nothing
+# still names the service.
+- name: Remove the automation service
+  hosts: mod_stackstorm_server
+  become: true
+  tasks:
+    - name: Export the database first
+      ansible.builtin.include_role:
+        name: stackstorm
+        tasks_from: export
+    - name: Stop and disable the bridge and the forward
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop: [hnx-st2-bridge.service, hnx-st2-broker-tunnel.service]
+      failed_when: false
+    - name: Remove their units, key and secrets
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/hnx-st2-bridge.service
+        - /etc/systemd/system/hnx-st2-broker-tunnel.service
+        - /etc/hnx-st2-bridge/secrets.env
+        - /etc/hnx-st2-broker/broker.key
+        - /etc/tmpfiles.d/hnx-st2-broker.conf
+    - name: Reload systemd (the units are gone)
+      ansible.builtin.command:
+        argv: [systemctl, daemon-reload]
+      changed_when: true
+    - name: Stop and remove the containers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ stackstorm_dir | default('/opt/compose/stackstorm') }}/docker-compose.yml", down]
+      changed_when: true

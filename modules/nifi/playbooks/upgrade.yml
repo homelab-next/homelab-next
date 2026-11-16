@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (nifi_target_image, tag and digest), export the
+# state first (flow definitions and the stopped-service archive), then converge with the new pin (set
+# nifi_image to the target in the overlay). The configuration files are taken afresh from the new image
+# by the role (its seed step); the stored flow, users and repositories are kept.
+#   ansible-playbook -i <inventory> modules/nifi/playbooks/upgrade.yml -e nifi_target_image=<ref>
+- name: Upgrade the dataflow service
+  hosts: mod_nifi_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: nifi
+        tasks_from: upgrade
+    - name: Export the state before the new image opens it
+      ansible.builtin.include_role:
+        name: nifi
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: nifi
+      vars:
+        nifi_image: "{{ nifi_target_image }}"

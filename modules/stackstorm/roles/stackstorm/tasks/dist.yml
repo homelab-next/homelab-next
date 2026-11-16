@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# The homelab-next wheel the pack's actions import, with its dependency lock, staged for the action
+# runner (read-only at /opt/hnx-dist). The wheel must be the pinned one: its sha256 on the host is
+# checked after the copy, and pip later installs it under --require-hashes with every dependency
+# named by the lock's hashes, so nothing unlocked is installed into the pack's runtime.
+- name: Copy the wheel
+  ansible.builtin.copy:
+    src: "{{ stackstorm_hnx_wheel }}"
+    dest: "{{ stackstorm_data_root }}/dist/{{ stackstorm_hnx_wheel | basename }}"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_gid | int }}"
+    mode: "0640"
+  register: stackstorm_wheel_written
+
+- name: Hash the wheel on the host
+  ansible.builtin.stat:
+    path: "{{ stackstorm_data_root }}/dist/{{ stackstorm_hnx_wheel | basename }}"
+    checksum_algorithm: sha256
+    get_checksum: true
+  register: stackstorm_wheel_stat
+
+- name: Refuse a wheel that is not the pinned one
+  ansible.builtin.assert:
+    that: stackstorm_wheel_stat.stat.checksum == stackstorm_hnx_wheel_sha256
+    fail_msg: >-
+      stackstorm: {{ stackstorm_hnx_wheel | basename }} hashes to {{ stackstorm_wheel_stat.stat.checksum | default('(missing)') }},
+      the pin is {{ stackstorm_hnx_wheel_sha256 }}
+  when: stackstorm_wheel_stat.stat.exists or not ansible_check_mode
+
+- name: Copy the dependency lock
+  ansible.builtin.copy:
+    src: "{{ stackstorm_hnx_constraints }}"
+    dest: "{{ stackstorm_data_root }}/dist/constraints.txt"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_gid | int }}"
+    mode: "0640"
+  register: stackstorm_constraints_written
+
+- name: Copy pip's own pin
+  ansible.builtin.copy:
+    src: "{{ stackstorm_hnx_bootstrap }}"
+    dest: "{{ stackstorm_data_root }}/dist/bootstrap.txt"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_gid | int }}"
+    mode: "0640"
+
+- name: Copy the compiled packages the python runner needs on this interpreter
+  ansible.builtin.copy:
+    src: runtime-compat.txt
+    dest: "{{ stackstorm_data_root }}/dist/runtime-compat.txt"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_gid | int }}"
+    mode: "0640"
+  register: stackstorm_compat_written
+
+- name: Write the one requirement, the wheel by hash
+  ansible.builtin.copy:
+    dest: "{{ stackstorm_data_root }}/dist/requirements.txt"
+    content: |
+      homelabnext[core] @ file://{{ stackstorm_c_dist }}/{{ stackstorm_hnx_wheel | basename }} --hash=sha256:{{ stackstorm_hnx_wheel_sha256 }}
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_gid | int }}"
+    mode: "0640"
+  register: stackstorm_requirements_written

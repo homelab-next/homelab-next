@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's (root); cache/ (the driver's compiled shaders) belongs to the
+# container's user, the one place it can write.
+- name: Create the data root and the cache directory
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ llamacpp_data_root }}", owner: "{{ llamacpp_owner }}", group: "{{ llamacpp_gid | int }}", mode: "0750"}
+    - {path: "{{ llamacpp_data_root }}/cache", owner: "{{ llamacpp_uid | int }}", group: "{{ llamacpp_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: Apache-2.0
+# Apache NiFi, the dataflow provider (modules/nifi): a single node (no cluster, no ZooKeeper) on the
+# lake's guest, HTTPS with a certificate from the lab CA, one sign-in, the lake's endpoints and
+# credentials supplied to flows as parameters. The image is pinned by tag and digest (2.12.0 was
+# published 2026-09-14).
+# nifi_logical_id (required): the instance's registry id, e.g. dataflow
+nifi_image: "docker.io/apache/nifi:2.12.0@sha256:6f7f2840dbf178c6dd3fa13435b9b358f3be3c6fb7417de467a35a267f4d28ad"
+# published on the guest's own address (the inventory's ansible_host), never on all interfaces; 8443
+# is the query engine's on the same guest
+nifi_bind: "{{ ansible_host }}"
+nifi_port: 9443
+nifi_dir: /opt/compose/nifi
+nifi_data_root: /var/lib/hnx-modules/nifi
+nifi_export_dir: /var/backups/hnx-modules/nifi/export
+nifi_owner: root
+# the group of the compose project and of the files the container reads: the container's gid
+nifi_group: "{{ nifi_gid }}"
+# the container's user and group. The image's own (1000:1000): its installation is owned by that id
+# and readable by no other (lib is 0770), so another id cannot start THIS image (a rebuilt image can
+# run as another: set both, and the files below follow). The role gives every file
+# the container writes to that id and nothing else; an account of the host that has the id can
+# read them (the data root is 0750 and its parts 0700).
+nifi_uid: 1000
+nifi_gid: 1000
+# JVM heap (initial = maximum) and the container's memory limit, which leaves room for the metaspace,
+# the code cache, direct buffers and the repositories' file cache
+nifi_heap: 2g
+nifi_mem_limit: 4g
+# --- the sign-in -----------------------------------------------------------------------------
+# single-user: one user whose password is a secret reference (the identity provider module renders no
+#              client for this row, and the role signs in with it for its own API calls)
+# oidc:        OpenID Connect against the identity provider; needs nifi_oidc_issuer_url, a client
+#              (nifi_oidc_client_id, a confidential client the realm must hold) and an initial admin,
+#              and nifi_api_bearer_ref for the role's own API calls (see README, "Sign-in")
+nifi_auth: single-user
+nifi_single_user_name: admin
+nifi_user_pw_ref: secret:nifi/single-user-password
+nifi_oidc_issuer_url: ""
+nifi_oidc_client_id: ""
+nifi_oidc_cred_ref: secret:nifi/oidc-client-secret
+# the claim that names the person, and the identity (that claim's value) that is the first administrator
+nifi_oidc_claim: preferred_username
+nifi_initial_admin: ""
+# a bearer token the service accepts, for the role's own API calls in the oidc sign-in
+nifi_api_bearer_ref: secret:nifi/api-token
+# --- TLS ---------------------------------------------------------------------------------------
+nifi_tls_cert_ref: secret:nifi/tls-cert
+nifi_tls_key_ref: secret:nifi/tls-key
+nifi_ca_ref: secret:nifi/ca
+nifi_store_pw_ref: secret:nifi/store-password
+nifi_sensitive_props_key_ref: secret:nifi/sensitive-props-key
+# the name clients reach it by (scheme://host:port), for the hooks: empty resolves the row of
+# nifi_logical_id from the registry (the name its certificate is issued for)
+nifi_self_url: ""
+# --- the lake and the bus, supplied to flows as parameters --------------------------------------
+# the rows' registry ids; their urls are resolved from the registry unless the matching *_url is
+# set (scheme://host:port)
+nifi_object_store_id: object-store
+nifi_s3_url: ""
+nifi_catalog_id: lake-catalog
+nifi_catalog_url: ""
+nifi_query_id: lake-query
+nifi_query_url: ""
+nifi_events_id: events
+nifi_events_url: ""
+# nifi_warehouse and nifi_region (required, no default): the lake's fixed warehouse (s3://<bucket>/,
+# the tables' metadata embeds its paths) and the object store's S3 region, the lake modules' own values
+nifi_s3_access_key_ref: secret:nifi/s3-access-key
+nifi_s3_signing_ref: secret:nifi/s3-secret-key
+nifi_events_auth_ref: secret:nifi/events-token
+# more sensitive parameters a site's flows read: parameter name (upper case, HNX_ first) -> secret ref
+nifi_extra_parameters: {}
+# the parameter provider the role keeps and the context it fills (flows bind to the context by name)
+nifi_parameter_provider: hnx-environment
+nifi_parameter_group: hnx
+nifi_parameter_context: hnx-lake
+# --- flows as code -----------------------------------------------------------------------------
+# a Git flow registry client (the GitHub client of the product, whose API URL setting also takes a
+# compatible host): empty nifi_registry_url means none, which is allowed (the repository comes later)
+nifi_registry_name: hnx-flows
+nifi_registry_url: ""
+nifi_registry_owner: ""
+nifi_registry_repo: ""
+nifi_registry_branch: main
+nifi_registry_path: flows
+# empty: no authentication (a public repository)
+nifi_registry_auth_ref: ""
+# --- the smoke flow and provenance --------------------------------------------------------------
+# a process group (files/hnx-smoke.json) that writes one file under <data root>/smoke every minute;
+# health asks for that file's age
+nifi_smoke_enabled: true
+nifi_smoke_max_age_minutes: 5
+# provenance is kept this long (and at most this large)
+nifi_provenance_max_age: 30 days
+nifi_provenance_max_size: 10 GB
+# the exports include the provenance repository only when asked (it is large and rebuilt as flows run)
+nifi_export_provenance: false
+nifi_start: true
+nifi_validate_with_docker: true
+# seconds to wait for the API after a start (the first start unpacks the extensions)
+nifi_ready_timeout: 420
+nifi_health_timeout: 30
+# a restore (nifi_restore_source, required there: the directory of an export) restores state (the
+# archive, with the service stopped) or flows (the portable flow definitions, imported by name when absent)
+nifi_restore_mode: state

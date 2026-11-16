@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# With the stack up: register the pack, apply the RBAC definitions, build the pack's runtime from the
+# pinned wheel, register the two API keys by their hash and put the runtime's datastore key in the
+# datastore, encrypted. Each step is safe to repeat. Signed in as the admin through the front on this guest.
+- name: Wait for the sign-in service (the stack is up)
+  ansible.builtin.uri:
+    url: "http://{{ stackstorm_bind }}:{{ stackstorm_port | int }}/auth/tokens"
+    method: POST
+    user: "{{ stackstorm_admin_user }}"
+    password: "{{ lookup('hnx_secret', stackstorm_admin_login_ref) }}"
+    force_basic_auth: true
+    body_format: json
+    body: {}
+    status_code: [200, 201]
+    timeout: "{{ stackstorm_health_timeout | int }}"
+  register: stackstorm_token_probe
+  until: stackstorm_token_probe.status | default(0) in [200, 201]
+  retries: "{{ ((stackstorm_ready_timeout | int) / 5) | int }}"
+  delay: 5
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: not ansible_check_mode
+
+# Applied before the first sign-in that needs a permission: the definitions are the source of
+# truth, a role or assignment removed from the files is removed from the database.
+- name: Apply the RBAC definitions
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", exec, -T, st2api,
+           /opt/stackstorm/st2/bin/st2-apply-rbac-definitions, --config-file, /etc/st2/st2.conf,
+           --config-file, /etc/st2/st2.docker.conf, --config-file, "{{ stackstorm_c_conf }}"]
+  register: stackstorm_rbac_applied
+  changed_when: "'Created' in stackstorm_rbac_applied.stdout or 'Deleted' in stackstorm_rbac_applied.stdout or 'Updated' in stackstorm_rbac_applied.stdout"
+  when: not ansible_check_mode
+
+- name: Register the pack (its rules, actions and config schema)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", exec, -T, st2api,
+           /opt/stackstorm/st2/bin/st2-register-content, --register-all, --config-file, /etc/st2/st2.conf,
+           --config-file, /etc/st2/st2.docker.conf, --config-file, "{{ stackstorm_c_conf }}"]
+  register: stackstorm_registered
+  changed_when: stackstorm_pack_changed | default(false) | bool
+  when: not ansible_check_mode
+
+- name: Build the pack's runtime from the pinned wheel
+  ansible.builtin.include_tasks: runtime.yml
+  when: not ansible_check_mode
+
+- name: Register the API keys and the runtime's datastore key
+  ansible.builtin.include_tasks: keys.yml
+  when: not ansible_check_mode

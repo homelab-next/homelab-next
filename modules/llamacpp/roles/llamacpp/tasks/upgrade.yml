@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# A bump moves the engine, never the weights: validate the target image (the backend's own build,
+# the same repository, pinned by tag and digest, newer), record it with compose_app, then converge
+# with llamacpp_image set to it, run health and the inference suite through the gateway.
+- block:
+    - name: Refuse a target that is not the backend's own build, another repository or not pinned
+      ansible.builtin.assert:
+        that:
+          - llamacpp_target_image is match(llamacpp_ref_pattern)
+          - llamacpp_target_image.split('@')[0].rsplit(':', 1)[0] == llamacpp_repository
+          - llamacpp_target_image.split('@')[0].rsplit(':', 1)[1] is match('^' ~ llamacpp_tag_prefix[llamacpp_backend] ~ 'b[0-9]{1,6}\Z')
+          - llamacpp_target_image.split('@')[0].rsplit(':', 1)[1].rsplit('b', 1)[1] | int > llamacpp_tag.rsplit('b', 1)[1] | int
+        fail_msg: "llamacpp: the target must be {{ llamacpp_repository }}:{{ llamacpp_tag_prefix[llamacpp_backend] }}b<N>@sha256:<64 hex>, a build newer than {{ llamacpp_tag }}"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: llamacpp
+        compose_app_dir: "{{ llamacpp_app.compose_app_dir }}"
+        compose_app_owner: "{{ llamacpp_app.compose_app_owner }}"
+        compose_app_group: "{{ llamacpp_app.compose_app_group }}"
+        compose_app_bind_extra: "{{ llamacpp_app.compose_app_bind_extra }}"
+        compose_app_spec: "{{ llamacpp_app.compose_app_spec }}"
+        compose_app_upgrade_service: llamacpp
+        compose_app_upgrade_tag: "{{ llamacpp_target_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ llamacpp_target_image.split('@')[1] }}"
+  tags: [upgrade]
