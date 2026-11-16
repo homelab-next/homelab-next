@@ -345,6 +345,24 @@ def _allow_entries(root: Path) -> list[tuple[str, str, list[str]]]:
     return out
 
 
+def product_allowlist_at(root: Path, rev: str) -> list[tuple[str, set[str]]]:
+    """The per-product exemptions as they were at ``rev`` (none when the vocabulary or the key is
+    not there), read from git."""
+    r = _git(root, "show", f"{rev}:{_prefix(root)}{VOCABULARY}")
+    if r is None or r.returncode:
+        return []
+    try:
+        doc = yaml.safe_load(r.stdout) or {}
+    except yaml.YAMLError:
+        return []
+    out = []
+    for e in doc.get("allow") or [] if isinstance(doc, dict) else []:
+        prods = e.get("products") if isinstance(e, dict) else None
+        if isinstance(prods, list) and prods and all(isinstance(x, str) for x in prods):
+            out.append((str(e.get("path", "")), {x.lower() for x in prods}))
+    return out
+
+
 def allowlist(root: Path) -> list[tuple[str, str]]:
     """The whole-file exemptions: every product is allowed in these paths."""
     return [(g, r) for g, r, prods in _allow_entries(root) if not prods]
@@ -362,18 +380,29 @@ def partial_problems(
     counts: dict[str, dict[str, int]],
     where: str,
     linted_then: set[str] | None = None,
+    at_base: list[tuple[str, set[str]]] | None = None,
 ) -> list[str]:
     """A ``products:`` exemption is for a product that is NEW to the lint, nothing else: an error
     when a name is not a known product, or when ``counts`` (a baseline) already holds a nonzero
     count for it in a path the entry matches - that debt is counted, and exempting it would erase
     it from the baseline without paying it down.  ``linted_then`` (the products linted at the
     base commit) makes it an error too when the product was already linted there, debt or no
-    debt: it is not new, so its mentions are counted or renamed, not exempted."""
+    debt: it is not new, so its mentions are counted or renamed, not exempted.
+
+    ``at_base`` (the per-product entries at the base commit) grandfathers what was already there:
+    a name an entry of the same path already listed at the base is judged when it is added, not
+    again once it has merged (by then its product IS in the base vocabulary, which is the point of
+    the exemption).  An entry that is new, or whose list gained a name, is judged for the new
+    names; an unknown name is always an error."""
     known = {p.lower() for p in vocab.products}
     old = {p.lower() for p in linted_then or ()}
     out = []
-    for glob, names in partial:
-        for name in sorted(names - known):
+    for glob, all_names in partial:
+        names = set(all_names)
+        for g0, n0 in at_base or ():
+            if g0 == glob:
+                names -= n0
+        for name in sorted(all_names - known):
             out.append(f"{VOCABULARY}: allow {glob!r}: products: {name!r} is not a known product")
         for name in sorted(names & old):
             out.append(
@@ -803,13 +832,24 @@ def against_base(
             f"{BASELINE}: {g} at {rev[:12]}: no product's total may rise" for g in grown(base, then)
         ]
         problems += partial_problems(
-            product_allowlist(root), vocab, then, f"the baseline at {rev[:12]}"
+            product_allowlist(root),
+            vocab,
+            then,
+            f"the baseline at {rev[:12]}",
+            at_base=product_allowlist_at(root, rev),
         )
     old_vocab = vocabulary_at(root, rev, roles)
     # a product already linted at the base is not new to the lint, debt or no debt
     problems += [
         p
-        for p in partial_problems(product_allowlist(root), vocab, {}, "", old_vocab.products)
+        for p in partial_problems(
+            product_allowlist(root),
+            vocab,
+            {},
+            "",
+            old_vocab.products,
+            product_allowlist_at(root, rev),
+        )
         if "was already linted" in p
     ]
     gone = set(old_vocab.by_key) - set(vocab.by_key)

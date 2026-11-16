@@ -564,11 +564,18 @@ def test_a_per_product_exemption_cannot_erase_counted_debt(tmp_path):
     assert _problems(root2) == []
 
 
-def _based(tmp_path, then_vocab, then_baseline, now_vocab, now_baseline, allow_products):
+def _based(
+    tmp_path, then_vocab, then_baseline, now_vocab, now_baseline, allow_products, then_allow=None
+):
     """A repo whose base commit has ``then_*`` and whose working tree has ``now_*`` plus an allow
     entry exempting ``allow_products`` in ``stack/*.yml``."""
     products = {"zorbix": {"name": "zorbix", "why": "x"}, "quuxd": {"name": "quuxd", "why": "x"}}
-    base_vocab = {"products": [products[p] for p in then_vocab], "allow": []}
+    base_allow = (
+        [{"path": "stack/*.yml", "products": then_allow, "reason": "the stack runs it"}]
+        if then_allow
+        else []
+    )
+    base_vocab = {"products": [products[p] for p in then_vocab], "allow": base_allow}
     root = tree(
         tmp_path, {"tools/product_names.yml": yaml.safe_dump(base_vocab), "stack/a.yml": "x: 1\n"}
     )
@@ -611,3 +618,43 @@ def test_debt_at_the_base_that_the_working_baseline_dropped_is_still_refused(tmp
     )
     assert run(root, "--base", "HEAD") == 1
     assert "already has 4 counted" in capsys.readouterr().out
+
+
+def test_an_exemption_identical_at_the_base_is_not_judged_again_once_merged(tmp_path):
+    # zorbix was new when the entry was added; after the merge it IS in the base vocabulary
+    root = _based(tmp_path, ["zorbix"], {}, ["zorbix"], {}, ["zorbix"], then_allow=["zorbix"])
+    assert run(root, "--base", "HEAD") == 0
+
+
+def test_an_exemption_added_now_for_an_already_linted_product_still_fails(tmp_path, capsys):
+    root = _based(tmp_path, ["zorbix", "quuxd"], {}, ["zorbix", "quuxd"], {}, ["quuxd"])
+    assert run(root, "--base", "HEAD") == 1
+    assert "'quuxd' was already linted at the base commit" in capsys.readouterr().out
+
+
+def test_widening_an_existing_exemption_to_an_already_linted_product_fails(tmp_path, capsys):
+    root = _based(
+        tmp_path, ["zorbix", "quuxd"], {}, ["zorbix", "quuxd"], {}, ["zorbix", "quuxd"],
+        then_allow=["zorbix"],
+    )  # fmt: skip
+    assert run(root, "--base", "HEAD") == 1
+    out = capsys.readouterr().out
+    assert (
+        "'quuxd' was already linted at the base commit" in out and "'zorbix' was already" not in out
+    )
+
+
+def test_an_existing_exemption_cannot_be_moved_to_a_new_path_to_escape_judgement(tmp_path, capsys):
+    root = _based(tmp_path, ["zorbix"], {}, ["zorbix"], {}, ["zorbix"], then_allow=["zorbix"])
+    vocab = yaml.safe_load((root / "tools/product_names.yml").read_text())
+    vocab["allow"][0]["path"] = "elsewhere/*.yml"  # same product, a path the base did not exempt
+    (root / "tools/product_names.yml").write_text(yaml.safe_dump(vocab))
+    assert run(root, "--base", "HEAD") == 1
+    assert "'zorbix' was already linted at the base commit" in capsys.readouterr().out
+
+
+def test_an_unknown_name_is_an_error_even_in_a_grandfathered_entry(tmp_path):
+    root = _based(
+        tmp_path, ["zorbix"], {}, ["zorbix"], {}, ["zorbix", "ghost"], then_allow=["zorbix"]
+    )
+    assert run(root, "--base", "HEAD") == 1
