@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: Apache-2.0
+# The profiles directory holds exactly the site's profile files (orchestration_profiles_src/*.yaml,
+# copied as they are) and, while the runner is the smoke session, the health check's one agent. A
+# *.yaml file the site no longer has is removed (a file only, directly in the profiles directory).
+# Profiles are data the controller reloads on POST /admin/reload-profiles: a changed set is
+# reloaded by the converge, never by a restart (a restart ends every running job).
+- name: List the site's profile files on the control host
+  ansible.builtin.find:
+    paths: "{{ orchestration_profiles_src }}"
+    patterns: ["*.yaml"]
+    file_type: file
+    recurse: false
+  register: orchestration_site_profiles
+  delegate_to: localhost
+  become: false
+  check_mode: false
+
+- name: Refuse an empty or unreadable profiles directory, and a profile that shadows the health check's
+  ansible.builtin.assert:
+    that:
+      - orchestration_site_profiles.files | length > 0
+      - orchestration_site_profiles.files | map(attribute='path') | map('basename') | select('equalto', orchestration_health_agent_key ~ '.yaml') | list | length == 0
+    fail_msg: >-
+      orchestration: {{ orchestration_profiles_src }} holds no *.yaml profile (a controller with no
+      agent admits nothing, and an empty directory is a mistake, never a configuration), or one
+      is named {{ orchestration_health_agent_key }}.yaml, which is the health check's
+
+- name: Copy the site's profiles
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "{{ orchestration_profiles_dir }}/{{ item.path | basename }}"
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_group }}"
+    mode: "0640"
+  loop: "{{ orchestration_site_profiles.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: orchestration_profile_files
+
+- name: Write the health check's profile
+  ansible.builtin.template:
+    src: hnx-health.yaml.j2
+    dest: "{{ orchestration_profiles_dir }}/{{ orchestration_health_agent_key }}.yaml"
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_group }}"
+    mode: "0640"
+  register: orchestration_health_profile_file
+  when: orchestration_health_job_on | bool
+
+- name: Find the profile files on the host
+  ansible.builtin.find:
+    paths: "{{ orchestration_profiles_dir }}"
+    patterns: ["*.yaml"]
+    file_type: file
+    recurse: false
+  register: orchestration_host_profiles
+
+- name: Remove a profile file nothing names any more
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: >-
+    {{ orchestration_host_profiles.files | rejectattr('islnk')
+       | rejectattr('path', 'in',
+           (orchestration_site_profiles.files | map(attribute='path') | map('basename')
+            | map('regex_replace', '^(.*)$', orchestration_profiles_dir ~ '/\1') | list)
+           + ([orchestration_profiles_dir ~ '/' ~ orchestration_health_agent_key ~ '.yaml'] if orchestration_health_job_on | bool else []))
+       | list }}
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: orchestration_profile_removals
+
+- name: Remember whether the profile set changed
+  ansible.builtin.set_fact:
+    orchestration_profiles_changed: >-
+      {{ orchestration_profile_files is changed or orchestration_health_profile_file is changed
+         or orchestration_profile_removals is changed }}
