@@ -1,0 +1,151 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - stackstorm_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      # the images: each pinned by tag and digest, and the st2 ones by one tag with a digest per service
+      - stackstorm_release_tag is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - stackstorm_release_repository is match('^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+\Z')
+      - stackstorm_release_digests is mapping
+      - stackstorm_services | difference(stackstorm_release_digests.keys() | list) | length == 0
+      - stackstorm_release_digests.values() | reject('match', stackstorm_digest_pattern) | list | length == 0
+      - >-
+        [stackstorm_mongo_image, stackstorm_rabbitmq_image, stackstorm_redis_image,
+         stackstorm_python_provisioner_image] | reject('match', stackstorm_pinned_pattern) | list | length == 0
+      - stackstorm_python_version is match('^3\.11\.[0-9]{1,2}\Z')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - stackstorm_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - stackstorm_bind != '0.0.0.0'
+      - stackstorm_port | int >= 1 and stackstorm_port | int <= 65535
+      - >-
+        [stackstorm_dir, stackstorm_data_root, stackstorm_bridge_state_dir, stackstorm_broker_socket_dir]
+        | reject('match', stackstorm_path_pattern) | list | length == 0
+      - stackstorm_uid | int >= 100 and stackstorm_gid | int >= 100
+      - >-
+        [stackstorm_mongo_uid, stackstorm_mongo_gid, stackstorm_rabbitmq_uid, stackstorm_rabbitmq_gid,
+         stackstorm_redis_uid, stackstorm_redis_gid] | map('int') | select('lt', 100) | list | length == 0
+      - stackstorm_mem_limit is mapping
+      - (stackstorm_services + ['mongo', 'rabbitmq', 'redis']) | difference(stackstorm_mem_limit.keys() | list) | length == 0
+      - stackstorm_mem_limit.values() | reject('match', '^[1-9][0-9]{1,5}[mg]\Z') | list | length == 0
+      - stackstorm_mongo_cache_gb is match('^(0\.[1-9][0-9]?|[1-9][0-9]?)\Z')
+      - stackstorm_retention_days | int == 0 or (stackstorm_retention_days | int >= 7 and stackstorm_retention_days | int <= 3650)
+      - stackstorm_enabled_rules is sequence and stackstorm_enabled_rules is not string
+      - stackstorm_enabled_rules | reject('string') | list | length == 0
+      - stackstorm_enabled_rules | reject('match', stackstorm_rule_pattern) | list | length == 0
+      - stackstorm_allow_live_rules | bool is boolean
+      - >-
+        [stackstorm_admin_login_ref, stackstorm_mongo_root_login_ref, stackstorm_mongo_login_ref,
+         stackstorm_rabbitmq_login_ref, stackstorm_datastore_key_ref, stackstorm_kv_key_ref,
+         stackstorm_webhook_key_ref, stackstorm_status_key_ref] | reject('match', stackstorm_ref_pattern) | list | length == 0
+      # eight distinct references: two secrets in one place would be one leak
+      - >-
+        [stackstorm_admin_login_ref, stackstorm_mongo_root_login_ref, stackstorm_mongo_login_ref,
+         stackstorm_rabbitmq_login_ref, stackstorm_datastore_key_ref, stackstorm_kv_key_ref,
+         stackstorm_webhook_key_ref, stackstorm_status_key_ref] | unique | list | length == 8
+      - >-
+        [stackstorm_admin_user, stackstorm_webhook_user, stackstorm_status_user]
+        | reject('match', '^[a-z][a-z0-9_-]{1,31}\Z') | list | length == 0
+      - >-
+        [stackstorm_admin_user, stackstorm_webhook_user, stackstorm_status_user] | unique | list | length == 3
+      - stackstorm_operator_users is sequence and stackstorm_operator_users is not string
+      - stackstorm_operator_users | reject('string') | list | length == 0
+      - stackstorm_operator_users | reject('match', '^[a-z][a-z0-9_.-]{1,31}\Z') | list | length == 0
+      - stackstorm_runner_roles is sequence and stackstorm_runner_roles is not string
+      - stackstorm_runner_roles | reject('match', '^[a-z][a-z0-9_]{1,63}\Z') | list | length == 0
+      - stackstorm_runner_roles | length > 0
+      - stackstorm_status_packs is sequence and stackstorm_status_packs is not string
+      - stackstorm_status_packs | reject('string') | list | length == 0
+      - stackstorm_status_packs | reject('match', '^[a-z][a-z0-9_]{0,63}\Z') | list | length == 0
+      - stackstorm_bridge_enabled | bool is boolean
+      - stackstorm_broker_tunnel_enabled | bool is boolean
+      - stackstorm_hnx_cli is match('^/[A-Za-z0-9_./-]*/hnx\Z')
+      - stackstorm_unit_dir is match(stackstorm_path_pattern)
+    fail_msg: >-
+      stackstorm: a registry id, st2 images pinned by tag with a digest each, MongoDB, RabbitMQ,
+      Redis and the interpreter provisioner pinned by tag and digest, the guest's IPv4 address
+      (not all interfaces), two different ports, absolute canonical directories, container user
+      ids of 100 or more, a memory limit per service like 512m, a MongoDB cache in GB, rule names
+      (lowercase and underscores), eight different secret:<name> references and three different
+      user names
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Validate the pack's inputs (the controller's rendered tree and the wheel the actions import)
+  ansible.builtin.assert:
+    that:
+      - stackstorm_pack_src is string and stackstorm_pack_src is match('^/')
+      - stackstorm_pack_src is not match('(^|/)\.\.(/|\Z)')
+      - stackstorm_hnx_wheel is string and stackstorm_hnx_wheel is match('^/.*\.whl\Z')
+      - stackstorm_hnx_wheel_sha256 is match('^[0-9a-f]{64}\Z')
+      - stackstorm_hnx_constraints is string and stackstorm_hnx_constraints is match('^/')
+      - stackstorm_hnx_bootstrap is string and stackstorm_hnx_bootstrap is match('^/')
+    fail_msg: >-
+      stackstorm: stackstorm_pack_src (the rendered workflows/stackstorm/ tree), stackstorm_hnx_wheel
+      (an absolute path to a .whl), its stackstorm_hnx_wheel_sha256 (64 hex) and stackstorm_hnx_constraints
+      (constraints/ci.txt of the same commit) and stackstorm_hnx_bootstrap (its constraints/bootstrap.txt, pip itself by hash) are required
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Validate the event bridge's inputs (only when the bridge is on)
+  ansible.builtin.assert:
+    that:
+      - stackstorm_events_endpoint is match('^(tls|nats)://[A-Za-z0-9.-]+(:[0-9]{1,5})?\Z')
+      - stackstorm_events_endpoint is match('^tls://') or stackstorm_events_endpoint is match('^nats://(localhost|127\.0\.0\.1)(:|\Z)')
+      - stackstorm_events_user is match('^[a-z][a-z0-9_-]{1,63}\Z')
+      - stackstorm_events_login_ref is match(stackstorm_ref_pattern)
+      - stackstorm_events_ca_file == '' or stackstorm_events_ca_file is match(stackstorm_path_pattern)
+      - stackstorm_events_stream is match('^[A-Za-z0-9_-]{1,64}\Z')
+      - stackstorm_events_subject_prefix is match('^[a-z][a-z0-9_-]{0,31}\Z')
+      - stackstorm_events_api_prefix == '' or stackstorm_events_api_prefix is match('^[A-Za-z0-9_.-]{1,64}\Z')
+      - stackstorm_bridge_user is match('^[a-z][a-z0-9_-]{1,31}\Z')
+    fail_msg: >-
+      stackstorm: the event bridge needs stackstorm_events_endpoint (tls://host:port; plain nats://
+      only to loopback), a bus user and a secret:<name> password reference, an absolute CA file or
+      none, the stream and its subject prefix, and a service user name (turn it off with
+      stackstorm_bridge_enabled: false)
+  when: stackstorm_bridge_enabled | bool
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Validate the broker socket forward's inputs (only when it is on)
+  ansible.builtin.assert:
+    that:
+      - stackstorm_broker_host is match('^[A-Za-z0-9][A-Za-z0-9.-]*\Z')
+      - stackstorm_broker_ssh_user is match('^[a-z][a-z0-9_-]{1,31}\Z')
+      - stackstorm_broker_ssh_port | int >= 1 and stackstorm_broker_ssh_port | int <= 65535
+      - stackstorm_broker_host_key is match('^[A-Za-z0-9.,:\[\]-]+ ssh-[a-z0-9-]+ [A-Za-z0-9+/=]+\Z')
+      - stackstorm_broker_key_ref is match(stackstorm_ref_pattern)
+      - stackstorm_broker_remote_socket is match(stackstorm_path_pattern)
+      - stackstorm_broker_tunnel_user is match('^[a-z][a-z0-9_-]{1,31}\Z')
+      - stackstorm_broker_socket_mode in ['0660', '0600']
+    fail_msg: >-
+      stackstorm: the broker socket forward needs stackstorm_broker_host, the user the broker maps to
+      the binding's actor, the host's pinned public key line (`name ssh-ed25519 AAAA...`, never
+      trusted on first use), a secret:<name> reference for the private key and the remote socket's
+      path (turn it off with stackstorm_broker_tunnel_enabled: false and mount the socket yourself)
+  when: stackstorm_broker_tunnel_enabled | bool
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Require the pinned network subnet
+  ansible.builtin.assert:
+    that:
+      - stackstorm_network_subnet | string != ''
+    fail_msg: "stackstorm_network_subnet is required: a free private /16 to /29 of the site's own (no default: a clashing range is a silent outage)"
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Judge the pinned network subnet with compose_app's rules
+  ansible.builtin.include_role:
+    name: compose_app
+    tasks_from: network_subnet
+    apply:
+      tags: [health, backup, restore, export, upgrade, readiness]
+  vars:
+    compose_app_network_subnet: "{{ stackstorm_network_subnet }}"
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: The memory budget fits the module's footprint
+  ansible.builtin.assert:
+    that: >-
+      (stackstorm_mem_limit.values() | map('regex_replace', 'm\Z', '') | map('regex_replace', 'g\Z', '000') | map('int') | sum)
+      <= stackstorm_footprint_memory_mb | int
+    fail_msg: >-
+      stackstorm: the per-service limits add up to more than the module's footprint
+      ({{ stackstorm_footprint_memory_mb }} MB): raise the footprint in the site's selection or lower a limit
+  tags: [health, backup, restore, export, upgrade, readiness]

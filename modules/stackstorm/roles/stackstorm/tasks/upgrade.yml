@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate and record an image bump (compose_app upgrade), then set the pins in the site's variables
+# and re-run main:
+#   * the st2 services together: stackstorm_target_release_tag and stackstorm_target_release_digests (one
+#     digest per service; StackStorm's services are one release, never mixed), a patch of the same
+#     minor line only: a minor or major bump reads the release notes first (README, "Upgrading");
+#   * MongoDB, RabbitMQ or Redis alone: stackstorm_target_service and stackstorm_target_image, the
+#     same repository and the same major.minor line (a data format change is a dump and a restore).
+- block:
+    - name: Name what is being bumped
+      ansible.builtin.set_fact:
+        stackstorm_up_release: "{{ stackstorm_target_release_tag | default('') }}"
+        stackstorm_up_service: "{{ stackstorm_target_service | default('') }}"
+        stackstorm_up_image: "{{ stackstorm_target_image | default('') }}"
+    - name: Refuse a target that is not pinned, mixes releases, or changes a data format
+      vars:
+        _cur: "{{ {'mongo': stackstorm_mongo_image, 'rabbitmq': stackstorm_rabbitmq_image, 'redis': stackstorm_redis_image} }}"
+      ansible.builtin.assert:
+        that:
+          - (stackstorm_up_release | length > 0) != (stackstorm_up_service | length > 0)
+          # an st2 bump: a patch of this minor line, a digest for every service
+          - >-
+            stackstorm_up_release | length == 0 or (
+              stackstorm_up_release is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+              and stackstorm_up_release.split('.')[:2] == stackstorm_release_tag.split('.')[:2]
+              and (stackstorm_target_release_digests | default({})) is mapping
+              and stackstorm_services | difference((stackstorm_target_release_digests | default({})).keys() | list) | length == 0
+              and (stackstorm_target_release_digests | default({})).values() | reject('match', stackstorm_digest_pattern) | list | length == 0)
+          # a data store: a known one, pinned, the same repository and the same major.minor
+          - >-
+            stackstorm_up_service | length == 0 or (
+              stackstorm_up_service in _cur
+              and stackstorm_up_image is match(stackstorm_pinned_pattern)
+              and stackstorm_up_image.split('@')[0].rsplit(':', 1)[0] == _cur[stackstorm_up_service].split('@')[0].rsplit(':', 1)[0]
+              and stackstorm_up_image.split('@')[0].rsplit(':', 1)[1].split('.')[:2] == _cur[stackstorm_up_service].split('@')[0].rsplit(':', 1)[1].split('.')[:2])
+        fail_msg: >-
+          stackstorm: name one bump: the st2 services' next patch of {{ stackstorm_release_tag.split('.')[:2] | join('.') }}.x
+          (stackstorm_target_release_tag with stackstorm_target_release_digests for every service), or one of mongo, rabbitmq
+          and redis (stackstorm_target_service with stackstorm_target_image: the same repository and the same
+          major.minor, pinned by tag and digest)
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the st2 bump (compose_app upgrade, one service at a time)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: stackstorm
+        compose_app_dir: "{{ stackstorm_app.compose_app_dir }}"
+        compose_app_owner: "{{ stackstorm_app.compose_app_owner }}"
+        compose_app_group: "{{ stackstorm_app.compose_app_group }}"
+        compose_app_spec: "{{ stackstorm_app.compose_app_spec }}"
+        compose_app_upgrade_service: "{{ stackstorm_up_release_item }}"
+        compose_app_upgrade_tag: "{{ stackstorm_up_release }}"
+        compose_app_upgrade_digest: "{{ stackstorm_target_release_digests[stackstorm_up_release_item] }}"
+      loop: "{{ stackstorm_services if stackstorm_up_release | length > 0 else [] }}"
+      loop_control:
+        loop_var: stackstorm_up_release_item
+    - name: Validate and record the data store's bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: stackstorm
+        compose_app_dir: "{{ stackstorm_app.compose_app_dir }}"
+        compose_app_owner: "{{ stackstorm_app.compose_app_owner }}"
+        compose_app_group: "{{ stackstorm_app.compose_app_group }}"
+        compose_app_spec: "{{ stackstorm_app.compose_app_spec }}"
+        compose_app_upgrade_service: "{{ stackstorm_up_service }}"
+        compose_app_upgrade_tag: "{{ stackstorm_up_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ stackstorm_up_image.split('@')[1] }}"
+      when: stackstorm_up_service | length > 0
+  tags: [upgrade]

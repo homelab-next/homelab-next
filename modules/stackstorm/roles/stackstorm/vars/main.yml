@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+stackstorm_pack_ref: homelabnext
+# where things appear INSIDE the containers
+stackstorm_c_packs: /opt/stackstorm/packs.hnx
+stackstorm_c_configs: /opt/stackstorm/configs
+stackstorm_c_virtualenvs: /opt/stackstorm/virtualenvs
+stackstorm_c_rbac: /opt/stackstorm/rbac
+stackstorm_c_keys: /etc/st2/keys
+stackstorm_c_python_root: /opt/py311
+stackstorm_c_dist: /opt/hnx-dist
+# the runner-only volume the pack's runtime keeps its dedupe/coalesce/submitted state in (StateKV)
+stackstorm_c_state: /opt/hnx-state
+stackstorm_c_export: /export
+stackstorm_c_broker_dir: /run/hnx-broker
+stackstorm_c_broker_socket: /run/hnx-broker/broker.sock
+stackstorm_c_conf: /etc/st2/st2.user.conf
+# the st2 services of the stack, in start order (st2web is the HTTP front and is always run)
+stackstorm_services: [st2api, st2auth, st2stream, st2scheduler, st2workflowengine, st2actionrunner, st2rulesengine, st2timersengine, st2garbagecollector, st2web]
+# the Python the pack's runtime needs (homelabnext requires 3.11; the st2 3.9 images carry 3.10)
+stackstorm_python_install_tag: "{{ stackstorm_python_version }}"
+stackstorm_python_binary: "{{ stackstorm_c_python_root }}/cpython-{{ stackstorm_python_version }}-linux-x86_64-gnu/bin/python3.11"
+# the rule names the pack renders (the role flips `enabled` per rule, never anything else)
+stackstorm_rule_pattern: '^[a-z][a-z0-9_]*\Z'
+stackstorm_ref_pattern: '^secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*\Z'
+stackstorm_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+stackstorm_pinned_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+stackstorm_digest_pattern: '^sha256:[0-9a-f]{64}\Z'
+# values that go into st2.conf / a URL / an env file: no quote, space, line break, % or @ or :
+stackstorm_login_value_pattern: '^[A-Za-z0-9._~-]{24,128}\Z'
+stackstorm_admin_login_value_pattern: '^[A-Za-z0-9._~-]{16,128}\Z'
+stackstorm_key_pattern: '^[A-Za-z0-9._~-]{32,128}\Z'
+# resolved against the shared secret name rule (hnx_secret): the env var the bridge reads
+stackstorm_unit_dir: /etc/systemd/system
+# where the forward and the bridge keep their files on the guest
+stackstorm_broker_state_dir: /etc/hnx-st2-broker
+stackstorm_broker_group: hnx-st2-clients
+stackstorm_bridge_conf_dir: /etc/hnx-st2-bridge
+# StreamLocalBindMask is an umask: the socket's mode is its complement
+stackstorm_broker_socket_masks: {"0660": "0117", "0600": "0177"}
+stackstorm_broker_socket_mask: "{{ stackstorm_broker_socket_masks[stackstorm_broker_socket_mode] }}"
+# Who may do what with the pack (docs/stackstorm.md, "Who may run the pack's actions"): operators
+# and the status hub read, the bridge may only post webhooks, and nobody who signs in may run an
+# action. The user rules run executions as (stanley, which has no password and no token anyone
+# holds) gets ONE grant: view of the datastore key the pack config reads (kv_key; the config loader
+# checks key_value_pair_view for the run's user before it decrypts, st2common KeyValueLookup).
+# The runtime's own state is not in the datastore but in a file on the runner's volume, because a
+# datastore grant names one key's uid and these names are HMACs: reaching them through the
+# datastore API would need system_admin. One role per file, as StackStorm's RBAC loader wants.
+stackstorm_rbac_roles: >-
+  {%- set grants = [{'resource_uid': 'pack:' ~ stackstorm_pack_ref, 'permission_types': ['action_view']},
+                    {'permission_types': ['action_list', 'execution_list']}] -%}
+  {%- for p in stackstorm_status_packs if p != stackstorm_pack_ref -%}
+  {%-   set _ = grants.insert(1, {'resource_uid': 'pack:' ~ p, 'permission_types': ['action_view']}) -%}
+  {%- endfor -%}
+  {{ [{'name': 'hnx_operator',
+       'description': "read the pack's actions and rules; never run an action",
+       'grants': [{'resource_uid': 'pack:' ~ stackstorm_pack_ref, 'permission_types': ['pack_view', 'action_view', 'rule_view']},
+                  {'permission_types': ['action_list', 'rule_list', 'pack_list', 'execution_list']}]},
+      {'name': 'hnx_status',
+       'description': "the status hub's reader: list executions, and the actions of the packs named",
+       'grants': grants},
+      {'name': 'hnx_runner',
+       'description': "what a rule-run execution (stanley) needs: view of the pack config's one datastore key",
+       'grants': [{'resource_uid': 'key_value_pair:st2kv.system:' ~ stackstorm_pack_ref ~ '.kv_key', 'permission_types': ['key_value_pair_view']}]},
+      {'name': 'hnx_bridge',
+       'description': "the event bridge: post to the pack's webhook, nothing else",
+       'grants': [{'resource_uid': 'webhook:' ~ stackstorm_pack_ref, 'permission_types': ['webhook_send']}]}] }}
+stackstorm_rbac_assignments: >-
+  {%- set out = [{'user': stackstorm_admin_user, 'roles': ['system_admin']},
+                 {'user': 'stanley', 'roles': stackstorm_runner_roles},
+                 {'user': stackstorm_status_user, 'roles': ['hnx_status']},
+                 {'user': stackstorm_webhook_user, 'roles': ['hnx_bridge']}] -%}
+  {%- for u in stackstorm_operator_users -%}{%- set _ = out.append({'user': u, 'roles': ['hnx_operator']}) -%}{%- endfor -%}
+  {{ out }}
+# StackStorm's own constant (st2common.util.hash.FIXED_SALT): an API key is stored as sha512(salt + key)
+stackstorm_hash_input_prefix: saltnpepper
+# the stack's own services, by name and port inside the compose network (data, not endpoints of the
+# site): the front proxies to them, their health checks ask themselves
+stackstorm_c_self: localhost
+stackstorm_c_services: {api: {host: st2api, port: 9101}, auth: {host: st2auth, port: 9100}, stream: {host: st2stream, port: 9102}, cache: {host: redis, port: 6379}}
+# the service that proxies /api/ and /auth/ (it is the only one with a port)
+stackstorm_front: st2web

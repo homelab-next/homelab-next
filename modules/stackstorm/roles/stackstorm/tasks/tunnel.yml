@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+# The broker socket forward (docs/broker.md, "Remote agents"): the pack's actions reach the broker
+# only through this ssh -L, as the broker host's own user for StackStorm. The group is st2's numeric
+# group, so the action runner's container (which runs as it) can open the socket and nobody else can.
+- name: The group the socket belongs to (st2's numeric group)
+  ansible.builtin.group:
+    name: "{{ stackstorm_broker_group }}"
+    gid: "{{ stackstorm_gid | int }}"
+    system: true
+
+- name: The forward's own user (no shell, no home)
+  ansible.builtin.user:
+    name: "{{ stackstorm_broker_tunnel_user }}"
+    group: "{{ stackstorm_broker_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: The forward's directory
+  ansible.builtin.file:
+    path: "{{ stackstorm_broker_state_dir }}"
+    state: directory
+    owner: root
+    group: "{{ stackstorm_broker_group }}"
+    mode: "0750"
+
+- name: Write the forward's key (owner-only)
+  ansible.builtin.copy:
+    dest: "{{ stackstorm_broker_state_dir }}/broker.key"
+    content: "{{ lookup('hnx_secret', stackstorm_broker_key_ref) | trim }}\n"
+    owner: "{{ stackstorm_broker_tunnel_user }}"
+    group: "{{ stackstorm_broker_group }}"
+    mode: "0400"
+  no_log: true
+  register: stackstorm_tunnel_key
+
+- name: Pin the broker host's key
+  ansible.builtin.copy:
+    dest: "{{ stackstorm_broker_state_dir }}/known_hosts"
+    content: "{{ stackstorm_broker_host_key }}\n"
+    owner: root
+    group: "{{ stackstorm_broker_group }}"
+    mode: "0644"
+  register: stackstorm_tunnel_hosts
+
+- name: Keep the socket's directory across restarts (tmpfiles, so the container's mount stays valid)
+  ansible.builtin.copy:
+    dest: /etc/tmpfiles.d/hnx-st2-broker.conf
+    content: "d {{ stackstorm_broker_socket_dir }} 0750 {{ stackstorm_broker_tunnel_user }} {{ stackstorm_broker_group }} -\n"
+    owner: root
+    group: root
+    mode: "0644"
+  register: stackstorm_tunnel_tmpfiles
+
+- name: Create the socket's directory now
+  ansible.builtin.command:
+    argv: [systemd-tmpfiles, --create, /etc/tmpfiles.d/hnx-st2-broker.conf]
+  changed_when: stackstorm_tunnel_tmpfiles is changed
+  when: not ansible_check_mode
+
+- name: Write the forward's unit
+  ansible.builtin.template:
+    src: broker-tunnel.service.j2
+    dest: "{{ stackstorm_unit_dir }}/hnx-st2-broker-tunnel.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: stackstorm_tunnel_unit
+
+- name: Start the forward
+  ansible.builtin.systemd_service:
+    name: hnx-st2-broker-tunnel.service
+    enabled: true
+    state: "{{ 'restarted' if (stackstorm_tunnel_unit is changed or stackstorm_tunnel_key is changed or stackstorm_tunnel_hosts is changed) else 'started' }}"
+    daemon_reload: "{{ stackstorm_tunnel_unit is changed }}"
+  when: stackstorm_start | bool and not ansible_check_mode

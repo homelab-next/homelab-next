@@ -127,6 +127,25 @@ SOURCES: dict[str, tuple[str, str]] = {
         "memcached release notes by hand",
     ),
     "role:prometheus/prometheus_image": ("github", "prometheus/prometheus"),
+    "role:stackstorm/stackstorm_mongo_image": (
+        "none",
+        "the Docker official image (docker.io/library/mongo), held on the 4.4 line the pinned "
+        "StackStorm release supports: compare its 4.4 tags by hand",
+    ),
+    "role:stackstorm/stackstorm_rabbitmq_image": (
+        "none",
+        "the Docker official image (docker.io/library/rabbitmq), within the pinned minor line",
+    ),
+    "role:stackstorm/stackstorm_redis_image": (
+        "none",
+        "the Docker official image (docker.io/library/redis), within the pinned minor line",
+    ),
+    "role:stackstorm/stackstorm_python_provisioner_image": ("github", "astral-sh/uv"),
+    "role:stackstorm/stackstorm_python_version": (
+        "none",
+        "the CPython 3.11 patch the one-shot provisioner downloads: compare with the 3.11 "
+        "release page by hand",
+    ),
     "role:open_webui/open_webui_image": ("github", "open-webui/open-webui"),
     "role:openbao/openbao_version": ("github", "openbao/openbao"),
     "role:openbao/openbao_lego_version": ("github", "go-acme/lego"),
@@ -218,6 +237,23 @@ NOTES: dict[str, str] = {
     ),
     "role:openproject/openproject_cache_image": (
         "an image (modules/openproject): bump the tag and its digest together"
+    ),
+    "role:stackstorm/stackstorm_mongo_image": (
+        "an image (modules/stackstorm): the tag and its digest together, within 4.4 (a data format "
+        "change is a dump and a restore)"
+    ),
+    "role:stackstorm/stackstorm_rabbitmq_image": (
+        "an image (modules/stackstorm): the tag and its digest together, within the minor line"
+    ),
+    "role:stackstorm/stackstorm_redis_image": (
+        "an image (modules/stackstorm): the tag and its digest together, within the minor line"
+    ),
+    "role:stackstorm/stackstorm_python_provisioner_image": (
+        "an image (modules/stackstorm): the tag and its digest together"
+    ),
+    "role:stackstorm/stackstorm_python_version": (
+        "a CPython 3.11 patch (modules/stackstorm): the pack's virtualenv is rebuilt from it on the "
+        "next run"
     ),
     "role:prometheus/prometheus_image": (
         "an image (modules/prometheus): bump the tag and its digest together, with product.version "
