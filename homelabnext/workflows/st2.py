@@ -15,8 +15,9 @@ stays in the broker.  Inputs: the binding (``workflows/stackstorm.yml``,
   (``admit`` then one task per pack step, in order) and ``rules/on_<name>.yaml``: a
   ``core.st2.webhook`` rule whose criteria are the pack's trigger (``trigger.body.type`` equals the
   event type, plus each ``where`` condition), or a ``core.st2.CronTimer`` rule for a scheduled pack;
-* ``configs/<st2_pack>.yaml``: the pack config (secrets as ``{{ st2kv.system.<key> | decrypt_kv }}``
-  references, never values);
+* ``configs/<st2_pack>.yaml``: the pack config (secrets as ``{{ st2kv.system.<key> }}``
+  references, never values; a value the schema flags as a secret is decrypted by StackStorm itself,
+  which refuses ``decrypt_kv`` on it);
 * ``bridge.json``: which bus subjects the event bridge relays to the webhook, the producers each
   subject's rules pin (anything else is poison to the bridge), and the secret-store name of its
   API key (:mod:`homelabnext.workflows.st2_bridge`);
@@ -165,7 +166,7 @@ _PARAM = {
 SHAPES: dict[str, dict[str, Any]] = {
     "pack": {
         "type": "object",
-        "required": ["ref", "name", "description", "version", "author"],
+        "required": ["ref", "name", "description", "version", "author", "email"],
         "properties": {
             "ref": {"type": "string", "pattern": r"^[a-z0-9_]+$"},
             "name": {"type": "string"},
@@ -175,6 +176,7 @@ SHAPES: dict[str, dict[str, Any]] = {
                 "pattern": r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$",
             },
             "author": {"type": "string"},
+            "email": {"type": "string", "minLength": 3},
             "keywords": {"type": "array", "items": {"type": "string"}},
             "python_versions": {"type": "array", "items": {"enum": ["2", "3"]}, "minItems": 1},
             "stackstorm_version": {
@@ -338,7 +340,9 @@ def rule_criteria(trigger: Mapping[str, Any]) -> dict[str, Any]:
         elif "in" in c:
             crit[key] = {"type": "inside", "pattern": list(c["in"])}
         else:
-            crit[key] = {"type": "exists" if c["exists"] else "nexists"}
+            # StackStorm refuses a criterion without a pattern, exists and nexists included
+            # ("no pattern specified for operator nexists"); the operators ignore its value
+            crit[key] = {"type": "exists" if c["exists"] else "nexists", "pattern": ""}
     return crit
 
 
@@ -506,12 +510,12 @@ class {cls}(Action):
 def _shim(ref: str, name: str) -> str:
     call = {
         "admit": (
-            "admit(\n            kv=st2_runtime.ActionServiceKV(self.action_service, self.config),\n"
+            "admit(\n            kv=st2_runtime.runner_state(self.config),\n"
             "            pinned_dir=PINNED,\n            **params,\n        )"
         ),
         "step": (
             "step(\n            self.config,\n            "
-            "kv=st2_runtime.ActionServiceKV(self.action_service, self.config),\n            "
+            "kv=st2_runtime.runner_state(self.config),\n            "
             "pinned_dir=PINNED,\n            **params,\n        )"
         ),
     }[name]
@@ -685,16 +689,16 @@ def _config(binding: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]
         "secret": True,
         "required": True,
         "description": (
-            "keys the runtime's datastore names (seen, coalesce, submitted) so nobody without it "
+            "keys the names of the runtime's own state (seen, coalesce, submitted) so nobody without it "
             f"can forge or pre-seed one; at least {KV_KEY_MIN} random characters"
         ),
     }
-    values[KV_KEY] = "{{ st2kv.system." + KV_KEY_DATASTORE + " | decrypt_kv }}"
+    values[KV_KEY] = "{{ st2kv.system." + KV_KEY_DATASTORE + " }}"
     for key, entry in sorted(binding.get("config", {}).items()):
         item: dict[str, Any] = {"description": entry.get("description", key)}
         if "st2kv" in entry:
             item |= {"type": "string", "secret": True, "required": True}
-            values[key] = "{{ st2kv.system." + entry["st2kv"] + " | decrypt_kv }}"
+            values[key] = "{{ st2kv.system." + entry["st2kv"] + " }}"
         else:
             v = entry["value"]
             item |= {"type": {bool: "boolean", int: "integer"}.get(type(v), "string")}
@@ -800,6 +804,8 @@ def render(
             "keywords": ["homelab-next", "workflows"],
             "version": binding["version"],
             "author": "homelab-next",
+            # StackStorm refuses to register a pack without one (PackAPI has no email)
+            "email": "homelab-next@example.internal",
             "python_versions": ["3"],
             "stackstorm_version": ">=3.8.0",
         }

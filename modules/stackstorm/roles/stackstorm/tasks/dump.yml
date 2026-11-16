@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+# A consistent archive of the st2 database taken by mongodump inside the database's container
+# (its root password is in the container's environment and goes to a 0600 config file in the container for the run, never into an argument), written into the
+# bind-mounted export directory under a temporary name and renamed when complete, then hashed
+# and listed. The database stays up: mongodump reads a consistent snapshot per collection (no
+# --oplog, which needs a replica set, so collections are not consistent with each other; with the
+# rules disabled nothing writes across them, and the VM backup is the cross-collection history).
+# The previous archive is kept as st2.archive.gz.prev (one generation) instead of being overwritten.
+- name: Dump the database inside its container
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", exec, -T, mongo, sh, -c,
+           'umask 077; printf "password: \"%s\"\n" "$MONGO_INITDB_ROOT_PASSWORD" > /tmp/dump.cfg; mongodump --quiet --config=/tmp/dump.cfg --db=st2 --username=root --authenticationDatabase=admin --gzip --archive={{ stackstorm_c_export }}/mongo/.st2.archive.gz.partial; rc=$?; rm -f /tmp/dump.cfg; exit $rc']
+  changed_when: true
+  no_log: true
+
+- name: Check the new archive is not empty before it replaces anything
+  ansible.builtin.stat:
+    path: "{{ stackstorm_data_root }}/export/mongo/.st2.archive.gz.partial"
+  register: stackstorm_dump_partial
+
+- name: Refuse an empty new archive (the previous one is kept untouched)
+  ansible.builtin.assert:
+    that: stackstorm_dump_partial.stat.exists and stackstorm_dump_partial.stat.size | int > 512
+    fail_msg: "stackstorm: the new database archive is missing or empty ({{ stackstorm_dump_partial.stat.size | default(0) }} bytes); the previous one is untouched"
+
+- name: Look for the previous archive
+  ansible.builtin.stat:
+    path: "{{ stackstorm_data_root }}/export/mongo/st2.archive.gz"
+  register: stackstorm_dump_previous
+
+- name: Keep the previous archive as .prev (one generation; the VM backup is the history)
+  ansible.builtin.command:
+    argv: [mv, -f, "{{ stackstorm_data_root }}/export/mongo/st2.archive.gz", "{{ stackstorm_data_root }}/export/mongo/st2.archive.gz.prev"]
+  when: stackstorm_dump_previous.stat.exists
+  changed_when: true
+
+- name: Put the archive in place (renamed only when complete)
+  ansible.builtin.command:
+    argv: [mv, -f, "{{ stackstorm_data_root }}/export/mongo/.st2.archive.gz.partial", "{{ stackstorm_data_root }}/export/mongo/st2.archive.gz"]
+  changed_when: true
+
+- name: Hash it
+  ansible.builtin.stat:
+    path: "{{ stackstorm_data_root }}/export/mongo/st2.archive.gz"
+    checksum_algorithm: sha256
+  register: stackstorm_dump_stat
+
+- name: Refuse an empty archive (a dump that wrote nothing is not a backup)
+  ansible.builtin.assert:
+    that: stackstorm_dump_stat.stat.exists and stackstorm_dump_stat.stat.size | int > 512
+    fail_msg: "stackstorm: the database archive is missing or empty ({{ stackstorm_dump_stat.stat.size | default(0) }} bytes)"
+
+- name: Write the listing
+  ansible.builtin.copy:
+    dest: "{{ stackstorm_data_root }}/export/listing.jsonl"
+    content: "{{ {'key': 'mongo/st2.archive.gz', 'size': stackstorm_dump_stat.stat.size, 'sha256': stackstorm_dump_stat.stat.checksum} | to_json }}\n"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_group }}"
+    mode: "0600"

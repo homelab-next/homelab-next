@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's (root). Each database's directory belongs to its container's
+# user, virtualenvs/ (the pack's runtime, rebuilt from the wheel) to st2's; config/, keys/ and rbac/
+# are root's and readable by st2's group only. Nothing here is ever removed by the role (a
+# bind-mounted directory taken away under a running container breaks it).
+- name: Create the project and data directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ stackstorm_dir }}", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_group }}", mode: "0750"}
+    - {path: "{{ stackstorm_data_root }}", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_group }}", mode: "0750"}
+    - {path: "{{ stackstorm_data_root }}/mongo", owner: "{{ stackstorm_mongo_uid | int }}", group: "{{ stackstorm_mongo_gid | int }}", mode: "0700"}
+    - {path: "{{ stackstorm_data_root }}/mongo-init", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_mongo_gid | int }}", mode: "0750"}
+    - {path: "{{ stackstorm_data_root }}/rabbitmq", owner: "{{ stackstorm_rabbitmq_uid | int }}", group: "{{ stackstorm_rabbitmq_gid | int }}", mode: "0700"}
+    - {path: "{{ stackstorm_data_root }}/config", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
+    - {path: "{{ stackstorm_data_root }}/keys", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
+    - {path: "{{ stackstorm_data_root }}/rbac", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
+    - {path: "{{ stackstorm_data_root }}/rbac/roles", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
+    - {path: "{{ stackstorm_data_root }}/rbac/assignments", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
+    - {path: "{{ stackstorm_data_root }}/virtualenvs", owner: "{{ stackstorm_uid | int }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
+    - {path: "{{ stackstorm_data_root }}/state", owner: "{{ stackstorm_uid | int }}", group: "{{ stackstorm_gid | int }}", mode: "0700"}
+    - {path: "{{ stackstorm_data_root }}/dist", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
+    - {path: "{{ stackstorm_data_root }}/pack-releases", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
+    - {path: "{{ stackstorm_data_root }}/export", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_group }}", mode: "0700"}
+    - {path: "{{ stackstorm_data_root }}/export/mongo", owner: "{{ stackstorm_mongo_uid | int }}", group: "{{ stackstorm_mongo_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

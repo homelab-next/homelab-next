@@ -1,0 +1,131 @@
+# SPDX-License-Identifier: Apache-2.0
+# The automation provider on StackStorm (docs/modules.md; README.md beside this file): when a
+# workflow pack runs. StackStorm 3.9 as the official container stack (its services, MongoDB,
+# RabbitMQ and Redis), run by compose_app in the module's slice, running the pack homelab-next
+# renders (workflows/stackstorm/, docs/stackstorm.md) read-only. Rules ship DISABLED and every pack
+# rule is in shadow mode (it records what it would ask the broker and sends nothing); every change a
+# pack makes goes through the broker over an SSH-forwarded socket, so StackStorm holds no credential
+# for any target. The event bridge (bus -> webhook) runs beside it as a systemd service. No public
+# route; the front is reached on the guest's address by the zones the site's firewall admits. Every
+# real value (the guest, its address, the broker host and its pinned key, the bus endpoint, the
+# secret values) is the site's: the overlay's lab/modules.yml, lab/services.yml, group variables and
+# secret store.
+manifest_version: "1.0"
+id: stackstorm
+kind: provider
+title: Automation on StackStorm
+description: Fills the automation slot with StackStorm 3.9 as compose_app containers (the st2 services,
+  MongoDB, RabbitMQ, Redis) running the rendered workflow pack in shadow mode with every rule
+  disabled, with the bus-to-webhook event bridge and the broker socket forward as systemd services;
+  every change a run causes goes through the broker.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: stackstorm
+  aliases: [st2]
+  version: 3.9.0
+licence:
+  kind: open-source
+  spdx: Apache-2.0
+credentials:
+  - secret: secret:stackstorm/admin-password
+    identity: password
+    holder: provider
+    purpose: the StackStorm administrator's sign-in (system admin); the role signs in with it over loopback to register the pack's keys and in its health hook
+  - secret: secret:stackstorm/mongo-root-password
+    identity: password
+    holder: provider
+    purpose: the database's root password, given to MongoDB at its first start and used by its export and restore
+  - secret: secret:stackstorm/mongo-password
+    identity: password
+    holder: provider
+    purpose: the password of the st2 database user StackStorm connects as (limited to its own database)
+  - secret: secret:stackstorm/rabbitmq-password
+    identity: password
+    holder: provider
+    purpose: the message bus user's password, given to RabbitMQ at its first start and to every StackStorm service
+  - secret: secret:stackstorm/datastore-key
+    identity: private-key
+    holder: provider
+    purpose: the datastore's encryption key (the JSON st2-generate-symmetric-crypto-key writes), readable by the StackStorm containers only
+  - secret: secret:stackstorm/kv-key
+    identity: token
+    holder: provider
+    purpose: the key the pack's runtime names its datastore entries with (an HMAC key, 32 characters or more), stored encrypted in the datastore
+  - secret: secret:stackstorm/webhook-key
+    identity: token
+    holder: provider
+    purpose: the event bridge's API key, registered by its hash for a StackStorm user whose only grant is posting the pack's webhook
+  - secret: secret:stackstorm/status-token
+    identity: token
+    holder: provider
+    purpose: the status hub's API key, registered by its hash for a StackStorm user that may only list and view executions
+  - secret: secret:stackstorm/events-password
+    identity: password
+    holder: provider
+    purpose: the bridge's bus user's password (its durable consumers are the only thing it may read)
+  - secret: secret:stackstorm/broker-ssh-key
+    identity: private-key
+    holder: provider
+    purpose: the key of the ssh forward to the broker's socket, restricted on the broker host to that forward and mapped by the broker to the pack's actor
+identifiers:
+  - {kind: secret-name, name: stackstorm, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: every password, key and token above is read by name at deploy time
+    - cap: cap:broker
+      version: "1.0"
+      hosts: [server]
+      purpose: every effect of a pack run, every approval and every audit record go through the broker's socket (shadow mode records the request and sends nothing)
+    - cap: cap:events
+      version: "1.0"
+      hosts: [server]
+      purpose: the event bridge reads the bus's durable consumers and posts each valid event to the pack's webhook
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 4, memory_mb: 6144, disk_gb: 30}
+      guest:
+        baselines: [base]
+      roles: [role:stackstorm]
+      purpose: runs the StackStorm stack (docker_engine applied first, compose_app renders it), the event bridge and the broker socket forward
+provides:
+  slots:
+    automation:
+      adapter: homelabnext.conform.adapters.automation:make
+      provisional: true
+      reason: automation has no contract yet; the obvious standard is the engine answering its API's version and listing its executions, which is what the status hub and a module's own live check read
+      migration: {formats: [object-tree], export: role:stackstorm, import: role:stackstorm}
+egress:
+  - host: server
+    to: [internet]
+    purpose: the interpreter's download and the dependency index the pack's virtualenv installs from, once per version
+contributes:
+  roles:
+    - file: roles/stackstorm
+  services:
+    - file: registry/services.yml
+  status_sources: [status:stackstorm-executions]
+  preflight:
+    - {role: role:stackstorm, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: database
+    kind: database
+    description: StackStorm's database (rules, executions as the shadow log, the encrypted datastore, API keys, role assignments) as a gzip archive with a sha256 listing; the pack, secrets and runtime are not in it.
+    export: {formats: [object-tree], via: role:stackstorm}
+    import: {formats: [object-tree], via: role:stackstorm}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump: the st2 services together (a patch of the same minor line, one digest per service) or one data store within its major.minor; the role's upgrade hook validates and records it, the database is exported, then it converges"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

@@ -32,7 +32,7 @@ may run the pack's actions at all is StackStorm RBAC's (``docs/stackstorm.md``).
   ``homelabnext.seen.<hash of pack and id>``) ends the run ``duplicate``.  A StackStorm webhook
   starts one run per POST and ignores ``Idempotency-Key``; the bridge is at-least-once;
 * **coalesces**: with ``coalesce = {key, window_s}`` the first event of a key opens a window in the
-  StackStorm datastore (``homelabnext.coalesce.<hash of pack, source and key>``, TTL
+  runner state file (StateKV) (``homelabnext.coalesce.<hash of pack, source and key>``, TTL
   ``window_s``); every later event of that key inside the window ends the run ``coalesced`` before
   any step runs.  The datastore has no
   compare-and-set, so two events in the same instant can both pass: the bound that holds anyway is
@@ -49,7 +49,7 @@ may run the pack's actions at all is StackStorm RBAC's (``docs/stackstorm.md``).
   is *submitted* - the broker holds it and emits ``homelabnext.decision.requested`` - and any other
   action is *called*.  StackStorm holds no credential for any target; the broker decides, runs the
   pinned handler and audits.
-* a held request is recorded in the datastore (:func:`submitted_name`) with its pack, step and
+* a held request is recorded in the runner state file (:func:`submitted_name`) with its pack, step and
   fingerprint; the built-in approved-run pack's one ``broker-run`` step (:func:`run_approved`)
   runs such a request once a person approved it, and nothing else;
 * ``lookup``, ``decide`` and ``prompt`` steps are not run on StackStorm yet; the renderer refuses a
@@ -64,6 +64,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -75,6 +76,7 @@ from homelabnext.agent.digest import digest_of
 from homelabnext.broker import request_digest
 from homelabnext.broker.state import is_id
 from homelabnext.events.envelope import build_event, event_problems
+from homelabnext.state import StateStore
 
 from .runner import (
     SCHEDULE_EVENT,
@@ -107,11 +109,15 @@ BROKER_SOURCE = "svc:broker"
 #: which pack and step, so the approved-run rule runs only those (and only for this long)
 SUBMITTED_PREFIX = "homelabnext.submitted."
 SUBMITTED_TTL_S = 7 * 86400
-#: the pack config key (a datastore secret, ``st2kv.system.homelabnext.kv_key``) that keys the
-#: datastore names above, so nobody without it can compute one to forge or pre-seed
+#: the pack config key (a datastore secret read as pack config, ``homelabnext.kv_key``) that keys the
+#: state names above, so nobody without it can compute one to forge or pre-seed
 KV_KEY = "kv_key"
 KV_KEY_DATASTORE = "homelabnext.kv_key"
 KV_KEY_MIN = 32
+#: the runner-only state volume (inside the container) and the file in it
+DEFAULT_STATE_DIR = "/opt/hnx-state"
+STATE_DIR_ENV = "HNX_RUNNER_STATE_DIR"
+STATE_FILE = "runtime-state.json"
 _KEYED_PREFIXES = (SEEN_PREFIX, COALESCE_PREFIX, SUBMITTED_PREFIX)
 
 log = logging.getLogger("homelabnext.st2_runtime")
@@ -178,25 +184,42 @@ class Broker(Protocol):
     def run(self, request_id: str) -> Any: ...
 
 
-class ActionServiceKV:
-    """:class:`KeyValue` over a StackStorm Python action's ``action_service`` (system scope).
+class StateKV:
+    """:class:`KeyValue` in one crash-safe, locked file on the action runner's own state volume.
 
-    The runtime's own names (``homelabnext.seen.*``, ``.coalesce.*``, ``.submitted.*``) are
-    stored under an HMAC of the name keyed with the pack config's ``kv_key`` (a datastore secret):
-    their inputs (a schedule's event id, a broker request id) are predictable, so with a plain hash
-    anyone allowed to write the datastore could compute a name and pre-seed it (suppress an event)
-    or forge a submit record.  Without a key of at least ``KV_KEY_MIN`` characters nothing is read
-    or written."""
+    The runtime's state (``homelabnext.seen.*``, ``.coalesce.*``, ``.submitted.*``) is NOT kept in
+    the engine's datastore: its RBAC is per key (a grant names one key's uid), and these names are
+    HMACs nobody can list in advance, so a rule-run execution could only reach them as a system
+    administrator (the action service's key API, checked as the run's user).  A file on a volume
+    only the runner mounts needs no datastore grant at all (the docs' "Where the runtime's state
+    is").
 
-    def __init__(self, action_service: Any, config: Mapping[str, Any] | None = None) -> None:
+    The names are still keyed with an HMAC under the pack config's ``kv_key``: their inputs (a
+    schedule's event id, a broker request id) are predictable, so with a plain hash anyone able to
+    write the file could compute a name and pre-seed it (suppress an event) or forge a submit
+    record.  Without a key of at least ``KV_KEY_MIN`` characters nothing is read or written."""
+
+    def __init__(
+        self,
+        state_dir: str | os.PathLike[str],
+        config: Mapping[str, Any] | None = None,
+        *,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
         key = (config or {}).get(KV_KEY)
         if not isinstance(key, str) or len(key) < KV_KEY_MIN:
             raise ValueError(
                 f"the pack config's {KV_KEY} (st2kv.system.{KV_KEY_DATASTORE}, encrypted) is not "
                 f"set to a secret of at least {KV_KEY_MIN} characters"
             )
-        self.svc = action_service
+        root = Path(state_dir)
+        if not root.is_absolute() or not root.is_dir():
+            raise ValueError(
+                f"the runtime's state directory {str(root)!r} is not an existing absolute directory"
+            )
+        self._store = StateStore(root / STATE_FILE, clock=clock)
         self._key = key.encode("utf-8")
+        self._clock = clock
 
     def stored_name(self, name: str) -> str:
         for prefix in _KEYED_PREFIXES:
@@ -205,11 +228,33 @@ class ActionServiceKV:
                 return prefix + mac.hexdigest()[:32]
         return name
 
+    def _read(self, stored: str) -> str | None:
+        entry = self._store.get(stored)
+        if not isinstance(entry, dict) or float(entry.get("expires", 0)) <= self._clock():
+            return None
+        return str(entry["value"])
+
+    def _write(self, stored: str, value: str, ttl: int) -> None:
+        now = self._clock()
+
+        def put(data: dict[str, Any]) -> bool:
+            for name in [n for n, e in data.items() if float(e.get("expires", 0)) <= now]:
+                del data[name]  # expired entries go with every write (TTLs are days)
+            data[stored] = {"expires": now + ttl, "value": value}
+            return True
+
+        self._store.rewrite(put)  # one locked, atomic read-modify-write of the map
+
     def get(self, name: str) -> str | None:
-        return self.svc.get_value(self.stored_name(name), local=False)
+        return self._read(self.stored_name(name))
 
     def set(self, name: str, value: str, ttl: int) -> None:
-        self.svc.set_value(self.stored_name(name), value, ttl=ttl, local=False)
+        self._write(self.stored_name(name), value, ttl)
+
+
+def runner_state(config: Mapping[str, Any] | None) -> StateKV:
+    """The :class:`StateKV` of the action runner (the role mounts its volume at the default path)."""
+    return StateKV(os.environ.get(STATE_DIR_ENV) or DEFAULT_STATE_DIR, config)
 
 
 # ---------------------------------------------------------------- admit

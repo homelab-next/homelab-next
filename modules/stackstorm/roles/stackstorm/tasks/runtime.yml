@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: Apache-2.0
+# The pack's virtualenv, in the action runner's container: made by st2's own tool from the
+# interpreter st2.conf names (3.11), then homelab-next installed into it by hash, once per wheel (the
+# marker names the wheel and the lock). The virtualenv is the runner's to write; it is rebuilt from
+# the wheel at any time, so it is not backed up.
+- name: Read the marker of the installed runtime
+  ansible.builtin.slurp:
+    src: "{{ stackstorm_data_root }}/virtualenvs/{{ stackstorm_pack_ref }}/.hnx-installed"
+  register: stackstorm_runtime_marker
+  failed_when: false
+
+- name: Name what should be installed
+  ansible.builtin.set_fact:
+    stackstorm_runtime_want: >-
+      {{ [stackstorm_hnx_wheel_sha256, lookup('ansible.builtin.file', stackstorm_hnx_constraints) | hash('sha256'),
+          lookup('ansible.builtin.file', stackstorm_hnx_bootstrap) | hash('sha256'),
+          lookup('ansible.builtin.file', 'runtime-compat.txt') | hash('sha256'),
+          stackstorm_python_version] | join('|') | hash('sha256') }}
+
+- name: Build and install the runtime when it is not what is wanted
+  when: stackstorm_runtime_marker.content is not defined or (stackstorm_runtime_marker.content | b64decode | trim) != stackstorm_runtime_want
+  block:
+    - name: Create the pack's virtualenv with the 3.11 interpreter (st2's own tool)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", exec, -T, st2actionrunner,
+               /opt/stackstorm/st2/bin/st2-pack-setup-virtualenv, --config-file, /etc/st2/st2.conf,
+               --config-file, /etc/st2/st2.docker.conf, --config-file, "{{ stackstorm_c_conf }}", "{{ stackstorm_pack_ref }}"]
+      changed_when: true
+    # the virtualenv's own pip is too old to take hashes from a constraints file: pip itself first, by hash
+    - name: Install pip from its hash pin
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", exec, -T, st2actionrunner,
+               "{{ stackstorm_c_virtualenvs }}/{{ stackstorm_pack_ref }}/bin/python", -m, pip, install,
+               --no-cache-dir, --disable-pip-version-check, --require-hashes, --no-deps, --ignore-installed,
+               -r, "{{ stackstorm_c_dist }}/bootstrap.txt"]
+      changed_when: true
+    # StackStorm's python runner imports compiled packages the st2 images carry for CPython 3.10: the
+    # same versions for 3.11, by hash, first (the virtualenv's own site-packages shadow st2's)
+    - name: Install the compiled packages the python runner needs, every one by hash
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", exec, -T, st2actionrunner,
+               "{{ stackstorm_c_virtualenvs }}/{{ stackstorm_pack_ref }}/bin/python", -m, pip, install,
+               --no-cache-dir, --disable-pip-version-check, --require-hashes, "--only-binary=:all:",
+               --no-deps, --ignore-installed, -r, "{{ stackstorm_c_dist }}/runtime-compat.txt"]
+      changed_when: true
+    # --ignore-installed: the pack's virtualenv also sees StackStorm's own packages (its .pth), and
+    # the lock, not what happens to be there, decides what the pack's runtime imports
+    - name: Install homelab-next and its dependencies, every one by hash
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", exec, -T, st2actionrunner,
+               "{{ stackstorm_c_virtualenvs }}/{{ stackstorm_pack_ref }}/bin/python", -m, pip, install,
+               --no-cache-dir, --disable-pip-version-check, --require-hashes, "--only-binary=:all:",
+               --ignore-installed, -c, "{{ stackstorm_c_dist }}/constraints.txt", -r, "{{ stackstorm_c_dist }}/requirements.txt"]
+      changed_when: true
+    - name: The actions' runtime imports (the pack's runtime and StackStorm's own base class, together)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", exec, -T, st2actionrunner,
+               "{{ stackstorm_c_virtualenvs }}/{{ stackstorm_pack_ref }}/bin/python", -c,
+               "import homelabnext.workflows.st2_runtime; from st2common.runners.base_action import Action"]
+      changed_when: false
+    - name: Mark it installed
+      ansible.builtin.copy:
+        dest: "{{ stackstorm_data_root }}/virtualenvs/{{ stackstorm_pack_ref }}/.hnx-installed"
+        content: "{{ stackstorm_runtime_want }}\n"
+        owner: "{{ stackstorm_uid | int }}"
+        group: "{{ stackstorm_gid | int }}"
+        mode: "0644"

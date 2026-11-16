@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Refuse a target that is not pinned by tag and digest, or is another repository
+      ansible.builtin.assert:
+        that:
+          - nifi_target_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+          - nifi_target_image.split('@')[0].rsplit(':', 1)[0] == nifi_repository
+        fail_msg: "nifi: the target must be {{ nifi_repository }}:<tag>@sha256:<64 hex>"
+    - name: Refuse a downgrade (the service migrates its repositories forward only)
+      ansible.builtin.assert:
+        that: nifi_target_image.split('@')[0].rsplit(':', 1)[1] is version(nifi_tag, '>=')
+        fail_msg: "nifi: {{ nifi_target_image }} is older than the running {{ nifi_tag }}; a downgrade is a restore of an export taken with the older version"
+    - name: Refuse the running tag at another digest unless a rebuild is allowed
+      ansible.builtin.assert:
+        that: >-
+          nifi_allow_same_tag_rebuild | default(false) | bool
+          or nifi_target_image.split('@')[0].rsplit(':', 1)[1] != nifi_tag
+          or nifi_target_image.split('@')[1] == nifi_digest
+        fail_msg: "nifi: {{ nifi_target_image }} has the running tag {{ nifi_tag }} at a digest other than the pinned one; a tag is not a version (set nifi_allow_same_tag_rebuild only to take a deliberate rebuild)"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: nifi
+        compose_app_dir: "{{ nifi_app.compose_app_dir }}"
+        compose_app_owner: "{{ nifi_app.compose_app_owner }}"
+        compose_app_group: "{{ nifi_app.compose_app_group }}"
+        compose_app_spec: "{{ nifi_app.compose_app_spec }}"
+        compose_app_upgrade_service: nifi
+        compose_app_upgrade_tag: "{{ nifi_target_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ nifi_target_image.split('@')[1] }}"
+  tags: [upgrade]

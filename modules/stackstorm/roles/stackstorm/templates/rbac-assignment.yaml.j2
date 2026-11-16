@@ -1,0 +1,5 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role stackstorm); one user per file.
+---
+username: "{{ item.user }}"
+roles: [{{ item.roles | map('to_json') | join(', ') }}]

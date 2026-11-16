@@ -928,6 +928,26 @@
     },
     {
       "exit": {
+        "0": "the power cap is within the limit (or the backend has no GPU) and the bytes are the pinned ones",
+        "1": "a refusal - the cap is above the limit, unset or unreadable, or the weights are not the pinned bytes",
+        "2": "usage error"
+      },
+      "id": "llamacpp-precheck",
+      "inputs": "the backend, the power limit in watts, the GPU (a DRM render node or an index), the model store's listing, the pinned digest and the model directory",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-llamacpp-precheck",
+      "kind": "job",
+      "language": "shell",
+      "outputs": "one line on stdout per check that passed; the refusal on stderr",
+      "owner": "platform",
+      "path": "modules/llamacpp/roles/llamacpp/files/hnx-llamacpp-precheck",
+      "purpose": "Refuse to start the inference server unless the GPU's power cap is at or under the limit and the weights are the pinned bytes.",
+      "status": "active",
+      "trigger": [
+        "role:llamacpp"
+      ]
+    },
+    {
+      "exit": {
         "0": "checked (and alerted, if the set changed)",
         "1": "neither dpkg --verify nor debsums could run; the result is not rewritten (or, with --test, the channel did not deliver)",
         "2": "the alert could not be sent; it stays owed to the next run"

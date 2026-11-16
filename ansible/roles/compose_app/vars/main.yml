@@ -2,7 +2,7 @@
 # Fixed spec rules, not settings: role vars outrank inventory, so a deployment cannot loosen them.
 compose_app_service_keys:
   [image, tag, digest, healthcheck, command, user, env_file, environment, ports, volumes,
-   depends_on, restart, cap_add, read_only, mem_limit, privileged]
+   depends_on, restart, cap_add, read_only, mem_limit, privileged, devices, group_add]
 compose_app_restart_policies: ["no", always, on-failure, unless-stopped]
 # docker (and its distribution) image grammar, repository part only: optional registry[:port]/
 compose_app_repository_pattern: '^(?:[A-Za-z0-9.-]+(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*\Z'
@@ -34,3 +34,11 @@ compose_app_subnet_pattern: '^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.
 # names them hnx-<module id>-<host role>.slice, `-` in either written `_`), never system.slice,
 # -.slice or a cgroupfs path that would leave the slice's limits
 compose_app_cgroup_parent_pattern: '^hnx-[a-z0-9_]+-[a-z0-9_]+\.slice\Z'
+# a GPU handed to a container (`devices`): a DRM render node (/dev/dri/renderD128, the host's path
+# is the container's) or a CDI device name (nvidia.com/gpu=0 or =all, which the container
+# toolkit's CDI spec resolves). Never /dev/mem, /dev/kmsg, a disk or the control node of anything
+# else: a wider device needs its own reviewed change here, not a deployment setting.
+compose_app_device_pattern: '^(?:/dev/dri/renderD[0-9]{3}|nvidia\.com/gpu=(?:all|[0-9]{1,2}))\Z'
+# a supplementary group by number (the render group's id on the host: the name does not resolve
+# inside the image); the root group is refused, as a user's is
+compose_app_group_add_pattern: '^[1-9][0-9]{0,9}\Z'

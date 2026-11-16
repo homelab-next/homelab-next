@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# llama-server, the inference provider that serves one GGUF model on one GPU (modules/llamacpp): one
+# compose_app container started by a systemd unit, so a power-cap check and a byte check of the
+# weights run before every start. The weights come from the model store (role model_store, a pinned
+# sha256 per file) and are mounted read-only; nothing is downloaded at start.
+# llamacpp_logical_id (required): the instance's registry id, e.g. inference-small
+
+# the engine's backend: vulkan (Mesa, the Intel Arc B60 and any GPU with a Vulkan driver), sycl
+# (Intel's oneAPI build), cuda (NVIDIA, through the container toolkit's CDI devices) or cpu. The
+# image must be that backend's: the tag is server-vulkan-b<N>, server-intel-b<N>, server-cuda-b<N>
+# or server-b<N> (README.md lists the pinned digests of all four).
+llamacpp_backend: vulkan
+llamacpp_image: "ghcr.io/ggml-org/llama.cpp:server-vulkan-b12033@sha256:421137599beb2135a9e1d664fa8991a3f4f5f953440a9d7622c7a61b63185fe8"
+# a local `docker save` of the pinned image (guest path), loaded when the daemon lacks the digest: a
+# model runtime's egress is default-deny, so it cannot pull from the registry; empty: pull
+llamacpp_image_archive: ""
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# guest firewall admits the gateway and the metrics scraper only
+llamacpp_bind: "{{ ansible_host }}"
+llamacpp_port: 8001
+llamacpp_dir: /opt/compose/llamacpp
+# the module's data root: cache/ (the driver's compiled shaders), the container's only writable path
+llamacpp_data_root: /var/lib/hnx-modules/llamacpp
+llamacpp_owner: root
+# the container's user: an id no account on the host has, and no more than the groups below
+llamacpp_uid: 61000
+llamacpp_gid: 61000
+# the model store (role model_store) and the one GGUF entry served from it
+llamacpp_store_root: /srv/models
+llamacpp_model_repo: ggml-org/Clef-GGUF
+llamacpp_model_file: Clef-Q4_K_M.gguf
+llamacpp_model_store_id: clef-q4-k-m
+# the entry's digest: sha256 of its sha256sum listing (hnx models store list prints it)
+llamacpp_model_digest: "sha256:e29796ca3b3e2b31cdd32f32347a464d562ae9efaa74f82e21d6610f84b6bf02"
+# the id /v1/models lists and a reply names: the role table's model id for this backend
+llamacpp_served_model_name: clef
+# the context each parallel slot gets, in tokens; the server is started with this times the slots
+llamacpp_context_size: 8192
+llamacpp_parallel: 2
+# layers kept in VRAM: a count, all or auto; 99 puts every layer of any model this size on the card
+llamacpp_n_gpu_layers: "99"
+llamacpp_flash_attn: auto
+# the GPU: vulkan and sycl take a DRM render node (its group id is read from the node, or set
+# llamacpp_render_gid), cuda takes the card's index in the container toolkit's CDI spec
+llamacpp_render_node: renderD128
+llamacpp_render_gid: ""
+llamacpp_gpu_index: 0
+# the model store's group id (read from the model's directory when empty): the container reads the
+# weights through it and can write none
+llamacpp_models_gid: ""
+# the operator's rule: the card's power cap must be at or under this many watts before any load
+# starts (and again on every health run). It can only tighten the rule: 1 to 200, never above. On Intel the cap is read from the card's hwmon in sysfs,
+# every attribute listed (microwatts; absent or 0 refuses), on NVIDIA from nvidia-smi
+llamacpp_power_cap_max_watts: 200
+llamacpp_power_cap_attrs: [power1_cap]
+llamacpp_precheck_bin: /usr/local/libexec/homelabnext/hnx-llamacpp-precheck
+llamacpp_unit_dir: /etc/systemd/system
+llamacpp_systemctl_cli: systemctl
+# the unit's start timeout: it reads every byte of the weights (minutes per hundred GB) first
+llamacpp_start_timeout_s: 1800
+llamacpp_start: true
+llamacpp_validate_with_docker: true
+llamacpp_health_timeout: 20

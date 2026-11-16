@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# The certificate files and the keystore and truststore built from them. The service reads PKCS12
+# stores (its PEM support does not cover the web server), so the role converts the lab CA's PEM files
+# in a throwaway container of the pinned image (openssl and keytool are in it); the store password
+# goes in on its standard input, never on a command line. The stores are rebuilt when the certificate,
+# the key, the CA or the password changed (a digest of the four is kept beside them), and the
+# service restarts to read them.
+- name: Write the certificate chain, the key and the CA
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ nifi_dir }}/tls/{{ item.name }}"
+    owner: "{{ nifi_owner }}"
+    group: "{{ nifi_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {name: chain.pem, mode: "0640", content: "{{ lookup('hnx_secret', nifi_tls_cert_ref) | trim ~ '\n' }}"}
+    - {name: server.key, mode: "0640", content: "{{ lookup('hnx_secret', nifi_tls_key_ref) | trim ~ '\n' }}"}
+    - {name: ca.pem, mode: "0644", content: "{{ lookup('hnx_secret', nifi_ca_ref) | trim ~ '\n' }}"}
+  loop_control:
+    label: "{{ item.name }}"
+  register: nifi_tls_files
+  no_log: true
+
+- name: Read the digest of what the stores were built from
+  ansible.builtin.slurp:
+    src: "{{ nifi_dir }}/tls/.stores.sha256"
+  register: nifi_stores_stamp
+  failed_when: false
+
+- name: Name the digest of what the stores are to be built from
+  ansible.builtin.set_fact:
+    nifi_stores_want: >-
+      {{ (lookup('hnx_secret', nifi_tls_cert_ref) | trim ~ '|' ~ lookup('hnx_secret', nifi_tls_key_ref) | trim ~ '|'
+          ~ lookup('hnx_secret', nifi_ca_ref) | trim ~ '|' ~ lookup('hnx_secret', nifi_store_pw_ref)) | hash('sha256') }}
+  no_log: true
+
+- name: Build the keystore and the truststore
+  block:
+    - name: Convert the PEM files (the password on standard input)
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - -i
+          - --user
+          - "0:0"
+          - -e
+          - "NIFI_GID={{ nifi_gid | int }}"
+          - --entrypoint
+          - sh
+          - -v
+          - "{{ nifi_dir }}/tls:/tls"
+          - "{{ nifi_image }}"
+          - -c
+          - "{{ nifi_stores_script }}"
+        stdin: "{{ lookup('hnx_secret', nifi_store_pw_ref) | trim }}"
+      changed_when: true
+      no_log: true
+    - name: Remember what the stores were built from
+      ansible.builtin.copy:
+        content: "{{ nifi_stores_want }}\n"
+        dest: "{{ nifi_dir }}/tls/.stores.sha256"
+        owner: "{{ nifi_owner }}"
+        group: "{{ nifi_group }}"
+        mode: "0640"
+  when: >-
+    nifi_start | bool and ((nifi_stores_stamp.content | default('') | b64decode | trim) != nifi_stores_want
+    or nifi_tls_files is changed)
+
+- name: Note that the service must restart to read the stores
+  ansible.builtin.set_fact:
+    nifi_tls_changed: "{{ (nifi_stores_stamp.content | default('') | b64decode | trim) != nifi_stores_want or nifi_tls_files is changed }}"
