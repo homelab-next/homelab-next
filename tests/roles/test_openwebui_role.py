@@ -18,6 +18,7 @@ from __future__ import annotations
 import http.server
 import json
 import os
+import socket
 import threading
 from pathlib import Path
 
@@ -29,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.requires_tool("ansible-playbook")
 MID = "openwebui"
 ROLE = str(ROOT / "modules" / MID / "roles" / MID)
+LOOP = socket.gethostbyname("localhost")  # the published address: compose wants an IP
 USER = __import__("pwd").getpwuid(os.getuid()).pw_name
 
 REGISTRY = """\
@@ -70,7 +72,7 @@ def vs(tmp: Path, **over) -> dict:
         "openwebui_public_url": "https://chat.example.internal",
         "openwebui_oidc_issuer_url": "https://sso.example.internal/realms/lab",
         "openwebui_admin_email": "admin@example.internal",
-        "openwebui_bind": "localhost",
+        "openwebui_bind": LOOP,
         "openwebui_dir": str(tmp / "app"),
         "openwebui_export_dir": str(tmp / "export"),
         "openwebui_owner": USER,
@@ -190,7 +192,7 @@ class _App:
                 self.end_headers()
                 self.wfile.write(data)
 
-        self._httpd = http.server.ThreadingHTTPServer(("localhost", 0), H)
+        self._httpd = http.server.ThreadingHTTPServer((LOOP, 0), H)
 
     def __enter__(self):
         threading.Thread(target=self._httpd.serve_forever, daemon=True).start()

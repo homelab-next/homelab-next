@@ -24,6 +24,7 @@ import copy
 import json
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -316,7 +317,7 @@ class _App:
                 self.end_headers()
                 self.wfile.write(data)
 
-        self._httpd = ThreadingHTTPServer(("localhost", 0), H)
+        self._httpd = ThreadingHTTPServer((socket.gethostbyname("localhost"), 0), H)
 
     def __enter__(self):
         threading.Thread(target=self._httpd.serve_forever, daemon=True).start()

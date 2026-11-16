@@ -11,7 +11,7 @@
 services:
   chat:
     capability: chat
-    impl: open-webui
+    impl: openwebui
     host: server
     protocol: http
     port: 8080
