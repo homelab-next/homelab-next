@@ -62,6 +62,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import sys
 from pathlib import Path
 
@@ -582,6 +583,9 @@ def _copy_tree(src: Path, dst: Path, skipped: list[str], skip_covers: bool) -> N
                 continue
             if SKIP_FILE_RE.search(name):
                 continue
+            if not stat.S_ISREG(os.lstat(s).st_mode):
+                skipped.append(str(rel / name))  # a fifo or a socket would hang the copy
+                continue
             if name.endswith((".db", ".sqlite3")) and (rel == Path(".") or rel == Path("db")):
                 _copy_db(s, d)
             else:
@@ -710,6 +714,8 @@ def import_config(
     before = {app: app_counts(app, base) for app, base in apps.items()}
     _require_understood(before, set(apps), allow_empty, only)
     _guard_target(source, target, list(rules.values()), replace, data_root)
+    if (owner is not None or seerr_owner is not None) and os.geteuid() != 0:
+        raise ImportFailed("--owner and --seerr-owner need root (chown); nothing was written")
     partial = target.with_name(target.name + ".partial")
     aside = target.with_name(target.name + ".before-import")
     if partial.exists() or partial.is_symlink():

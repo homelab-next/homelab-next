@@ -82,7 +82,6 @@
 *.beam
 *.bh
 *.bin
-*.bmp
 *.bms
 *.bndl
 *.bns
@@ -106,9 +105,7 @@
 *.car
 *.cb7
 *.cba
-*.cbr
 *.cbt
-*.cbz
 *.cci
 *.cda
 *.cdb
@@ -147,7 +144,6 @@
 *.csv
 *.ctx
 *.ctz
-*.cue
 *.cur
 *.cxarchive
 *.cyw
@@ -157,7 +153,6 @@
 *.dar
 *.dat
 *.data-00000-of-00001
-*.db
 *.dd
 *.deamon
 *.deb
@@ -224,7 +219,6 @@
 *.fba
 *.fcx
 *.fky
-*.flac
 *.flatpak
 *.flv
 *.fp8
@@ -236,7 +230,6 @@
 *.gar
 *.gat
 *.gca
-*.gif
 *.gifv
 *.gm9
 *.gmz
@@ -281,7 +274,6 @@
 *.img
 *.index
 *.inf
-*.ini
 *.ink
 *.ins
 *.ipa
@@ -307,8 +299,6 @@
 *.jgz
 *.jhh
 *.jic
-*.jpeg
-*.jpg
 *.js
 *.js_be
 *.js_le
@@ -339,7 +329,6 @@
 *.lnk
 *.lo
 *.lock
-*.log
 *.loop-vbs
 *.lpkg
 *.lqr
@@ -352,8 +341,6 @@
 *.lzo
 *.lzr
 *.lzx
-*.m3u
-*.m4a
 *.mac
 *.macho
 *.mamc
@@ -389,7 +376,6 @@
 *.mou
 *.movpkg
 *.mozlz4
-*.mp3
 *.mpa
 *.mpk
 *.mpkg
@@ -420,7 +406,6 @@
 *.net
 *.nex
 *.nexe
-*.nfo
 *.npk
 *.nrg
 *.num
@@ -466,7 +451,6 @@
 *.pcd
 *.pcv
 *.pdb
-*.pdf
 *.pea
 *.perl
 *.pet
@@ -487,7 +471,6 @@
 *.pl
 *.plsc
 *.plx
-*.png
 *.pol
 *.pot
 *.potm
@@ -678,8 +661,6 @@
 *.thmx
 *.thumb
 *.tiapp
-*.tif
-*.tiff
 *.tipa
 *.tlz
 *.tlzma
@@ -689,7 +670,6 @@
 *.tpk
 *.tpsr
 *.trs
-*.txt
 *.tx_
 *.txz
 *.tz
@@ -746,7 +726,6 @@
 *.waff
 *.war
 *.wastickers
-*.wav
 *.wbk
 *.wcm
 *.wdz
@@ -757,7 +736,6 @@
 *.wim
 *.wiz
 *.wlb
-*.wma
 *.workflow
 *.wot
 *.wpk

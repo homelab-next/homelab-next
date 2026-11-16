@@ -23,7 +23,34 @@ Environment=COMPLETED_ROOT={{ media_automation_downloads_dir }}/qbittorrent/comp
 ExecStart=/usr/bin/python3 -I {{ media_automation_helpers_dir }}/{{ h.script }}{{ h.args }}
 NoNewPrivileges=yes
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+{% if h.id == 'cleanup-downloads' %}
+# the library is read-only for it: it may only delete under downloads/ (and write its state)
+ReadOnlyPaths={{ media_automation_library_path }}
+ReadWritePaths={{ media_automation_downloads_dir }} {{ media_automation_state_dir }}
+{% elif h.id == 'rename-cleanup' %}
 ReadWritePaths={{ media_automation_library_path }} {{ media_automation_state_dir }}
+{% else %}
+ReadWritePaths={{ media_automation_state_dir }}
+{% endif %}
 ReadOnlyPaths={{ media_automation_data_root }}/config

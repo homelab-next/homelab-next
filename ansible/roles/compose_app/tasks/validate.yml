@@ -95,6 +95,8 @@
       - item.value.devices | default([]) | reject('string') | list | length == 0
       - item.value.devices | default([]) | reject('match', compose_app_device_pattern) | list | length == 0
       - item.value.devices | default([]) | unique | list | length == item.value.devices | default([]) | length
+      # the tunnel node needs the same opt-in as the capability that uses it
+      - "'/dev/net/tun' not in item.value.devices | default([]) or compose_app_allow_net_admin | bool"
       - item.value.group_add | default([]) is sequence and item.value.group_add | default([]) is not string and item.value.group_add | default([]) is not mapping
       - item.value.group_add | default([]) | map('string') | reject('match', compose_app_group_add_pattern) | list | length == 0
       - item.value.group_add | default([]) | map('string') | select('match', compose_app_group_add_pattern) | map('int') | select('gt', 4294967295) | list | length == 0
@@ -133,10 +135,14 @@
       - item.value.ports | default([]) | length == 0
       - item.value.network_mode.split(':')[1] in item.value.depends_on | default([])
       - compose_app_spec.services[item.value.network_mode.split(':')[1]].network_mode is not defined
+      # a sharer cannot change the owner's firewall or routes: no NET_ADMIN, no device of its own
+      - item.value.cap_add | default([]) | map('regex_replace', '^CAP_', '') | select('eq', 'NET_ADMIN') | list | length == 0
+      - item.value.devices | default([]) | length == 0
     fail_msg: >-
       service '{{ item.key }}' network_mode must be service:<another service of the spec> that has
       no network_mode of its own, the service must also be in its depends_on, and it publishes no
-      port of its own (publish on the service whose namespace it shares)
+      port of its own (publish on the service whose namespace it shares), and it has neither NET_ADMIN
+      nor a device (it could rewrite the owner's firewall)
   loop: "{{ compose_app_spec.services | dict2items | selectattr('value.network_mode', 'defined') | list }}"
   loop_control:
     label: "{{ item.key }}"

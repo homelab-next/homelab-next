@@ -50,6 +50,14 @@
             ['sonarr/config.xml', 'radarr/config.xml', 'lidarr/config.xml', 'prowlarr/config.xml']
             | difference(media_automation_members.stdout_lines | map('regex_replace', '^\\./', '') | list) | length == 0
         fail_msg: "media-automation: the archive leaves its directory, holds a link or special file, or lacks one of sonarr, radarr, lidarr, prowlarr config.xml"
+    - name: Look for a config an earlier restore moved aside
+      ansible.builtin.stat:
+        path: "{{ media_automation_data_root }}/config.before-restore"
+      register: media_automation_stale_aside
+    - name: Refuse to nest under it
+      ansible.builtin.assert:
+        that: not media_automation_stale_aside.stat.exists
+        fail_msg: "media-automation: {{ media_automation_data_root }}/config.before-restore is left from an earlier restore; archive or move it away first"
     - name: Look for a staging directory an earlier restore left
       ansible.builtin.stat:
         path: "{{ media_automation_data_root }}/config.restoring"

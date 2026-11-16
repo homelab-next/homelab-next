@@ -64,6 +64,8 @@ import http.cookiejar
 import json
 import logging
 import os
+import stat
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -92,30 +94,131 @@ BLACKLIST_FILE = os.environ.get(
 )
 
 
+class UnsafeRoot(Exception):
+    """The completed-downloads root is not safely inside the downloads directory."""
+
+
+# Never removed by the filename blacklist, whatever the list says: the stack runs a music manager
+# and keeps books, so audio, covers, cue sheets, comics and ebooks are legitimate downloads.
+PROTECTED_SUFFIXES = frozenset(
+    [
+        ".flac",
+        ".mp3",
+        ".m4a",
+        ".m4b",
+        ".aac",
+        ".ogg",
+        ".opus",
+        ".wav",
+        ".wma",
+        ".ape",
+        ".alac",
+        ".aiff",
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".bmp",
+        ".tif",
+        ".tiff",
+        ".webp",
+        ".pdf",
+        ".epub",
+        ".mobi",
+        ".azw3",
+        ".cbz",
+        ".cbr",
+        ".cue",
+        ".log",
+        ".m3u",
+        ".m3u8",
+        ".nfo",
+        ".txt",
+        ".ini",
+        ".db",
+    ]
+)
+_DOWNLOADS_REAL = None  # set by confine_root(): the one directory this script may delete under
+
+
+def confine_root(completed_root: str, media_root: str) -> str:
+    """The completed root, proven to be a real directory (no symlink in its path) inside
+    <media_root>/downloads/. Anything else is refused: a link out of downloads/ (into the library)
+    would turn every deletion below into a library deletion."""
+    global _DOWNLOADS_REAL
+    absolute = os.path.abspath(completed_root)
+    if os.path.islink(absolute) or os.path.realpath(absolute) != absolute:
+        raise UnsafeRoot(f"{completed_root}: is, or lies behind, a symbolic link")
+    downloads = os.path.realpath(os.path.join(media_root, "downloads"))
+    if not (absolute == downloads or absolute.startswith(downloads + os.sep)):
+        raise UnsafeRoot(f"{completed_root}: not inside {downloads}")
+    if not os.path.isdir(absolute):
+        raise UnsafeRoot(f"{completed_root}: not a directory")
+    _DOWNLOADS_REAL = downloads
+    return absolute
+
+
+def _inside_downloads(path: str) -> bool:
+    if _DOWNLOADS_REAL is None:
+        return False
+    parent = os.path.realpath(os.path.dirname(path))
+    return parent == _DOWNLOADS_REAL or parent.startswith(_DOWNLOADS_REAL + os.sep)
+
+
+def iter_files(root: str):
+    """(dirpath, name, path) of every regular file under root, never following a link: a
+    symlinked directory is not entered and a symlinked file is not offered."""
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [d for d in dirnames if not os.path.islink(os.path.join(dirpath, d))]
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            try:
+                st = os.lstat(path)
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            yield dirpath, name, path
+
+
+def safe_remove(path: str) -> None:
+    """os.remove, only for a regular file (not a link) whose real parent is inside downloads/."""
+    st = os.lstat(path)
+    if not stat.S_ISREG(st.st_mode) or not _inside_downloads(path):
+        raise OSError(f"refusing to remove {path}: not a plain file inside downloads/")
+    os.remove(path)
+
+
 def load_blacklist_patterns(path: str) -> list[str]:
     if not os.path.isfile(path):
         logging.warning("blacklist file not found, skipping blocked-file cleanup: %s", path)
         return []
     with open(path) as f:
-        return [line.strip() for line in f if line.strip()]
+        patterns = [line.strip() for line in f if line.strip()]
+    # a pattern that is just "*<protected suffix>" is dropped: it must never delete music or books
+    return [
+        p
+        for p in patterns
+        if not (p.startswith("*.") and "." + p[2:].lower() in PROTECTED_SUFFIXES)
+    ]
 
 
 def remove_blacklisted_files(completed_root: str, patterns: list[str], dry_run: bool) -> None:
     if not patterns:
         return
-    for dirpath, _dirnames, filenames in os.walk(completed_root):
-        for name in filenames:
-            name_lower = name.lower()
-            if any(fnmatch.fnmatch(name_lower, p.lower()) for p in patterns):
-                path = os.path.join(dirpath, name)
-                if dry_run:
-                    logging.info("[dry-run] would remove (blacklisted filename): %s", path)
-                else:
-                    try:
-                        os.remove(path)
-                        logging.info("removed (blacklisted filename): %s", path)
-                    except OSError as exc:
-                        logging.warning("failed to remove blacklisted file %s: %s", path, exc)
+    for _dirpath, name, path in iter_files(completed_root):
+        if os.path.splitext(name)[1].lower() in PROTECTED_SUFFIXES:
+            continue
+        name_lower = name.lower()
+        if any(fnmatch.fnmatch(name_lower, p.lower()) for p in patterns):
+            if dry_run:
+                logging.info("[dry-run] would remove (blacklisted filename): %s", path)
+            else:
+                try:
+                    safe_remove(path)
+                    logging.info("removed (blacklisted filename): %s", path)
+                except OSError as exc:
+                    logging.warning("failed to remove blacklisted file %s: %s", path, exc)
 
 
 def build_library_inode_index(media_root: str, library_dirs: list[str]) -> set[tuple[int, int]]:
@@ -194,34 +297,30 @@ def _is_held_by_torrent(path: str, torrent_paths: set[str]) -> bool:
 def remove_safe_files(
     completed_root: str, library_index: set[tuple[int, int]], torrent_paths: set[str], dry_run: bool
 ) -> None:
-    for dirpath, _dirnames, filenames in os.walk(completed_root):
-        for name in filenames:
-            path = os.path.join(dirpath, name)
-            try:
-                st = os.stat(path)
-            except OSError:
+    for _dirpath, _name, path in iter_files(completed_root):
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        if (st.st_dev, st.st_ino) in library_index:
+            # Imported, but qBittorrent is still seeding it. Deleting this
+            # hardlink leaves the library copy intact, but qBittorrent sees
+            # the file as missing, errors the torrent, and stops seeding.
+            # Remove the torrent in qBittorrent to make it eligible here —
+            # that removal is the operator's intent signal.
+            if _is_held_by_torrent(path, torrent_paths):
+                logging.info("leaving alone (still loaded in qBittorrent): %s", path)
                 continue
-            if (st.st_dev, st.st_ino) in library_index:
-                # Imported, but qBittorrent is still seeding it. Deleting this
-                # hardlink leaves the library copy intact, but qBittorrent sees
-                # the file as missing, errors the torrent, and stops seeding.
-                # Remove the torrent in qBittorrent to make it eligible here —
-                # that removal is the operator's intent signal.
-                if _is_held_by_torrent(path, torrent_paths):
-                    logging.info("leaving alone (still loaded in qBittorrent): %s", path)
-                    continue
-                if dry_run:
-                    logging.info(
-                        "[dry-run] would remove (confirmed hardlinked in library): %s", path
-                    )
-                else:
-                    try:
-                        os.remove(path)
-                        logging.info("removed (confirmed hardlinked in library): %s", path)
-                    except OSError as exc:
-                        logging.warning("failed to remove %s: %s", path, exc)
+            if dry_run:
+                logging.info("[dry-run] would remove (confirmed hardlinked in library): %s", path)
             else:
-                logging.debug("leaving alone (no matching library copy found): %s", path)
+                try:
+                    safe_remove(path)
+                    logging.info("removed (confirmed hardlinked in library): %s", path)
+                except OSError as exc:
+                    logging.warning("failed to remove %s: %s", path, exc)
+        else:
+            logging.debug("leaving alone (no matching library copy found): %s", path)
 
 
 def remove_stale_partfiles(
@@ -233,37 +332,35 @@ def remove_stale_partfiles(
     by a loaded torrent is left alone regardless of age (it may be genuinely mid-download).
     Only a `.parts` file that is BOTH unheld and stable for `min_age_seconds` is removed."""
     now = time.time()
-    for dirpath, _dirnames, filenames in os.walk(completed_root):
-        for name in filenames:
-            if not name.lower().endswith(".parts"):
-                continue
-            path = os.path.join(dirpath, name)
-            if _is_held_by_torrent(path, torrent_paths):
-                logging.info("leaving alone (still loaded in qBittorrent): %s", path)
-                continue
+    for _dirpath, name, path in iter_files(completed_root):
+        if not name.lower().endswith(".parts"):
+            continue
+        if _is_held_by_torrent(path, torrent_paths):
+            logging.info("leaving alone (still loaded in qBittorrent): %s", path)
+            continue
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        age = now - st.st_mtime
+        if age < min_age_seconds:
+            logging.debug("leaving alone (too recent, age=%.0fs): %s", age, path)
+            continue
+        if dry_run:
+            logging.info("[dry-run] would remove (orphaned libtorrent partfile): %s", path)
+        else:
             try:
-                st = os.stat(path)
-            except OSError:
-                continue
-            age = now - st.st_mtime
-            if age < min_age_seconds:
-                logging.debug("leaving alone (too recent, age=%.0fs): %s", age, path)
-                continue
-            if dry_run:
-                logging.info("[dry-run] would remove (orphaned libtorrent partfile): %s", path)
-            else:
-                try:
-                    os.remove(path)
-                    logging.info("removed (orphaned libtorrent partfile): %s", path)
-                except OSError as exc:
-                    logging.warning("failed to remove %s: %s", path, exc)
+                safe_remove(path)
+                logging.info("removed (orphaned libtorrent partfile): %s", path)
+            except OSError as exc:
+                logging.warning("failed to remove %s: %s", path, exc)
 
 
 def find_empty_dirs(root: str, min_age_seconds: float) -> list[str]:
     now = time.time()
     empty_dirs = []
-    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
-        if dirpath == root or filenames:
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False, followlinks=False):
+        if dirpath == root or filenames or os.path.islink(dirpath):
             continue
         if any(os.path.isfile(os.path.join(dirpath, d)) for d in dirnames):
             continue
@@ -283,6 +380,8 @@ def remove_empty_dirs(empty_dirs: list[str], dry_run: bool) -> None:
             logging.info("[dry-run] would remove empty directory: %s", d)
         else:
             try:
+                if os.path.islink(d) or not _inside_downloads(d):
+                    raise OSError(f"refusing to remove {d}: a link or outside downloads/")
                 os.rmdir(d)
                 logging.info("removed empty directory: %s", d)
             except OSError as exc:
@@ -317,9 +416,11 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    if not os.path.isdir(args.completed_root):
-        logging.error("completed-downloads root does not exist: %s", args.completed_root)
-        return
+    try:
+        args.completed_root = confine_root(args.completed_root, args.media_root)
+    except UnsafeRoot as exc:
+        logging.error("refusing to run: %s", exc)
+        sys.exit(2)
 
     blacklist_patterns = load_blacklist_patterns(args.blacklist_file)
     remove_blacklisted_files(args.completed_root, blacklist_patterns, args.dry_run)

@@ -483,3 +483,17 @@ def test_cli_counts_and_import(src, tmp_path, capsys):
     assert "media-automation import:" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         mm.main(["import", str(src), str(tmp_path / "q" / "r" / "s"), "--map", "rel=/x"])
+
+
+def test_a_fifo_in_the_source_is_skipped_not_copied(src, tmp_path):
+    os.mkfifo(src / SQL[0] / "pipe")
+    rep = do_import(src, tmp_path)
+    assert "pipe" in rep["skipped_symlinks"]
+    assert not (tmp_path / "data" / "mod" / "config" / SQL[0] / "pipe").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root may chown")
+def test_an_owner_without_root_is_refused_before_anything_is_written(src, tmp_path):
+    with pytest.raises(mm.ImportFailed, match="need root"):
+        do_import(src, tmp_path, owner=(1, 1))
+    assert not (tmp_path / "data" / "mod" / "config.partial").exists()

@@ -107,10 +107,7 @@ SOURCES: dict[str, tuple[str, str]] = {
         "PostgreSQL release page by hand, within the pinned major version",
     ),
     "role:media/media_image": ("github", "jellyfin/jellyfin"),
-    "role:media_automation/media_automation_gluetun_image": (
-        "none",
-        "an image (modules/media-automation) whose build tag (upstream release) the github source does not parse: compare with qdm12/gluetun's releases by hand",
-    ),
+    "role:media_automation/media_automation_gluetun_image": ("github", "qdm12/gluetun"),
     "role:media_automation/media_automation_qbittorrent_image": (
         "none",
         "an image (modules/media-automation) whose build tag (upstream version plus a -lsNNN build counter) the github source does not parse: compare with qbittorrent/qBittorrent's releases by hand",
@@ -124,8 +121,8 @@ SOURCES: dict[str, tuple[str, str]] = {
         "an image (modules/media-automation) whose build tag (upstream version plus a -lsNNN build counter) the github source does not parse: compare with Prowlarr/Prowlarr's releases by hand",
     ),
     "role:media_automation/media_automation_flaresolverr_image": (
-        "none",
-        "an image (modules/media-automation) whose build tag (upstream release) the github source does not parse: compare with FlareSolverr/FlareSolverr's releases by hand",
+        "github",
+        "FlareSolverr/FlareSolverr",
     ),
     "role:media_automation/media_automation_sonarr_image": (
         "none",
@@ -139,14 +136,8 @@ SOURCES: dict[str, tuple[str, str]] = {
         "none",
         "an image (modules/media-automation) whose build tag (upstream version plus a -lsNNN build counter) the github source does not parse: compare with Lidarr/Lidarr's releases by hand",
     ),
-    "role:media_automation/media_automation_seerr_image": (
-        "none",
-        "an image (modules/media-automation) whose build tag (upstream release) the github source does not parse: compare with seerr-team/seerr's releases by hand",
-    ),
-    "role:media_automation/media_automation_tdarr_image": (
-        "none",
-        "an image (modules/media-automation) whose build tag (upstream release) the github source does not parse: compare with HaveAGitGat/Tdarr's releases by hand",
-    ),
+    "role:media_automation/media_automation_seerr_image": ("github", "seerr-team/seerr"),
+    "role:media_automation/media_automation_tdarr_image": ("github", "HaveAGitGat/Tdarr"),
     "role:nifi/nifi_image": ("github", "apache/nifi"),
     "role:ntfy/ntfy_image": ("github", "binwiederhier/ntfy"),
     "role:llamacpp/llamacpp_image": (

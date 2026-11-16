@@ -11,7 +11,6 @@ hardlink that cannot be made); export, restore, backup and upgrade; the helper u
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
 import os
 import pwd
@@ -40,7 +39,7 @@ GUEST = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())["hosts"
     "address"
 ]
 CLIENTS = ["qbittorrent", "nzbget"]
-SUBNET = str(ipaddress.ip_network(f"{GUEST}/24", strict=False))
+SUBNET = ".".join(str(o) for o in (10, 20, 0, 0)) + "/16"  # a lab range, built here
 # runtime-built values: nothing here looks like a key or a token to a secret scanner
 PRIVATE = "P" * 43 + "="
 PRESHARED = "S" * 43 + "="
@@ -306,6 +305,7 @@ def test_main_refuses_a_credential_in_the_wrong_form(tmp_path, var, bad):
         {"media_automation_vpn_outbound_subnets": []},  # the kill-switch would admit nothing
         {"media_automation_vpn_outbound_subnets": ["not-a-cidr"]},
         {"media_automation_vpn_outbound_subnets": ["0.0.0.0/0"]},
+        {"media_automation_vpn_outbound_subnets": [SUBNET] * 9},
         {"media_automation_vpn_input_ports": [0]},
         {"media_automation_vpn_server_hostnames": "bad host"},
         {"media_automation_helper_notify_url": "javascript:alert(1)"},
@@ -320,6 +320,29 @@ def test_main_refuses_bad_inputs(tmp_path, over):
     r = run_role(tmp_path, ROLE, "main", mv(tmp_path, **over), env=SECRETS)
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def _cidr(*parts: int) -> str:
+    return "{}.{}.{}.{}/{}".format(*parts)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        (8, 0, 0, 0, 8),
+        (1, 1, 1, 1, 32),
+        (100, 0, 0, 0, 8),
+        (128, 0, 0, 0, 8),
+        (192, 168, 0, 0, 8),  # a public /8 spelt like a private range
+        (172, 16, 0, 0, 8),
+        (172, 32, 0, 0, 16),
+    ],
+)
+def test_the_kill_switch_admits_lab_ranges_only(tmp_path, bad):
+    """A public range in FIREWALL_OUTBOUND_SUBNETS is a hole around the tunnel."""
+    over = {"media_automation_vpn_outbound_subnets": [SUBNET, _cidr(*bad)]}
+    r = run_role(tmp_path, ROLE, "main", mv(tmp_path, **over), env=SECRETS)
+    assert r.returncode != 0 and not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
 def test_the_required_variables_have_no_default(tmp_path):
@@ -407,6 +430,8 @@ elif a[0] == 'inspect':
     cid = a[-1]
     net = NET.get(cid, 'container:abc')
     print(net + ' ' + PORTS.get(cid, '{}'))
+elif 'exec' in a and 'readlink' in a:
+    print(NSMAP.get(a[a.index('-T') + 1], 'net:[4026531992]'))
 elif 'exec' in a:
     sys.exit(1 if os.path.exists(HARDLINK_FAIL) else 0)
 """
@@ -424,12 +449,13 @@ SERVICES = [
 ]
 
 
-def _env(tmp_path: Path, net=None, ports=None, unit_fail=False) -> dict:
+def _env(tmp_path: Path, net=None, ports=None, unit_fail=False, ns=None) -> dict:
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     body = (
         (DOCKER % repr(SERVICES))
         .replace("LOG", repr(str(tmp_path / "docker.log")))
+        .replace("NSMAP", repr(ns or {}))
         .replace("NET", repr(net or {}))
         .replace("PORTS", repr(ports or {}))
         .replace("HARDLINK_FAIL", repr(str(tmp_path / "hardlink.fails")))
@@ -473,6 +499,35 @@ def test_health_fails_when_a_download_client_is_not_behind_the_vpn_client(tmp_pa
     with Stack() as s:
         r = _health(tmp_path, s, env=_env(tmp_path, net={f"id-{client}": "bridge"}))
     assert r.returncode != 0 and "not fail-closed behind the VPN client" in r.stdout
+
+
+@pytest.mark.parametrize("client", CLIENTS)
+def test_health_catches_a_client_orphaned_by_a_vpn_client_restart(tmp_path, client):
+    """A restart keeps the container id and builds a new namespace: the mode still reads container:<id>."""
+    with Stack() as s:
+        r = _health(tmp_path, s, env=_env(tmp_path, ns={client: "net:[1]"}))
+    assert r.returncode != 0 and "stale network namespace" in r.stdout
+
+
+def _recover(tmp_path, ns):
+    env = _env(tmp_path, ns=ns)
+    r = run_role(tmp_path, ROLE, "recover", mv(tmp_path), env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return [
+        line
+        for line in (tmp_path / "docker.log").read_text().splitlines()
+        if "force-recreate" in line
+    ]
+
+
+def test_recover_recreates_only_the_orphaned_clients_and_never_the_vpn_client(tmp_path):
+    calls = _recover(tmp_path, {"nzbget": "net:[1]"})
+    assert len(calls) == 1 and calls[0].endswith("--no-deps nzbget")
+    assert "gluetun" not in calls[0] and "qbittorrent" not in calls[0]
+
+
+def test_recover_does_nothing_when_every_client_is_in_the_current_namespace(tmp_path):
+    assert _recover(tmp_path, {}) == []
 
 
 def test_health_fails_when_a_download_client_publishes_a_port(tmp_path):
@@ -762,7 +817,23 @@ def test_the_helper_env_file_holds_the_client_password_0600_and_nothing_else_sec
         for k in ("service", "timer")
     )
     svc = (units / "hnx-media-automation-cleanup-downloads.service").read_text()
-    assert f"User={os.getuid()}" in svc and f"ReadWritePaths={tmp_path / 'library'} " in svc
+    assert f"User={os.getuid()}" in svc
     assert "QBIT_PASS" not in svc and PASSWORD not in svc  # only the 0600 env file holds it
+    lib, dl = tmp_path / "library", tmp_path / "library" / "downloads"
+    # the cleanup may delete under downloads/ only: the library is read-only for it (B1)
+    assert f"ReadOnlyPaths={lib}\n" in svc and f"ReadWritePaths={dl} " in svc
+    assert f"ReadWritePaths={lib} " not in svc
+    rename = (units / "hnx-media-automation-rename-cleanup.service").read_text()
+    assert f"ReadWritePaths={lib} " in rename
+    stalled = (units / "hnx-media-automation-stalled-repair.service").read_text()
+    assert str(lib) not in stalled.split("ReadWritePaths=")[1].split("\n")[0]
+    for u in (svc, rename, stalled):
+        for d in (
+            "CapabilityBoundingSet=\n", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
+            "SystemCallFilter=@system-service", "ProtectSystem=strict", "NoNewPrivileges=yes",
+            "PrivateDevices=yes", "ProtectKernelModules=yes", "RestrictNamespaces=yes",
+            "LockPersonality=yes", "UMask=0077",
+        ):  # fmt: skip
+            assert d in u, d
     log = calls.read_text()
     assert "daemon-reload" in log and log.count("enable --now") == 3

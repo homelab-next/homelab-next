@@ -91,11 +91,34 @@ decide and record, once, one of:
 Either way the new `config/<app>` directories are created for the configured ids, and the request app runs
 as its image's own `1000:1000` (`media_automation_seerr_uid`/`_gid`), the one exception.
 
+## Fail-closed, and what a restart of the VPN client does
+
+A restart or recreate of gluetun keeps its container id but builds a **new network namespace**; the two
+download clients keep the old one, which has no interface and no route. That is fail-closed (no traffic
+can leak), but they stay dead, and their own health checks (inside the stale namespace) stay green. The
+`health` hook therefore compares each client's network namespace with the VPN client's current one
+(`readlink /proc/self/ns/net` in each) and fails naming the stale client; the web-interface probe catches
+it too. Recovery is the `recover` hook (`tasks_from: recover`): it recreates only the clients that are out
+of step (`up -d --force-recreate --no-deps`); they start again only behind gluetun's health check
+(`depends_on` service_healthy), so the kill-switch holds throughout. Run it after any restart of the VPN
+client (the status hub's `health` probe is the trigger; a timer for it is not shipped). The containers
+restart with `unless-stopped`: a crash restarts the VPN client first, the clients follow only by recovery.
+The module does not touch gluetun's DNS or IPv6 defaults (no sysctl, no `DOT` setting).
+
 ## Helper scripts: systemd timers on the guest (not StackStorm)
 
 The old stack's three helper scripts are carried as module files (`roles/media_automation/files/`) and
-run by systemd timers on the guest, as the apps' user, hardened (`NoNewPrivileges`, `ProtectSystem=strict`,
-`ProtectHome`, write access to the library and the state directory only):
+run by systemd timers on the guest, as the apps' user, fully hardened (an empty
+`CapabilityBoundingSet`, `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateDevices`,
+`PrivateTmp`, kernel and cgroup protections, `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`,
+`RestrictNamespaces`, `LockPersonality`, `MemoryDenyWriteExecute`, `SystemCallFilter=@system-service`,
+`UMask=0077`). Write access is per unit: the cleanup may write **only `downloads/` and its state** (the
+library is read-only for it), the rename helper the library, the stalled-torrent repair only its state.
+The cleanup also refuses to run when its completed root is a symlink or lies outside `downloads/`, never
+follows a link while walking, and removes only plain files whose real parent is inside `downloads/` (the
+apps' uid can plant a link there, so the unit's mount confinement and the script's checks are both
+required). The seccomp filter and `MemoryDenyWriteExecute` could not be exercised without systemd in CI:
+the first deploy confirms the three units run (`systemctl start` each once).
 
 | unit | what | when |
 |---|---|---|
@@ -130,8 +153,14 @@ wire it, as the key is the media server's.)
   show up as a climbing validation-error count: remove them from Prowlarr rather than excluding the noise.
 * The request app keeps **its own** root-folder settings (`settings.json`: `activeDirectory`), separate from the
   managers'; the migration maps both.
-* qBittorrent's `excluded_file_names` blacklist is carried (`qbittorrent-excluded-file-names.txt`; a
-  `*.torrent` entry is deliberately absent: the client needs its own metadata files).
+* The filename blacklist (`qbittorrent-excluded-file-names.txt`, executables, scripts, archives, office
+  documents, samples) is carried **without** its audio, image, cue, log, ebook and comic entries
+  (`*.flac`, `*.mp3`, `*.jpg`, `*.pdf`, `*.cbz`, ...): this stack runs a music manager and keeps books, and
+  the cleanup would have deleted those downloads on sight. The cleanup script also never deletes a file
+  with such a suffix whatever list it is given (tested). `*.torrent` stays out: the client needs its own
+  metadata files. **The migrated `qBittorrent.conf` still carries the old `Session\ExcludedFileNames`
+  setting** (the client refuses those names at download time): review it in the client's settings after the
+  import if music or book torrents are wanted.
 
 ## Migration: `tools/migrate/media_automation.py`
 
@@ -173,7 +202,7 @@ mounted target, an unrelated non-empty target, a leftover `.partial`; it follows
   the lab's own standing/backup/scope.
 * Guest: >= 6 CPU, 12 GiB, 60 GB, the `base` baseline, **docker_engine**, the library as a **virtiofs share
   of the host dataset mounted at `media_automation_library_path`** (and its marker file), `/dev/net/tun`.
-* Group variables: `media_automation_logical_id`, **`media_automation_vpn_outbound_subnets`** (required: the
+* Group variables: `media_automation_logical_id`, **`media_automation_vpn_outbound_subnets`** (required: private, shared, link-local or loopback CIDRs only; the
   lab subnets the interfaces are reached from, as CIDRs), `media_automation_vpn_input_ports` (the provider's
   forwarded port, if any), `media_automation_vpn_server_hostnames` (optional), `media_automation_timezone`,
   `media_automation_uid`/`_gid` (the ownership decision above), `media_automation_library_path` if not
@@ -202,3 +231,7 @@ happened), `restore` (hash-checked archive, no link, staged then swapped, the pr
 media_automation_target_image=<repo:tag@sha256:...>`; the config is exported first, since the managers
 migrate their databases on first start and cannot go back). `remove` exports first and leaves the data
 root, the helper units and the library.
+
+`roles/media_automation/meta/argument_specs.yml` repeats the variable table once per hook entry point
+(main, health, readiness, backup, export, restore, recover, upgrade), as the ansible argument validator
+requires; the variable list is the role's `defaults/main.yml`.

@@ -37,7 +37,8 @@
       - media_automation_vpn_outbound_subnets is sequence and media_automation_vpn_outbound_subnets is not string
       - media_automation_vpn_outbound_subnets | length >= 1
       - media_automation_vpn_outbound_subnets | map('string') | reject('match', media_automation_cidr_pattern) | list | length == 0
-      - media_automation_vpn_outbound_subnets | map('string') | select('match', '^0\.') | list | length == 0
+      - media_automation_vpn_outbound_subnets | length <= 8
+      - media_automation_vpn_outbound_subnets | map('string') | reject('match', media_automation_lan_cidr_pattern) | list | length == 0
       - >-
         [media_automation_vpn_key_ref, media_automation_vpn_psk_ref,
          media_automation_vpn_addresses_ref, media_automation_qbittorrent_login_ref]
@@ -59,7 +60,7 @@
       to publish on (not all interfaces), ports, uids and gids of 1000 or more, absolute canonical
       directories with the library outside the data root and the compose project and not a host-wide
       directory, a downloads directory name, a timezone, a VPN provider, optional server hostnames,
-      forwarded ports, at least one outbound subnet as a CIDR (the kill-switch's only way out to the
-      lab), four distinct secret references, boolean switches, positive helper hours, http(s) URLs
+      forwarded ports, one to eight outbound subnets as CIDRs in private, shared, link-local or loopback ranges (the
+      kill-switch's only way out to the lab: a public range would be a hole around the tunnel), four distinct secret references, boolean switches, positive helper hours, http(s) URLs
       or empty 
   tags: [health, backup, restore, export, upgrade, readiness]

@@ -102,6 +102,23 @@ def test_a_shared_namespace_is_refused_unless_it_is_exactly_service_of_this_spec
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
+@pytest.mark.parametrize(
+    "client",
+    [{"cap_add": ["NET_ADMIN"]}, {"cap_add": ["CAP_NET_ADMIN"]}, {"devices": ["/dev/net/tun"]}],
+)
+def test_a_sharer_may_not_carry_net_admin_or_a_device_even_with_the_flag(tmp_path, client):
+    """A sharer with NET_ADMIN could flush the owner's firewall: the kill-switch is gone."""
+    r = run(tmp_path, spec(**client))
+    assert r.returncode != 0, client
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def test_the_tunnel_device_needs_the_net_admin_flag_too(tmp_path):
+    s = {"services": {"vpn": svc(devices=["/dev/net/tun"], ports=[f"{HOST}:8080:8080"])}}
+    assert run(tmp_path, s, compose_app_allow_net_admin=False).returncode != 0
+    assert run(tmp_path, s).returncode == 0
+
+
 def test_a_namespace_owner_may_not_itself_share_another(tmp_path):
     s = spec()
     s["services"]["vpn"]["network_mode"] = "service:client"

@@ -107,10 +107,26 @@ def real_root(reported_path: str, real_root_prefix: str) -> str:
     return os.path.join(real_root_prefix, folder_name)
 
 
+def _inside(path: str, root: str) -> bool:
+    root = os.path.realpath(root)
+    real = os.path.realpath(path)
+    return real == root or real.startswith(root + os.sep)
+
+
 def rename_on_disk(root_path: str, old_relative: str, new_relative: str) -> bool:
-    old_full = os.path.join(root_path, old_relative)
-    new_full = os.path.join(root_path, new_relative)
+    """Rename inside root_path only. The relative names come from an API: a name that leaves the
+    series/movie folder (.., an absolute path), a link, or a folder outside the library is refused."""
+    old_full = os.path.normpath(os.path.join(root_path, old_relative))
+    new_full = os.path.normpath(os.path.join(root_path, new_relative))
+    base = os.path.normpath(root_path)
+    for p in (old_full, new_full):
+        if not p.startswith(base + os.sep) or not _inside(os.path.dirname(p), LIBRARY_ROOT):
+            print(f"  [!] refusing a path outside the library folder: {p}", file=sys.stderr)
+            return False
     if old_full == new_full:
+        return False
+    if os.path.islink(old_full):
+        print(f"  [!] refusing a link: {old_full}", file=sys.stderr)
         return False
     if not os.path.exists(old_full):
         print(f"  [!] source missing, skipping: {old_full}", file=sys.stderr)

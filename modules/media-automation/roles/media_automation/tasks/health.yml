@@ -66,6 +66,33 @@
       loop: "{{ media_automation_client_net.results }}"
       loop_control:
         label: "{{ item.item.item }}"
+    - name: Read the network namespace of the VPN client and of each download client
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ media_automation_dir }}/docker-compose.yml"
+          - exec
+          - -T
+          - "{{ item }}"
+          - readlink
+          - /proc/self/ns/net
+      loop: [gluetun, qbittorrent, nzbget]
+      register: media_automation_netns
+      changed_when: false
+      check_mode: false
+    - name: The download clients are in the VPN client's CURRENT namespace
+      ansible.builtin.assert:
+        that: (item.stdout | trim) == (media_automation_netns.results[0].stdout | trim) and (item.stdout | trim) | length > 0
+        fail_msg: >-
+          media-automation: {{ item.item }} is in a stale network namespace (the VPN client was restarted
+          or recreated and rebuilt its own: the client keeps the old one, which has no route at all, so
+          it is fail-closed but dead while its own health check still passes). Recover with
+          tasks_from recover (docker compose up -d --force-recreate qbittorrent nzbget).
+      loop: "{{ media_automation_netns.results[1:] }}"
+      loop_control:
+        label: "{{ item.item }}"
     - name: A hardlink can be made inside the downloads directory as the apps' user
       ansible.builtin.command:
         argv:
