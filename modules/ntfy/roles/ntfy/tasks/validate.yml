@@ -40,3 +40,41 @@
       without a wildcard, absolute canonical directories, a cache duration
       like 12h and a memory limit like 256m
   tags: [health, backup, restore, export, upgrade]
+
+# The dead-man watch's inputs (only judged when there are beats; the topic and the limit are the
+# deployment's, the file names and the schedule are not).
+- name: Validate the dead-man watch settings
+  when: ntfy_deadman_beats | length > 0
+  tags: [health, backup, restore, export, upgrade]
+  block:
+    - name: The schedule is one the watch knows (its interval is derived from it)
+      ansible.builtin.assert:
+        that: ntfy_deadman_schedule in ntfy_deadman_schedules
+        fail_msg: >-
+          ntfy: each dead-man beat needs a schedule the watch knows: ntfy_deadman_schedule is one of
+          {{ ntfy_deadman_schedules.keys() | list }}
+    - name: Name the cache duration in seconds and the topics the publisher may not write
+      ansible.builtin.set_fact:
+        ntfy_cache_seconds: "{{ (ntfy_cache_duration[:-1] | int) * ntfy_cache_unit_seconds[ntfy_cache_duration[-1]] }}"
+        ntfy_deadman_unwritable: >-
+          {% set out = [] %}{% for b in ntfy_deadman_beats %}{% set ok = namespace(v=false) %}{% for p in ntfy_publisher_topics %}{% if (b.topic | default('')) is match('^' ~ (p | regex_escape | replace('\\*', '.*')) ~ '\\Z') %}{% set ok.v = true %}{% endif %}{% endfor %}{% if not ok.v %}{% set _ = out.append(b.topic | default('')) %}{% endif %}{% endfor %}{{ out }}
+    - name: The beats are well formed and their limits fit the interval and the cache
+      ansible.builtin.assert:
+        that:
+          - ntfy_deadman_beats is sequence and ntfy_deadman_beats is not string
+          - ntfy_deadman_beats | reject('mapping') | list | length == 0
+          - ntfy_deadman_beats | map(attribute='name', default='') | reject('match', '^[a-z][a-z0-9-]{0,40}\\Z') | list | length == 0
+          - ntfy_deadman_beats | map(attribute='name', default='') | unique | list | length == ntfy_deadman_beats | length
+          - ntfy_deadman_beats | map(attribute='topic', default='') | reject('match', '^[-_A-Za-z0-9]{1,64}\\Z') | list | length == 0
+          - ntfy_deadman_beats | map(attribute='topic', default='') | unique | list | length == ntfy_deadman_beats | length
+          - ntfy_deadman_beats | map(attribute='max_age_minutes', default=0) | map('int') | min >= 2 * (ntfy_deadman_interval_minutes | int)
+          - (ntfy_deadman_beats | map(attribute='max_age_minutes', default=0) | map('int') | max) * 60 * 2 <= ntfy_cache_seconds | int
+          - ntfy_deadman_unwritable == []
+          - ntfy_deadman_unreadable_after_runs | int >= 1 and ntfy_deadman_unreadable_after_runs | int <= 100
+          - ntfy_deadman_alert_topic is match('^[-_A-Za-z0-9]{1,64}\\Z')
+          - ntfy_deadman_alert_topic not in (ntfy_deadman_beats | map(attribute='topic', default='') | list)
+        fail_msg: >-
+          ntfy: each dead-man beat needs a unique slug name, a unique topic ([-_A-Za-z0-9], at most 64)
+          the publisher may write ({{ ntfy_deadman_unwritable }} may not be) and a max_age_minutes of
+          at least twice the watch interval ({{ ntfy_deadman_interval_minutes }} min) and at most half the
+          cache duration ({{ ntfy_cache_duration }}); the alert topic is another topic

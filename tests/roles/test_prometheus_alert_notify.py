@@ -119,6 +119,8 @@ def env(tmp_path):
             "prometheus_logical_id": "metrics",
             "prometheus_unreachable_after_minutes": 3,
             "prometheus_alert_interval_seconds": 60,
+            "prometheus_heartbeat_topic": "",
+            "prometheus_heartbeat_every_minutes": 5,
         }
         values.update(over)
         e = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
@@ -302,3 +304,71 @@ def test_the_units_run_the_script_report_their_runs_and_tick_on_the_schedule():
     rw = next(l for l in service.splitlines() if l.startswith("ReadWritePaths="))
     assert "/var/lib/homelabnext/last-run" in rw and "/var/lib/homelabnext/prometheus" in rw
     assert "OnCalendar=*-*-* *:*:00 UTC\n" in timer and "Persistent=false" in timer
+
+
+# ----------------------------------------------------------------------------- the dead-man heartbeat
+
+
+def watchdog():
+    return alert("Watchdog", instance="", severity="none")
+
+
+def beats(notify):
+    return [p for p in notify.posts if p[1] == "/beat"]
+
+
+def test_the_watchdog_is_never_posted_as_an_alert(tmp_path, env, servers):
+    metrics, notify = servers(alerts=[watchdog()]), servers()
+    assert run(env(metrics, notify)).returncode == 0
+    assert notify.posts == []  # the always-firing rule is the proof of life, not an alert
+
+
+def test_a_heartbeat_is_posted_at_minimum_priority_when_the_watchdog_fires(tmp_path, env, servers):
+    metrics, notify = servers(alerts=[watchdog()]), servers()
+    r = run(env(metrics, notify, prometheus_heartbeat_topic="beat"))
+    assert r.returncode == 0, r.stderr
+    ((_m, path, headers, _body),) = notify.posts
+    assert path == "/beat" and headers["Priority"] == "1"
+    assert headers["Authorization"] == "Bearer " + TOKEN
+
+
+def test_the_heartbeat_is_paced_not_sent_every_run(tmp_path, env, servers):
+    metrics, notify = servers(alerts=[watchdog()]), servers()
+    script = env(metrics, notify, prometheus_heartbeat_topic="beat")
+    assert run(script).returncode == 0 and run(script).returncode == 0
+    assert len(beats(notify)) == 1
+    stamp = tmp_path / "state" / "heartbeat.json"
+    stamp.write_text(json.dumps({"sent": 0}))  # long ago
+    assert run(script).returncode == 0 and len(beats(notify)) == 2
+
+
+def test_no_heartbeat_without_the_watchdog_or_when_the_metrics_service_is_down(
+    tmp_path, env, servers
+):
+    # rules not loaded: the service answers but the Watchdog is absent -> silence (the watcher pages)
+    metrics, notify = servers(alerts=[alert("DiskAlmostFull")]), servers()
+    script = env(metrics, notify, prometheus_heartbeat_topic="beat")
+    assert run(script).returncode == 0
+    assert beats(notify) == []
+    metrics.alerts = None  # the service itself is down
+    assert run(script).returncode == 1
+    assert beats(notify) == []
+
+
+def test_heartbeat_off_when_the_topic_is_empty(tmp_path, env, servers):
+    metrics, notify = servers(alerts=[watchdog()]), servers()
+    assert run(env(metrics, notify)).returncode == 0
+    assert notify.posts == []
+
+
+def test_a_failed_heartbeat_is_owed_and_exits_2_without_losing_the_alert_state(
+    tmp_path, env, servers
+):
+    metrics, notify = servers(alerts=[watchdog()]), servers(post=503)
+    script = env(metrics, notify, prometheus_heartbeat_topic="beat")
+    r = run(script)
+    assert r.returncode == 2 and "heartbeat not sent" in r.stderr
+    assert TOKEN not in r.stdout + r.stderr
+    assert not (tmp_path / "state" / "heartbeat.json").exists()  # owed: tried again next run
+    notify.post = 200
+    assert run(script).returncode == 0 and (tmp_path / "state" / "heartbeat.json").exists()

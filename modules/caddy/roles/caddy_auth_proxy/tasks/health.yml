@@ -3,7 +3,11 @@
 # with no session (401: the edge turns it into the sign-in redirect), and signing in for each site
 # starts the authorization code flow at the configured issuer (a 302 to its authorization endpoint
 # for this client, with PKCE S256 and the site's own callback), which proves the proxy read the
-# IdP's discovery document. Read-only.
+# IdP's discovery document. The sign-in is asked THROUGH THE EDGE (https://<site>/oauth2/start, on
+# the edge's own address, TLS verified by the site's name), as a user gets it: the proxy trusts
+# X-Forwarded-* only from the gateway of its own network (--trusted-proxy-ip), so a request sent
+# straight to its port cannot say which site it is for and would name the bind address in the
+# redirect_uri. Read-only.
 - block:
     - name: Validate the inputs
       ansible.builtin.include_tasks: validate.yml
@@ -39,27 +43,38 @@
         status_code: 401
         timeout: "{{ caddy_auth_proxy_health_timeout | int }}"
       changed_when: false
-    - name: Signing in for each site starts the authorization code flow at the issuer
-      ansible.builtin.uri:
-        url: "http://{{ caddy_auth_proxy_bind }}:{{ caddy_auth_proxy_port | int }}/oauth2/sign_in?rd=https%3A%2F%2F{{ item }}%2F"
-        headers:
-          X-Forwarded-Host: "{{ item }}"
-          X-Forwarded-Proto: https
-        follow_redirects: none
-        status_code: 302
-        timeout: "{{ caddy_auth_proxy_health_timeout | int }}"
-      register: caddy_auth_proxy_sign_in
+    - name: Sign in for each site through the edge, as a user does
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -I
+          - -c
+          - "{{ caddy_auth_proxy_probe_script }}"
+          - >-
+            {{ {'address': caddy_auth_proxy_edge_address, 'port': caddy_auth_proxy_edge_port | int,
+                'bundle': caddy_auth_proxy_edge_trust_bundle, 'names': caddy_auth_proxy_sites,
+                'timeout': caddy_auth_proxy_health_timeout | int} | to_json }}
+      register: caddy_auth_proxy_probe
       changed_when: false
-      loop: "{{ caddy_auth_proxy_sites }}"
+      check_mode: false
+    - name: Read the probe's findings
+      ansible.builtin.set_fact:
+        caddy_auth_proxy_found: "{{ caddy_auth_proxy_probe.stdout | from_json }}"
+    - name: Every site's sign-in answers 302 over TLS that verifies by the site's name
+      ansible.builtin.assert:
+        that:
+          - caddy_auth_proxy_found.keys() | list | sort == caddy_auth_proxy_sites | sort
+          - caddy_auth_proxy_found.values() | map(attribute='status') | unique | list == [302]
+        fail_msg: "caddy_auth_proxy: signing in through the edge at {{ caddy_auth_proxy_edge_address }}:{{ caddy_auth_proxy_edge_port }} failed: {{ caddy_auth_proxy_found }}"
     - name: The sign-in goes to the issuer's authorization endpoint for this client with PKCE
       ansible.builtin.assert:
         that:
-          - item.location is match('^' ~ (caddy_auth_proxy_issuer_url | regex_escape) ~ '/protocol/openid-connect/auth\?')
-          - item.location is search('[?&]client_id=' ~ (caddy_auth_proxy_client_id | regex_escape) ~ '(&|$)')
-          - item.location is search('[?&]code_challenge_method=S256(&|$)')
-          - item.location is search('[?&]redirect_uri=https%3A%2F%2F' ~ (item.item | regex_escape) ~ '%2Foauth2%2Fcallback(&|$)')
-        fail_msg: "caddy_auth_proxy: signing in for {{ item.item }} goes to {{ item.location | default('nowhere') }}"
-      loop: "{{ caddy_auth_proxy_sign_in.results }}"
+          - item.value.location is match('^' ~ (caddy_auth_proxy_issuer_url | regex_escape) ~ '/protocol/openid-connect/auth\?')
+          - item.value.location is search('[?&]client_id=' ~ (caddy_auth_proxy_client_id | regex_escape) ~ '(&|$)')
+          - item.value.location is search('[?&]code_challenge_method=S256(&|$)')
+          - item.value.location is search('[?&]redirect_uri=https%3A%2F%2F' ~ (item.key | regex_escape) ~ '%2Foauth2%2Fcallback(&|$)')
+        fail_msg: "caddy_auth_proxy: signing in for {{ item.key }} goes to {{ item.value.location | default('nowhere') }}"
+      loop: "{{ caddy_auth_proxy_found | dict2items }}"
       loop_control:
-        label: "{{ item.item }}"
+        label: "{{ item.key }}"
   tags: [health]
