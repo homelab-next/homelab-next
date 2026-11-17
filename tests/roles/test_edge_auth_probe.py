@@ -88,7 +88,8 @@ def edge(tmp_path):
     class H(BaseHTTPRequestHandler):
         def do_GET(self):
             seen.append((self.path, self.headers.get("Host")))
-            host = self.headers.get("Host")
+            # only the one known site name is echoed (never the raw header)
+            host = next((n for n in (SITE,) if n == self.headers.get("Host")), "unknown")
             loc = (
                 "https://idp.example.internal/realms/lab/protocol/openid-connect/auth?"
                 "client_id=auth-proxy&code_challenge_method=S256&redirect_uri="
@@ -102,7 +103,7 @@ def edge(tmp_path):
             pass
 
     srv = HTTPServer(("localhost", 0), H)
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     ctx.load_cert_chain(str(crt), str(key))
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
