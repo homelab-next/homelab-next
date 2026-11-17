@@ -699,6 +699,8 @@ def test_the_limits_are_installed_before_the_modules_and_a_rerun_changes_nothing
         (sbin / name).mkdir()
         (units / name).mkdir()
     args = ["ansible-playbook", "-i", "hosts.yml", pb, "-e", "ansible_become=false",
+            "-e", f"hnx_limits_data_root={tmp_path}/data-root", "-e", f"hnx_limits_data_owner={os.getuid()}",
+            "-e", f"hnx_limits_data_group={os.getgid()}",
             "-e", f"hnx_limits_unit_dir={units}/{{{{ inventory_hostname }}}}",
             "-e", f"hnx_limits_sbin_dir={sbin}/{{{{ inventory_hostname }}}}"]  # fmt: skip
 
@@ -784,6 +786,8 @@ def test_an_owed_cap_that_cannot_be_applied_fails_the_play(tmp_path, tree, fleet
     r = subprocess.run(
         ["ansible-playbook", "-i", "hosts.yml", str(tmp_path / "out" / apply.PLAYBOOK),
          "-e", "ansible_become=false", "-e", f"hnx_limits_unit_dir={tmp_path}",
+         "-e", f"hnx_limits_data_root={tmp_path}/data-root", "-e", f"hnx_limits_data_owner={os.getuid()}",
+            "-e", f"hnx_limits_data_group={os.getgid()}",
          "-e", f"hnx_limits_sbin_dir={tmp_path}"],
         capture_output=True, text=True, env=env, cwd=tmp_path, timeout=300,
     )  # fmt: skip
@@ -837,6 +841,8 @@ def test_on_vm_guests_the_real_quota_script_passes_over_existing_data_and_says_s
                ANSIBLE_GATHERING="explicit", PATH=f"{bin_}:{os.environ['PATH']}")  # fmt: skip
     args = ["ansible-playbook", "-i", "hosts.yml", str(tmp_path / "out" / apply.PLAYBOOK),
             "-e", "ansible_become=false",
+            "-e", f"hnx_limits_data_root={tmp_path}/data-root", "-e", f"hnx_limits_data_owner={os.getuid()}",
+            "-e", f"hnx_limits_data_group={os.getgid()}",
             "-e", f"hnx_limits_unit_dir={units}/{{{{ inventory_hostname }}}}",
             "-e", f"hnx_limits_sbin_dir={sbin}/{{{{ inventory_hostname }}}}"]  # fmt: skip
     for _run in (1, 2):
@@ -973,3 +979,38 @@ def test_ansible_reads_the_carried_group_vars(tmp_path, capsys):
     )  # fmt: skip
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["probe_value"] == "carried"
+
+
+def test_limits_play_creates_data_parent_first() -> None:
+    """The first play task makes the data parent root-owned 0755, before any module role runs.
+
+    Left to the first module's own data-root task, Ansible created the parent with that module's
+    group and mode 0750, and another module's service user could not traverse it.
+    """
+    import yaml
+
+    from homelabnext.modules.limits import DATA_ROOT
+
+    text = (GOLDEN / "playbooks" / "modules.yml").read_text()
+    plays = yaml.safe_load(text)
+    limits = [p for p in plays if str(p.get("name", "")).startswith("module limits on site host")]
+    assert limits
+    names = [p["name"] for p in plays]
+    for play in limits:
+        first = play["tasks"][0]
+        assert first["ansible.builtin.file"] == {
+            "path": "{{ hnx_limits_data_root }}",
+            "state": "directory",
+            "owner": "{{ hnx_limits_data_owner }}",
+            "group": "{{ hnx_limits_data_group }}",
+            "mode": "0755",
+        }
+        assert play["vars"]["hnx_limits_data_root"] == DATA_ROOT
+        assert play["vars"]["hnx_limits_data_owner"] == "root"
+        assert play["vars"]["hnx_limits_data_group"] == "root"
+    last_limits = max(names.index(p["name"]) for p in limits)
+    assert all(
+        names.index(n) > last_limits
+        for n in names
+        if str(n).startswith("module ") and n not in {p["name"] for p in limits}
+    )

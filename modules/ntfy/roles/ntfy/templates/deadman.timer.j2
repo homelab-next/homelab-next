@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role ntfy); local changes are overwritten.
+[Unit]
+Description=homelabnext dead-man watch, every {{ ntfy_deadman_interval_minutes }} minutes
+
+[Timer]
+OnCalendar={{ ntfy_deadman_schedule }}
+AccuracySec=5s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

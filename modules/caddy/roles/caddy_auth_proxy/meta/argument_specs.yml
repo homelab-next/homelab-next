@@ -88,8 +88,17 @@ argument_specs:
         type: int
         description: Seconds for each health request.
         default: 10
+      caddy_auth_proxy_edge_address: &edge_address
+        type: str
+        description: The edge's own address, where health signs in through it (the caddy role's bind address by default).
+      caddy_auth_proxy_edge_port: &edge_port
+        type: int
+        description: The edge's HTTPS port (the caddy role's port by default).
+      caddy_auth_proxy_edge_trust_bundle: &edge_bundle
+        type: str
+        description: The CA bundle the edge's certificates verify against (the caddy role's trust bundle by default).
   health:
-    short_description: Fail unless the container is healthy, /ping answers, the check refuses a request with no session and signing in starts the code flow (PKCE) at the issuer for each site.
+    short_description: Fail unless the container is healthy, /ping answers, the check refuses a request with no session and signing in through the edge (https://<site>/oauth2/start) starts the code flow (PKCE) at the issuer for each site.
     options:
       caddy_auth_proxy_logical_id: *logical_id
       caddy_auth_proxy_issuer_url: *issuer_url
@@ -111,6 +120,9 @@ argument_specs:
       caddy_auth_proxy_start: *start
       caddy_auth_proxy_validate_with_docker: *validate_with_docker
       caddy_auth_proxy_health_timeout: *health_timeout
+      caddy_auth_proxy_edge_address: *edge_address
+      caddy_auth_proxy_edge_port: *edge_port
+      caddy_auth_proxy_edge_trust_bundle: *edge_bundle
   readiness:
     short_description: Fail unless the container engine is ready and both credentials resolve in their form.
     options:

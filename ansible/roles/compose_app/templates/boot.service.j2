@@ -1,0 +1,17 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role compose_app); local changes are overwritten.
+[Unit]
+Description=compose project {{ compose_app_name }} up at boot (starts any container that did not come back)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists={{ compose_app_dir }}/docker-compose.yml
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/docker compose -f {{ compose_app_dir }}/docker-compose.yml up -d --remove-orphans
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

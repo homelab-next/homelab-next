@@ -41,3 +41,7 @@
     compose_app_spec: "{{ ntfy_app.compose_app_spec }}"
     compose_app_secret_env: "{{ ntfy_secret_env }}"
   no_log: true
+
+- name: Install the dead-man watch (only with beats)
+  ansible.builtin.include_tasks: deadman.yml
+  when: ntfy_deadman_beats | length > 0

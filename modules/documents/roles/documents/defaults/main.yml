@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: Apache-2.0
+# The documents provider (modules/documents): the application (web server, task worker, consumer
+# and scheduler are processes of the one image) and its broker as two compose_app containers in the
+# module's slice. The application listens in plain http on the guest's own address and nowhere else;
+# the broker publishes no port. The database is SQLite in the data root: one writer, a library of
+# a few thousand documents, and the product's exporter and importer are database-neutral, so a later
+# move to a server database is an export and an import.
+# Required, with no default (the site's): documents_logical_id (the instance's registry id).
+documents_image: "ghcr.io/paperless-ngx/paperless-ngx:3.4.2@sha256:d704e84f88300eb6ab001ab15720a2330ff99169cf9f94d6b8fcc44b63a84c84"
+documents_broker_image: "docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# hypervisor's per-VM firewall admits only the named consumers on this port
+documents_bind: "{{ ansible_host }}"
+documents_port: 8000
+documents_dir: /opt/compose/documents
+documents_owner: root
+documents_group: root
+# the module's data root (docs/modules/data.md): data/ (the database, the search index, the
+# classifier), media/ (originals, archive copies, thumbnails), consume/ (the inbox), broker/ (the
+# broker's snapshot) and export/ (the exit copy)
+documents_data_root: /var/lib/hnx-modules/documents
+# the containers' users: ids no account on the host has. The application runs as a non-root user
+# (the image supports it): it cannot install OCR languages at start, so the languages below are
+# limited to the ones the image ships.
+documents_app_uid: 61040
+documents_app_gid: 61040
+documents_broker_uid: 61041
+documents_broker_gid: 61041
+documents_timezone: Etc/UTC
+# the OCR languages (Tesseract codes), as data; each must be one the image ships (documents_ocr_available)
+documents_ocr_languages: [eng]
+# the name the people and agents use for the library, when a route exists (empty: none; set it with the
+# route, the application then trusts the name for sign-in and CSRF), e.g. https://documents.<domain>
+documents_url: ""
+# the first administrator, created on an EMPTY database from the admin password. Set false when the
+# library is to be imported (the importer brings its own accounts and refuses a target that has one)
+documents_admin_bootstrap: true
+documents_admin_user: admin
+# the account that owns the API token (documents_api_login_ref); it must be an administrator for the
+# health hook's status read. After an import it is the imported account of that name.
+documents_api_user: admin
+documents_signing_ref: secret:documents/secret-key
+documents_admin_login_ref: secret:documents/admin-password
+documents_api_login_ref: secret:documents/api-token
+# the account agents (the concierge, the research tools) use, with its own token and ONLY these
+# permissions: it can read and change documents and their taxonomy, it cannot delete anything and is
+# neither staff nor administrator. The administrator's token (documents_api_login_ref) can delete the
+# whole library: keep it for operators and for the health hook, never hand it to an agent. Empty
+# documents_agent_user: no agent account (and no agent token is read). An agent that files new
+# documents needs add_document too (documents_agent_permissions); delete_* is always refused.
+documents_agent_user: agent
+documents_agent_login_ref: secret:documents/agent-token
+documents_agent_permissions:
+  - view_document
+  - change_document
+  - view_note
+  - change_note
+  - view_tag
+  - change_tag
+  - view_correspondent
+  - change_correspondent
+  - view_documenttype
+  - change_documenttype
+  - view_storagepath
+  - change_storagepath
+  - view_customfield
+  - change_customfield
+# false: PAPERLESS_EMAIL_TASK_CRON=disable, the application never polls a mail account by itself
+# (nothing in this module needs it; an imported mail account stays inert until the site turns it on)
+documents_mail_fetch: false
+# after an import, switch off the mail rules and the workflows that send e-mail or call a webhook
+# that came with the library (they are always listed in the run's output)
+documents_disable_imported_egress: true
+# the inbox (consume/): files dropped there are read, OCRed and filed
+documents_consumer_recursive: false
+documents_consumer_subdirs_as_tags: false
+documents_task_workers: 1
+documents_threads_per_worker: 2
+# more PAPERLESS_* settings the site wants (name: value, no secret: a name that looks like one is refused)
+documents_extra_env: {}
+# health fails when the library holds fewer documents than this (set at a cutover to the source's
+# count, so an empty library cannot pass for a migrated one); 0 = not checked
+documents_expected_min_documents: 0
+documents_mem_limit: 2g
+documents_broker_mem_limit: 256m
+documents_start: true
+documents_validate_with_docker: true
+documents_health_timeout: 15
+# seconds main waits for the application to answer after a start (the first one migrates the database)
+documents_ready_timeout: 600

@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the directories and install the helpers
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Write the certificate files and the SSH host keys
+  ansible.builtin.include_tasks: tls.yml
+
+# The three application secrets are written as files (0440, root:container group) in a directory only
+# that group can enter, and the container reads them through GITEA__<section>__<KEY>__FILE: no value
+# is in the compose file, the environment or `docker inspect`. A reference with no value stops the
+# run in credentials.yml, naming it, before any file is written.
+- name: Write the application secrets as files
+  ansible.builtin.include_tasks: appsecrets.yml
+
+- name: Render and start the service
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ gitea_app.compose_app_name }}"
+    compose_app_dir: "{{ gitea_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ gitea_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ gitea_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ gitea_app.compose_app_owner }}"
+    compose_app_group: "{{ gitea_app.compose_app_group }}"
+    compose_app_start: "{{ gitea_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ gitea_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ gitea_app.compose_app_spec }}"
+    compose_app_bind_roots: ["{{ gitea_dir }}", "{{ gitea_data_root }}"]
+  no_log: true
+
+# The certificate, the host keys and the application secrets are read at start: a change takes a restart
+- name: Restart the service to read a changed certificate or host key
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ gitea_dir }}/docker-compose.yml", restart, "{{ gitea_service }}"]
+  changed_when: true
+  when: gitea_start | bool and (gitea_tls_files is changed or gitea_ssh_files is changed or gitea_secret_files is changed)
+
+- name: Wait for the service to answer
+  ansible.builtin.include_tasks: helper.yml
+  vars:
+    gitea_helper_cmd: wait
+  when: gitea_start | bool
+
+- name: Create the administrator on an empty database, the OpenID Connect source and the password sync
+  ansible.builtin.include_tasks: seed.yml
+  when: gitea_start | bool

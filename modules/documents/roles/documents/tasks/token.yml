@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# The product's export carries no API token, so after an import the agents' token is gone. The role
+# therefore owns it: the secret's value is written into the product's token table for the account
+# documents_api_user (one token per account: a different one is replaced). The value goes to the
+# container through the environment of this one command, never an argument. An account that does not
+# exist yet (an empty library about to be imported) is reported, not an error: the next run, after
+# the import, seeds it, and health fails until it has.
+- name: Seed the API token of the service account
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ documents_dir }}/docker-compose.yml", exec, -T,
+           -e, HNX_API_USER, -e, HNX_API_TOKEN, app, python3, manage.py, shell, -c, "{{ documents_seed_code }}"]
+  environment:
+    HNX_API_USER: "{{ documents_api_user }}"
+    HNX_API_TOKEN: "{{ lookup('hnx_secret', documents_api_login_ref) }}"
+  register: documents_token
+  changed_when: "'HNX-TOKEN created' in documents_token.stdout or 'HNX-TOKEN replaced' in documents_token.stdout"
+  failed_when: documents_token.rc != 0 or 'HNX-TOKEN ' not in documents_token.stdout
+  no_log: true
+  tags: [restore]
+
+- name: Say that the service account does not exist yet
+  ansible.builtin.debug:
+    msg: >-
+      documents: no account named {{ documents_api_user }} yet, so the API token was not seeded.
+      Import the library (or create the account) and run the role again; health fails until it is seeded.
+  when: "'HNX-TOKEN no-user' in documents_token.stdout"
+  tags: [restore]
+
+# The agents' account: created (without a password, so it cannot sign in to the web UI), neither staff
+# nor administrator, with exactly documents_agent_permissions (view and change, add only if named,
+# never delete) and no group, and its own token. It waits (reported, not an error) until the
+# administrator exists, so an empty library about to be imported has no account that would collide
+# with the import.
+- name: Seed the agents' account, its permissions and its token
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ documents_dir }}/docker-compose.yml", exec, -T,
+           -e, HNX_API_USER, -e, HNX_AGENT_USER, -e, HNX_AGENT_TOKEN, -e, HNX_AGENT_PERMS,
+           app, python3, manage.py, shell, -c, "{{ documents_agent_code }}"]
+  environment:
+    HNX_API_USER: "{{ documents_api_user }}"
+    HNX_AGENT_USER: "{{ documents_agent_user }}"
+    HNX_AGENT_TOKEN: "{{ lookup('hnx_secret', documents_agent_login_ref) }}"
+    HNX_AGENT_PERMS: "{{ documents_agent_permissions | join(',') }}"
+  register: documents_agent
+  changed_when: "'HNX-AGENT created' in documents_agent.stdout or 'HNX-AGENT updated' in documents_agent.stdout"
+  failed_when: documents_agent.rc != 0 or 'HNX-AGENT ' not in documents_agent.stdout
+  no_log: true
+  when: documents_agent_user | length > 0
+  tags: [restore]
+
+- name: Say that the agents' account waits for the administrator
+  ansible.builtin.debug:
+    msg: >-
+      documents: the agents' account {{ documents_agent_user }} was not created: the administrator
+      {{ documents_api_user }} does not exist yet. Import the library and run the role again.
+  when: documents_agent_user | length > 0 and 'HNX-AGENT deferred' in documents_agent.stdout
+  tags: [restore]

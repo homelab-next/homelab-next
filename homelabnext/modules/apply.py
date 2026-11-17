@@ -39,7 +39,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from homelabnext.modules.limits import slice_name
+from homelabnext.modules.limits import DATA_ROOT, slice_name
 from homelabnext.modules.rules import us
 
 Doc = dict[str, Any]
@@ -534,7 +534,20 @@ def _limits_plays(
             "  vars:",
             f"    hnx_limits_unit_dir: {_q(UNIT_DIR)}",
             f"    hnx_limits_sbin_dir: {_q(SBIN_DIR)}",
+            f"    hnx_limits_data_root: {_q(DATA_ROOT)}",
+            "    hnx_limits_data_owner: root",
+            "    hnx_limits_data_group: root",
             "  tasks:",
+            # the parent of every module's data root, made here first and reasserted each run:
+            # left to the first module's own `file` task, Ansible creates it with THAT module's
+            # group and mode, and a service user of another module cannot traverse it
+            '    - name: "the module data parent (traversable by every module service user)"',
+            "      ansible.builtin.file:",
+            '        path: "{{ hnx_limits_data_root }}"',
+            "        state: directory",
+            '        owner: "{{ hnx_limits_data_owner }}"',
+            '        group: "{{ hnx_limits_data_group }}"',
+            '        mode: "0755"',
         ]
         if dropins:
             P += [

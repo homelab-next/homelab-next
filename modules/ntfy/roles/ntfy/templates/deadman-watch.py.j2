@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: ntfy-deadman-watch
+#   kind: job
+#   purpose: Page, through this notify service, when an expected heartbeat topic has gone quiet (the metrics path is dead), and once more when it is back.
+#   owner: platform
+#   trigger: [timer:ntfy/deadman, role:ntfy]
+#   inputs: the notify service's message cache (read-only) and the previous state file
+#   outputs: the state file and, on a change between alive and silent, one message to the alert topic (publish token)
+#   installs_to: /usr/local/libexec/homelabnext/ntfy-deadman-watch
+#   exit:
+#     "0": checked (and paged, if a beat changed state)
+#     "1": the message cache could not be read or is not the schema this expects (nothing was judged)
+#     "2": a page could not be sent; it stays owed to the next run
+"""Managed by homelabnext (role ntfy); local changes are overwritten.  A dead-man's switch for
+things that cannot report their own death (LL-571): each heartbeat topic named in BEATS is posted
+to by its sender every few minutes.  This runs on the notify service's host, reads the newest
+message time of each topic straight from the service's message cache (read-only, so no account or
+token is needed to read) and pages when the newest is older than that beat's limit, or when none
+was ever seen (counted from the first run that knew the beat, so a sender that never started pages
+too).  State-diffed: one page when a beat goes silent, one when it speaks again, never once per
+run; a page that could not be sent is not recorded and is retried.  The post follows no redirect,
+takes no proxy from the environment, and the token never appears in an error."""
+
+import json
+import os
+import re
+import sqlite3
+import sys
+import time
+import urllib.error
+import urllib.request
+
+DB = {{ ntfy_deadman_cache_file | to_json }}
+STATE_DIR = {{ ntfy_deadman_state_dir | to_json }}
+BEATS = {{ ntfy_deadman_beats | to_json }}
+NOTIFY_URL = {{ ('http://' ~ ntfy_bind ~ ':' ~ (ntfy_port | int | string)) | to_json }}
+ALERT_TOPIC = {{ ntfy_deadman_alert_topic | to_json }}
+TOKEN_FILE = {{ ntfy_deadman_auth_file | to_json }}
+LAB = {{ ntfy_logical_id | to_json }}
+FAIL_AFTER = {{ ntfy_deadman_unreadable_after_runs | int }}
+STATE = os.path.join(STATE_DIR, "state.json")
+SKEW = 300  # seconds of clock difference tolerated between the sender and this host
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
+_SECRETS = []  # the token, once read: scrubbed from any error text that is printed
+
+
+def describe(exc):
+    if isinstance(exc, urllib.error.HTTPError):
+        text = f"HTTP {exc.code} from the notify endpoint"
+    else:
+        text = f"{type(exc).__name__}: {exc}"
+    for secret in _SECRETS:
+        text = text.replace(secret, "[token]")
+    return " ".join(text.split())[:200]
+
+
+def write_private(path, doc):
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=2, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def stopped():
+    """True for a journaled-in-WAL cache with no shared-memory file beside it: the server is not
+    running (its last connection removed the file on a clean close), so nothing writes it and
+    every commit is already in the main file.  Reading it immutable creates no -wal or -shm, which
+    this root-run script must not leave behind (the server's own user could not open them).  With
+    the server running the shared-memory file exists and the ordinary read-only open is used."""
+    with open(DB, "rb") as fh:
+        head = fh.read(20)
+    if not (len(head) == 20 and head[18] == 2 and head[19] == 2) or os.path.exists(DB + "-shm"):
+        return False
+    # a crash leaves committed frames in -wal, which immutable=1 would ignore (stale reads)
+    return not (os.path.exists(DB + "-wal") and os.path.getsize(DB + "-wal") > 0)
+
+
+def newest(topics):
+    """{topic: newest message time (epoch seconds) or None} from the cache, read-only.  A cache
+    that is missing or has no messages table of the expected columns is an error (exit 1), never
+    "no heartbeat": a check that cannot read must not look like a check that found silence."""
+    if not os.path.isfile(DB) or os.path.islink(DB):
+        raise ValueError(f"the message cache {DB} is missing (or a link)")
+    con = sqlite3.connect("file:" + DB + "?mode=ro" + ("&immutable=1" if stopped() else ""), uri=True, timeout=10)
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(messages)")}
+        if not {"topic", "time", "event", "published"} <= cols:
+            raise ValueError("the message cache has no messages table with topic, time, event and published")
+        out = {}
+        for topic in topics:
+            row = con.execute("SELECT MAX(time) FROM messages WHERE topic = ? AND event = 'message' AND published = 1", (topic,)).fetchone()
+            # a delayed message is stored unpublished (filtered above) with a future time; anything
+            # still far in the future is not a heartbeat and must not keep the topic fresh
+            if row[0] is not None and row[0] > time.time() + SKEW:
+                raise ValueError(f"a message on {topic} is dated in the future")
+            out[topic] = row[0]
+        return out
+    finally:
+        con.close()
+
+
+def page(title, body, priority, tags):
+    with open(TOKEN_FILE, encoding="utf-8") as fh:
+        token = fh.read().strip()
+    if not token or not (token.isascii() and token.isprintable()):
+        raise ValueError(f"the token in {TOKEN_FILE} is empty or not printable ASCII")
+    _SECRETS.append(token)
+    headers = {"Title": title[:200], "Priority": str(priority), "Tags": tags,
+               "Content-Type": "text/plain; charset=utf-8", "Authorization": "Bearer " + token}
+    req = urllib.request.Request(f"{NOTIFY_URL}/{ALERT_TOPIC}", data=body.encode("utf-8"), headers=headers, method="POST")
+    with OPENER.open(req, timeout=10) as resp:
+        resp.read()
+        if not 200 <= resp.status < 300:
+            raise ValueError(f"the notify endpoint answered HTTP {resp.status}")
+
+
+def load_state():
+    try:
+        with open(STATE, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        doc = {}
+    armed, seen = doc.get("armed", {}), doc.get("state", {})
+    fails = doc.get("failures", 0)
+    return (
+        armed if isinstance(armed, dict) else {},
+        seen if isinstance(seen, dict) else {},
+        fails if isinstance(fails, int) else 0,
+        doc.get("failure_paged") is True,
+    )
+
+
+def minutes(seconds):
+    return max(0, int(seconds // 60))
+
+
+def main():
+    now = time.time()
+    armed, states, failures, failure_paged = load_state()
+    try:
+        latest = newest([b["topic"] for b in BEATS])
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        # nothing is judged, so the dead-man is OFF for this run: after FAIL_AFTER runs in a row
+        # that is itself paged, once (a schema change after an upgrade would otherwise leave it
+        # silently off until someone runs health), and its recovery below
+        failures += 1
+        print(f"nothing judged: {describe(exc)}", file=sys.stderr)
+        if failures >= FAIL_AFTER and not failure_paged:
+            try:
+                page(f"DEAD-MAN BLIND on {LAB}", f"The dead-man watch on {LAB} could not read the message cache {failures} runs in a row ({describe(exc)}); heartbeats are not being judged.", 5, "rotating_light,heartbeat")
+                failure_paged = True
+            except Exception as sent:
+                print(f"page not sent: {describe(sent)}", file=sys.stderr)
+        write_private(STATE, {"armed": armed, "state": states, "failures": failures, "failure_paged": failure_paged})
+        return 1
+    rc = 0
+    if failure_paged:
+        try:
+            page(f"dead-man watch reads again on {LAB}", "The dead-man watch can read the message cache again.", 3, "white_check_mark,heartbeat")
+            failure_paged = False
+        except Exception as sent:
+            print(f"page not sent: {describe(sent)}", file=sys.stderr)
+            rc = 2
+    if not failure_paged:
+        failures = 0
+    for beat in BEATS:
+        name, topic, limit = beat["name"], beat["topic"], int(beat["max_age_minutes"]) * 60
+        armed.setdefault(name, now)
+        seen = latest[topic]
+        age = now - (float(seen) if seen is not None else armed[name])
+        now_state = "stale" if age > limit else "ok"
+        if now_state == states.get(name, "ok"):
+            states[name] = now_state
+            continue
+        if now_state == "stale":
+            if seen is not None:
+                what = f"last heartbeat {minutes(age)} min ago"
+            else:
+                what = f"no heartbeat seen in {minutes(age)} min since the watch began"
+            title = f"DEAD-MAN: {name} silent on {LAB}"
+            body = (f"{name} has sent no heartbeat on topic {topic}: {what} (limit {limit // 60} min). "
+                    "The thing that reports its own health is down, or cannot reach this service.")
+            priority, tags = 5, "rotating_light,heartbeat"
+        else:
+            title = f"dead-man: {name} is back on {LAB}"
+            body = f"{name} is sending heartbeats again on topic {topic}."
+            priority, tags = 3, "white_check_mark,heartbeat"
+        try:
+            page(title, body, priority, tags)
+            states[name] = now_state
+        except Exception as exc:  # the page stays owed
+            print(f"page not sent: {describe(exc)}", file=sys.stderr)
+            rc = 2
+    write_private(STATE, {"armed": armed, "state": states, "failures": failures, "failure_paged": failure_paged})
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

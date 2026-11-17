@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup manifest names the data root: the database, the originals, the archive copies, the
+# thumbnails and the search index. The inbox and the broker's snapshot are in it too (both small and
+# transient); the exit copy (export/) is what a restore from scratch uses.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Create the compose project directory
+      ansible.builtin.file:
+        path: "{{ documents_dir }}"
+        state: directory
+        owner: "{{ documents_owner }}"
+        group: "{{ documents_group }}"
+        mode: "0750"
+    - name: Write the backup manifest (the data root)
+      ansible.builtin.copy:
+        dest: "{{ documents_dir }}/backup-manifest.json"
+        content: "{{ {'app': 'documents', 'paths': [documents_data_root]} | to_nice_json }}\n"
+        owner: "{{ documents_owner }}"
+        group: "{{ documents_group }}"
+        mode: "0640"
+  tags: [backup]

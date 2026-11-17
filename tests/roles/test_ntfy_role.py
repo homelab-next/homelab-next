@@ -7,10 +7,17 @@ export writes an object-tree with a sha256 listing and restore refuses a tampere
 
 from __future__ import annotations
 
+import grp
+import http.server
 import json
 import os
 import pwd
+import socket
+import socketserver
 import sqlite3
+import subprocess
+import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -275,3 +282,372 @@ def test_upgrade_refuses_an_unpinned_target_and_records_a_pinned_one(tmp_path):
     assert ok.returncode == 0, ok.stdout + ok.stderr
     pending = json.loads((tmp_path / "app" / "pending-upgrade.json").read_text())
     assert pending == {"service": "ntfy", "tag": "v9.9.9", "digest": "sha256:" + "a" * 64}
+
+
+# -----------------------------------------------------------------------------
+# The dead-man watch (LL-571)
+#
+
+
+jinja2 = pytest.importorskip("jinja2")
+
+TEMPLATE = Path(ROLE) / "templates" / "deadman-watch.py.j2"
+LOOPBACK = socket.gethostbyname("localhost")
+BEAT = {"name": "metrics", "topic": "beat", "max_age_minutes": 15}
+
+
+class _Quick(http.server.HTTPServer):
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+class Notify:
+    """A loopback notify service: records every POST, answers ``status``."""
+
+    def __init__(self, status=200):
+        self.status, self.posts = status, []
+        me = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                me.posts.append((self.path, dict(self.headers), self.rfile.read(n).decode()))
+                self.send_response(me.status)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = _Quick((LOOPBACK, 0), H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+@pytest.fixture
+def notify():
+    made = []
+
+    def make(**kw):
+        n = Notify(**kw)
+        made.append(n)
+        return n
+
+    yield make
+    for n in made:
+        n.close()
+
+
+# The message cache's table as ntfy v2.35.0 creates it (message/cache_sqlite_schema.go,
+# sqliteCreateTablesQuery), so a change of that schema in a later release breaks a test here.
+REAL_DDL = """
+CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, mid TEXT NOT NULL, sequence_id TEXT NOT NULL,
+    time INT NOT NULL, event TEXT NOT NULL, expires INT NOT NULL, topic TEXT NOT NULL,
+    message TEXT NOT NULL, title TEXT NOT NULL, priority INT NOT NULL, tags TEXT NOT NULL,
+    click TEXT NOT NULL, icon TEXT NOT NULL, actions TEXT NOT NULL, attachment_name TEXT NOT NULL,
+    attachment_type TEXT NOT NULL, attachment_size INT NOT NULL, attachment_expires INT NOT NULL,
+    attachment_url TEXT NOT NULL, attachment_deleted INT NOT NULL, sender TEXT NOT NULL,
+    user TEXT NOT NULL, content_type TEXT NOT NULL, encoding TEXT NOT NULL, published INT NOT NULL
+)
+"""
+
+
+def insert(c, topic, ago_min, event="message", published=1):
+    """One row as the server stores it; ``ago_min`` negative: dated in the future (a delayed one)."""
+    c.execute(
+        "INSERT INTO messages (mid, sequence_id, time, event, expires, topic, message, title,"
+        " priority, tags, click, icon, actions, attachment_name, attachment_type, attachment_size,"
+        " attachment_expires, attachment_url, attachment_deleted, sender, user, content_type,"
+        " encoding, published) VALUES ('m', 's', ?, ?, 0, ?, 'x', '', 1, '', '', '', '', '', '', 0,"
+        " 0, '', 0, '', '', '', '', ?)",
+        (NOW - ago_min * 60, event, topic, published),
+    )
+
+
+def cache(path: Path, rows=(), schema=None) -> Path:
+    c = sqlite3.connect(path)
+    c.execute(f"CREATE TABLE messages ({schema})" if schema else REAL_DDL)
+    for row in rows:
+        insert(c, *row)
+    c.commit()
+    c.close()
+    return path
+
+
+def build(tmp_path, srv, beats=(BEAT,)):
+    token = tmp_path / "auth"
+    token.write_text(TOKEN + "\n")
+    values = {
+        "ntfy_deadman_cache_file": str(tmp_path / "cache.db"),
+        "ntfy_deadman_state_dir": str(tmp_path / "state"),
+        "ntfy_deadman_beats": list(beats),
+        "ntfy_bind": LOOPBACK,
+        "ntfy_port": srv.srv.server_port,
+        "ntfy_deadman_alert_topic": "alerts",
+        "ntfy_deadman_auth_file": str(token),
+        "ntfy_logical_id": "notify",
+        "ntfy_deadman_unreadable_after_runs": 3,
+    }
+    e = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
+    e.filters["to_json"] = json.dumps
+    script = tmp_path / "watch.py"
+    script.write_text(e.from_string(TEMPLATE.read_text()).render(**values))
+    return script
+
+
+# the watch reads the clock once: it is run under a fixed one (injected, not the wall clock), so
+# "40 minutes ago" is an exact number in the cache and the test never races a minute boundary
+NOW = 1_800_000_000
+FIXED_CLOCK = (
+    "import runpy, sys, time\n"
+    f"time.time = lambda: {NOW}\n"
+    "sys.argv = sys.argv[1:]\n"
+    "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+)
+
+
+def run(script):
+    return subprocess.run(
+        [sys.executable, "-c", FIXED_CLOCK, str(script)], capture_output=True, text=True
+    )
+
+
+def state(tmp_path):
+    return json.loads((tmp_path / "state" / "state.json").read_text())
+
+
+def test_a_live_beat_pages_nobody(tmp_path, notify):
+    cache(tmp_path / "cache.db", [("beat", 3, "message")])
+    srv = notify()
+    assert run(build(tmp_path, srv)).returncode == 0
+    assert srv.posts == [] and state(tmp_path)["state"] == {"metrics": "ok"}
+
+
+def test_silence_pages_once_at_urgent_priority_and_the_return_pages_once(tmp_path, notify):
+    db = cache(tmp_path / "cache.db", [("beat", 40, "message")])
+    srv = notify()
+    script = build(tmp_path, srv)
+    r = run(script)
+    assert r.returncode == 0, r.stderr
+    ((path, headers, body),) = srv.posts
+    assert path == "/alerts" and headers["Priority"] == "5"
+    assert headers["Title"] == "DEAD-MAN: metrics silent on notify"
+    assert "last heartbeat 40 min ago" in body and "limit 15 min" in body
+    assert headers["Authorization"] == "Bearer " + TOKEN
+    assert run(script).returncode == 0 and len(srv.posts) == 1  # the same silence: no second page
+    c = sqlite3.connect(db)
+    insert(c, "beat", 0)
+    c.commit()
+    c.close()
+    assert run(script).returncode == 0 and len(srv.posts) == 2
+    assert srv.posts[1][1]["Title"] == "dead-man: metrics is back on notify"
+    assert run(script).returncode == 0 and len(srv.posts) == 2
+
+
+def test_other_topics_and_keepalive_events_are_not_the_heartbeat(tmp_path, notify):
+    cache(tmp_path / "cache.db", [("other", 1, "message"), ("beat", 1, "keepalive")])
+    srv = notify()
+    assert run(build(tmp_path, srv)).returncode == 0
+    assert srv.posts == []  # not yet: counted from arming, which is now
+    st = state(tmp_path)
+    st["armed"]["metrics"] -= 3600  # armed an hour ago and never heard from
+    (tmp_path / "state" / "state.json").write_text(json.dumps(st))
+    assert run(build(tmp_path, srv)).returncode == 0
+    assert "no heartbeat seen" in srv.posts[0][2]
+
+
+def test_a_failed_page_is_not_recorded_and_is_retried(tmp_path, notify):
+    cache(tmp_path / "cache.db", [("beat", 40, "message")])
+    srv = notify(status=503)
+    script = build(tmp_path, srv)
+    r = run(script)
+    assert r.returncode == 2 and "page not sent" in r.stderr and TOKEN not in r.stdout + r.stderr
+    assert state(tmp_path)["state"] == {}  # owed
+    srv.status = 200
+    assert run(script).returncode == 0 and state(tmp_path)["state"] == {"metrics": "stale"}
+
+
+def test_a_stopped_servers_wal_cache_is_read_without_creating_files(tmp_path, notify):
+    """The watch runs as root: opening a WAL-mode cache whose server is not running would create
+    a root-owned -wal/-shm the server's own user could not open at its next start."""
+    db = cache(tmp_path / "cache.db", [("beat", 3, "message")])
+    c = sqlite3.connect(db)
+    c.execute("PRAGMA journal_mode=wal")
+    c.close()
+    srv = notify()
+    script = build(tmp_path, srv)
+    before = sorted(p.name for p in tmp_path.iterdir())
+    assert run(script).returncode == 0 and srv.posts == []
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name != "state") == [
+        n for n in before if n != "state"
+    ]
+    assert not (tmp_path / "cache.db-wal").exists() and not (tmp_path / "cache.db-shm").exists()
+
+
+def test_a_delayed_message_does_not_keep_the_topic_fresh(tmp_path, notify):
+    """A message with a Delay header is stored unpublished with a future time: it is not a heartbeat."""
+    cache(tmp_path / "cache.db", [("beat", 40, "message"), ("beat", -600, "message", 0)])
+    srv = notify()
+    assert run(build(tmp_path, srv)).returncode == 0
+    assert srv.posts and srv.posts[0][1]["Title"] == "DEAD-MAN: metrics silent on notify"
+
+
+def test_a_published_message_dated_far_in_the_future_is_an_error_not_a_heartbeat(tmp_path, notify):
+    cache(tmp_path / "cache.db", [("beat", -600, "message")])
+    srv = notify()
+    r = run(build(tmp_path, srv))
+    assert r.returncode == 1 and "dated in the future" in r.stderr and srv.posts == []
+
+
+def test_a_watch_that_cannot_read_pages_once_after_n_runs_and_once_when_it_reads_again(
+    tmp_path, notify
+):
+    srv = notify()
+    script = build(tmp_path, srv)  # no cache file: every run is exit 1
+    for _ in range(2):
+        assert run(script).returncode == 1
+    assert srv.posts == []  # not yet: a blip is not a page
+    assert run(script).returncode == 1
+    assert [p[1]["Title"] for p in srv.posts] == ["DEAD-MAN BLIND on notify"]
+    assert srv.posts[0][1]["Priority"] == "5"
+    assert run(script).returncode == 1 and len(srv.posts) == 1  # state-diffed: not again
+    cache(tmp_path / "cache.db", [("beat", 3, "message")])
+    assert run(script).returncode == 0
+    assert [p[1]["Title"] for p in srv.posts][1] == "dead-man watch reads again on notify"
+    assert run(script).returncode == 0 and len(srv.posts) == 2
+    assert state(tmp_path)["failures"] == 0
+
+
+def test_a_blind_page_that_could_not_be_sent_is_retried(tmp_path, notify):
+    srv = notify(status=503)
+    script = build(tmp_path, srv)
+    for _ in range(3):
+        run(script)
+    assert not state(tmp_path)["failure_paged"]
+    srv.status = 200
+    assert run(script).returncode == 1
+    assert state(tmp_path)["failure_paged"] and len(srv.posts) == 2  # the 503, then the retry
+
+
+@pytest.mark.parametrize("what", ["missing", "no table", "wrong columns"])
+def test_an_unreadable_cache_is_an_error_not_a_silence(tmp_path, notify, what):
+    if what == "no table":
+        sqlite3.connect(tmp_path / "cache.db").close()
+    elif what == "wrong columns":
+        cache(tmp_path / "cache.db", schema="a TEXT, b INT, c TEXT")
+    srv = notify()
+    r = run(build(tmp_path, srv))
+    assert r.returncode == 1 and "nothing judged" in r.stderr
+    assert srv.posts == []
+
+
+# ----------------------------------------------------------------------------- the role
+
+
+def dvars(tmp_path, **kw):
+    v = ntfy_vars(
+        tmp_path,
+        ntfy_deadman_beats=[BEAT],
+        ntfy_unit_dir=str(tmp_path / "units"),
+        ntfy_last_run_dir=str(tmp_path / "last-run"),
+        ntfy_last_run_group=grp.getgrgid(os.getgid()).gr_name,
+        ntfy_last_run_writer=str(tmp_path / "libexec" / "hnx-last-run"),
+        ntfy_deadman_script=str(tmp_path / "libexec" / "watch"),
+        ntfy_deadman_state_dir=str(tmp_path / "wstate"),
+        ntfy_deadman_auth_file=str(tmp_path / "etc" / "auth"),
+    )
+    v.update(kw)
+    return v
+
+
+FAKE_SYSTEMCTL = r"""
+import os, sys
+a = sys.argv[1:]
+open(LOG, "a").write(" ".join(a) + "\n")
+if a[0] == "enable":
+    open(STATE + ".enabled", "w").close(); open(STATE + ".active", "w").close()
+elif a[0] in ("is-enabled", "is-active"):
+    ok = os.path.exists(STATE + (".enabled" if a[0] == "is-enabled" else ".active"))
+    print("enabled" if a[0] == "is-enabled" and ok else "active" if ok else "inactive")
+    sys.exit(0 if ok else 3)
+"""
+
+
+def test_with_beats_the_script_units_and_owner_only_token_are_installed_and_it_converges(tmp_path):
+    systemctl = fake(
+        tmp_path / "systemctl",
+        FAKE_SYSTEMCTL.replace("LOG", repr(str(tmp_path / "sc.log"))).replace(
+            "STATE", repr(str(tmp_path / "sc"))
+        ),
+    )
+    (tmp_path / "units").mkdir()
+    v = dvars(tmp_path, ntfy_systemctl_cli=systemctl)
+    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    script = tmp_path / "libexec" / "watch"
+    assert script.exists() and "BEATS = " in script.read_text() and TOKEN not in script.read_text()
+    token = tmp_path / "etc" / "auth"
+    assert token.read_text().strip() == TOKEN and oct(token.stat().st_mode & 0o777) == "0o400"
+    service = (tmp_path / "units" / "hnx-ntfy-deadman.service").read_text()
+    assert "User=" not in service and "--job timer:ntfy/deadman" in service
+    assert f"ReadOnlyPaths={tmp_path}/data/db" in service  # the cache is only read
+    assert f"{tmp_path}/last-run" in service.split("ReadWritePaths=")[1].splitlines()[0]
+    assert "ExecStart=/usr/local/libexec/homelabnext/ntfy-deadman-watch\n" in service
+    timer = (tmp_path / "units" / "hnx-ntfy-deadman.timer").read_text()
+    assert "OnCalendar=*-*-* *:0/5:00 UTC" in timer and "OnBootSec" not in timer
+    assert "enable --now hnx-ntfy-deadman.timer" in (tmp_path / "sc.log").read_text()
+    again = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert again.returncode == 0, again.stdout + again.stderr
+    calls = (tmp_path / "sc.log").read_text().splitlines()
+    assert (
+        calls.count("enable --now hnx-ntfy-deadman.timer") == 1
+    )  # a second run does not re-enable
+    assert calls.count("daemon-reload") == 1  # nor reload: the units did not change
+
+
+def test_without_beats_nothing_of_the_watch_is_installed(tmp_path):
+    v = dvars(tmp_path, ntfy_deadman_beats=[])
+    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (tmp_path / "units").exists() and not (tmp_path / "libexec").exists()
+
+
+BAD = {
+    "a limit under twice the interval": [{**BEAT, "max_age_minutes": 9}],
+    "a limit over half the cache duration": [{**BEAT, "max_age_minutes": 400}],
+    "a bad topic": [{**BEAT, "topic": "has space"}],
+    "a bad name": [{**BEAT, "name": "Not A Slug"}],
+    "a missing topic": [{"name": "metrics", "max_age_minutes": 15}],
+    "a duplicate topic": [BEAT, {**BEAT, "name": "other"}],
+    "a duplicate name": [BEAT, {**BEAT, "topic": "other"}],
+    "the alert topic itself": [{**BEAT, "topic": "homelabnext-alerts"}],
+}
+
+
+def test_a_schedule_the_watch_does_not_know_is_refused(tmp_path):
+    v = dvars(tmp_path, ntfy_deadman_schedule="*-*-* *:0/7:00 UTC")
+    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert r.returncode != 0 and "each dead-man beat needs" in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("beats", list(BAD.values()), ids=list(BAD))
+def test_a_bad_beat_is_refused_before_anything_is_written(tmp_path, beats):
+    r = run_role(tmp_path, ROLE, "main", dvars(tmp_path, ntfy_deadman_beats=beats), env=SECRETS)
+    assert r.returncode != 0 and "each dead-man beat needs" in r.stdout + r.stderr
+    assert not (tmp_path / "app").exists() and not (tmp_path / "units").exists()
+
+
+def test_a_topic_the_publisher_may_not_write_is_refused(tmp_path):
+    v = dvars(tmp_path, ntfy_publisher_topics=["alerts-*"])
+    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert r.returncode != 0 and "['beat'] may not be" in r.stdout + r.stderr
+    sub = tmp_path / "ok"
+    sub.mkdir()
+    ok = dvars(sub, ntfy_publisher_topics=["alerts-*", "be*"])
+    r = run_role(sub, ROLE, "validate", ok)
+    assert r.returncode == 0, r.stdout + r.stderr

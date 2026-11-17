@@ -42,3 +42,9 @@ compose_app_start: true
 # (a container reaching the host's own address arrives on the host's INPUT chain with that source)
 # needs an address that does not move between recreates. Changing it recreates the network.
 compose_app_network_subnet: ""
+# A oneshot unit that runs docker compose up -d at boot (after docker), so a container that did not
+# come back after a power cycle is started and a failure shows as a failed unit (LL-571). Opt-in:
+# the module's remove playbook must remove hnx-compose-<name>.service with the project.
+compose_app_boot_unit: false
+compose_app_unit_dir: /etc/systemd/system
+compose_app_systemctl_cli: systemctl

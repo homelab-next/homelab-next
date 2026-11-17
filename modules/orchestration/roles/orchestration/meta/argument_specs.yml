@@ -50,7 +50,7 @@ argument_specs:
       orchestration_install_dir:
         type: path
         description: Where releases, the current link and bin/controller live.
-        default: /opt/hnx-orchestration
+        default: /opt/hnx/orchestration
       orchestration_keep_releases:
         type: int
         description: Older releases kept besides the current one.
@@ -58,7 +58,7 @@ argument_specs:
       orchestration_config_dir:
         type: path
         description: 'The configuration directory: controller.yaml, the token digests, profiles/ and homes/ (root''s, read by the service group).'
-        default: /etc/orchestration
+        default: /etc/hnx/orchestration
       orchestration_data_root:
         type: path
         description: 'The module''s data root: the database, runs/, usage/ and export/ (the service user''s).'
