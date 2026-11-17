@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: context-reindex
+#   kind: job
+#   purpose: Ask the running context service to fetch every configured git source and index what changed, and exit with the run's outcome.
+#   owner: platform
+#   trigger: [timer:context/reindex, role:context]
+#   inputs: the context container (its configuration and the admin token in its own environment)
+#   outputs: the service's index and its record <data root>/state/last-reindex.json; the run's report on stdout
+#   installs_to: /usr/local/libexec/homelabnext/hnx-context-reindex
+#   exit:
+#     "0": the reindex succeeded
+#     "1": the reindex failed (the index is unchanged; the report says why)
+#     "2": the service was busy, unreachable or refused the call
+# Managed by homelabnext (module context, role context); local changes are overwritten.
+"""Run by the hnx-context-reindex timer: ``python -m homelabnext.context_service reindex`` inside the
+container, which posts to the service on loopback with the admin token the container already holds,
+so the token never appears on this host's command lines."""
+
+import subprocess
+import sys
+
+ARGV = [
+    {{ context_docker_cli | to_json }}, "compose", "-f", {{ (context_dir ~ '/docker-compose.yml') | to_json }},
+    "exec", "-T", "context", "python", "-m", "homelabnext.context_service", "reindex",
+    {{ (context_reindex_timeout_s | int | string) | to_json }},
+]
+
+sys.exit(subprocess.run(ARGV, check=False).returncode)

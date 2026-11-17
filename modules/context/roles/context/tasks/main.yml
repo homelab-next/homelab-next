@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Every credential resolves, in its form
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the configuration
+  ansible.builtin.include_tasks: config.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Write the configuration (read-only in the container)
+  ansible.builtin.copy:
+    content: "{{ context_config | to_nice_json }}\n"
+    dest: "{{ context_dir }}/config.json"
+    owner: "{{ context_owner }}"
+    group: "{{ context_gid | int }}"
+    mode: "0640"
+
+- name: Load the pinned image from the local archive when the daemon lacks it
+  ansible.builtin.include_tasks: image.yml
+  when: context_image_archive != ''
+
+- name: Render and start the context service
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ context_app.compose_app_name }}"
+    compose_app_dir: "{{ context_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ context_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ context_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ context_app.compose_app_owner }}"
+    compose_app_group: "{{ context_app.compose_app_group }}"
+    compose_app_start: "{{ context_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ context_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ context_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ context_secret_env }}"
+  no_log: true
+
+- name: Wait until the service answers
+  ansible.builtin.uri:
+    url: "http://{{ context_bind }}:{{ context_port | int }}/health"
+    status_code: 200
+    timeout: "{{ context_health_timeout | int }}"
+  register: context_up
+  until: context_up.status == 200
+  retries: 30
+  delay: 2
+  changed_when: false
+  when: context_start | bool and not ansible_check_mode
+
+- name: The reindex timer and its last-run record
+  ansible.builtin.include_tasks: timer.yml

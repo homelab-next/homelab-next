@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the context suite against the
+# module's own code through the shared adapter, in process: the suite's documents go to the service's
+# store and every read goes through the service's HTTP routes as a JSON request (the deployed instance
+# indexes its configured sources only, so the suite cannot index into it). Needs the context-semantic
+# extra and the pinned model (python -m homelabnext.context.semantic_model DIR), as the image has them:
+#   HNX_CONTEXT_MODEL_DIR=DIR hnx conform run context --target modules/context/conformance/target.yml
+# CI runs the same routes with the semantic adapter's test seams (tests/context_service/).
+name: context-module
+capabilities:
+  context:
+    adapter: homelabnext.conform.adapters.context_service:make
+    features: [semantic]

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root belongs to the container's user (it writes the checkouts, the state and the libraries'
+# scratch there); the compose project directory is the owner's, readable by the container's group.
+- name: Create the compose project directory and the data root
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ context_gid | int }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ context_dir }}", owner: "{{ context_owner }}", mode: "0750"}
+    - {path: "{{ context_data_root }}", owner: "{{ context_uid | int }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup]

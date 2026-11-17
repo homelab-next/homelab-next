@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: stop and disable the reindex timer, then stop and remove the container (compose down). The data
+# root (the checkouts and the last reindex's record, all derived from the sources) and the compose project
+# are kept for the operator to delete. The decommission audit (module.yml lifecycle.remove.audit) checks
+# nothing still names the service.
+- name: Remove the context service
+  hosts: mod_context_server
+  become: true
+  tasks:
+    - name: Stop and disable the reindex timer
+      ansible.builtin.command:
+        argv: [systemctl, disable, --now, hnx-context-reindex.timer]
+      changed_when: true
+      failed_when: false
+    - name: Remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ context_dir | default('/opt/compose/context') }}/docker-compose.yml", down]
+      changed_when: true
