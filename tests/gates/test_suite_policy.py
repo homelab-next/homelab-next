@@ -702,7 +702,7 @@ def test_shards_run_every_test_once_end_to_end(tmp_path):
     assert all(ran), [len(r) for r in ran]
     rc, out = _merge(reports, "--groups", "{}.{}".format(*sys.version_info[:2]))
     assert rc == 0, out
-    assert "3 shards" in out and "  a\n" in out
+    assert "3 shards" in out and "  a  (+ " in out
     rc, out = _merge(reports, "--groups", "3.11,3.12,3.13,3.14")
     assert rc == 1 and "expected" in out
 
@@ -788,3 +788,79 @@ def test_a_test_dropped_after_the_split_is_not_reported_as_run(tmp_path):
     assert [p.returncode for p in procs] == [0, 0], [p.stdout for p in procs]
     rc, out = _merge(reports)
     assert rc == 1 and "shard 1/2 ran 2 of the 3 tests it kept" in out, out
+
+
+HEAVY_FIXTURE = (
+    "import time\nimport pytest\n\n"
+    '@pytest.fixture(scope="module")\ndef heavy():\n    time.sleep(0.4)\n\n'
+    "@pytest.fixture\ndef light():\n    time.sleep(0.01)\n\n"
+    + "".join(f"def test_{k}(heavy, light):\n    time.sleep(0.02)\n\n" for k in range(40))
+)
+
+
+def _suite_totals(out: str, suite: str) -> float:
+    return float(re.search(rf"^\s+([\d.]+)s / +\d+s  {suite}\b", out, re.M)[1])
+
+
+def test_the_shard_count_does_not_inflate_a_suites_summed_time(tmp_path):
+    """A module fixture built once per shard stays out of the budgeted figure at any shard count,
+    so the same suite measures the same (give or take noise) in 2 shards and in 4."""
+    totals = {}
+    for n in (2, 4):
+        base = tmp_path / str(n)
+        base.mkdir()
+        procs, reports = _shards(base, n, "--suite-times", heavy__test_heavy=HEAVY_FIXTURE)
+        assert all(p.returncode == 0 for p in procs), [p.stdout for p in procs]
+        rc, out = _merge(reports)
+        assert rc == 0, out
+        assert "shared fixture setup" in out
+        totals[n] = _suite_totals(out, "heavy")
+        data = [json.loads(f.read_text()) for f in reports.glob("*.json")]
+        shared = sum(d["shared"].get("heavy", 0.0) for d in data)
+        assert shared >= 0.4 * len([d for d in data if d["selected"]]) * 0.9  # one per shard
+        assert all(d["shared"].get("heavy", 0.0) <= d["times"].get("heavy", 0.0) for d in data)
+    # without the split the 4-shard sum would be about 2 x 0.4s = 0.8s above the 2-shard sum
+    assert abs(totals[4] - totals[2]) < 0.6, totals
+
+
+def test_a_genuinely_slower_suite_still_goes_over_its_budget(tmp_path):
+    slow = HEAVY_FIXTURE.replace("time.sleep(0.02)", "time.sleep(0.2)")
+    _procs, reports = _shards(tmp_path, 3, ini_budgets="heavy = 1.0", heavy__test_heavy=slow)
+    rc, out = _merge(reports)
+    assert rc == 1 and "heavy: " in out and "over all shards > budget 1.0s" in out, out
+    assert "fixtures" not in out  # the fixture was not what pushed it over
+
+
+def test_a_heavy_shared_fixture_has_a_per_shard_budget_of_its_own(tmp_path):
+    _project(tmp_path, heavy__test_heavy=HEAVY_FIXTURE)
+    ini = tmp_path / "pytest.ini"
+    ini.write_text(ini.read_text() + "suite_shared_budget_default = 0.1\n")
+    proc = _pytest(tmp_path)
+    assert proc.returncode == 1, proc.stdout
+    assert "heavy (shared fixture setup):" in proc.stdout and "> budget 0s" in proc.stdout
+    ok = _pytest(tmp_path, env={"HNX_SUITE_BUDGET_SCALE": "100"})
+    assert ok.returncode == 0, ok.stdout
+
+
+def _report(shard, times, shared, limit=30.0):
+    return shard_report.report(
+        group="3.12", index=shard, count=2, collected=["t::a", "t::b"],
+        selected=[["t::a"], ["t::b"]][shard - 1], ran=[["t::a"], ["t::b"]][shard - 1],
+        times=times, shared=shared, shared_budget=limit,
+        budgets={"s": 20.0}, default_budget=60.0, exitstatus=0,
+    )  # fmt: skip
+
+
+def test_the_merge_sums_work_and_checks_shared_setup_per_shard(capsys):
+    ok = [_report(1, {"s": 15.0}, {"s": 10.0}), _report(2, {"s": 15.0}, {"s": 10.0})]
+    assert shard_report.merge(ok) == []  # 30s raw, 10s of work, under 20s
+    assert "(+ 20.0s shared fixture setup" in capsys.readouterr().out
+    slow = [_report(1, {"s": 25.0}, {"s": 1.0}), _report(2, {"s": 5.0}, {"s": 1.0})]
+    assert any("s: 28.0s over all shards" in p for p in shard_report.merge(slow))
+    heavy = [_report(1, {"s": 40.0}, {"s": 35.0}), _report(2, {"s": 5.0}, {"s": 1.0})]
+    problems = shard_report.merge(heavy)
+    assert len(problems) == 1 and "shard 1/2 spent 35.0s" in problems[0], problems
+    old = [{**_report(i, {"s": 5.0}, {}), "shared": None, "phases": None} for i in (1, 2)]
+    for r in old:
+        r.pop("shared_budget")
+    assert shard_report.merge(old) == []  # reports from before the split still merge

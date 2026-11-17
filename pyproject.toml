@@ -127,6 +127,10 @@ markers = [
 # directories; HNX_SUITE_BUDGET_SCALE multiplies them), and the only legitimate skip reasons --
 # any other skip fails.  `pytest --suite-times` prints the table.
 suite_budget_default = "60"
+# the setup of module-, class-, package- and session-scoped fixtures runs once in every shard that
+# draws a test needing it, so it is left out of the per-suite budgets below and held to this budget
+# per suite and per shard instead (seconds)
+suite_shared_budget_default = "30"
 suite_budgets = [
   # runs ansible-playbook against localhost (skipped where ansible is absent); 900 since the
   # baseline-control roles (21 roles, each config hook run end to end against fake daemons), 1080

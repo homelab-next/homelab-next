@@ -6,9 +6,10 @@
 it stays whole): every file and every suite is spread over all the shards, so
 they come out about even with no table of timings to keep up to date, and the choice does not
 depend on collection order, which may differ between runners.  The cost is that a module- or
-session-scoped fixture runs once in each shard that needs it -- and its time counts once per
-shard in the summed budget below, so a suite with a heavy shared fixture needs the headroom, or
-its module the ``shard_by_module`` mark.
+session-scoped fixture runs once in each shard that needs it.  Its setup time is therefore kept
+out of the summed suite budget and held to a per-shard budget of its own (``shared``, below), so
+the number of shards does not move the summed figures; a heavy shared fixture is still worth the
+module's ``shard_by_module`` mark.
 
 ``--shard-report FILE`` writes what the shard collected (the count and a digest of every node id,
 after ``-m`` and ``--deselect``), the node ids it kept and those it actually ran (a setup
@@ -20,7 +21,9 @@ suite (a share over the budget means the whole suite is too); only the merge see
 reads every ``*.json`` report under the PATHs (files or directories), groups them by the Python
 version that wrote them, and fails (exit 1) unless, in every group: shards 1..N each reported
 once, all collected the same tests, each ran exactly the tests it kept, together they ran
-each of them exactly once, every shard exited 0, and each suite's time summed over the shards is within its budget.  ``--groups`` names
+each of them exactly once, every shard exited 0, and each suite's time summed over the shards, without the once-per-shard setup of its module- and
+session-scoped fixtures, is within its budget, and that fixture setup is within its per-shard budget
+(so doubling the shards does not inflate a suite's total).  ``--groups`` names
 the groups that must all be there.  Exit 2: no report, or one that cannot be read.
 
 Standard library only: the CI job that merges installs nothing.
@@ -73,6 +76,9 @@ def report(
     selected: list[str],
     ran: list[str],
     times: dict[str, float],
+    shared: dict[str, float] | None = None,
+    phases: dict[str, dict[str, float]] | None = None,
+    shared_budget: float | None = None,
     budgets: dict[str, float],
     default_budget: float,
     exitstatus: int,
@@ -88,6 +94,9 @@ def report(
         "selected": sorted(selected),
         "ran": sorted(ran),
         "times": dict(sorted(times.items())),
+        "shared": dict(sorted((shared or {}).items())),
+        "phases": dict(sorted((phases or {}).items())),
+        "shared_budget": shared_budget,
         "budgets": dict(sorted(budgets.items())),
         "default_budget": default_budget,
         "exitstatus": exitstatus,
@@ -133,8 +142,19 @@ def _check_group(group: str, reports: list[dict]) -> tuple[list[str], dict[str, 
         return problems, {}
     totals: dict[str, float] = {}
     for r in reports:
+        shared = r.get("shared") or {}
         for suite, secs in r["times"].items():
-            totals[suite] = totals.get(suite, 0.0) + secs
+            # the budgeted figure leaves out each shard's once-per-shard fixture setup, so the
+            # shard count does not inflate it; that setup has a per-shard budget of its own
+            totals[suite] = totals.get(suite, 0.0) + secs - shared.get(suite, 0.0)
+        limit = r.get("shared_budget")
+        for suite, secs in sorted(shared.items()):
+            if limit is not None and not secs <= limit:
+                problems.append(
+                    f"{group}: {suite}: shard {r['shard']}/{n} spent {secs:.1f}s setting up "
+                    f"module/session fixtures > {limit:.1f}s per shard "
+                    "(suite_shared_budget_default in pyproject.toml)"
+                )
     budgets, default = reports[0]["budgets"], reports[0]["default_budget"]
     for suite, secs in sorted(totals.items()):
         budget = budgets.get(suite, default)
@@ -166,7 +186,16 @@ def merge(reports: list[dict], groups: list[str] | None = None) -> list[str]:
         print()
         for suite, secs in sorted(totals.items(), key=lambda kv: -kv[1]):
             budget = rs[0]["budgets"].get(suite, rs[0]["default_budget"])
-            print(f"  {secs:8.1f}s / {budget:6.0f}s  {suite}")
+            shared = sum((r.get("shared") or {}).get(suite, 0.0) for r in rs)
+            phases = {
+                ph: sum(((r.get("phases") or {}).get(suite) or {}).get(ph, 0.0) for r in rs)
+                for ph in ("setup", "call", "teardown")
+            }
+            print(
+                f"  {secs:8.1f}s / {budget:6.0f}s  {suite}"
+                f"  (+ {shared:.1f}s shared fixture setup; setup {phases['setup']:.0f}s,"
+                f" call {phases['call']:.0f}s, teardown {phases['teardown']:.0f}s)"
+            )
     return problems
 
 
