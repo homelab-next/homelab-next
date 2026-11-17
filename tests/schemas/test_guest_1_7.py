@@ -18,10 +18,10 @@ FROZEN_17 = json.loads((ROOT / "schemas/_frozen/1.7/platform/guest.schema.json")
 FIXTURES = sorted((Path(__file__).parent / "fixtures").glob("guest.1_7.*.yml"))
 
 
-def test_version_is_1_7_and_frozen():
-    assert CURRENT["$id"].endswith("/platform/guest/1.7")
-    assert sc.same_version_problems(FROZEN_17, CURRENT) == []
-    assert sc.is_additive(FROZEN_16, CURRENT) == []
+def test_1_7_is_frozen_and_current_is_additive_over_it():
+    assert FROZEN_17["$id"].endswith("/platform/guest/1.7")
+    assert sc.is_additive(FROZEN_16, FROZEN_17) == []
+    assert sc.is_additive(FROZEN_17, CURRENT) == []
 
 
 def test_fixtures_exist():
