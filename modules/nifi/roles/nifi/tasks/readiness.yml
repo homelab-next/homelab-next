@@ -23,11 +23,17 @@
         status_code: 200
         timeout: "{{ nifi_health_timeout | int }}"
       changed_when: false
-    - name: The query engine and the bus accept a connection
+    # Events are on only when nifi_events_url names an HTTP forwarder; the bus row alone (a bus
+    # that listens on its own host) is not something NiFi publishes to, so it is not waited for.
+    - name: Events are off (no forwarder address), so the bus is not waited for
+      ansible.builtin.debug:
+        msg: "nifi: events are off (nifi_events_url is empty); the bus {{ nifi_events_endpoint }} is not checked"
+      when: nifi_events_url == ''
+    - name: The query engine accepts a connection, and the events forwarder when events are on
       ansible.builtin.wait_for:
         host: "{{ item | urlsplit('hostname') }}"
         port: "{{ item | urlsplit('port') }}"
         timeout: "{{ nifi_health_timeout | int }}"
-      loop: ["{{ nifi_query_endpoint }}", "{{ nifi_events_endpoint }}"]
+      loop: "{{ [nifi_query_endpoint] + ([nifi_events_url] if nifi_events_url != '' else []) }}"
       changed_when: false
   tags: [readiness]
