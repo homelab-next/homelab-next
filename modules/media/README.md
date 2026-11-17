@@ -10,14 +10,25 @@ library's real source; those live in the private overlay.
 | | |
 |---|---|
 | Slot | `media` (provisional: no contract or suite yet), stateful, object-tree export |
-| Product | Jellyfin 10.11.11, `docker.io/jellyfin/jellyfin` pinned by tag and digest |
+| Product | Jellyfin 12.1, `docker.io/jellyfin/jellyfin:12.1` pinned by its multi-arch index digest |
 | Host role | `server`: kind `vm`, baseline `base`, footprint 4 vCPU, 12 GB, 40 GB |
 | Role | `media` (role interface v1), a wrapper of the core `compose_app` |
-| Secrets | none: the accounts are the server's own |
+| Secrets | `secret:media/api-token` (an administrator's API key), read only by `health` when `media_health_min_libraries` is above 0; the accounts are the server's own |
 | Egress | `internet` (metadata and artwork lookups, plugin catalogue); grant it in the overlay |
 | Public route | the row declares `public_hostname` (the site's value) and `auth: own`; the edge adds **no** forward-auth |
 
 ## Decisions that matter
+
+- **The version follows the data, never below it.** A server cannot open a database a newer
+  version migrated: on 2026-11-17 a config from a 12.1 server imported into 10.11.11 failed to
+  start ("no such column: b.ExtraIds", "An error occurred starting the application") while
+  `/health` still said Healthy. The pin is 12.1 because the source's newest migration
+  (`20260911120000_StripEmbeddedLinkedChildren`) was recorded by version 12.1 and 12.2 added
+  migrations the source does not have: the source ran 12.1. `known-migrations.json` lists every
+  migration id of every release up to the pinned version (generated from the product's source:
+  `python3 tools/migrate/jellyfin.py known-migrations --repo CLONE --version 12.1 --out
+  modules/media/known-migrations.json`); the importer refuses a source with any other, and a test
+  holds the file to the pin. **Bumping the pin means regenerating it in the same change.**
 
 - **`auth: own`, no SSO.** TV apps (Fire TV cubes) cannot do a browser sign-in. They use the
   account's password or **Quick Connect**, which the role keeps on: it seeds `config/system.xml`
@@ -89,38 +100,58 @@ tokens**, watch state and metadata. It changes only:
 
 **Nothing is deleted.** The new tree is built in `DST.partial` and renamed into place only after
 it verified; an existing empty `DST` is replaced, an existing data root (`data/device.txt`) only
-with `--replace`, and is then renamed to `DST.before-import`. The target must differ from and not
+with `--replace`, and is then renamed to `DST.before-import`, or, when an earlier import took
+that name, to the first free `DST.before-import.N` (N from 2; a name taken in any form, a dangling
+link included, is skipped; when `.before-import` to `.99` are all taken it refuses before copying). The target must differ from and not
 nest with the source, be at least three components deep, not a mount point, not around a mapped
 library root, and (with `--data-root`) inside the module's data root. A failed import leaves the
 previous `DST` untouched and the partial tree for inspection.
+
+**It refuses a downgrade first.** Before anything is created, both `counts` and `import` read the
+source's `__EFMigrationsHistory` and refuse a source holding a migration the pinned version does
+not know, or one a newer server version recorded, naming each (`counts`/`import --known FILE`
+judge against another list; `--source-version V`, the old image's tag when known, is refused when
+newer than the pin). A source with no history is refused too. A refused source means: pin the
+module to the source's version or newer, regenerate the list, import again.
 
 It refuses to call anything verified on a source it did not understand (no users and devices tables,
 or no users without `--allow-empty`), then reads both sides: the counts of users, devices,
 libraries, items and watch-state rows, the device tokens and the server id (byte-identical) must
 match, and no old prefix may remain. It warns about item paths under the new library roots that do
 not exist on this host, and lists the symlinks it did not carry. `counts DIR` prints the server id and
-the same counts, read-only, for the freeze-time comparison. Both schema generations are read (the
-single database of 10.11 and the earlier `library.db` layout); a database from an older server is
+the same counts (and the history it read), read-only, for the freeze-time comparison. The server
+writes `data/device.txt` with a UTF-8 byte order mark: the file is carried byte for byte, and the
+id is printed and compared without the mark (so is the restore hook's). Both schema generations are read (the
+single database of 10.11 and later and the earlier `library.db` layout); a database from an older server is
 migrated by the server itself on first start, so upgrade only after the import and an export. The
 fixtures here are synthetic: run it against a copy of the real old `library.db` before the
 rehearsal counts as proof.
 
 Then restore it into the data root (`config/`, owned by the container's uid) and start the role with
-`media_expected_server_id` set to the source's id.
+`media_expected_server_id` set to the source's id and `media_health_min_libraries` to its
+`libraries` count (with `secret:media/api-token` holding an administrator's key; an imported config
+keeps the old server's API keys).
 
 ## Hooks
 
 | Hook | What it checks or does |
 |---|---|
 | `readiness` (also the module's preflight) | `docker_engine` readiness and valid inputs |
-| `health` | the library still mounted or marked; every container of the spec running and healthy; `GET /health` is `Healthy`; `GET /System/Info/Public` answers with a server id (the expected one when set); Quick Connect enabled |
+| `health` | the library still mounted or marked; every container of the spec running and healthy; the container's log since it last started holds none of `media_startup_failure_patterns` (a failed start, "no such column"; an unreadable or empty log fails too); `GET /health` is `Healthy`; `GET /System/Info/Public` answers with a server id (the expected one when set) and, when `media_expected_server_id` or `media_health_min_libraries` is set, `StartupWizardCompleted` true (the startup page of a server still starting, or failed, says false); Quick Connect enabled; with `media_health_min_libraries` above 0, `GET /Library/VirtualFolders` as `secret:media/api-token` lists at least that many libraries |
 | `export` | the server stopped briefly, `export/media-config.tar.gz` (config without cache, logs, transcodes) and `export/listing.jsonl` (size, sha256), the server started again whatever happened |
 | `backup` | the manifest naming the data root (not the library, not the cache) |
 | `restore` | checks the archive against its listing and refuses a member that leaves the directory, a link or special file, or an archive with no `data/device.txt`; extracts beside the config and checks it (no link; the expected server id when set) while the server still runs; only then stops it, moves the live config aside (`config.before-restore`) and the verified one in, and starts it. A failure leaves it stopped, saying so |
 | `upgrade` | refuses a target not pinned by tag and digest or from another repository, then records the bump |
 
-`health` calls `/System/Info/Public` (anonymous); `/System/Info` itself needs a signed-in user and
-the role signs in as no one.
+`health` calls `/System/Info/Public` (anonymous); `/System/Info` itself needs a signed-in user. The
+library list needs an administrator: health sends the API key as `Authorization: MediaBrowser
+Token="..."` (since 12.0 the legacy `X-Emby-Token` header and `api_key` parameter are off by
+default) and only when a minimum is set. The settings the role writes (`system.xml`
+`QuickConnectAvailable`; `encoding.xml` `TranscodingTempPath`, `EnableThrottling`,
+`ThrottleDelaySeconds`, `EnableSegmentDeletion`, `SegmentKeepSeconds`,
+`HardwareAccelerationType`), the files' names and roots, `/health`, `/System/Info/Public` and
+`/QuickConnect/Enabled` were checked against the 12.1 source; the image still sets
+`HEALTHCHECK_URL` and `JELLYFIN_LOG_DIR=/config/log`. The role does not touch `network.xml`.
 
 ## Using it in a site
 
@@ -128,5 +159,5 @@ The overlay adds: the selection (`slots.media` provider `media`, an instance nam
 guest (resources and the library mount at `media_library_path`), the registry row exactly as bound
 (plus at most `standing`, `backup_job`, `scope`; its `public_hostname` is the site's), the grants
 (`egress.media.server: [internet]`, `public_routes`), group variables (`media_library_path`,
-`media_mem_limit` and `media_transcode_tmpfs_size` when the guest's RAM differs from the 12 GB default, `media_gid` of the mount's group, `media_published_url`, `media_expected_server_id` at a cutover)
+`media_mem_limit` and `media_transcode_tmpfs_size` when the guest's RAM differs from the 12 GB default, `media_gid` of the mount's group, `media_published_url`, `media_expected_server_id` and `media_health_min_libraries` at a cutover), the secret `secret:media/api-token` when a minimum is set, the registry's `version` (12.1)
 and the firewall: the edge and the TV clients' zone to the port.

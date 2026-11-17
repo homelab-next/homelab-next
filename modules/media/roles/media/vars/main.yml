@@ -11,7 +11,7 @@ media_transcode_tmpfs_max: 1099511627776
 # memory the server, the encoder and the page cache need on top of the tmpfs mounts
 media_mem_headroom: 2147483648
 media_mem_units: {k: 1024, m: 1048576, g: 1073741824}
-# encoding.xml (the server's EncodingOptions), Jellyfin 10.11: throttling pauses the encoder once it
+# encoding.xml (the server's EncodingOptions), Jellyfin 10.11 and 12.1: throttling pauses the encoder once it
 # is media_transcode_throttle_seconds ahead of the player and segment deletion removes segments
 # media_transcode_keep_seconds behind it, so one long stream holds roughly (throttle + keep) seconds
 # of output in the tmpfs instead of the whole file
@@ -82,3 +82,51 @@ media_encoding_script: |
       with open(path, "w", encoding="utf-8") as f:
           f.write(new)
       print("changed")
+# Startup failures in the server's log (since the container last started). A server that cannot open
+# its database still binds its port and can answer /health, so health reads the log too. The first
+# three are what a server logs when its database came from a newer version (a downgrade); the rest
+# are the server's and its web host's own startup failures.
+media_startup_failure_patterns:
+  - "An error occurred starting the application"
+  # SQLite's own words, quoted or not ("SQLite Error 1: 'no such column: b.ExtraIds'")
+  - "no such column"
+  - "no such table"
+  - "An error occurred while starting the application"
+  - "Error while starting server"
+  - "Kestrel failed to start"
+  - "Hosting failed to start"
+  - "Application startup exception"
+# Reads the log of the compose service's one container since it last started (python3 -I -c SCRIPT
+# COMPOSE_FILE SERVICE PATTERNS_JSON) and prints {"started", "lines", "hits"}: the matching lines,
+# at most 10, each cut to 500 characters. Exit 2 when it cannot read the log, or the log since the
+# start is empty (the server always logs at start: an empty log proves nothing).
+media_startup_log_script: |
+  import json, subprocess, sys
+  compose, service, patterns = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+  def fail(why):
+      sys.stderr.write("media: cannot read the server's log: " + why + "\n")
+      sys.exit(2)
+  def run(*argv):
+      r = subprocess.run(list(argv), capture_output=True, text=True, errors="replace")
+      if r.returncode != 0:
+          fail(" ".join(argv[:4]) + " exited " + str(r.returncode) + ": " + r.stderr.strip()[:300])
+      return r.stdout
+  ids = run("docker", "compose", "-f", compose, "ps", "-q", service).split()
+  if len(ids) != 1:
+      fail("expected one container for " + service + ", found " + str(len(ids)))
+  try:
+      started = json.loads(run("docker", "inspect", ids[0]))[0]["State"]["StartedAt"]
+  except (ValueError, LookupError, TypeError) as e:
+      fail("docker inspect gave no start time (" + str(e) + ")")
+  p = subprocess.Popen(["docker", "logs", "--since", started, ids[0]], stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, text=True, errors="replace")
+  hits, lines = [], 0
+  for line in p.stdout:
+      lines += 1
+      if len(hits) < 10 and any(x in line for x in patterns):
+          hits.append(line.strip()[:500])
+  if p.wait() != 0:
+      fail("docker logs exited " + str(p.returncode))
+  if lines == 0:
+      fail("the log since the container started (" + started + ") is empty")
+  print(json.dumps({"started": started, "lines": lines, "hits": hits}))
