@@ -26,7 +26,10 @@ unless the caller says otherwise, and never the record's.  ``--report`` files (`
 are a local convenience; CI never passes one.
 
 :func:`gate` is the CI check: when the role table differs from the base's, a swap record added or
-changed under :data:`SWAPS` must cover it, its legs holding against that evidence.
+changed under :data:`SWAPS` must cover it, its legs holding against that evidence: a rebind leg
+for a role both tables have, an add leg for a role only the table after has (an overlay's first
+role included) and a remove leg for one only the table before has, each with the report for the
+table after.
 
 Whatever cannot be read is :class:`EvidenceError`, never a missing table read as "no change".
 
@@ -92,7 +95,10 @@ EVALS = "examples/model-evals"
 #: the most reports read from EVALS: more is refused, never truncated
 MAX_EVALS = 64
 #: the golden suites a report is checked with (homelabnext.golden.pins.DEFAULT_SUITES)
-SUITES = ("homelabnext/golden/examples/classifier_smoke.yml",)
+SUITES = (
+    "homelabnext/golden/examples/classifier_smoke.yml",
+    "homelabnext/golden/examples/decision_smoke.yml",
+)
 #: where a change keeps the swap record that covers its role-table change (swap-gate)
 SWAPS = "examples/swaps"
 
@@ -469,8 +475,9 @@ def gate(
             return [
                 f"{roles} changes since {sha[:12]} (roles: {', '.join(changed) or 'none rebound'}{detail})"
                 f" and no swap record under {layout.swaps}/ in this change covers it: commit the record"
-                " whose model_roles legs rebind them, after the store entry and the live report"
-                f" are on the base ({layout.store}, {layout.evals}/)"
+                " whose model_roles legs rebind them (change: add for a role only the table after"
+                " has, remove for one only the table before has), after the store entry and the"
+                f" live report are on the base ({layout.store}, {layout.evals}/)"
             ], "uncovered"
         schema = ld._schema("platform", "module_swap.schema.json")
         budget = ld.Budget()

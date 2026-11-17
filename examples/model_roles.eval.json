@@ -4,6 +4,7 @@
       "bindings": [
         {
           "backend": "svc:inference",
+          "kind": "chat",
           "mode": "fake",
           "params": {
             "max_tokens": 256,
@@ -71,6 +72,7 @@
       "bindings": [
         {
           "backend": "svc:inference",
+          "kind": "chat",
           "mode": "fake",
           "params": {},
           "pin": "sha256:dd76f4571d69c66d02a7d0a729798da9ea60620501005dffa04c574555179431",
@@ -136,6 +138,7 @@
   "golden": {
     "classifier-smoke": {
       "errors": 0,
+      "kind": "chat",
       "model_id": "fake-golden:fast-classifier",
       "ok": true,
       "passed": 3,
@@ -167,7 +170,7 @@
   },
   "inputs": {
     "canary": {
-      "code": "sha256:94bf80674a51fba003e494fa7353d59023218146d4337788aaacc3eab557c76d",
+      "code": "sha256:45882321da970cb28009577a83d0e734faafca4a9b6719db287f71888f88d287",
       "metadata": "sha256:4823a1f2b212edb258cbe4c5edaebc61b64e814444faded40737e1f769fdac85",
       "params": {
         "fast-classifier": {
@@ -187,8 +190,12 @@
       "impact_keywords": "sha256:b52c8fbf86afbbb3b83e17950826b068a9d6b54888adb08b9d5c691cad28dd1a",
       "spec": "sha256:eebf1221c2f81b13bf23e90529e62b0d9230e2d8561c4b6f9406feb5821e4282"
     },
-    "digest": "sha256:b7c66045ece59d6fd659986244bec3b47311e1992f181cc8d0b1273eaafcfb06",
-    "eval": 2,
+    "digest": "sha256:f9bce08fe2b9cf658994b900c7e59438ce309c1376e2cdc8f015959fcab91b5f",
+    "eval": 3,
+    "kinds": {
+      "fast-classifier": "chat",
+      "main-reasoner": "chat"
+    },
     "pins": {
       "fast-classifier": [
         {
@@ -208,7 +215,8 @@
       ]
     },
     "suites": {
-      "classifier-smoke": "sha256:020b2f73361c3c52c2e33a309835532c6f8d8b9fc809cce0362ca4d991c35391"
+      "classifier-smoke": "sha256:020b2f73361c3c52c2e33a309835532c6f8d8b9fc809cce0362ca4d991c35391",
+      "decision-smoke": "sha256:b7e6d41acd85413964de8ab4400176cb2ee1a425b42916fe2e222687bc333ee9"
     }
   },
   "model": {

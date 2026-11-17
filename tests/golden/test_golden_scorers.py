@@ -30,6 +30,13 @@ from homelabnext.golden import SCORERS, ScoreError, TaskError, parse_suite, scor
         ("far too long here", {"scorer": "max_length", "max_chars": 10}, 0.0),
         ('{"n": 1}', {"scorer": "json_schema", "schema": {"type": "object", "required": ["n"]}}, 1.0),
         ('{"m": 1}', {"scorer": "json_schema", "schema": {"type": "object", "required": ["n"]}}, 0.0),
+        ("0.93", {"scorer": "probability", "min": 0.8}, 1.0),
+        ("0.5", {"scorer": "probability", "min": 0.8}, 0.0),
+        ("0.04", {"scorer": "probability", "max": 0.2}, 1.0),
+        ("0.5", {"scorer": "probability", "min": 0.4, "max": 0.6}, 1.0),
+        ("1.7", {"scorer": "probability", "max": 1.0}, 0.0),
+        ("nan", {"scorer": "probability", "min": 0.0}, 0.0),
+        ("yes", {"scorer": "probability", "min": 0.8}, 0.0),
     ],
 )  # fmt: skip
 def test_scorers(out, expect, want):
@@ -39,6 +46,7 @@ def test_scorers(out, expect, want):
 def test_every_scorer_has_a_case():
     assert set(SCORERS) == {
         "exact", "one_of", "contains", "regex", "json_fields", "json_schema", "max_length",
+        "probability",
     }  # fmt: skip
 
 

@@ -8,8 +8,19 @@ and gold set the replay gate uses (:func:`inputs_of`).  It holds:
 * one golden-suite run per suite, against the suite's role;
 * the K-12 replay of the synthetic gold set through the change-review cascade, with its gate;
 * the egress canary (:mod:`homelabnext.golden.canary`) for **every binding** of every role, each
-  entry recording the pin it ran against, the role's sampling params and whether it ran **live**
-  (a real model through the resolver) or against the **fake** (:func:`fake_canary_factory`).
+  entry recording the pin it ran against, the role's sampling params, its ``kind`` and whether it
+  ran **live** (a real model through the resolver) or against the **fake**
+  (:func:`fake_canary_factory`).
+
+**Decision roles** (``kind: decision``: a model that answers noul questions on
+``POST /v1/systemone`` and refuses chat) are evaluated through a *decider*, never a completer: a
+decision suite (``kind: decision``, :func:`homelabnext.golden.runner.run_decision_suite`) scores
+each answer against a probability band, and the binding's canary entry is
+:func:`homelabnext.golden.canary.run_decision_canary` (``kind: decision``).  A suite applies to
+a table only when the table has its role and of its kind (a chat suite to any role but a decision
+one, a decision suite to a decision role); one that does not apply is not run, so an overlay that
+keeps a subset of the roles, or makes one a decision role, is evaluated by the suites that fit it.
+The K-12 replay evaluates the cascade's roles that the table has as chat roles.
 
 ``hnx golden pins check`` fails when a binding is unpinned, when a pinned role is evaluated by
 nothing, when the stored report is **stale** (a pin, a suite, the spec, the canary's code or the
@@ -36,6 +47,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -43,21 +55,27 @@ from homelabnext import paths
 from homelabnext.registry.models import Binding, RoleTable, normalize_role
 
 from .report import Report
-from .runner import Completer, run_suite
+from .runner import Completer, Decider, run_decision_suite, run_suite
 from .tasks import Suite, load_suite
 
 REPORT_FORMAT = "hnx-model-eval/1"
 #: Bump when the evaluation, the scorers or the fake change behaviour: it is a pinned input.
-EVAL_VERSION = 2
+EVAL_VERSION = 3
 EXAMPLES = Path(__file__).resolve().parent / "examples"
-DEFAULT_SUITES = (EXAMPLES / "classifier_smoke.yml",)
+DEFAULT_SUITES = (EXAMPLES / "classifier_smoke.yml", EXAMPLES / "decision_smoke.yml")
 GOLD_N, GOLD_SEED = 200, 7
 
 #: ``completer_for(role) -> (completer, model id)``
 CompleterFactory = Callable[[str], "tuple[Completer, str]"]
 #: ``canary_for(role, binding) -> (completer, mode)``; the factory, not a model name, says the mode
 CanaryFactory = Callable[[str, Binding], "tuple[Completer, str]"]
+#: ``decider_for(role) -> (decider, model id)``: a decision suite's
+DeciderFactory = Callable[[str], "tuple[Decider, str]"]
+#: ``decision_canary_for(role, binding) -> (decider, mode)``: a decision binding's canary
+DecisionCanaryFactory = Callable[[str, Binding], "tuple[Decider, str]"]
 CANARY_MODES = ("live", "fake")
+#: what a canary entry and a suite run are: a chat completion or a decision (noul questions)
+EVAL_KINDS = ("chat", "decision")
 
 
 def _digest(obj: Any) -> str:
@@ -93,6 +111,23 @@ def fake_factory(role: str) -> tuple[Completer, str]:
     return FakeGoldenModel(), f"{FakeGoldenModel.name}:{normalize_role(role)}"
 
 
+class FakeGoldenDecider:
+    """Deterministic CI decider for the shipped decision suite: reads only the state, and answers
+    every question with 0.95 when the state names a rollback or a revert (and not
+    ``NO-ROLLBACK``), else 0.05.  It proves the harness, not a model."""
+
+    name = "fake-golden-decider"
+
+    def __call__(self, questions: Mapping[str, str], state: str | None) -> dict[str, float]:
+        low = (state or "").lower()
+        yes = "no-rollback" not in low and ("rollback" in low or "revert" in low)
+        return dict.fromkeys(questions, 0.95 if yes else 0.05)
+
+
+def fake_decider_factory(role: str) -> tuple[Decider, str]:
+    return FakeGoldenDecider(), f"{FakeGoldenDecider.name}:{normalize_role(role)}"
+
+
 def pin_digest(pin: Mapping[str, Any]) -> str:
     """A binding's pin (backend, model id, version, digest) as one digest: what a canary entry
     records, so the report names the binding without repeating its model id."""
@@ -112,6 +147,28 @@ def fake_canary_factory(role: str, binding: Binding) -> tuple[Completer, str]:
     return benign_model, "fake"
 
 
+def fake_decision_canary_factory(role: str, binding: Binding) -> tuple[Decider, str]:
+    """The decision canary's CI stand-in for every decision binding, marked ``fake``."""
+    from .canary import benign_decider
+
+    return benign_decider, "fake"
+
+
+def eval_kind(role_kind: str) -> str:
+    """How a role of ``role_kind`` is evaluated: ``decision`` for a decision role, else ``chat``."""
+    return "decision" if role_kind == "decision" else "chat"
+
+
+def applies(suite: Suite, table: RoleTable) -> bool:
+    """Whether ``suite`` evaluates a role of ``table``: a suite with no role applies to any table
+    (as a chat suite); one with a role applies when the table has it, a decision suite to a
+    decision role and a chat suite to any other."""
+    if not suite.role:
+        return suite.kind == "chat"
+    r = table.roles.get(normalize_role(suite.role))
+    return r is not None and eval_kind(r.kind) == suite.kind
+
+
 # ---------------------------------------------------------------- inputs and coverage
 def _decide_inputs() -> dict:
     from homelabnext.decide.evalset import EXAMPLES as DECIDE_EXAMPLES
@@ -123,12 +180,17 @@ def _decide_inputs() -> dict:
     }
 
 
-def _replay_roles() -> set[str]:
+def _replay_roles(table: RoleTable | None = None) -> set[str]:
+    """The roles the K-12 replay's cascade names; with ``table``, only those the table has as
+    chat roles (a decision role answers no chat, so the cascade's tiers cannot ask it)."""
     from homelabnext.decide.evalset import EXAMPLES as DECIDE_EXAMPLES
     from homelabnext.decide.spec import load_spec
 
     spec = load_spec(DECIDE_EXAMPLES / "decision_spec.yml")
-    return {normalize_role(t.model_role) for t in spec.tiers if t.model_role}
+    roles = {normalize_role(t.model_role) for t in spec.tiers if t.model_role}
+    if table is None:
+        return roles
+    return {r for r in roles if r in table.roles and eval_kind(table.roles[r].kind) == "chat"}
 
 
 def inputs_of(table: RoleTable, suite_paths: Sequence[Path]) -> dict:
@@ -141,6 +203,7 @@ def inputs_of(table: RoleTable, suite_paths: Sequence[Path]) -> dict:
         },
         "decide": _decide_inputs(),
         "canary": _canary_inputs(table),
+        "kinds": {name: r.kind for name, r in sorted(table.roles.items())},
     }
     return {**pinned, "digest": _digest(pinned)}
 
@@ -160,14 +223,17 @@ def _canary_inputs(table: RoleTable) -> dict:
 
 
 def coverage_problems(table: RoleTable, suites: Sequence[Suite]) -> list[str]:
-    """Every role must be evaluated by a golden suite or by the replay gate's cascade."""
-    covered = {normalize_role(s.role) for s in suites if s.role} | _replay_roles()
-    p = [f"mdl:{r} is pinned but nothing evaluates it" for r in sorted(set(table.roles) - covered)]
-    p += [
-        f"mdl:{r} is evaluated but not in the role table"
-        for r in sorted(covered - set(table.roles))
-    ]
-    return p
+    """Every role must be evaluated by a golden suite of its kind (:func:`applies`) or, a chat
+    role, by the replay gate's cascade.  A suite or a cascade tier for a role the table does not
+    have is not run (an overlay keeps a subset of the roles), so it is no problem."""
+    covered = {normalize_role(s.role) for s in suites if s.role and applies(s, table)}
+    covered |= _replay_roles(table)
+    return [
+        f"mdl:{r} is pinned but nothing evaluates it"
+        + (" (a decision role needs a decision suite: kind: decision)"
+           if table.roles[r].kind == "decision" else "")
+        for r in sorted(set(table.roles) - covered)
+    ]  # fmt: skip
 
 
 # ---------------------------------------------------------------- run
@@ -179,12 +245,16 @@ def run_eval(
     model_name: str,
     replay_tiers: Mapping[str, Any] | None = None,
     canary_factory: CanaryFactory = fake_canary_factory,
+    decider_factory: DeciderFactory = fake_decider_factory,
+    decision_canary_factory: DecisionCanaryFactory = fake_decision_canary_factory,
 ) -> dict:
     """Golden suites, the K-12 replay and the egress canary of every binding -> one report (no
     clock: latencies are not stored).
 
     ``replay_tiers`` replaces the cascade's simulated model tiers (live runs pass ModelTiers);
-    ``canary_factory`` gives each binding's canary completer and whether it is live.
+    ``canary_factory`` gives each binding's canary completer and whether it is live.  A decision
+    role goes through ``decider_factory`` (its suites) and ``decision_canary_factory`` (its
+    bindings' canary) instead; only the suites that :func:`applies` to the table run.
     """
     from homelabnext.decide.evalset import demo_cascade, generate_gold_set
     from homelabnext.decide.replay import gate, replay
@@ -192,29 +262,43 @@ def run_eval(
     golden: dict[str, dict] = {}
     for p in sorted(suite_paths, key=lambda p: p.name):
         suite = load_suite(p)
+        if not applies(suite, table):
+            continue
         role = suite.role or ""
-        completer, model_id = factory(role)
-        rep: Report = run_suite(suite, completer, role=role, model_id=model_id)
-        golden[suite.name] = {**rep.to_dict(), "ok": rep.ok}
+        rep: Report
+        if suite.kind == "decision":
+            decider, model_id = decider_factory(role)
+            rep = run_decision_suite(suite, decider, role=role, model_id=model_id)
+        else:
+            completer, model_id = factory(role)
+            rep = run_suite(suite, completer, role=role, model_id=model_id)
+        golden[suite.name] = {**rep.to_dict(), "kind": suite.kind, "ok": rep.ok}
     from .canary import load_suite as load_canary
-    from .canary import run_canary
+    from .canary import run_canary, run_decision_canary
 
     canary_suite = load_canary()
     canary: dict[str, dict] = {}
     for role, r in sorted(table.roles.items()):
         entries = []
+        kind = eval_kind(r.kind)
         for b, pin in zip(r.bindings, table.pins()[role], strict=True):
-            completer, mode = canary_factory(role, b)
+            ident = pin_digest(pin)
+            if kind == "decision":
+                decider, mode = decision_canary_factory(role, b)
+                run_one = partial(run_decision_canary, canary_suite, decider)
+            else:
+                completer, mode = canary_factory(role, b)
+                run_one = partial(run_canary, canary_suite, completer)
             if mode not in CANARY_MODES:
                 raise ValueError(f"canary factory mode {mode!r}: one of {CANARY_MODES}")
-            ident = pin_digest(pin)
-            rep_c = run_canary(canary_suite, completer, role=role, model_id=ident)
+            rep_c = run_one(role=role, model_id=ident)
             entries.append(
                 {
                     "backend": pin["backend"],
                     "version": pin["version"],
                     "pin": ident,
                     "params": dict(r.params),
+                    "kind": kind,
                     "mode": mode,
                     "report": rep_c,
                 }
@@ -251,7 +335,7 @@ def run_eval(
 def _stale(want: dict, have: Any) -> list[str]:
     if not isinstance(have, dict):
         return ["inputs"]
-    out = [k for k in ("eval", "suites", "decide", "canary") if have.get(k) != want[k]]
+    out = [k for k in ("eval", "suites", "decide", "canary", "kinds") if have.get(k) != want[k]]
     hp = have.get("pins") if isinstance(have.get("pins"), dict) else {}
     changed = sorted(r for r in set(want["pins"]) | set(hp) if want["pins"].get(r) != hp.get(r))
     out += [f"pin mdl:{r}" for r in changed]
@@ -277,6 +361,7 @@ def check_report(
             + "; rerun the evaluation (make models-report, and make models-eval live) and commit it"
         )
     p += canary_problems(report, table, require_live=require_live)
+    p += golden_problems(report, table, suites)
     s = report.get("summary", {})
     if not s.get("ok"):
         p.append(
@@ -284,6 +369,55 @@ def check_report(
             f"replay gate {'passed' if s.get('replay_passed') else 'failed'}"
         )
     return p
+
+
+def golden_problems(
+    report: Mapping[str, Any], table: RoleTable, suites: Sequence[Suite]
+) -> list[str]:
+    """The report holds a passing run of exactly the suites that apply to the table
+    (:func:`applies`), each of its suite's kind and with every task passed (recounted from its
+    tasks), and no run of a suite that does not apply: a suite cannot be left out of a report
+    whose summary says ok."""
+    golden = report.get("golden")
+    if not isinstance(golden, Mapping):
+        return ["the report has no golden suite runs"]
+    want = {s.name: s for s in suites if applies(s, table)}
+    out = [f"golden suite {n}: not in the report; it applies to this table" for n in sorted(
+        set(want) - set(golden))]  # fmt: skip
+    out += [
+        f"golden suite {n}: in the report, but it does not apply to this table"
+        for n in sorted(set(golden) - set(want))
+    ]
+    for name in sorted(set(want) & set(golden)):
+        g = golden[name]
+        tasks = g.get("tasks") if isinstance(g, Mapping) else None
+        if not isinstance(tasks, list):
+            out.append(f"golden suite {name}: malformed")
+            continue
+        if g.get("kind", "chat") != want[name].kind:
+            out.append(
+                f"golden suite {name}: ran as {g.get('kind', 'chat')!r}, the suite is "
+                f"{want[name].kind!r}; rerun it"
+            )
+        ids = [t.get("id") for t in tasks if isinstance(t, Mapping)]
+        if sorted(map(str, ids)) != sorted(t.id for t in want[name].tasks):
+            out.append(f"golden suite {name}: its tasks are not the suite's; rerun it")
+        failed = [
+            str(t.get("id"))
+            for t in tasks
+            if not (isinstance(t, Mapping) and t.get("passed") is True)
+        ]
+        summary = report.get("summary")
+        if (
+            (failed or g.get("ok") is not True)
+            and isinstance(summary, Mapping)
+            and summary.get("ok")
+        ):
+            out.append(
+                f"golden suite {name}: did not pass ({', '.join(failed) or 'not ok'}), but the "
+                "summary says ok"
+            )
+    return out
 
 
 def canary_problems(
@@ -312,6 +446,11 @@ def canary_problems(
         for pin, e in zip(pins[role], entries, strict=False):
             where = f"mdl:{role} -> {pin['backend']} {pin['model_id']}"
             out += [f"{where}: {p}" for p in _entry_problems(e, pin, dict(r.params), suite)]
+            if isinstance(e, Mapping) and e.get("kind", "chat") != eval_kind(r.kind):
+                out.append(
+                    f"{where}: the canary ran as a {e.get('kind', 'chat')!r} binding, the role is "
+                    f"{eval_kind(r.kind)!r}; rerun it"
+                )
             if require_live and isinstance(e, Mapping) and e.get("mode") != "live":
                 out.append(
                     f"{where}: the canary ran against the {e.get('mode')!r} model; a live run is "

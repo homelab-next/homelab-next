@@ -16,6 +16,25 @@
           scorer: json_fields                # exact|one_of|contains|regex|json_fields|json_schema|max_length
           fields: {label: accept}
 
+A **decision** suite (``kind: decision``, ``schemas/agent/golden_task`` 1.2) evaluates a decision
+role (``kind: decision`` in the role table: a model that answers noul questions on
+``POST /v1/systemone`` and refuses chat).  Each task's ``prompt`` is the state the question is
+asked about, ``question`` is the noul question's instructions, and ``expect`` is the probability
+band the answer must fall in (scorer ``probability``, ``min`` and/or ``max`` in [0, 1]; the
+thresholds are data)::
+
+    suite: decision-smoke
+    kind: decision
+    role: fast-classifier
+    tasks:
+      - id: rollback-named
+        prompt: "Change: upgrade the queue workers. Rollback: revert the commit."
+        question: "Does this change plan say how to roll the change back?"
+        expect: {scorer: probability, min: 0.8}
+
+A decision task has no ``system``, ``params`` or tool fields; ``probability`` is a decision
+suite's only scorer and only a decision suite's.
+
 A **tool-using** suite (``schemas/agent/golden_task`` 1.1; the Code Mode golden harness,
 :mod:`homelabnext.golden.agentic`, ``docs/codemode.md`` CM-6) poses every task once per mode and
 adds, on the suite, ``profile``, ``modes`` (``mcp``, ``codemode``), ``grant`` (the broker actions
@@ -56,6 +75,11 @@ FIELD = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 PROFILE = re.compile(r"^profile:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 #: the two ways a tool-using task is posed (``docs/codemode.md``, CM-6)
 MODES = ("mcp", "codemode")
+#: a suite's kind: ``chat`` (a completion per task, the default) or ``decision`` (a noul question
+#: per task on a decision role, :func:`homelabnext.golden.runner.run_decision_suite`)
+KINDS = ("chat", "decision")
+#: the scorer of a decision task (and only of one)
+DECISION_SCORER = "probability"
 DEFAULT_MAX_TURNS = 8
 MAX_TURNS = 32
 
@@ -77,6 +101,8 @@ class Task:
     fixtures: dict = field(default_factory=dict)
     inject: dict | None = None
     checks: tuple[dict, ...] = ()
+    #: decision tasks only: the noul question's instructions (``prompt`` is the state)
+    question: str = ""
 
     def messages(self) -> list[dict]:
         msgs = [{"role": "system", "content": self.system}] if self.system else []
@@ -94,6 +120,8 @@ class Suite:
     modes: tuple[str, ...] = ()
     grant: tuple[str, ...] = ()
     max_turns: int = DEFAULT_MAX_TURNS
+    #: ``chat`` or ``decision`` (:data:`KINDS`)
+    kind: str = "chat"
 
 
 def parse_suite(doc: Any) -> Suite:
@@ -103,6 +131,13 @@ def parse_suite(doc: Any) -> Suite:
     modes, grant, max_turns, suite_problems = _tool_suite(doc)
     problems += suite_problems
     tool_suite = bool(modes) or "modes" in doc
+    kind = doc.get("kind", "chat")
+    if kind not in KINDS:
+        problems.append(f"kind: one of {list(KINDS)}")
+        kind = "chat"
+    decision = kind == "decision"
+    if decision and tool_suite:
+        problems.append("modes: a decision suite has no tool-using modes")
     name = doc.get("suite")
     if not isinstance(name, str) or not SLUG.match(name):
         problems.append("suite: must be a slug")
@@ -135,6 +170,9 @@ def parse_suite(doc: Any) -> Suite:
             validate_expect(exp)
         except ScoreError as exc:
             problems.append(f"{where}: {exc}")
+        if why := _decision_task_problem(t, exp, decision):
+            problems.append(f"{where}: {why}")
+            continue
         w = t.get("weight", 1)
         if not isinstance(w, (int, float)) or isinstance(w, bool) or w <= 0:
             problems.append(f"{where}: weight must be > 0")
@@ -155,6 +193,7 @@ def parse_suite(doc: Any) -> Suite:
                 fixtures={a: dict(by) for a, by in (t.get("fixtures") or {}).items()},
                 inject=dict(t["inject"]) if t.get("inject") else None,
                 checks=tuple(dict(c) for c in t.get("checks") or ()),
+                question=str(t.get("question", "")),
             )
         )
     ps = doc.get("pass_score", 1.0)
@@ -178,7 +217,30 @@ def parse_suite(doc: Any) -> Suite:
         modes=modes,
         grant=grant,
         max_turns=max_turns,
+        kind=kind,
     )
+
+
+def _decision_task_problem(t: dict, exp: dict, decision: bool) -> str:
+    """Why a task does not fit its suite's kind ("" when it does): a decision task asks a
+    ``question`` scored by ``probability`` and has no ``system`` or ``params``; a chat task has
+    neither ``question`` nor ``probability``."""
+    scorer = exp.get("scorer")
+    if not decision:
+        if "question" in t:
+            return "question: only in a decision suite (kind: decision)"
+        if scorer == DECISION_SCORER:
+            return f"scorer {DECISION_SCORER!r}: only in a decision suite (kind: decision)"
+        return ""
+    q = t.get("question")
+    if not isinstance(q, str) or not q.strip():
+        return "question missing: a decision task asks one noul question about its prompt"
+    if scorer != DECISION_SCORER:
+        return f"a decision task is scored by {DECISION_SCORER!r}, not {scorer!r}"
+    stray = [k for k in ("system", "params") if k in t]
+    if stray:
+        return f"{', '.join(stray)}: not in a decision task (a noul question has neither)"
+    return ""
 
 
 def _tool_suite(doc: dict) -> tuple[tuple[str, ...], tuple[str, ...], int, list[str]]:
