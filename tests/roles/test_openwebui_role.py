@@ -169,28 +169,54 @@ CONFIG = {
 }
 
 
-class _App:
-    """The two anonymous endpoints health reads."""
+GATEWAY_URL = "http://{}:{}/v1".format("inference.svc.example.internal", 4100)
+RUNNING = {
+    "ENABLE_OPENAI_API": True,
+    "OPENAI_API_BASE_URLS": [GATEWAY_URL],
+    "OPENAI_API_KEYS": ["k" * 8],
+    "OPENAI_API_CONFIGS": {
+        "0": {"headers": {"X-HNX-TLP": "amber", "X-HNX-Tag": "openwebui:{{USER_ID}}"}}
+    },
+}
 
-    def __init__(self, config):
+
+class _App:
+    """The anonymous endpoints health reads, and the administrator's two (sign-in, connections)."""
+
+    def __init__(self, config, running):
         outer = self
-        outer.config = config
+        outer.config, outer.running = config, running
+        outer.signins = []
 
         class H(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
                 pass
 
-            def do_GET(self):
-                body = {"/health": {"status": True}, "/api/config": outer.config}.get(self.path)
-                if body is None:
-                    self.send_error(404)
-                    return
+            def _send(self, body, status=200):
                 data = json.dumps(body).encode()
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+
+            def do_GET(self):
+                if self.path == "/openai/config":
+                    if self.headers.get("Authorization") != "Bearer admin-token":
+                        return self._send({"detail": "no"}, 401)
+                    return self._send(outer.running)
+                body = {"/health": {"status": True}, "/api/config": outer.config}.get(self.path)
+                if body is None:
+                    self.send_error(404)
+                    return
+                self._send(body)
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                outer.signins.append(json.loads(self.rfile.read(n)))
+                if self.path != "/api/v1/auths/signin":
+                    return self._send({}, 404)
+                self._send({"token": "admin-token"})
 
         self._httpd = http.server.ThreadingHTTPServer((LOOP, 0), H)
 
@@ -207,14 +233,17 @@ class _App:
         return self._httpd.server_address[1]
 
 
-def _health(tmp, config):
+def _health(tmp, config, running=None):
     bindir = tmp / "bin"
     bindir.mkdir(exist_ok=True)
     state = json.dumps({"Service": "open-webui", "State": "running", "Health": "healthy"})
     fake(bindir / "docker", f"import sys\nsys.stdout.write({state + chr(10)!r})\n")
-    with _App(config) as app:
+    with _App(config, running or RUNNING) as app:
         v = vs(tmp, openwebui_port=app.port)
-        return run_role(tmp, ROLE, "health", v, env={"PATH": f"{bindir}:{os.environ['PATH']}"})
+        env = {**ENV, "PATH": f"{bindir}:{os.environ['PATH']}"}
+        r = run_role(tmp, ROLE, "health", v, env=env)
+        r.signins = app.signins
+        return r
 
 
 def test_health_passes_on_a_deployed_instance(tmp_path):
@@ -252,3 +281,33 @@ def test_upgrade_records_a_bump_of_the_same_repository_and_refuses_another(tmp_p
     ):
         r = run_role(tmp_path, ROLE, "upgrade", {**v, "openwebui_target_image": bad})
         assert r.returncode != 0, bad
+
+
+def test_health_signs_in_as_the_break_glass_administrator_without_logging_the_password(tmp_path):
+    r = _health(tmp_path, CONFIG)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.signins == [{"email": "admin@example.internal", "password": ADM}]
+    assert ADM not in r.stdout and ADM not in r.stderr
+
+
+def _edit(mutate):
+    running = json.loads(json.dumps(RUNNING))
+    mutate(running)
+    return running
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda r: r.update(OPENAI_API_BASE_URLS=["https://elsewhere.example.internal/v1"]),
+        lambda r: r["OPENAI_API_BASE_URLS"].append("https://second.example.internal/v1"),
+        lambda r: r["OPENAI_API_CONFIGS"]["0"]["headers"].update({"X-HNX-TLP": "green"}),
+        lambda r: r["OPENAI_API_CONFIGS"]["0"]["headers"].pop("X-HNX-Tag"),
+        lambda r: r["OPENAI_API_CONFIGS"].pop("0"),
+        lambda r: r.update(ENABLE_OPENAI_API=False),
+    ],
+)
+def test_health_fails_when_an_admin_ui_edit_changed_the_running_connection(tmp_path, mutate):
+    r = _health(tmp_path, CONFIG, _edit(mutate))
+    assert r.returncode != 0 and "differs from the rendered one" in r.stdout, r.stdout[-1500:]
+    assert "k" * 8 not in r.stdout  # the keys the answer carries are never printed

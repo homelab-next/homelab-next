@@ -5,6 +5,20 @@ open_webui_fixed_env:
   ENABLE_OLLAMA_API: "false"
   # web search calls out to a search engine: off, and a reserved name for extra settings
   ENABLE_WEB_SEARCH: "false"
+  # server-side execution and fetching, read in 0.12.5's config.py: code execution and the code
+  # interpreter default ON upstream (admin-configured, but the engine they run in is the
+  # container), image generation and editing call an image engine, automations run prompts on a
+  # schedule, a local web fetch lets the loader reach the lab's own addresses, and a loader that must
+  # verify TLS (API keys are off upstream and the name is reserved: a key-named setting cannot
+  # pass compose_app's secret-looking name check as plain environment)
+  ENABLE_CODE_EXECUTION: "false"
+  ENABLE_CODE_INTERPRETER: "false"
+  ENABLE_IMAGE_GENERATION: "false"
+  ENABLE_IMAGE_EDIT: "false"
+  ENABLE_AUTOMATIONS: "false"
+  ENABLE_LOCAL_WEB_FETCH: "false"
+  ENABLE_RAG_LOCAL_WEB_FETCH: "false"
+  ENABLE_WEB_LOADER_SSL_VERIFICATION: "true"
   ENABLE_DIRECT_CONNECTIONS: "false"
   ENABLE_SIGNUP: "false"
   ENABLE_COMMUNITY_SHARING: "false"

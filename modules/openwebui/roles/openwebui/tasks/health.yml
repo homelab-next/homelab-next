@@ -31,4 +31,46 @@
           exists yet (the first visitor would become one), sign-up must be off, the password form on
           (the break-glass administrator) and the one provider oidc; got
           {{ openwebui_config.json | to_json }}
+    # The environment is authoritative at start only: an administrator's edit in the UI can take
+    # effect in the running process until the next restart. So the RUNNING connection is read back
+    # (as the break-glass administrator) and held to what was rendered: its base URL, and the two
+    # headers the gateway judges the app by. The keys the answer also carries are never kept.
+    - name: Sign in as the break-glass administrator
+      ansible.builtin.uri:
+        url: "http://{{ openwebui_bind }}:{{ openwebui_port | int }}/api/v1/auths/signin"
+        method: POST
+        body_format: json
+        body:
+          email: "{{ openwebui_admin_email }}"
+          password: "{{ lookup('hnx_secret', openwebui_admin_login_ref) }}"
+        return_content: true
+        status_code: 200
+        timeout: "{{ openwebui_health_timeout | int }}"
+      register: openwebui_signin
+      changed_when: false
+      no_log: true
+    - name: Read the running connection settings
+      ansible.builtin.uri:
+        url: "http://{{ openwebui_bind }}:{{ openwebui_port | int }}/openai/config"
+        headers:
+          Authorization: "Bearer {{ openwebui_signin.json.token }}"
+        return_content: true
+        status_code: 200
+        timeout: "{{ openwebui_health_timeout | int }}"
+      register: openwebui_running
+      changed_when: false
+      no_log: true
+    - name: The running connection is the rendered one
+      ansible.builtin.assert:
+        that:
+          - openwebui_running.json.OPENAI_API_BASE_URLS == [lookup('hnx_registry', openwebui_gateway_id, field='url') ~ '/v1']
+          - openwebui_running.json.ENABLE_OPENAI_API | bool
+          - (openwebui_running.json.OPENAI_API_CONFIGS.get('0', {}).get('headers', {})) == open_webui_gateway_headers
+        fail_msg: >-
+          openwebui: the running connection differs from the rendered one (an edit in the admin UI
+          takes effect until the next restart): its base URLs are
+          {{ openwebui_running.json.OPENAI_API_BASE_URLS | to_json }}, its headers
+          {{ openwebui_running.json.OPENAI_API_CONFIGS.get('0', {}).get('headers', {}) | to_json }},
+          not the gateway's registry URL and {{ open_webui_gateway_headers | to_json }}; restart the
+          container to restore the rendered settings, then ask who edited them
   tags: [health]

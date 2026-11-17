@@ -34,6 +34,9 @@
       - open_webui_oidc_provider_name is match('^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}\\Z')
       # the break-glass administrator: an email and its password's reference, both or neither
       - open_webui_admin_email is string
+      # the first account Open WebUI sees becomes its administrator: with a sign-in issuer the
+      # break-glass administrator must exist first, so the first OIDC user can never be one
+      - open_webui_oidc_issuer_url == '' or open_webui_admin_email != ''
       - (open_webui_admin_email == '') == (open_webui_admin_password_ref == '')
       - open_webui_admin_email == '' or open_webui_admin_email is match('^[A-Za-z0-9._+-]{1,64}@[a-z0-9]([a-z0-9.-]*[a-z0-9])?\\Z')
       - open_webui_admin_password_ref == '' or open_webui_admin_password_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\\Z')

@@ -276,9 +276,11 @@ go through the gateway with their own key instead (`GatewayResolver`; ADR-0007 d
   `0600` env file, never into `docker-compose.yml`.
 - Ollama, direct connections, sign-up, community sharing, the update check and external apps
   (`ENABLE_APPS`, Open WebUI 0.12.1's channel bots that it keeps a live connection to) are off
-  (fixed in `vars/`), and `ENABLE_PERSISTENT_CONFIG=false`: the environment is the configuration
-  on every start, so a connection added in the admin UI, or external apps turned on there, does
-  not outlive a restart.
+  (fixed in `vars/`), as are code execution, the code interpreter (both default on upstream), image
+  generation and editing, automations and local web fetch; `ENABLE_PERSISTENT_CONFIG=false`: the
+  environment is re-read on every start, so what an admin saved in the UI does not outlive a
+  restart. It is authoritative **at start only**: an edit can take effect in the running process
+  until then (the chat provider module's health reads the running connection back).
 - Tool servers (OpenAPI, MCP and terminal servers), workspace Tools and Functions are off:
   `ENABLE_PLUGINS`, `ENABLE_TOOLS`, `ENABLE_FUNCTIONS` and `ENABLE_TOOL_SERVERS` are `false`, and
   `ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS=false`. These are environment-only switches, so,

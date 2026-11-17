@@ -52,8 +52,16 @@ returns to) and a stricter `health`.
 
 - `OPENAI_API_BASE_URLS` is the gateway's registry URL plus `/v1` (the registry resolves the id the
   overlay gives, `openwebui_gateway_id`); **there is no provider key** and no second connection:
-  Ollama and direct (user-added) connections are off, and the setting can no longer be changed in
-  the admin UI (the environment wins on every start).
+  Ollama and direct (user-added) connections are off. **The environment is authoritative only at
+  start** (`ENABLE_PERSISTENT_CONFIG=false` makes each start re-read it and forget what the UI
+  saved); an administrator's edit of the connection in the admin UI can take effect in the
+  *running* process until the next restart. The module does not pretend otherwise: `health` signs
+  in as the break-glass administrator and reads the running connection back, and fails (red) when
+  its base URL or its two headers differ from the rendered ones; a restart restores them. The
+  real bounds are the gateway key's `tlp_ceiling`, roles and limits (an edit cannot give the app
+  a better key than the one it holds) and the guest's firewall (no other destination is
+  reachable). The check needs the break-glass password unchanged; if the administrator changes it
+  in the UI, `health` fails on the sign-in until the secret is updated.
 - The key is the store's **`gateway/key-openwebui`** (reference `secret:gateway/key-openwebui`), the gateway spec's `keys:` entry for this caller
   (roles, `data_tier`, `tlp_ceiling`, limits; see [modules/gateway/README.md](../gateway/README.md),
   "Using it in a site", steps 4 and 5). It is outside this module's secret namespace because the
@@ -105,6 +113,11 @@ returns to) and a stricter `health`.
 
 ## What it cannot do within these rules (honest list)
 
+- **Server-side execution and fetching** is fixed off by environment: web search, code execution
+  and the code interpreter (both default **on** upstream), image generation and editing,
+  automations, local web fetch (and web loader TLS verification fixed on), external apps, plugins,
+  Tools, Functions and tool servers. One path has no switch in 0.12.5: attaching a URL to a chat
+  makes the server fetch it with the web loader; the guest's firewall is what bounds where.
 - **A different TLP per chat or per user.** One label for the whole app (above).
 - **Show only some of the gateway's roles to some users.** Which models appear is the gateway key's
   `roles`; Open WebUI's per-user model access (workspace) is the admin UI's and is overridden by
@@ -133,7 +146,7 @@ returns to) and a stricter `health`.
 | Hook | What it checks or does |
 |---|---|
 | `readiness` (also the module's preflight) | `docker_engine` readiness; the inputs are valid; the row is the `chat` row and public at the address sign-in returns to; the gateway id resolves to the gateway's product (not an engine) and accepts connections; every secret resolves and is long enough |
-| `health` | the core role's (the container running and healthy, `/health` 200), then the anonymous `/api/config`: **an administrator exists** (no `onboarding`), sign-up off, the password form on, and the one provider `oidc`. Read-only |
+| `health` | the core role's (the container running and healthy, `/health` 200), then the anonymous `/api/config`: **an administrator exists** (no `onboarding`), sign-up off, the password form on, and the one provider `oidc`; then, signed in as the break-glass administrator, **the running connection**: its base URL is the gateway's registry URL plus `/v1`, it is the only one, and its `X-HNX-TLP` and `X-HNX-Tag` headers equal the rendered ones (an admin-UI edit turns this red). Read-only (the keys in the answer are never printed) |
 | `export` / `backup` | the core role's: the data directory (the SQLite database, uploads, the vector store) as the open-format exit copy / the backup manifest. The export is a file copy: take it with the app stopped for a guaranteed-consistent database |
 | `restore` | the core role's, from `openwebui_restore_source` |
 | `upgrade` | refuses a target not pinned by tag and digest or of another repository, then records the bump; the playbook exports first (the database is migrated forward on the new image's first start) |

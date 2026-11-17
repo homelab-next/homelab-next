@@ -1085,6 +1085,14 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
         {"open_webui_extra_env": {"AUDIO_REALTIME_ENABLED": "true"}},
         {"open_webui_extra_env": {"openai_api_base_url": "http://gpu-01.example.internal"}},
         # tool servers, plugins, Tools, Functions and their pip installs (fixed off)
+        {"open_webui_extra_env": {"ENABLE_CODE_EXECUTION": "true"}},
+        {"open_webui_extra_env": {"ENABLE_CODE_INTERPRETER": "true"}},
+        {"open_webui_extra_env": {"ENABLE_IMAGE_GENERATION": "true"}},
+        {"open_webui_extra_env": {"ENABLE_IMAGE_EDIT": "true"}},
+        {"open_webui_extra_env": {"ENABLE_AUTOMATIONS": "true"}},
+        {"open_webui_extra_env": {"ENABLE_LOCAL_WEB_FETCH": "true"}},
+        {"open_webui_extra_env": {"ENABLE_RAG_LOCAL_WEB_FETCH": "true"}},
+        {"open_webui_extra_env": {"ENABLE_WEB_LOADER_SSL_VERIFICATION": "false"}},
         {"open_webui_extra_env": {"ENABLE_PLUGINS": "true"}},
         {"open_webui_extra_env": {"ENABLE_TOOL_SERVERS": "true"}},
         {"open_webui_extra_env": {"ENABLE_TOOLS": "true"}},
@@ -1306,6 +1314,11 @@ def test_open_webui_sends_the_gateways_headers_and_signs_in_through_the_issuer(f
     cfg = json.loads(env["OPENAI_API_CONFIGS"])
     assert cfg == {"0": {"headers": {"X-HNX-TLP": "amber", "X-HNX-Tag": "chat:{{USER_ID}}"}}}
     assert env["ENABLE_WEB_SEARCH"] == "false"
+    # server-side execution and fetching, fixed (code execution and the interpreter default on)
+    off = ("CODE_EXECUTION", "CODE_INTERPRETER", "IMAGE_GENERATION", "IMAGE_EDIT", "AUTOMATIONS",
+           "LOCAL_WEB_FETCH", "RAG_LOCAL_WEB_FETCH")  # fmt: skip
+    assert {n: env["ENABLE_" + n] for n in off} == dict.fromkeys(off, "false")
+    assert env["ENABLE_WEB_LOADER_SSL_VERIFICATION"] == "true"
     assert env["OPENID_PROVIDER_URL"] == (
         "https://sso.example.internal/realms/lab/.well-known/openid-configuration"
     )
@@ -1345,6 +1358,8 @@ def test_the_tag_the_role_renders_is_a_tag_the_gateway_accepts():
         {"open_webui_admin_password_ref": ""},
         {"open_webui_admin_email": "not an email"},
         {"open_webui_gateway_capabilities": []},
+        # a sign-in issuer without the break-glass administrator: the first OIDC user would be admin
+        {"open_webui_admin_email": "", "open_webui_admin_password_ref": ""},
     ],
 )
 @first_run(lambda tmp, over: {"role": "open_webui", "tasks_from": "main",
