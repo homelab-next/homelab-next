@@ -63,6 +63,14 @@ prometheus_notify_auth_ref: secret:prometheus/notify-token
 # Explicit opt-in, LAN only, for a notify endpoint that has no TLS: the write-only publish token
 # then travels in clear. Off: the role refuses a token over plain http.
 prometheus_notify_allow_plain_http: false
+# The dead-man heartbeat (LL-571): the metrics guest cannot page about itself being down, so the
+# forwarder posts one minimum-priority message to this topic of the notify service every
+# prometheus_heartbeat_every_minutes, only while the metrics service answers AND the always-firing
+# Watchdog rule is firing. The notify service's host (a DIFFERENT host: the role refuses a notify
+# service on this guest) watches the topic (module ntfy, ntfy_deadman_beats) and pages when it goes
+# quiet. Empty topic: no heartbeat, and nothing outside this guest notices the metrics path die.
+prometheus_heartbeat_topic: hnx-heartbeat-metrics
+prometheus_heartbeat_every_minutes: 5
 # The forwarder's timer (OnCalendar, ending in UTC): every minute, or every 30 seconds. The seconds
 # between its runs (prometheus_alert_interval_seconds, vars/main.yml) are derived from it, so the
 # unreachable counter can never disagree with the timer.
@@ -71,6 +79,9 @@ prometheus_unreachable_after_minutes: 5
 # Run the forwarder's --test (one low-priority message through the real send path) once at deploy
 # when the channel changed, failing the play with the script's error (LL-567). Skipped in --check.
 prometheus_notify_test_on_change: true
+# A boot unit (compose_app_boot_unit) that runs docker compose up -d after docker at every boot, so the
+# container that sat Exited for 16 h after a power cycle (LL-571) is started; remove deletes it.
+prometheus_boot_unit: true
 prometheus_systemctl_cli: systemctl
 prometheus_unit_dir: /etc/systemd/system
 prometheus_state_dir: /var/lib/homelabnext/prometheus

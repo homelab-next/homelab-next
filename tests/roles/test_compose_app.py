@@ -147,3 +147,88 @@ def test_a_slice_starts_only_under_systemd_and_with_its_unit_installed(first, dr
         assert "native.cgroupdriver=systemd" in r.stdout
     else:
         assert "has no unit file: install the module limits first" in r.stdout
+
+
+# ------------------------------------------------- the boot unit (opt-in): a container that did not
+# come back after a power cycle is started at boot (LL-571)
+
+SC = """import os, sys
+a = sys.argv[1:]
+open(os.environ["SC_LOG"], "a").write(" ".join(a) + "\\n")
+flag = os.environ["SC_STATE"]
+if a[0] == "enable":
+    open(flag, "w").close()
+elif a[0] == "is-enabled":
+    print("enabled" if os.path.exists(flag) else "disabled")
+    sys.exit(0 if os.path.exists(flag) else 1)
+"""
+
+
+def _boot(tmp_path, **over):
+    from rolerun import run_role
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    fake(bindir / "docker", "import sys\n")
+    systemctl = fake(bindir / "systemctl", SC)
+    units = tmp_path / "units"
+    units.mkdir(exist_ok=True)
+    v = {
+        "compose_app_name": "demo-app",
+        "compose_app_spec": {
+            "services": {
+                "web": {
+                    "image": "registry.example.internal/demo/web",
+                    "tag": "1.2.3",
+                    "digest": DIGEST,
+                    "healthcheck": {"test": ["CMD", "true"]},
+                }
+            }
+        },
+        "compose_app_dir": str(tmp_path / "app"),
+        "compose_app_data_dir": str(tmp_path / "app" / "data"),
+        "compose_app_owner": pwd.getpwuid(os.getuid()).pw_name,
+        "compose_app_group": grp.getgrgid(os.getgid()).gr_name,
+        "compose_app_validate_with_docker": False,
+        "compose_app_cgroup_parent": "",
+        "compose_app_unit_dir": str(units),
+        "compose_app_systemctl_cli": systemctl,
+        **over,
+    }
+    env = {"SC_LOG": str(tmp_path / "sc.log"), "SC_STATE": str(tmp_path / "sc.enabled"),
+           "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"}  # fmt: skip
+    return run_role(tmp_path, str(ROLES / "compose_app"), "main", v, env=env), units
+
+
+ROLES = __import__("pathlib").Path(__file__).resolve().parents[2] / "ansible" / "roles"
+
+
+def test_the_boot_unit_is_off_by_default(tmp_path):
+    r, units = _boot(tmp_path, compose_app_start=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert list(units.iterdir()) == []
+
+
+def test_the_boot_unit_runs_up_d_after_docker_and_is_enabled_once(tmp_path):
+    r, units = _boot(tmp_path, compose_app_start=True, compose_app_boot_unit=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (units / "hnx-compose-demo-app.service").read_text()
+    assert "After=docker.service" in text and "Requires=docker.service" in text
+    assert f"ConditionPathExists={tmp_path}/app/docker-compose.yml" in text  # nothing once removed
+    assert (
+        f"ExecStart=/usr/bin/docker compose -f {tmp_path}/app/docker-compose.yml up -d --remove-orphans"
+        in text
+    )
+    assert "WantedBy=multi-user.target" in text
+    log = (tmp_path / "sc.log").read_text().splitlines()
+    assert log.count("daemon-reload") == 1 and log.count("enable hnx-compose-demo-app.service") == 1
+    r, _ = _boot(tmp_path, compose_app_start=True, compose_app_boot_unit=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    log = (tmp_path / "sc.log").read_text().splitlines()
+    assert log.count("daemon-reload") == 1 and log.count("enable hnx-compose-demo-app.service") == 1
+
+
+def test_no_boot_unit_when_nothing_is_started(tmp_path):
+    r, units = _boot(tmp_path, compose_app_start=False, compose_app_boot_unit=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert list(units.iterdir()) == []

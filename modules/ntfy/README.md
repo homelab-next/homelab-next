@@ -70,6 +70,35 @@ Two deviations from the role interface table, on purpose: `health` leaves one me
 scratch topic's cache (it expires after `ntfy_cache_duration`, 12h), and `export` (so `backup`)
 writes a new snapshot on every run and reports `changed`.
 
+## The dead-man watch (an outside monitor for things that cannot report their own death)
+
+On 2026-11-16 the new lab's metrics container sat `Exited` for 16 hours after a power cycle, and
+the alert forwarder that would have said so lives on the same guest, so nothing paged (LL-571). A
+monitor on the thing being monitored cannot see its own death. This module is the other host:
+
+- **The sender** posts a heartbeat message to a topic of this service on a timer (the `prometheus`
+  module does, `prometheus_heartbeat_topic`, only while its metrics service answers AND its
+  always-firing `Watchdog` rule fires).
+- **The watch** (`ntfy_deadman_beats`, default none) is a timer on **this** host
+  (`hnx-ntfy-deadman.timer`, every `ntfy_deadman_interval_minutes`, calendar based) that reads the
+  newest message time of each beat's topic from the message cache (read-only; no account needed to
+  read) and pages through this service (to `ntfy_deadman_alert_topic`, the publisher token) when
+  the newest is older than the beat's `max_age_minutes`, or when none was ever seen (counted from
+  the first run that knew the beat). **State-diffed**: one page when a beat goes silent (priority 5),
+  one when it speaks again; a page that could not be sent is retried. A cache the watch cannot
+  read, or whose messages table is not the expected one, is an error (exit 1, visible in `health`),
+  never read as silence or as a pass.
+- **A beat**: `{name: metrics, topic: hnx-heartbeat-metrics, max_age_minutes: 15}`. The limit must
+  be at least twice the watch interval, at most half `ntfy_cache_duration` (a heartbeat the cache
+  already dropped cannot be told from none), and the topic one the publisher may write.
+- **Placement is the point.** The sender must NOT be on this host's guest and this service must not be
+  on the sender's: the `prometheus` role refuses a notify service placed on its own guest (registry
+  `host_id`) unless the heartbeat is turned off. It also cannot page if **this** service is down; the
+  role's `health` (the watch's last-run record) and the registry row's health probe are what notice
+  that, and `compose_app_boot_unit` is what starts a container that did not come back.
+- `health` fails (with beats) when the watch's last-run record is missing, older than five runs, or
+  its last result was not `success`. `remove` deletes the units, script and token.
+
 ## Data
 
 | Dataset | Kind | What | Export |

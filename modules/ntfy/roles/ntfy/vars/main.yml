@@ -183,3 +183,13 @@ ntfy_drift_script: |
   finally:
       c.close()
   print(json.dumps({"minted": minted, "users": [u[0] for u in users]}))
+# The dead-man watch's own files (fixed): the script, its state, the publish token it pages with
+# (the container's user's, 0400: the unit runs as that user), the message cache it reads.
+ntfy_deadman_script: /usr/local/libexec/homelabnext/ntfy-deadman-watch
+ntfy_deadman_state_dir: /var/lib/homelabnext/ntfy-deadman
+ntfy_deadman_auth_file: /etc/homelabnext/ntfy-deadman.auth
+ntfy_deadman_cache_file: "{{ ntfy_data_root }}/db/cache.db"
+ntfy_deadman_schedule: "*-*-* *:0/{{ ntfy_deadman_interval_minutes | int }}:00 UTC"
+ntfy_deadman_intervals: [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30]
+ntfy_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
+ntfy_cache_unit_seconds: {s: 1, m: 60, h: 3600, d: 86400}

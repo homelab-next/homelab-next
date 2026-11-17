@@ -145,6 +145,14 @@ argument_specs:
         type: bool
         description: "Explicit opt-in, LAN only: send the token to a notify endpoint with no TLS."
         default: false
+      prometheus_heartbeat_topic: &heartbeat_topic
+        type: str
+        description: "The dead-man heartbeat: the notify topic the forwarder posts one minimum-priority message to, only while the metrics service answers and its Watchdog rule fires. The notify service's host (never this guest) pages when the topic goes quiet (module ntfy, ntfy_deadman_beats). Empty: no heartbeat (no outside dead-man)."
+        default: "hnx-heartbeat-metrics"
+      prometheus_heartbeat_every_minutes: &heartbeat_every_minutes
+        type: int
+        description: "Minutes between heartbeats (the watcher's threshold must be several times this)."
+        default: 5
       prometheus_alert_schedule: &alert_schedule
         type: str
         description: "The forwarder timer's OnCalendar: \"*-*-* *:*:00 UTC\" (every minute) or \"*-*-* *:*:00,30 UTC\" (every 30 seconds)."
@@ -156,6 +164,10 @@ argument_specs:
       prometheus_notify_test_on_change: &notify_test_on_change
         type: bool
         description: "Send one test message at deploy when the channel changed; fail the play if it does not deliver."
+        default: true
+      prometheus_boot_unit: &boot_unit
+        type: bool
+        description: "Install the compose_app boot unit: docker compose up -d after docker at every boot, so a container that did not come back after a power cycle is started (LL-571)."
         default: true
       prometheus_systemctl_cli: &systemctl_cli
         type: str
@@ -213,6 +225,8 @@ argument_specs:
       prometheus_notify_priority: *notify_priority
       prometheus_notify_auth_ref: *notify_auth_ref
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
+      prometheus_heartbeat_topic: *heartbeat_topic
+      prometheus_heartbeat_every_minutes: *heartbeat_every_minutes
       prometheus_alert_schedule: *alert_schedule
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
@@ -256,6 +270,8 @@ argument_specs:
       prometheus_notify_priority: *notify_priority
       prometheus_notify_auth_ref: *notify_auth_ref
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
+      prometheus_heartbeat_topic: *heartbeat_topic
+      prometheus_heartbeat_every_minutes: *heartbeat_every_minutes
       prometheus_alert_schedule: *alert_schedule
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
@@ -297,6 +313,8 @@ argument_specs:
       prometheus_notify_priority: *notify_priority
       prometheus_notify_auth_ref: *notify_auth_ref
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
+      prometheus_heartbeat_topic: *heartbeat_topic
+      prometheus_heartbeat_every_minutes: *heartbeat_every_minutes
       prometheus_alert_schedule: *alert_schedule
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
@@ -343,6 +361,8 @@ argument_specs:
       prometheus_notify_priority: *notify_priority
       prometheus_notify_auth_ref: *notify_auth_ref
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
+      prometheus_heartbeat_topic: *heartbeat_topic
+      prometheus_heartbeat_every_minutes: *heartbeat_every_minutes
       prometheus_alert_schedule: *alert_schedule
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir

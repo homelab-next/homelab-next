@@ -74,6 +74,24 @@ names a real host, address, VM id or secret value; those live only in the privat
   health is what makes it visible: LL-567); (3) the registry row's `health` probe (`/-/healthy`) is
   what the hub and the hypervisor-side checks poll. The overlay should ship the last-run directory
   to the hub as it does for the other role timers.
+- **The outside dead-man (LL-571).** (1)-(3) all live on this guest or ask this guest, so a stopped
+  metrics container, a dead timer, a dead guest or a rule file that never loaded are silent to
+  them. On 2026-11-16 the container sat `Exited` for 16 hours after a power cycle and nothing paged.
+  So the forwarder also posts a **heartbeat**: one minimum-priority message to the topic
+  `prometheus_heartbeat_topic` (default `hnx-heartbeat-metrics`) of the notify service, at most
+  every `prometheus_heartbeat_every_minutes` (5), and **only on a run that proved the whole chain**:
+  the metrics service answered AND the always-firing `Watchdog` rule (`vector(1)`, severity `none`,
+  never posted as an alert) is firing, i.e. rules loaded and evaluated. A timer on the notify
+  service's host (module `ntfy`, `ntfy_deadman_beats`) pages once when that topic goes quiet and
+  once when it returns. The heartbeat is silent on a failed post (it stays owed; the unit exits 2).
+  **The receiver must not be on this guest**: the role compares the metrics row's and the notify
+  row's registry `host_id` (and the endpoint's address against loopback and this guest's own
+  addresses) and refuses a heartbeat whose receiver would die with it; `prometheus_heartbeat_topic: ""`
+  turns the heartbeat off, and with it any outside monitor.
+- **A boot unit** (`prometheus_boot_unit`, default true; `compose_app_boot_unit`): a oneshot
+  `hnx-compose-prometheus.service` runs `docker compose up -d` after docker at every boot, so a
+  container that did not come back after a power cycle is started and a failure to start it is a
+  failed unit. `remove` disables and deletes it.
 - **Nothing reloads through an HTTP API.** The lifecycle API stays off (anyone who could reach the
   port could shut the server down); a changed configuration is a `SIGHUP`, sent once the service
   reports ready (a signal sent earlier kills a process that has not installed its handler).
@@ -214,8 +232,12 @@ The overlay carries every real value ([selection](../../docs/modules/selection.m
    <instance>`, `prometheus_registry: <absolute path of lab/services.yml on the controller>`,
    `prometheus_node_exporter_port: 9100`, `prometheus_network_subnet: <a CIDR of the site's own>` (and the guest's rule for it, above), and the `hnx` command (`prometheus_hnx_cli`, default
    `[hnx]`), optionally `prometheus_node_exporter_exclude`, `prometheus_retention_time`,
-   `prometheus_notify_id`/`prometheus_notify_topic`, `prometheus_alert_readonly_ignore`, `prometheus_alert_schedule` (every minute, or every 30 seconds), and `prometheus_notify_allow_plain_http: true`
+   `prometheus_notify_id`/`prometheus_notify_topic`, `prometheus_heartbeat_topic`/`prometheus_heartbeat_every_minutes`, `prometheus_alert_readonly_ignore`, `prometheus_alert_schedule` (every minute, or every 30 seconds), and `prometheus_notify_allow_plain_http: true`
    while the notify service has no TLS (LAN only; the role says so in the run).
+   **The dead-man's other half is in the notify module's variables** (`group_vars/mod_ntfy_server.yml`):
+   `ntfy_deadman_beats: [{name: metrics, topic: <the same as prometheus_heartbeat_topic>,
+   max_age_minutes: 15}]` (`ntfy_deadman_alert_topic` defaults to the forwarder's alert topic); the
+   notify service must be placed on a guest other than the metrics guest.
 6. **Apply**: `docker_engine` on the module group (`mod_prometheus_server`), the exporter role on
    every guest (the baseline), then the rendered `modules.yml` twice (the second `changed=0`),
    then `checks/prometheus.yml`.

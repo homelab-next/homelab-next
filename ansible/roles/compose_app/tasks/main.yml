@@ -98,3 +98,32 @@
     argv: [docker, compose, -f, "{{ compose_app_dir }}/docker-compose.yml", up, -d, --remove-orphans]
   changed_when: compose_app_rendered.changed or compose_app_secrets_written.changed
   when: compose_app_start | bool
+
+# A container with a restart policy that did not come back after a power cycle stays down until
+# someone looks (LL-571): at boot this unit runs the same `up -d`, after docker.
+- name: Install and enable the boot unit
+  when: compose_app_boot_unit | bool and compose_app_start | bool
+  block:
+    - name: Write the boot unit
+      ansible.builtin.template:
+        src: boot.service.j2
+        dest: "{{ compose_app_unit_dir }}/hnx-compose-{{ compose_app_name }}.service"
+        mode: "0644"
+      register: compose_app_boot_written
+    - name: Ask whether the boot unit is enabled
+      ansible.builtin.command:
+        argv: ["{{ compose_app_systemctl_cli }}", is-enabled, "hnx-compose-{{ compose_app_name }}.service"]
+      register: compose_app_boot_enabled
+      changed_when: false
+      failed_when: false
+      check_mode: false
+    - name: Reload systemd (the unit changed) and enable it (not enabled yet)
+      ansible.builtin.command:
+        argv: "{{ [compose_app_systemctl_cli] + item }}"
+      loop: >-
+        {{ ([['daemon-reload']] if compose_app_boot_written is changed else [])
+           + ([['enable', 'hnx-compose-' ~ compose_app_name ~ '.service']]
+              if (compose_app_boot_written is changed or compose_app_boot_enabled.stdout | default('') | trim != 'enabled') else []) }}
+      loop_control:
+        label: "{{ item | join(' ') }}"
+      changed_when: true

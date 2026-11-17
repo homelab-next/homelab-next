@@ -34,3 +34,21 @@ ntfy_mem_limit: 256m
 ntfy_start: true
 ntfy_validate_with_docker: true
 ntfy_health_timeout: 10
+# The dead-man watch (LL-571): things that cannot report their own death (the metrics guest) post a
+# heartbeat to a topic of this service; a timer on THIS host reads the newest message time of each
+# topic from the message cache and pages through this service when a topic goes quiet, once, and
+# once more when it speaks again. Empty (the default): no watch. Each beat: {name: <slug>, topic:
+# <a topic the publisher may write>, max_age_minutes: <silence that pages>}. The limit must be at
+# least twice the watch's interval and at most half the cache duration (a heartbeat the cache has
+# already dropped cannot be told from none). The watch pages to ntfy_deadman_alert_topic with the
+# publisher token; it cannot page if this service is itself down (the compose boot unit and the
+# role's health are what notice that).
+ntfy_deadman_beats: []
+ntfy_deadman_alert_topic: homelabnext-alerts
+# minutes between the watch's runs: a divisor of 60 up to 30 (a calendar, not a boot-relative timer: LL-041)
+ntfy_deadman_interval_minutes: 5
+ntfy_systemctl_cli: systemctl
+ntfy_unit_dir: /etc/systemd/system
+# the shared last-run record directory (role last_run) and the group that may read it
+ntfy_last_run_dir: /var/lib/homelabnext/last-run
+ntfy_last_run_group: root

@@ -92,6 +92,35 @@ argument_specs:
         type: int
         description: "Seconds for each health request."
         default: 10
+      ntfy_deadman_beats: &dm_beats
+        type: list
+        elements: dict
+        description: "The dead-man watch: heartbeat topics to watch, each {name, topic, max_age_minutes}. Senders (the metrics guest) post to the topic; a timer on this host pages through this service when it goes quiet, and when it speaks again. Empty: no watch."
+        default: []
+      ntfy_deadman_alert_topic: &dm_alert
+        type: str
+        description: "The topic the watch pages to."
+        default: homelabnext-alerts
+      ntfy_deadman_interval_minutes: &dm_interval
+        type: int
+        description: "Minutes between the watch's runs (a divisor of 60, at most 30)."
+        default: 5
+      ntfy_systemctl_cli: &systemctl
+        type: str
+        description: "The systemctl command."
+        default: systemctl
+      ntfy_unit_dir: &unitdir
+        type: path
+        description: "Where the watch's units are written."
+        default: /etc/systemd/system
+      ntfy_last_run_dir: &lrdir
+        type: path
+        description: "The shared per-host directory of last-run records (role last_run)."
+        default: /var/lib/homelabnext/last-run
+      ntfy_last_run_group: &lrgroup
+        type: str
+        description: "The group that may read the last-run records."
+        default: root
   health:
     short_description: Fail unless the container is healthy, /v1/health answers, anonymous publish is refused, the admin signs in and the publisher's round trip works.
     options:
@@ -110,6 +139,9 @@ argument_specs:
       ntfy_publisher_key_ref: *pubtoken
       ntfy_scratch_prefix: *scratch
       ntfy_health_timeout: *htimeout
+      ntfy_deadman_beats: *dm_beats
+      ntfy_deadman_interval_minutes: *dm_interval
+      ntfy_last_run_dir: *lrdir
   readiness:
     short_description: Fail unless the container engine is ready and every credential resolves in its expected form.
     options:

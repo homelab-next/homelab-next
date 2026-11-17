@@ -13,6 +13,33 @@
       - prometheus_notify_url is match('^https://') or prometheus_notify_allow_plain_http | bool
     fail_msg: "prometheus: the notify endpoint {{ prometheus_notify_url }} is not http(s), or the token would go over plain http (set prometheus_notify_allow_plain_http for a LAN endpoint with no TLS)"
 
+# The dead-man is only a dead-man if its receiver is somewhere else: a notify service on THIS guest
+# dies with it, and the heartbeat would be watched by the thing it watches (LL-571). Judged by the
+# registry's placement (the metrics row's host_id against the notify row's) and by the address
+# the endpoint names (loopback, this guest's bind address or any of its own addresses).
+- name: Name where the heartbeat receiver lives and where this guest is
+  ansible.builtin.set_fact:
+    prometheus_notify_host: "{{ prometheus_notify_url | regex_replace('^https?://(\\[[^]]*\\]|[^/:]+).*$', '\\1') }}"
+    prometheus_notify_row_host: "{{ lookup('hnx_registry', prometheus_notify_id, field='host_id') }}"
+    prometheus_own_row_host: "{{ lookup('hnx_registry', prometheus_logical_id, field='host_id') }}"
+  when: prometheus_heartbeat_topic | length > 0
+
+- name: Refuse a heartbeat receiver on the metrics guest itself
+  ansible.builtin.assert:
+    that:
+      - prometheus_notify_row_host != prometheus_own_row_host
+      - prometheus_notify_host != 'localhost'
+      - not (prometheus_notify_host is match('^(127\\.|\\[?::1\\]?\\Z)'))
+      - prometheus_notify_host != prometheus_bind
+      - prometheus_notify_host not in (ansible_facts.all_ipv4_addresses | default([]))
+      - prometheus_notify_host != (ansible_facts.hostname | default(''))
+    fail_msg: >-
+      prometheus: the notify service ({{ prometheus_notify_id }}, {{ prometheus_notify_url }}) runs on this
+      metrics guest, so the dead-man heartbeat would be received and watched by the thing it
+      watches: when this guest dies, nothing pages (LL-571). Place the notify service on another
+      host, or set prometheus_heartbeat_topic to "" to run with no outside dead-man
+  when: prometheus_heartbeat_topic | length > 0
+
 - name: Warn that the token goes over plain http (the explicit opt-in)
   ansible.builtin.debug:
     msg: "prometheus: the publish token goes in clear to {{ prometheus_notify_url }} (prometheus_notify_allow_plain_http); LAN only, prefer TLS"
