@@ -194,6 +194,16 @@ first on a `compose_app` module's host.
   device is refused. `group_add` lists supplementary groups by number (the render group's id on
   the host, which does not resolve by name inside an image), never 0. A GPU container still gets
   `cap_drop: [ALL]` and `no-new-privileges`.
+* `tmpfs` is a list of RAM-backed mounts, `[{target, size_bytes, mode}]`, rendered in the compose
+  long syntax (`type: tmpfs`, `tmpfs: {size, mode}`) after the service's `volumes`. `target` is an
+  absolute, canonical container path (not `/`) that equals, lies inside or contains no other mount
+  of the service (a volume's container path, an anonymous volume, another tmpfs); `size_bytes` is an
+  integer from 4096 to 1 TiB; `mode` is optional, a quoted string of three or four octal digits
+  (`"1777"`, docker's default; a bare number is refused, YAML would read it as decimal). The
+  template writes the mode with a leading 0 because compose reads the number itself. The pages
+  live in the container's memory cgroup, so a `mem_limit` must leave room for them, and a full
+  tmpfs fails the writer, not the host. This is what lets a service run with `read_only: true`:
+  its scratch directories (`/tmp`) are tmpfs mounts. Output is byte-identical without it.
 * Ports are always `host_ip:host_port:container_port`; nothing binds all interfaces
   by omission.
 * Secrets never go in `environment` (a secret-looking key is refused unless it ends

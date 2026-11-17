@@ -136,6 +136,54 @@
   loop_control:
     label: "{{ item.key }}"
 
+# A tmpfs mount is RAM that counts against the container's memory limit: the target is a canonical
+# container path that does not overlap any other mount of the service (a volume's container path,
+# an anonymous volume, another tmpfs), the size a bounded integer of bytes, the mode octal digits
+# in a string (a bare number would be read as decimal by YAML before this sees it).
+- name: Validate each service (tmpfs mounts)
+  vars:
+    _compose_app_tmpfs: "{{ item.value.tmpfs | default([]) }}"
+    _compose_app_volume_targets: >-
+      {{ item.value.volumes | default([]) | map('string') | map('regex_replace', '^[^:]*:([^:]*).*$', '\1') | list }}
+    _compose_app_tmpfs_overlap: >-
+      {%- set ts = (_compose_app_tmpfs | selectattr('target', 'defined') | map(attribute='target') | map('string') | list)
+            if _compose_app_tmpfs is sequence and _compose_app_tmpfs is not string and _compose_app_tmpfs is not mapping else [] -%}
+      {%- set out = [] -%}
+      {%- for t in ts -%}
+      {%-   set i = loop.index0 -%}
+      {%-   for o in _compose_app_volume_targets + ts -%}
+      {%-     if not (loop.index0 == i + _compose_app_volume_targets | length) and (t == o or t.startswith(o ~ '/') or o.startswith(t ~ '/')) -%}
+      {%-       set _ = out.append(t ~ ' vs ' ~ o) -%}
+      {%-     endif -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ out | join(', ') }}
+  ansible.builtin.assert:
+    that:
+      - _compose_app_tmpfs is sequence and _compose_app_tmpfs is not string and _compose_app_tmpfs is not mapping
+      - _compose_app_tmpfs | reject('mapping') | list | length == 0
+      - _compose_app_tmpfs | map('list') | flatten | difference(compose_app_tmpfs_keys) | length == 0
+      - _compose_app_tmpfs | rejectattr('target', 'defined') | list | length == 0
+      - _compose_app_tmpfs | rejectattr('size_bytes', 'defined') | list | length == 0
+      - _compose_app_tmpfs | map(attribute='target') | reject('string') | list | length == 0
+      - _compose_app_tmpfs | map(attribute='target') | reject('match', compose_app_tmpfs_target_pattern) | list | length == 0
+      # a bool or a float is not a count of bytes; a digit string is accepted (a templated value)
+      - _compose_app_tmpfs | map(attribute='size_bytes') | map('string') | reject('match', '^[1-9][0-9]{0,15}\Z') | list | length == 0
+      - _compose_app_tmpfs | map(attribute='size_bytes') | map('string') | map('int') | select('lt', compose_app_tmpfs_size_min) | list | length == 0
+      - _compose_app_tmpfs | map(attribute='size_bytes') | map('string') | map('int') | select('gt', compose_app_tmpfs_size_max) | list | length == 0
+      - _compose_app_tmpfs | selectattr('mode', 'defined') | map(attribute='mode') | reject('string') | list | length == 0
+      - _compose_app_tmpfs | selectattr('mode', 'defined') | map(attribute='mode') | reject('match', compose_app_tmpfs_mode_pattern) | list | length == 0
+      - _compose_app_tmpfs_overlap | length == 0
+    fail_msg: >-
+      service '{{ item.key }}' has a refused tmpfs mount ({{ _compose_app_tmpfs_overlap | default('') }}): tmpfs is a list of
+      {target, size_bytes, mode}; target an absolute canonical container path (not /), size_bytes an
+      integer from {{ compose_app_tmpfs_size_min }} to {{ compose_app_tmpfs_size_max }} bytes, mode (optional) a quoted
+      string of three or four octal digits such as "1777", and no target may equal or lie inside or
+      above another mount of the service (a volume's container path or another tmpfs)
+  loop: "{{ compose_app_spec.services | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
 # Bind sources are an allow-list: a host path is mounted only when it lies under one of
 # compose_app_bind_roots (the application's own directories by default) or is listed on its own,
 # with a reason, in compose_app_bind_extra. A relative source (./x) stays in the project directory,
