@@ -3,6 +3,22 @@
 open_webui_fixed_env:
   ENABLE_OPENAI_API: "true"
   ENABLE_OLLAMA_API: "false"
+  # web search calls out to a search engine: off, and a reserved name for extra settings
+  ENABLE_WEB_SEARCH: "false"
+  # server-side execution and fetching, read in 0.12.5's config.py: code execution and the code
+  # interpreter default ON upstream (admin-configured, but the engine they run in is the
+  # container), image generation and editing call an image engine, automations run prompts on a
+  # schedule, a local web fetch lets the loader reach the lab's own addresses, and a loader that must
+  # verify TLS (API keys are off upstream and the name is reserved: a key-named setting cannot
+  # pass compose_app's secret-looking name check as plain environment)
+  ENABLE_CODE_EXECUTION: "false"
+  ENABLE_CODE_INTERPRETER: "false"
+  ENABLE_IMAGE_GENERATION: "false"
+  ENABLE_IMAGE_EDIT: "false"
+  ENABLE_AUTOMATIONS: "false"
+  ENABLE_LOCAL_WEB_FETCH: "false"
+  ENABLE_RAG_LOCAL_WEB_FETCH: "false"
+  ENABLE_WEB_LOADER_SSL_VERIFICATION: "true"
   ENABLE_DIRECT_CONNECTIONS: "false"
   ENABLE_SIGNUP: "false"
   ENABLE_COMMUNITY_SHARING: "false"
@@ -31,9 +47,10 @@ open_webui_fixed_env:
   ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS: "false"
 # Names of model backends: the gateway id may not be one (Open WebUI never calls an engine).
 open_webui_backend_id_pattern: '^(inference|vllm|llama|ollama|lmstudio|unsloth)([-.]|\Z)'
-# What the gateway id must resolve to in the registry (its service's capability): a registry id
-# that is not the gateway (gpu-01 pointing at a vLLM, say) is refused whatever it is named.
-open_webui_gateway_capability: llm-gateway
+# (What the gateway id must resolve to in the registry, its service's capability, is
+# open_webui_gateway_capabilities: a registry id that is not the gateway, gpu-01 pointing at a
+# vLLM say, is refused whatever it is named.)
+open_webui_tlp_labels: [clear, green, amber, amber+strict, red]
 # open_webui_extra_env is an allowlist: each name below was read in the pinned release and only
 # shapes the UI or the chat behaviour inside the gateway's models (a name, a default model, a
 # banner, which generation tasks run). Anything else is refused; a name an overlay needs is added

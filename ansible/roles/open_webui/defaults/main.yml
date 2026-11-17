@@ -24,3 +24,28 @@ open_webui_export_dir: /var/backups/compose/open-webui/export
 open_webui_start: true
 open_webui_validate_with_docker: true
 open_webui_health_timeout: 10
+# the registry capabilities the gateway id may resolve to (default: the LLM gateway of the old
+# stack; the lab's own gateway answers as 'inference')
+open_webui_gateway_capabilities: [llm-gateway]
+# the registry 'impl' (the product) the gateway id must also be, when a capability has two kinds of
+# provider (the gateway and an engine behind it both answer 'inference'); empty: not checked, and
+# the id may then not be named like a model backend
+open_webui_gateway_impls: []
+# optional per-request headers the gateway reads, sent on every call of the one gateway connection
+# (Open WebUI's connection 'headers' setting, set from the environment on every start): X-HNX-TLP
+# is the TLP label of what this app sends (empty: none sent, which the gateway reads as red) and
+# X-HNX-Tag a usage tag, the prefix (empty: none) with ':' and the signed-in user's id when per-user
+open_webui_gateway_tlp: ""
+open_webui_gateway_tag_prefix: ""
+open_webui_gateway_tag_per_user: false
+# optional OpenID Connect sign-in (empty issuer: none): the issuer (https://host/realms/<realm>),
+# this app's client and the reference of that client's secret; needs open_webui_public_url (the
+# redirect is <public url>/oauth/oidc/callback). The password form stays on for the break-glass admin.
+open_webui_oidc_issuer_url: ""
+open_webui_oidc_client_id: ""
+open_webui_oidc_client_secret_ref: ""
+open_webui_oidc_provider_name: SSO
+# optional break-glass local administrator, created at start only while the database has no user
+# (email, and the reference of its password; both or neither)
+open_webui_admin_email: ""
+open_webui_admin_password_ref: ""

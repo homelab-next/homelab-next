@@ -109,6 +109,7 @@ capabilities:
   cap:tunnel: [exec]  # the connector that publishes a lab name to the internet: changing what it serves acts on every user
   cap:media: [read]  # the media slot: a server that plays a library to its clients
   cap:media-automation: [exec]  # the media-automation slot: requests, downloads through a VPN and imports into the library change files and spend bandwidth
+  cap:chat: [exec]  # the chat slot: a front end that sends people's prompts to the model gateway under its own key; broker-only, an agent has no use for it
   # the capabilities the other example registries use (examples/four-box-lab, lab-topology,
   # minimal); each would otherwise be unclassified, refused to every profile, and an overlay would
   # hand-patch this table or grant a broader class to get it

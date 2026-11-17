@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# The core open_webui role's inputs, from this module's: one place, so every hook converges on the
+# very same application spec. Nothing here is a secret (references only).
+- name: Map this module's settings onto the core role's
+  ansible.builtin.set_fact:
+    open_webui_gateway_id: "{{ openwebui_gateway_id }}"
+    open_webui_image: "{{ openwebui_image }}"
+    open_webui_gateway_capabilities: [inference]
+    open_webui_gateway_impls: "{{ openwebui_gateway_impls }}"
+    open_webui_gateway_key_ref: "{{ openwebui_gateway_key_ref }}"
+    open_webui_gateway_tlp: "{{ openwebui_gateway_tlp }}"
+    open_webui_gateway_tag_prefix: "{{ openwebui_gateway_tag_prefix }}"
+    open_webui_gateway_tag_per_user: true
+    open_webui_session_key_ref: "{{ openwebui_session_key_ref }}"
+    open_webui_oidc_issuer_url: "{{ openwebui_oidc_issuer_url }}"
+    open_webui_oidc_client_id: "{{ openwebui_logical_id }}"
+    open_webui_oidc_client_secret_ref: "{{ openwebui_oidc_client_secret_ref }}"
+    open_webui_oidc_provider_name: "{{ openwebui_oidc_provider_name }}"
+    open_webui_admin_email: "{{ openwebui_admin_email }}"
+    open_webui_admin_password_ref: "{{ openwebui_admin_login_ref }}"
+    open_webui_public_url: "{{ openwebui_public_url }}"
+    open_webui_bind: "{{ openwebui_bind }}"
+    open_webui_port: "{{ openwebui_port }}"
+    open_webui_dir: "{{ openwebui_dir }}"
+    open_webui_owner: "{{ openwebui_owner }}"
+    open_webui_group: "{{ openwebui_group }}"
+    open_webui_mem_limit: "{{ openwebui_mem_limit }}"
+    open_webui_extra_env: "{{ openwebui_extra_env }}"
+    open_webui_export_dir: "{{ openwebui_export_dir }}"
+    open_webui_start: "{{ openwebui_start }}"
+    open_webui_validate_with_docker: "{{ openwebui_validate_with_docker }}"
+    open_webui_health_timeout: "{{ openwebui_health_timeout }}"
+  no_log: true

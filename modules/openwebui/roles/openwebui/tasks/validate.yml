@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# What this module requires beyond the core role's own checks (which run in main): the sign-in
+# and the break-glass administrator are not optional here, and the row this instance is must be
+# the chat row, public under the address the sign-in redirects back to.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - openwebui_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - openwebui_gateway_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - openwebui_gateway_id != openwebui_logical_id
+      - openwebui_public_url is match('^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[1-9][0-9]{0,4})?\Z')
+      - openwebui_oidc_issuer_url is match('^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[1-9][0-9]{0,4})?/realms/[A-Za-z0-9._-]+\Z')
+      - openwebui_oidc_client_secret_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - openwebui_admin_email is match('^[A-Za-z0-9._+-]{1,64}@[a-z0-9]([a-z0-9.-]*[a-z0-9])?\Z')
+      - openwebui_gateway_tlp in ['clear', 'green', 'amber', 'amber+strict']
+      - openwebui_gateway_tag_prefix is match('^[A-Za-z0-9._:/-]{1,64}\Z')
+      - openwebui_gateway_impls is sequence
+      - openwebui_gateway_impls | length > 0
+      - openwebui_extra_env is mapping
+    fail_msg: >-
+      openwebui: the instance's registry id and the gateway's (and the product the gateway's row
+      names), the public address (https://host[:port], the row's public_hostname), the issuer
+      (https://host/realms/<realm>), the client's secret reference and the break-glass
+      administrator's email are required; the label this app sends is clear, green, amber or
+      amber+strict (never red: nothing red goes to a model), the usage tag's prefix is 1 to 64 of
+      letters, digits and . _ : / -, and the gateway's product must be named
+      (openwebui_gateway_impls)
+
+- name: This instance is the chat row, public at the address sign-in returns to
+  ansible.builtin.assert:
+    that:
+      - lookup('hnx_registry', openwebui_logical_id, field='capability') == 'chat'
+      - openwebui_public_url == 'https://' ~ lookup('hnx_registry', openwebui_logical_id, field='public_hostname')
+    fail_msg: >-
+      openwebui: {{ openwebui_logical_id }} must be a registry row of capability chat whose
+      public_hostname is the host of openwebui_public_url ({{ openwebui_public_url }}): the sign-in
+      redirects back to it and the edge serves that name
