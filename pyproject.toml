@@ -224,6 +224,10 @@ suite_budgets = [
   # the read-only server starts the MCP SDK over stdio and builds the repository graph, and the
   # catalog's file-level rules (record files, locks, renders, imports) each copy the catalog
   "tests/mcp = 90",
+  # 80 since the shard-report tests (subprocess pytest runs) joined: 50.5 s and 54.9 s on 3.11/3.12
+  # (2026-11-17, twelve shards) against 57.8 s and 61.9 s (over the 60 s default) with the tests
+  # of this change before they were trimmed; 80 is about 1.3x the slower figure
+  "tests/gates = 80",
   # 75 since a 12-shard run measured 64.6 s on 3.11 (#455, over the 60 s default) against 42-58 s
   # typically: 1.3x the typical worst figure, 1.16x the one outlier
   "tests/compute = 75",

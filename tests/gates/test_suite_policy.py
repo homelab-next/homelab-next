@@ -794,7 +794,7 @@ HEAVY_FIXTURE = (
     "import time\nimport pytest\n\n"
     '@pytest.fixture(scope="module")\ndef heavy():\n    time.sleep(0.4)\n\n'
     "@pytest.fixture\ndef light():\n    time.sleep(0.01)\n\n"
-    + "".join(f"def test_{k}(heavy, light):\n    time.sleep(0.02)\n\n" for k in range(40))
+    + "".join(f"def test_{k}(heavy, light):\n    time.sleep(0.02)\n\n" for k in range(12))
 )
 
 
@@ -804,9 +804,9 @@ def _suite_totals(out: str, suite: str) -> float:
 
 def test_the_shard_count_does_not_inflate_a_suites_summed_time(tmp_path):
     """A module fixture built once per shard stays out of the budgeted figure at any shard count,
-    so the same suite measures the same (give or take noise) in 2 shards and in 4."""
+    so the same suite measures the same (give or take noise) in 1 shard and in 3."""
     totals = {}
-    for n in (2, 4):
+    for n in (1, 3):
         base = tmp_path / str(n)
         base.mkdir()
         procs, reports = _shards(base, n, "--suite-times", heavy__test_heavy=HEAVY_FIXTURE)
@@ -819,15 +819,15 @@ def test_the_shard_count_does_not_inflate_a_suites_summed_time(tmp_path):
         shared = sum(d["shared"].get("heavy", 0.0) for d in data)
         assert shared >= 0.4 * len([d for d in data if d["selected"]]) * 0.9  # one per shard
         assert all(d["shared"].get("heavy", 0.0) <= d["times"].get("heavy", 0.0) for d in data)
-    # without the split the 4-shard sum would be about 2 x 0.4s = 0.8s above the 2-shard sum
-    assert abs(totals[4] - totals[2]) < 0.6, totals
+    # without the split the 3-shard sum would be about 2 x 0.4s = 0.8s above the 1-shard sum
+    assert abs(totals[3] - totals[1]) < 0.6, totals
 
 
 def test_a_genuinely_slower_suite_still_goes_over_its_budget(tmp_path):
-    slow = HEAVY_FIXTURE.replace("time.sleep(0.02)", "time.sleep(0.2)")
-    _procs, reports = _shards(tmp_path, 3, ini_budgets="heavy = 1.0", heavy__test_heavy=slow)
+    slow = HEAVY_FIXTURE.replace("time.sleep(0.02)", "time.sleep(0.1)")
+    _procs, reports = _shards(tmp_path, 3, ini_budgets="heavy = 0.8", heavy__test_heavy=slow)
     rc, out = _merge(reports)
-    assert rc == 1 and "heavy: " in out and "over all shards > budget 1.0s" in out, out
+    assert rc == 1 and "heavy: " in out and "over all shards > budget 0.8s" in out, out
     assert "fixtures" not in out  # the fixture was not what pushed it over
 
 
