@@ -27,8 +27,9 @@ from homelabnext.context_service import cli, config, sources
 from homelabnext.context_service.server import ApiError, Routes, make_server
 from homelabnext.context_service.service import ContextService, ReindexBusy, make_judge
 from tests.context.test_semantic import _FakeBm25, _FakeEmbedder
+from tests.suite_policy import require_tool
 
-needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+needs_git = pytest.mark.requires_tool("git")
 ADMIN = "a" * 40  # the admin token, built short so nothing looks like a key
 READER = "r" * 40
 GREEN_READER = "g" * 40
@@ -514,8 +515,7 @@ def test_the_gateway_judge_asks_the_decision_role_with_its_key(tmp_path):
 
 @pytest.fixture
 def routes(tmp_path):
-    if shutil.which("git") is None:
-        pytest.skip("git is not installed")
+    require_tool("git")
     repo = make_repo(tmp_path)
     s = service(tmp_path, repo)
     return Routes(s, {"CONTEXT_ADMIN_TOKEN": ADMIN})

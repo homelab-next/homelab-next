@@ -19,6 +19,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 import yaml
@@ -163,7 +164,8 @@ def test_the_judge_is_on_with_a_gateway_found_in_the_registry(tmp_path):
     r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
     assert r.returncode == 0, r.stdout + r.stderr
     judge = json.loads((tmp_path / "app" / "config.json").read_text())["judge"]
-    assert judge["url"].startswith("https://gateway-01.example.internal")
+    assert urlsplit(judge["url"]).hostname == "gateway-01.example.internal"
+    assert urlsplit(judge["url"]).scheme == "https"
     assert judge["key_env"] == "CONTEXT_GATEWAY_KEY" and judge["role"] == "fast-classifier"
     assert judge["threshold"] == 0.1 and judge["workers"] == 2 and judge["top_k"] == 5
     assert judge["ceiling"] == "green" and judge["on_error"] == "fallback"
