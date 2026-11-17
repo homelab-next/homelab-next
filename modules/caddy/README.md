@@ -136,7 +136,7 @@ so keeping the port closed there remains the deployment's job.
 | `caddy` | `restore` | one script, two passes: **check** (nothing written: the source and every file opened without following a link, root's and writable by no one else, the listing naming only `acme/` and `config/`, each a single-link regular file of the listed size and sha256), then **apply** (each copied through the descriptor that was checked into a staging file and renamed in, 0600); run `main` afterwards |
 | `caddy` | `upgrade` | refuses a target not pinned by tag and digest or from another repository, then records the bump |
 | `caddy_auth_proxy` | `readiness` | `docker_engine` readiness; the client secret and the cookie key in their form (the IdP is not asked: its public name is served by this edge, not up before the first install) |
-| `caddy_auth_proxy` | `health` | the container healthy; `/ping`; `/oauth2/auth` with no session is 401; signing in for each site is a 302 to the issuer's authorization endpoint for this client, with `code_challenge_method=S256` and the site's own callback (the proxy read the IdP's discovery document) |
+| `caddy_auth_proxy` | `health` | the container healthy; `/ping`; `/oauth2/auth` with no session is 401; signing in for each site, asked through the edge (`https://<site>/oauth2/start`, on its own address, TLS verified by the site name), is a 302 to the issuer's authorization endpoint for this client, with `code_challenge_method=S256` and the site's own callback (the proxy read the IdP's discovery document) |
 | `caddy_auth_proxy` | `backup`, `export`, `restore` | nothing: it keeps no state (sessions are the users' cookies) |
 
 `export` (so `backup`) writes a new snapshot on every run and reports `changed`.

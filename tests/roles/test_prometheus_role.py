@@ -432,6 +432,7 @@ def test_the_four_default_rules_use_the_settings(tmp_path):
     by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
     assert sorted(by) == [
         "DiskAlmostFull", "FilesystemReadOnly", "MemoryPressure", "NoTargets", "TargetDown",
+        "Watchdog",
     ]  # fmt: skip
     assert by["TargetDown"]["for"] == "20m" and by["TargetDown"]["expr"] == "up == 0"
     assert "> 85" in by["DiskAlmostFull"]["expr"]
@@ -632,3 +633,132 @@ def test_an_unfinished_or_malformed_record_fails_health(tmp_path, finished):
 def test_a_stale_record_fails_health(tmp_path):
     r = _forwarder(tmp_path, _record(tmp_path, _ago(3600)))
     assert r.returncode != 0 and "no fresh last-run record" in r.stdout
+
+
+# ----------------------------------------------------------------------------- the dead-man heartbeat
+
+
+def test_the_watchdog_rule_always_fires_and_carries_no_severity_that_pages(tmp_path):
+    assert render(tmp_path).returncode == 0
+    rules = yaml.safe_load((tmp_path / "data/config/rules.yml").read_text())
+    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
+    assert by["Watchdog"]["expr"] == "vector(1)" and "for" not in by["Watchdog"]
+    assert by["Watchdog"]["labels"]["severity"] == "none"
+
+
+def _placement(tmp_path, notify_host=None):
+    """A registry with both rows (the module's metrics row and the notify row) and the notify row
+    on ``notify_host`` (None: as the example has it, on the same host as the metrics row)."""
+    doc = yaml.safe_load(REGISTRY.read_text())
+    if notify_host:
+        doc["services"]["notify"]["host"] = notify_host
+    path = tmp_path / "registry.yml"
+    path.write_text(yaml.safe_dump(doc))
+    return path
+
+
+GETENT = """import json, sys
+names = json.load(open(NAMES))
+addrs = names.get(sys.argv[2])
+if addrs is None:
+    sys.exit(2)
+for a in addrs:
+    print(a + "      STREAM " + sys.argv[2])
+"""
+ELSEWHERE = str(load(REGISTRY).hosts["lake-core"].address)  # another host of the example lab
+
+
+def _alerts(tmp_path, registry, resolves=None, **kw):
+    """``resolves``: what the fake getent answers by name (default: the notify alias resolves to an
+    address that is not this guest's)."""
+    from rolerun import fake
+
+    names = tmp_path / "names.json"
+    names.write_text(
+        json.dumps(
+            resolves if resolves is not None else {"notify.svc.example.internal": [ELSEWHERE]}
+        )
+    )
+    kw.setdefault(
+        "prometheus_getent_cli",
+        fake(tmp_path / "getent", GETENT.replace("NAMES", repr(str(names)))),
+    )
+    extra = pvars(
+        tmp_path,
+        prometheus_unit_dir=str(tmp_path / "units"),
+        prometheus_notify_allow_plain_http=True,
+        prometheus_notify_auth_file=str(tmp_path / "auth" / "token"),
+        prometheus_notify_test_on_change=False,
+        **kw,
+    )
+    extra["hnx_registry_file"] = str(registry)
+    return run_role(tmp_path, ROLE, "alerts", extra, env=SECRETS, check=True)
+
+
+def _outcome(out, task):
+    """How the named task ended in the play's output: ok, skipping, fatal (or None: not reached)."""
+    lines = out.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("TASK [") and task in line:
+            for nxt in lines[i + 1 :]:
+                if nxt.strip():
+                    return nxt.split(":")[0].strip() if not nxt.startswith("[ERROR]") else "fatal"
+    return None
+
+
+def test_a_heartbeat_receiver_on_the_metrics_guest_is_refused(tmp_path):
+    """The notify service on the metrics guest is watched by the thing it watches (LL-571)."""
+    r = _alerts(tmp_path, _placement(tmp_path))
+    out = r.stdout + r.stderr
+    assert r.returncode != 0 and "runs on this" in out and "LL-571" in out
+    assert not (tmp_path / "state").exists()  # nothing was written before the refusal
+
+
+ALIAS = "notify.svc.example.internal"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [[GUEST], ["::1"], [__import__("socket").gethostbyname("localhost")], [ELSEWHERE, GUEST]],
+    ids=["an alias of this guest", "loopback v6", "loopback v4", "one of several is this guest"],
+)
+def test_a_receiver_that_resolves_to_this_guest_is_refused_whatever_the_registry_says(
+    tmp_path, answer
+):
+    r = _alerts(tmp_path, _placement(tmp_path, "lake-core"), resolves={ALIAS: answer})
+    out = r.stdout + r.stderr
+    assert r.returncode != 0 and "runs on this" in out and "resolves to" in out
+
+
+def test_a_receiver_that_does_not_resolve_is_refused_unless_accepted(tmp_path):
+    reg = _placement(tmp_path, "lake-core")
+    r = _alerts(tmp_path, reg, resolves={})
+    assert r.returncode != 0 and "does not resolve" in r.stdout + r.stderr
+    ok = _alerts(tmp_path, reg, resolves={}, prometheus_heartbeat_allow_unresolved=True)
+    assert _outcome(ok.stdout + ok.stderr, "Refuse a receiver that does not resolve") == "skipping"
+
+
+def test_the_refusal_is_lifted_by_turning_the_heartbeat_off(tmp_path):
+    r = _alerts(tmp_path, _placement(tmp_path), prometheus_heartbeat_topic="")
+    out = r.stdout + r.stderr
+    assert _outcome(out, "Refuse a heartbeat receiver") == "skipping", out
+
+
+def test_a_receiver_on_another_host_passes_the_placement_check(tmp_path):
+    r = _alerts(tmp_path, _placement(tmp_path, "lake-core"))
+    out = r.stdout + r.stderr
+    assert _outcome(out, "Refuse a heartbeat receiver") == "ok", out
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"prometheus_heartbeat_topic": "has space"},
+        {"prometheus_heartbeat_topic": "homelabnext-alerts"},  # the alert topic itself
+        {"prometheus_heartbeat_every_minutes": 0},
+        {"prometheus_heartbeat_every_minutes": 61},
+    ],
+)
+def test_a_malformed_heartbeat_setting_is_refused(tmp_path, over):
+    r = render(tmp_path, **over)
+    assert r.returncode != 0 and "prometheus: a registry id" in r.stdout + r.stderr

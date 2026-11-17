@@ -125,4 +125,35 @@
           the account(s) {{ (ntfy_drift.stdout | from_json).users }} that the environment does not
           provision (a token minted through the API, or an account a restore brought in): they
           survive a rotation of the secrets. Remove them (README, "Known limits").
+    - name: The dead-man watch ran lately and did not fail (only with beats)
+      when: ntfy_deadman_beats | length > 0
+      block:
+        - name: Read the watch's last-run record
+          ansible.builtin.slurp:
+            src: "{{ ntfy_last_run_dir }}/timer%3Antfy%2Fdeadman.json"
+          register: ntfy_deadman_record
+          failed_when: false
+        - name: Read that time, and the time now, on the host
+          ansible.builtin.command:
+            argv: ["date", "-u", "-d", "{{ ntfy_deadman_finished }}", "+%s"]
+          vars:
+            ntfy_deadman_finished: "{{ (ntfy_deadman_record.content | default('e30=') | b64decode | from_json).finished_at | default('1970-01-01T00:00:00Z') }}"
+          register: ntfy_deadman_finished_at
+          changed_when: false
+          check_mode: false
+        - name: Read the time now on the host
+          ansible.builtin.command:
+            argv: [date, -u, +%s]
+          register: ntfy_deadman_now
+          changed_when: false
+          check_mode: false
+        - name: The watch finished within five intervals and its last result was success
+          ansible.builtin.assert:
+            that:
+              - (ntfy_deadman_now.stdout | int) - (ntfy_deadman_finished_at.stdout | int) < (ntfy_deadman_interval_minutes | int) * 60 * 5 + 60
+              - (ntfy_deadman_record.content | default('e30=') | b64decode | from_json).result | default('') == 'success'
+            fail_msg: >-
+              ntfy: the dead-man watch has no fresh successful last-run record in {{ ntfy_last_run_dir }}: its
+              timer is not running, it cannot read the message cache or cannot page, so a silent
+              heartbeat would page nobody
   tags: [health]
