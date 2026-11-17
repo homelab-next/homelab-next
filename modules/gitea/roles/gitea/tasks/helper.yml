@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# One run of the helper (files/hnx_gitea.py) with the command gitea_helper_cmd. Its settings, the
+# credential among them, go in on standard input (never a command line) and the task's output is
+# hidden; what it prints is JSON of facts, and a failure's one-line reason (which holds no credential)
+# is shown. gitea_helper_extra adds to the settings.
+- name: Name the settings the helper is given
+  ansible.builtin.set_fact:
+    gitea_helper_input: >-
+      {{ {'bind': gitea_bind, 'port': gitea_port | int, 'hostname': gitea_hostname,
+          'ca_file': gitea_dir ~ '/tls/ca.pem', 'timeout': gitea_health_timeout | int,
+          'wait_s': gitea_ready_timeout | int, 'ssh_port': gitea_ssh_port | int,
+          'ssh_keys': dict(gitea_ssh_host_key_refs.keys() | list | zip(gitea_ssh_host_key_refs.keys() | map('regex_replace', '^', gitea_dir ~ '/sshkeys/gitea.') | list)),
+          'expect_version': gitea_product_version, 'admin_user': gitea_admin_user,
+          'admin_password': (lookup('hnx_secret', gitea_admin_login_ref) if gitea_helper_cmd in ['health', 'signin'] else ''),
+          'pull_user': gitea_registry_pull_user,
+          'pull_token': (lookup('hnx_secret', gitea_pull_auth_ref) if gitea_registry_pull_user != '' and gitea_helper_cmd == 'health' else '')}
+         | combine(gitea_helper_extra | default({})) | to_json }}
+  no_log: true
+
+- name: Run the helper
+  ansible.builtin.command:
+    # the script itself is the role's file, run with -c: nothing has to be installed first (health
+    # writes nothing), and what runs is exactly what the role shipped
+    argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', 'hnx_gitea.py') }}", "{{ gitea_helper_cmd }}"]
+    stdin: "{{ gitea_helper_input }}"
+  register: gitea_helper_result
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: The helper succeeded
+  ansible.builtin.assert:
+    that: gitea_helper_result.rc == 0
+    fail_msg: "forge: {{ gitea_helper_cmd }} failed: {{ gitea_helper_result.stderr | default('') | trim | truncate(500) }}"
+  when: gitea_helper_must_pass | default(true)
+
+- name: Read what the helper reported
+  ansible.builtin.set_fact:
+    gitea_facts: "{{ gitea_helper_result.stdout | from_json if gitea_helper_result.rc == 0 else {} }}"

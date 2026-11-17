@@ -20,10 +20,14 @@
     mode: "0644"
     force: false
 
+# Without recommends: Debian's package recommends the textfile collectors, which pull in ipmitool and openipmi, and
+# openipmi's init script fails at every boot on a guest with no IPMI device: a standing failed unit on every
+# guest hides the real ones (seen on all pm205 guests, 2026-11-17).
 - name: Install the node exporter (keeping the argument file the role wrote)
   ansible.builtin.apt:
     name: prometheus-node-exporter
     state: present
+    install_recommends: false
     dpkg_options: force-confold
 
 - name: Write the arguments and restart while a restart is owed

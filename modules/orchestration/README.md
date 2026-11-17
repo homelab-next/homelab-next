@@ -40,12 +40,12 @@ which is a new pin, never a silent change.
 
 | Path (defaults) | Content | Owner, mode |
 |---|---|---|
-| `/opt/hnx-orchestration/releases/<sha16>/controller`, `current`, `bin/controller` | the pinned binary and the links the unit runs | root, 0755 |
-| `/etc/orchestration/controller.yaml` | the configuration, from the variables below | root:service group, 0640 |
-| `/etc/orchestration/api-tokens.yaml` | each caller's **sha256 digest**, never a token | root:service group, 0640 |
-| `/etc/orchestration/profiles/*.yaml` | the site's profile files (`orchestration_profiles_src`) plus, while the runner is the smoke session, the health check's one agent | root:service group, 0640 |
-| `/etc/orchestration/homes/<backend>/` | the runner home of each backend; with a gateway, a `config.yaml` naming the gateway's URL and the backend's role alias, and the gateway key | root:service group, 0750 / 0640 |
-| `/etc/orchestration/events.token` | the events forwarder's bearer token (only with a forwarder); the unit's `LoadCredential=` reads it as root and the controller reads the copy under `/run/credentials/<unit>/` at start | root, 0600 |
+| `/opt/hnx/orchestration/releases/<sha16>/controller`, `current`, `bin/controller` | the pinned binary and the links the unit runs | root, 0755 |
+| `/etc/hnx/orchestration/controller.yaml` | the configuration, from the variables below | root:service group, 0640 |
+| `/etc/hnx/orchestration/api-tokens.yaml` | each caller's **sha256 digest**, never a token | root:service group, 0640 |
+| `/etc/hnx/orchestration/profiles/*.yaml` | the site's profile files (`orchestration_profiles_src`) plus, while the runner is the smoke session, the health check's one agent | root:service group, 0640 |
+| `/etc/hnx/orchestration/homes/<backend>/` | the runner home of each backend; with a gateway, a `config.yaml` naming the gateway's URL and the backend's role alias, and the gateway key | root:service group, 0750 / 0640 |
+| `/etc/hnx/orchestration/events.token` | the events forwarder's bearer token (only with a forwarder); the unit's `LoadCredential=` reads it as root and the controller reads the copy under `/run/credentials/<unit>/` at start | root, 0600 |
 | `/var/lib/hnx-modules/orchestration/` | the data root: `controller.db`, `runs/`, `usage/`, `export/` | service user, 0750 / 0700 |
 | `/etc/systemd/system/hnx-<instance>.service` | the unit | root, 0644 |
 

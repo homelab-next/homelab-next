@@ -39,10 +39,10 @@
               - "--regid={{ orchestration_group | default('hnx-orchestrator') }}"
               - --clear-groups
               - --no-new-privs
-              - "{{ orchestration_install_dir | default('/opt/hnx-orchestration') }}/bin/controller"
+              - "{{ orchestration_install_dir | default('/opt/hnx/orchestration') }}/bin/controller"
               - serve
               - --config
-              - "{{ orchestration_config_dir | default('/etc/orchestration') }}/controller.yaml"
+              - "{{ orchestration_config_dir | default('/etc/hnx/orchestration') }}/controller.yaml"
               - --migrate-only
               - --migrate-backup
               - "{{ orchestration_data_root | default('/var/lib/hnx-modules/orchestration') }}/export/migrate-{{ ansible_date_time.iso8601_basic_short }}.bak"
