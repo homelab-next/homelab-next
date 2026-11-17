@@ -79,6 +79,7 @@ def report(
     shared: dict[str, float] | None = None,
     phases: dict[str, dict[str, float]] | None = None,
     shared_budget: float | None = None,
+    shared_budgets: dict[str, float] | None = None,
     budgets: dict[str, float],
     default_budget: float,
     exitstatus: int,
@@ -97,13 +98,33 @@ def report(
         "shared": dict(sorted((shared or {}).items())),
         "phases": dict(sorted((phases or {}).items())),
         "shared_budget": shared_budget,
+        "shared_budgets": dict(sorted((shared_budgets or {}).items())),
         "budgets": dict(sorted(budgets.items())),
         "default_budget": default_budget,
         "exitstatus": exitstatus,
     }
 
 
-def _check_group(group: str, reports: list[dict]) -> tuple[list[str], dict[str, float]]:
+def load_shared_limits(pyproject: Path) -> tuple[float, dict[str, float]]:
+    """The shared-fixture setup budgets the merge enforces, read from ``pyproject.toml`` here and
+    not from the shard reports (a shard cannot loosen its own limit): ``(default, per suite)``."""
+    import tomllib
+
+    ini = tomllib.loads(pyproject.read_text(encoding="utf-8"))["tool"]["pytest"]["ini_options"]
+    per: dict[str, float] = {}
+    for line in ini.get("suite_shared_budgets", []):
+        suite, sep, secs = line.partition("=")
+        if not sep or not suite.strip():
+            raise ValueError(f"suite_shared_budgets: expected '<suite> = <seconds>', got {line!r}")
+        per[suite.strip().rstrip("/")] = float(secs)
+    return float(ini["suite_shared_budget_default"]), per
+
+
+def _check_group(
+    group: str,
+    reports: list[dict],
+    shared_limits: tuple[float, dict[str, float]] | None = None,
+) -> tuple[list[str], dict[str, float]]:
     problems: list[str] = []
     counts = {r["of"] for r in reports}
     if len(counts) != 1:
@@ -143,17 +164,31 @@ def _check_group(group: str, reports: list[dict]) -> tuple[list[str], dict[str, 
     totals: dict[str, float] = {}
     for r in reports:
         shared = r.get("shared") or {}
+        if shared and r.get("shared_budget") is None:
+            problems.append(
+                f"{group}: shard {r['shard']}/{n} reports shared fixture setup but no "
+                "shared_budget (a report from a plugin that does not apply the limit)"
+            )
+        for suite, secs in shared.items():
+            if not secs <= r["times"].get(suite, 0.0):  # a NaN is wrong too
+                problems.append(
+                    f"{group}: {suite}: shard {r['shard']}/{n} reports {secs:.1f}s of shared "
+                    f"fixture setup in {r['times'].get(suite, 0.0):.1f}s of suite time"
+                )
         for suite, secs in r["times"].items():
             # the budgeted figure leaves out each shard's once-per-shard fixture setup, so the
             # shard count does not inflate it; that setup has a per-shard budget of its own
             totals[suite] = totals.get(suite, 0.0) + secs - shared.get(suite, 0.0)
-        limit = r.get("shared_budget")
         for suite, secs in sorted(shared.items()):
+            if shared_limits is not None:
+                limit: float | None = shared_limits[1].get(suite, shared_limits[0])
+            else:
+                limit = (r.get("shared_budgets") or {}).get(suite, r.get("shared_budget"))
             if limit is not None and not secs <= limit:
                 problems.append(
                     f"{group}: {suite}: shard {r['shard']}/{n} spent {secs:.1f}s setting up "
                     f"module/session fixtures > {limit:.1f}s per shard "
-                    "(suite_shared_budget_default in pyproject.toml)"
+                    "(suite_shared_budget_default / suite_shared_budgets in pyproject.toml)"
                 )
     budgets, default = reports[0]["budgets"], reports[0]["default_budget"]
     for suite, secs in sorted(totals.items()):
@@ -166,7 +201,11 @@ def _check_group(group: str, reports: list[dict]) -> tuple[list[str], dict[str, 
     return problems, totals
 
 
-def merge(reports: list[dict], groups: list[str] | None = None) -> list[str]:
+def merge(
+    reports: list[dict],
+    groups: list[str] | None = None,
+    shared_limits: tuple[float, dict[str, float]] | None = None,
+) -> list[str]:
     """Every problem with the reports, as lines; the per-suite table goes to stdout."""
     by_group: dict[str, list[dict]] = {}
     problems: list[str] = []
@@ -178,7 +217,7 @@ def merge(reports: list[dict], groups: list[str] | None = None) -> list[str]:
     if groups is not None and sorted(by_group) != sorted(groups):
         problems.append(f"groups reported {sorted(by_group)}, expected {sorted(groups)}")
     for group, rs in sorted(by_group.items()):
-        found, totals = _check_group(group, rs)
+        found, totals = _check_group(group, rs, shared_limits)
         problems += found
         print(f"{group}: {len(rs)} shards, seconds per shard:", end="")
         for r in sorted(rs, key=lambda r: r["shard"]):
@@ -209,6 +248,11 @@ def _load(paths: list[str]) -> list[dict]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("paths", nargs="+", help="shard reports, or directories holding them")
+    ap.add_argument(
+        "--pyproject",
+        default=str(Path(__file__).resolve().parents[1] / "pyproject.toml"),
+        help="where the shared-fixture setup budgets are read from (not from the reports)",
+    )
     ap.add_argument("--groups", help="the groups (Python versions) that must all report, a,b")
     args = ap.parse_args(argv)
     try:
@@ -221,8 +265,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     groups = [g.strip() for g in args.groups.split(",") if g.strip()] if args.groups else None
     try:
-        problems = merge(reports, groups)
-    except (KeyError, TypeError, AttributeError) as exc:
+        problems = merge(reports, groups, load_shared_limits(Path(args.pyproject)))
+    except (KeyError, TypeError, AttributeError, OSError, ValueError) as exc:
         print(f"shard_report: a malformed report: {exc!r}", file=sys.stderr)
         return 2
     for p in problems:

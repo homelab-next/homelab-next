@@ -842,7 +842,7 @@ def test_a_heavy_shared_fixture_has_a_per_shard_budget_of_its_own(tmp_path):
     assert ok.returncode == 0, ok.stdout
 
 
-def _report(shard, times, shared, limit=30.0):
+def _report(shard, times, shared, limit=15.0):
     return shard_report.report(
         group="3.12", index=shard, count=2, collected=["t::a", "t::b"],
         selected=[["t::a"], ["t::b"]][shard - 1], ran=[["t::a"], ["t::b"]][shard - 1],
@@ -864,3 +864,71 @@ def test_the_merge_sums_work_and_checks_shared_setup_per_shard(capsys):
     for r in old:
         r.pop("shared_budget")
     assert shard_report.merge(old) == []  # reports from before the split still merge
+
+
+def test_a_suite_can_have_its_own_shared_setup_budget(tmp_path):
+    _project(tmp_path, heavy__test_heavy=HEAVY_FIXTURE)
+    ini = tmp_path / "pytest.ini"
+    ini.write_text(
+        ini.read_text()
+        + "suite_shared_budget_default = 0.1\nsuite_shared_budgets =\n    heavy = 5\n"
+    )
+    assert _pytest(tmp_path).returncode == 0  # 0.4 s is over the default but under heavy's own
+    ini.write_text(ini.read_text().replace("heavy = 5", "heavy = 0.2"))
+    proc = _pytest(tmp_path)
+    assert proc.returncode == 1 and "heavy (shared fixture setup):" in proc.stdout, proc.stdout
+
+
+def test_this_repos_shared_setup_budgets_are_per_suite():
+    default, per = shard_report.load_shared_limits(Path(ROOT) / "pyproject.toml")
+    assert default == 15.0 and per["tests/roles"] == 30.0  # measured 18.8 s on twelve shards
+
+
+def test_the_merge_rejects_shared_setup_the_suite_time_cannot_hold():
+    bad = [_report(1, {"s": 5.0}, {"s": 9.0}), _report(2, {"s": 5.0}, {"s": 1.0})]
+    problems = shard_report.merge(bad)
+    assert any("shard 1/2 reports 9.0s of shared fixture setup in 5.0s" in p for p in problems)
+    nan = [_report(1, {"s": 5.0}, {"s": float("nan")}), _report(2, {"s": 5.0}, {"s": 1.0})]
+    assert any("reports nan" in p for p in shard_report.merge(nan))
+
+
+def test_the_merge_rejects_shared_setup_reported_without_its_budget():
+    r1 = _report(1, {"s": 5.0}, {"s": 1.0})
+    r1.pop("shared_budget")
+    problems = shard_report.merge([r1, _report(2, {"s": 5.0}, {"s": 1.0})])
+    assert any("shard 1/2 reports shared fixture setup but no shared_budget" in p for p in problems)
+
+
+def test_the_merge_enforces_the_configured_shared_limit_not_the_reports_own():
+    pinned = (15.0, {"s": 30.0})
+    # a shard that reports a generous limit of its own is held to the configuration
+    loose = [{**_report(1, {"s": 21.0}, {"s": 20.0}, limit=99.0)}, _report(2, {"s": 1.0}, {})]
+    assert shard_report.merge(loose) == []  # no pinned limits: the report's own are taken
+    assert shard_report.merge(loose, shared_limits=pinned) == []  # s has 30 s
+    assert any(
+        "spent 20.0s" in p and "> 15.0s per shard" in p
+        for p in shard_report.merge(loose, shared_limits=(15.0, {}))
+    )
+    other = [_report(1, {"t": 21.0}, {"t": 20.0}, limit=99.0), _report(2, {"t": 1.0}, {})]
+    assert any("per shard" in p for p in shard_report.merge(other, shared_limits=pinned))
+
+
+def test_the_merge_command_reads_the_shared_limits_from_the_pyproject(tmp_path):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    for i in (1, 2):
+        r = _report(i, {"s": 21.0 if i == 1 else 1.0}, {"s": 20.0 if i == 1 else 0.0}, limit=99.0)
+        (reports / f"{i}.json").write_text(json.dumps(r))
+    cfg = tmp_path / "cfg.toml"
+
+    def run(text):
+        cfg.write_text(text)
+        return _merge(reports, "--pyproject", cfg)
+
+    head = "[tool.pytest.ini_options]\nsuite_shared_budget_default = {}\n"
+    assert run(head.format(15))[0] == 1  # 20 s over 15, whatever the report says
+    assert "> 15.0s per shard" in run(head.format(15))[1]
+    assert run(head.format(25) + 'suite_shared_budgets = ["s = 10"]\n')[0] == 1
+    assert run(head.format(10) + 'suite_shared_budgets = ["s = 30"]\n')[0] == 0
+    assert _merge(reports, "--pyproject", tmp_path / "missing.toml")[0] == 2
+    assert run("[tool.pytest.ini_options]\n")[0] == 2  # no default configured

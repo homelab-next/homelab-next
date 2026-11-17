@@ -9,7 +9,7 @@ Configuration is in ``[tool.pytest.ini_options]`` of ``pyproject.toml``.
 setup, call and teardown time of every test is summed per suite, less the setup of fixtures shared
 by several tests (module, class, package, session scope), which runs once in each shard that needs
 it and so grows with the shard count: that is kept out of the budgeted figure and budgeted per
-shard instead (``suite_shared_budget_default``); a suite over its budget fails the
+shard instead (``suite_shared_budget_default``, ``suite_shared_budgets`` per suite); a suite over its budget fails the
 session (exit 1) and the summary names it.  ``suite_budget_default`` (seconds) applies to every
 suite, ``suite_budgets`` (``"<suite> = <seconds>"`` lines) overrides it per suite, and the
 environment variable ``HNX_SUITE_BUDGET_SCALE`` multiplies every budget (a slow machine, a coverage
@@ -92,7 +92,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini(
         "suite_shared_budget_default",
         "per-suite, per-shard budget for the setup of module/class/package/session fixtures, seconds",
-        default="30",
+        default="15",
+    )
+    parser.addini(
+        "suite_shared_budgets",
+        "per-suite overrides of the shared-fixture setup budget: '<suite> = <seconds>' lines",
+        type="linelist",
     )
     parser.addini("skip_reasons", "regular expressions a skip reason must match", type="linelist")
     parser.addini("quarantine_max_days", "longest allowed quarantine, days", default="90")
@@ -192,6 +197,7 @@ def pytest_configure(config: pytest.Config) -> None:
         "phases": {},
         "shared": {},
         "shared_default": float(config.getini("suite_shared_budget_default")),
+        "shared_budgets": parse_budgets(config.getini("suite_shared_budgets")),
         "current": None,
         "over": [],
         "quarantined": [],
@@ -402,6 +408,10 @@ def _budget(st: dict, suite: str) -> float:
     return st["budgets"].get(suite, st["default"]) * st["scale"]
 
 
+def _shared_budget(st: dict, suite: str) -> float:
+    return st["shared_budgets"].get(suite, st["shared_default"]) * st["scale"]
+
+
 def _work(st: dict, suite: str) -> float:
     """The suite's time without the once-per-shard fixture setup (the budgeted figure)."""
     return st["times"].get(suite, 0.0) - st["shared"].get(suite, 0.0)
@@ -478,9 +488,9 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus) -> None:
         for suite in sorted(st["times"])
         if _work(st, suite) > _budget(st, suite)
     ] + [
-        (f"{suite} (shared fixture setup)", secs, st["shared_default"] * st["scale"])
+        (f"{suite} (shared fixture setup)", secs, _shared_budget(st, suite))
         for suite, secs in sorted(st["shared"].items())
-        if secs > st["shared_default"] * st["scale"]
+        if secs > _shared_budget(st, suite)
     ]
     if st["over"] and session.exitstatus == 0:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
@@ -498,6 +508,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus) -> None:
             shared=st["shared"],
             phases=st["phases"],
             shared_budget=st["shared_default"] * st["scale"],
+            shared_budgets={s: v * st["scale"] for s, v in st["shared_budgets"].items()},
             budgets={suite: secs * st["scale"] for suite, secs in st["budgets"].items()},
             default_budget=st["default"] * st["scale"],
             exitstatus=int(session.exitstatus),
