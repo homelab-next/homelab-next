@@ -6,6 +6,7 @@
     that:
       - llamacpp_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
       - llamacpp_backend in llamacpp_backends
+      - llamacpp_mode in llamacpp_modes
       - llamacpp_image is match(llamacpp_ref_pattern)
       # the image is the backend's own build: server-vulkan-b<N> for vulkan, server-cuda-b<N> for cuda ...
       - llamacpp_tag is match('^' ~ llamacpp_tag_prefix[llamacpp_backend] ~ 'b[0-9]{1,6}\Z')
@@ -41,7 +42,7 @@
       - llamacpp_unit_name is match('^[A-Za-z0-9@._-]+[.]service\Z')
       - llamacpp_start_timeout_s | int >= 60 and llamacpp_start_timeout_s | int <= 86400
     fail_msg: >-
-      llamacpp: a registry id, a backend (vulkan, sycl, cuda or cpu) with that backend's image
+      llamacpp: a registry id, a mode (generate or decision), a backend (vulkan, sycl, cuda or cpu) with that backend's image
       pinned by tag (server-vulkan-b<N>, server-intel-b<N>, server-cuda-b<N>, server-b<N>) and
       digest, the guest's IPv4 address to publish on (not all interfaces), an unprivileged port,
       a container uid and gid of 1000 or more, canonical absolute paths, a model repository, a
