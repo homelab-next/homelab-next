@@ -468,9 +468,33 @@ def test_a_fresh_key_is_accepted_only_for_a_proved_export_and_the_archive_is_pro
     (_builtin_manifest(), "other", FRESH, "origin must be one of"),
     ({**_builtin_manifest(), "secret_key_source": "guessed"}, "generated", FRESH, "unknown SECRET_KEY source"),
 ])  # fmt: skip
-def test_every_way_a_key_does_not_fit_the_export_is_refused(manifest, origin, values, message):
+def test_every_way_a_key_does_not_fit_the_export_is_refused(
+    tmp_path, manifest, origin, values, message
+):
+    clean = make_dump(tmp_path / "clean.zip")  # the archive is clean: only the named fault is left
     with pytest.raises(helper.HelperError, match=message):
-        helper.check_app_key({"values": values, "origin": origin, "manifest": manifest})
+        helper.check_app_key(
+            {"values": values, "origin": origin, "manifest": manifest, "zip": str(clean)}
+        )
+
+
+@pytest.mark.parametrize("zpath", [None, ""])
+def test_a_fresh_key_without_the_archive_to_prove_again_is_refused(zpath):
+    cfg = {"values": FRESH, "origin": "generated", "manifest": _builtin_manifest()}
+    if zpath is not None:
+        cfg["zip"] = zpath
+    with pytest.raises(helper.HelperError, match="needs the export's archive"):
+        helper.check_app_key(cfg)
+
+
+def test_the_encrypted_table_list_is_the_one_audited_for_the_pinned_release():
+    """APP_KEY_USES was read from the pinned release's source: bumping the image fails here until
+    the list is audited again against the new release and APP_KEY_USES_RULES follows it."""
+    defaults = yaml.safe_load((FILES.parent / "defaults" / "main.yml").read_text())
+    tag = defaults[f"{P}_image"].split("@")[0].rsplit(":", 1)[1]
+    manifest = yaml.safe_load((FILES.parents[2] / "module.yml").read_text())
+    assert tag.removesuffix("-rootless") == helper.APP_KEY_USES_RULES
+    assert str(manifest["product"]["version"]) == helper.APP_KEY_USES_RULES
 
 
 def test_a_source_with_its_own_key_is_copied_as_before():

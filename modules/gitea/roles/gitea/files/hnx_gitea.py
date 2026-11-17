@@ -90,7 +90,9 @@ BUILTIN_APP_KEY = "".join(("!#@", "FDEWREWR", "&*("))
 KEY_CONFIGURED, KEY_BUILTIN = "configured", "builtin-default"
 #: how the target's SECRET_KEY is chosen (the role's gitea_app_key_origin): the source's, or a fresh one
 KEY_ORIGINS = ("source", "generated")
-#: the release whose source the list below was read from (a proof made under another list is refused)
+#: the release whose source the list below was read from (a proof made under another list is
+#: refused); a test ties it to the pinned image's version, so an image bump fails until the list is
+#: audited again against the new release's source
 APP_KEY_USES_RULES = "28.4.0"
 #: every place that release keeps data encrypted with SECRET_KEY (every caller of
 #: secret.EncryptSecret/AesEncrypt with setting.SecretKey), table -> columns read:
@@ -277,8 +279,12 @@ def check_app_key(cfg: dict) -> dict:
             "encrypted under the default"
         )
     check_unused_proof(manifest.get("secret_key_unused_proof"))
-    if cfg.get("zip"):
-        unused_key_proof(from_dump(cfg["zip"], app_key_uses))
+    if not cfg.get("zip"):
+        raise HelperError(
+            "a fresh SECRET_KEY needs the export's archive to prove again that nothing is "
+            "encrypted under the built-in one: refusing on the manifest's word alone"
+        )
+    unused_key_proof(from_dump(cfg["zip"], app_key_uses))
     if values.get("secret_key") in ("", None, BUILTIN_APP_KEY):
         raise HelperError(
             "the configured SECRET_KEY is empty or the built-in default: set a fresh one"
