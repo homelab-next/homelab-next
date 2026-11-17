@@ -24,11 +24,21 @@
       - media_published_url == '' or media_published_url is match('^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9_.-]*)*\Z')
       - media_expected_server_id == '' or media_expected_server_id is match('^[0-9a-f]{32}\Z')
       - media_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      # a byte count: 0 (off) or 1 GiB to 1 TiB; a bool, a float or a unit ("8g") is refused
+      - media_transcode_tmpfs_size | string is match('^(0|[1-9][0-9]{0,15})\Z')
+      - >-
+        media_transcode_tmpfs_size | int == 0 or
+        (media_transcode_tmpfs_size | int >= media_transcode_tmpfs_min and media_transcode_tmpfs_size | int <= media_transcode_tmpfs_max)
+      # tmpfs pages count against the container's memory limit: it must hold both mounts and headroom
+      - >-
+        (media_mem_limit[:-1] | int) * media_mem_units[media_mem_limit[-1]] >=
+        media_transcode_tmpfs_size | int + media_tmp_tmpfs_size + media_mem_headroom
     fail_msg: >-
       media: a registry id, an image pinned by tag and digest, the guest's IPv4 address to publish
       on (not all interfaces), a port, a container uid and gid of 1000 or more, absolute canonical
       directories with the library outside the data root and not a host-wide directory,
       media_quick_connect true or false, media_hwaccel none (hardware transcoding is not supported
       yet), a timezone, an http(s) published URL or empty, a 32-hex expected server id or empty,
-      and a memory limit like 8g
+      and a memory limit like 12g that covers the transcode tmpfs (a byte count, 0 or 1 GiB to 1 TiB)
+      plus /tmp and 2 GiB of headroom
   tags: [health, backup, restore, export, upgrade]
