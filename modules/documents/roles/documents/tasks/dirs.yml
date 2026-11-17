@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's (root); every directory under it belongs to the container that
+# writes it, so each opens its files as its own user and the export (written by the application) is
+# the application's.
+- name: Create the data root and the directories under it
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ documents_data_root }}", owner: "{{ documents_owner }}", group: "{{ documents_group }}", mode: "0750"}
+    - {path: "{{ documents_data_root }}/data", owner: "{{ documents_app_uid | int }}", group: "{{ documents_app_gid | int }}", mode: "0700"}
+    - {path: "{{ documents_data_root }}/media", owner: "{{ documents_app_uid | int }}", group: "{{ documents_app_gid | int }}", mode: "0700"}
+    - {path: "{{ documents_data_root }}/consume", owner: "{{ documents_app_uid | int }}", group: "{{ documents_app_gid | int }}", mode: "0770"}
+    - {path: "{{ documents_data_root }}/export", owner: "{{ documents_app_uid | int }}", group: "{{ documents_app_gid | int }}", mode: "0700"}
+    - {path: "{{ documents_data_root }}/broker", owner: "{{ documents_broker_uid | int }}", group: "{{ documents_broker_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]
