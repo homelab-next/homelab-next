@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes, keyed by the slot and renamed to
+# the instance the site selects; version is product.version (never repeated here), host is the
+# module's host role. The lab registry (lab/services.yml) must carry it exactly as bound
+# (hnx modules check, docs/modules/registry-rows.md). auth: own - the product's local accounts and
+# API tokens. No public_hostname: the library is private by default; a site that wants a route adds
+# one with the public_hostname and the grant, and sets documents_url so the application trusts the name.
+services:
+  documents:
+    capability: documents
+    impl: paperless-ngx
+    host: server
+    protocol: http
+    port: 8000
+    health: {kind: http, path: /accounts/login/, expect_status: 200}
+    owner: operator
+    tls: none
+    auth: own
+    tags: [documents]
+    description: The document library with its own accounts and API tokens, OCR and a consumption inbox. No public route.

@@ -1,0 +1,20 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role ntfy); local changes are overwritten.
+[Unit]
+Description=homelabnext dead-man watch (pages when an expected heartbeat topic goes quiet)
+
+[Service]
+Type=oneshot
+# runs as root, like the last-run writer; the script never creates a file beside the server's
+# message cache (it reads a stopped server's cache immutable: see newest())
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ ntfy_last_run_dir }} --group {{ ntfy_last_run_group }} --job timer:ntfy/deadman --unit %n --calendar "{{ ntfy_deadman_schedule }}" --delay 0
+ExecStart=/usr/local/libexec/homelabnext/ntfy-deadman-watch
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ ntfy_last_run_dir }} --group {{ ntfy_last_run_group }} --job timer:ntfy/deadman --unit %n --calendar "{{ ntfy_deadman_schedule }}" --delay 0
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+# the message cache is only read (mode=ro): the namespace keeps it read-only, so a cache that needs
+# a journal recovery fails loud (exit 1) instead of being written by this script
+ReadWritePaths={{ ntfy_deadman_state_dir }} {{ ntfy_last_run_dir }}
+ReadOnlyPaths={{ ntfy_data_root }}/db
+PrivateTmp=true

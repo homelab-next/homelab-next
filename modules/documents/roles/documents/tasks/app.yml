@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). No environment
+# holds a secret: the signing key (and the admin password, while the role creates the first
+# administrator) go in compose_app_secret_env. One image runs the web server, the task worker, the
+# consumer and the scheduler; the broker is a second container the application reaches by name.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    documents_app:
+      compose_app_name: documents
+      compose_app_dir: "{{ documents_dir }}"
+      compose_app_data_dir: "{{ documents_data_root }}"
+      compose_app_export_dir: "{{ documents_data_root }}/export"
+      compose_app_owner: "{{ documents_owner }}"
+      compose_app_group: "{{ documents_group }}"
+      compose_app_start: "{{ documents_start }}"
+      compose_app_validate_with_docker: "{{ documents_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          broker:
+            image: "{{ documents_broker_repository }}"
+            tag: "{{ documents_broker_tag }}"
+            digest: "{{ documents_broker_digest }}"
+            user: "{{ documents_broker_uid | int }}:{{ documents_broker_gid | int }}"
+            command: [redis-server, --save, "300", "1", --appendonly, "no"]
+            volumes: ["{{ documents_data_root }}/broker:/data"]
+            mem_limit: "{{ documents_broker_mem_limit }}"
+            healthcheck:
+              test: [CMD, redis-cli, ping]
+              interval: 15s
+              timeout: 5s
+              retries: 5
+              start_period: 5s
+          app:
+            image: "{{ documents_repository }}"
+            tag: "{{ documents_tag }}"
+            digest: "{{ documents_digest }}"
+            user: "{{ documents_app_uid | int }}:{{ documents_app_gid | int }}"
+            depends_on: [broker]
+            environment: "{{ documents_env }}"
+            ports: ["{{ documents_bind }}:{{ documents_port | int }}:{{ documents_container_port }}"]
+            volumes:
+              - "{{ documents_data_root }}/data:{{ documents_container_data }}"
+              - "{{ documents_data_root }}/media:{{ documents_container_media }}"
+              - "{{ documents_data_root }}/consume:{{ documents_container_consume }}"
+              - "{{ documents_data_root }}/export:{{ documents_container_export }}"
+            mem_limit: "{{ documents_mem_limit }}"
+            healthcheck:
+              test: [CMD, curl, -fsS, -o, /dev/null, "http://localhost:{{ documents_container_port }}/accounts/login/"]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 120s
+  vars:
+    documents_env_base:
+      PAPERLESS_REDIS: "{{ documents_broker_url }}"
+      PAPERLESS_TIME_ZONE: "{{ documents_timezone }}"
+      PAPERLESS_OCR_LANGUAGE: "{{ documents_ocr_languages | join('+') }}"
+      PAPERLESS_CONSUMER_RECURSIVE: "{{ documents_consumer_recursive | bool | to_json }}"
+      PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS: "{{ documents_consumer_subdirs_as_tags | bool | to_json }}"
+      PAPERLESS_TASK_WORKERS: "{{ documents_task_workers | int }}"
+      PAPERLESS_THREADS_PER_WORKER: "{{ documents_threads_per_worker | int }}"
+    documents_env_mail: "{{ {} if documents_mail_fetch | bool else {'PAPERLESS_EMAIL_TASK_CRON': 'disable'} }}"
+    documents_env_url: "{{ {'PAPERLESS_URL': documents_url} if documents_url | length > 0 else {} }}"
+    documents_env_admin: "{{ {'PAPERLESS_ADMIN_USER': documents_admin_user} if documents_admin_bootstrap | bool else {} }}"
+    documents_env: "{{ documents_extra_env | combine(documents_env_base, documents_env_mail, documents_env_url, documents_env_admin) }}"
+  tags: [health, backup, restore, export, upgrade]

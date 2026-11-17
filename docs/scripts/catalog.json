@@ -368,6 +368,25 @@
     },
     {
       "exit": {
+        "0": "done (for restore, the target equals the manifest by counts and by every file's checksum)",
+        "1": "a count or a checksum differs, or the dump is not intact",
+        "2": "usage error, a refused target or a command on an endpoint failed"
+      },
+      "id": "documents-migrate",
+      "inputs": "two endpoints named on the command line (an ssh destination and the application container, never a literal in this file); for restore, a dump directory written by dump",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "a dump directory (export.tar, dump-manifest.json) for dump; the counts as JSON for counts, the verification report for restore",
+      "owner": "maintainers",
+      "path": "tools/migrate/documents.py",
+      "purpose": "Copy a document library (every document with its archive copy and thumbnail, tags, correspondents, document types, custom fields, notes and accounts) from one instance to another with the product's own exporter and importer, and prove the copy by counts and by the checksum of every file.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "no clone beyond the baseline and no stale entry",
         "1": "a new or grown clone, a stale baseline entry, or a baseline loosened against the base",
         "2": "usage error, a bad baseline, an unusable base, or an update that would raise the total"
@@ -905,6 +924,7 @@
         "timer:lynis/scan",
         "timer:needrestart/check",
         "timer:needrestart/reboot",
+        "timer:ntfy/deadman",
         "timer:openbao/acme-renew",
         "timer:prometheus/alerts",
         "timer:rkhunter/scan",
@@ -1221,6 +1241,27 @@
     },
     {
       "exit": {
+        "0": "checked (and paged, if a beat changed state)",
+        "1": "the message cache could not be read or is not the schema this expects (nothing was judged)",
+        "2": "a page could not be sent; it stays owed to the next run"
+      },
+      "id": "ntfy-deadman-watch",
+      "inputs": "the notify service's message cache (read-only) and the previous state file",
+      "installs_to": "/usr/local/libexec/homelabnext/ntfy-deadman-watch",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the state file and, on a change between alive and silent, one message to the alert topic (publish token)",
+      "owner": "platform",
+      "path": "modules/ntfy/roles/ntfy/templates/deadman-watch.py.j2",
+      "purpose": "Page, through this notify service, when an expected heartbeat topic has gone quiet (the metrics path is dead), and once more when it is back.",
+      "status": "active",
+      "trigger": [
+        "timer:ntfy/deadman",
+        "role:ntfy"
+      ]
+    },
+    {
+      "exit": {
         "0": "the installed certificate is valid (renewed and installed, or not yet due); with --check, it is valid",
         "1": "with --check, the installed certificate is missing, invalid or due",
         "100": "could not measure (openssl cannot be run); nothing was checked or installed",
@@ -1391,14 +1432,14 @@
       "exit": {
         "0": "checked (and alerted, if the firing set changed)",
         "1": "the metrics service could not be asked (alerted once after the configured number of minutes) (or, with --test, the channel did not deliver)",
-        "2": "the alert could not be sent; it stays owed to the next run"
+        "2": "the alert or the heartbeat could not be sent; it stays owed to the next run"
       },
       "id": "prometheus-alert-notify",
       "inputs": "the metrics service's /api/v1/alerts on this host; the previous state file",
       "installs_to": "/usr/local/libexec/homelabnext/prometheus-alert-notify",
       "kind": "job",
       "language": "python",
-      "outputs": "the state file and the last send's outcome (owner-only) and, on a change of the firing set, one alert to the notify service (ntfy, publish token)",
+      "outputs": "the state file and the last send's outcome (owner-only) and, on a change of the firing set, one alert to the notify service (ntfy, publish token); and, while the Watchdog rule fires, the dead-man heartbeat (one minimum-priority message to the heartbeat topic, at most every few minutes)",
       "owner": "platform",
       "path": "modules/prometheus/roles/prometheus/templates/alert-notify.py.j2",
       "purpose": "Post to the notify service when the set of firing alerts of the metrics service changes, and when the metrics service itself cannot be asked.",
