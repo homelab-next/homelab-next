@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The service's dependencies are the container engine (docker_engine, applied to the guest before this
+# module), the voice model in the model store (model_store, applied before it) and the recordings in
+# the data root. It holds no credential in the secret store.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The voice model's listing is in the store
+      ansible.builtin.stat:
+        path: "{{ tts_listing }}"
+        follow: false
+      register: tts_listing_ready
+      failed_when: not (tts_listing_ready.stat.exists and tts_listing_ready.stat.isreg)
+    - name: The voice model's weights are in the store
+      ansible.builtin.stat:
+        path: "{{ tts_model_top }}/snapshots/{{ tts_model_revision }}/model.pth"
+      register: tts_weights_ready
+      failed_when: not tts_weights_ready.stat.exists
+    - name: The voice is there
+      ansible.builtin.include_tasks: voice.yml
+      when: tts_start | bool
+  tags: [readiness]

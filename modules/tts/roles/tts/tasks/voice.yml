@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# The voice is the operator's own recordings. Start refuses to go on without every one of them as a
+# regular file (a service that starts without them answers 503 to every job), and, when
+# tts_voice_expected_sha256 is set, without each listed one being exactly those bytes (a copy that was
+# cut short, or another take, is a different voice).
+- name: Look at every reference recording
+  ansible.builtin.stat:
+    path: "{{ tts_data_root }}/voice/{{ item }}"
+    follow: false
+    checksum_algorithm: sha256
+    get_checksum: "{{ item in tts_voice_expected_sha256 }}"
+  loop: "{{ tts_voice_files }}"
+  register: tts_voice_stat
+  tags: [health, readiness]
+
+- name: Each recording is a non-empty regular file
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg | default(false)
+      - item.stat.size | default(0) | int > 0
+    fail_msg: >-
+      tts: the reference recording {{ item.item }} is not a non-empty regular file in
+      {{ tts_data_root }}/voice. Copy the recordings from the archive (modules/tts/README.md, "The
+      voice") or restore an export; the service does not start on a voice it does not have.
+  loop: "{{ tts_voice_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  tags: [health, readiness]
+
+- name: Each recording the site named is exactly those bytes
+  ansible.builtin.assert:
+    that: item.stat.checksum == tts_voice_expected_sha256[item.item]
+    fail_msg: >-
+      tts: {{ item.item }} is not the recording the site pinned (tts_voice_expected_sha256): it may have
+      been cut short in a copy, or be another take, and that is a different voice
+  loop: "{{ tts_voice_stat.results | selectattr('item', 'in', tts_voice_expected_sha256) | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  tags: [health, readiness]
