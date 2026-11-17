@@ -7,6 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
+- Role `caddy_auth_proxy` health asked EVERY edge name to sign in, so the identity provider's own site (not behind the proxy) answered 404 and failed health. It now reads the deployed sites file (`caddy_auth_proxy_sites_file`, default under the `caddy` role's data root) and probes only the names whose site block imports `hnx_forward_auth`, and fails if none does. `caddy_auth_proxy_sites` keeps its meaning (the proxy's whitelist of return hosts).
 - node_exporter installs `prometheus-node-exporter` without recommends: they pulled `ipmitool` and `openipmi` onto every guest, and `openipmi` failed at every boot on a guest with no IPMI device, a standing failed unit that hides real ones.
 
 ### Breaking
