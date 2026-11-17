@@ -103,6 +103,12 @@ cannot write, fails health after `nifi_smoke_max_age_minutes`). `nifi_smoke_enab
 
 ## The events contract (what a flow emits)
 
+**Events are off until an HTTP forwarder exists.** This section is a contract; no emitter flow ships
+yet, and the `events` registry row is a bus that may listen only on its own host. So `nifi_events_url`
+is empty by default: readiness then reports that events are off and does **not** wait for the bus, and
+health never needs it. Set `nifi_events_url` to a forwarder's `scheme://host:port` to turn events on;
+readiness then waits for it. The query engine is always checked.
+
 NiFi publishes to the events forwarder by **HTTP**, the way every other publisher does, from an
 `InvokeHTTP` at the end of a flow (no extra processor bundle, one place to authenticate and validate):
 
