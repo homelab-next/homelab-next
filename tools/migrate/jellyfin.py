@@ -189,13 +189,18 @@ def _version_key(text: str) -> tuple[int, ...] | None:
 
 def pinned_version(module_dir: Path = MODULE_DIR) -> str:
     """``product.version`` of the module's manifest (the version its image pin carries)."""
-    text = (module_dir / "module.yml").read_text(encoding="utf-8")
-    m = re.search(
-        r"^product:[ \t]*\n(?:[ \t]+.*\n)*?[ \t]+version:[ \t]*[\"']?([0-9][0-9.]*)", text, re.M
-    )
-    if not m:
-        raise ImportFailed(f"{module_dir / 'module.yml'}: no product.version")
-    return m.group(1)
+    lines = (module_dir / "module.yml").read_text(encoding="utf-8").splitlines()
+    inside = False
+    for line in lines:  # a line scan of the top-level product: block (no YAML dependency)
+        if not line[:1].isspace():
+            inside = line.rstrip() == "product:"
+            continue
+        key, sep, value = line.strip().partition(":")
+        if inside and sep and key == "version":
+            version = value.strip().strip("\"'")
+            if _version_key(version) is not None:
+                return version
+    raise ImportFailed(f"{module_dir / 'module.yml'}: no product.version")
 
 
 def load_known(path: Path | None = None, *, expect_version: str | None = None) -> dict:
