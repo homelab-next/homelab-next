@@ -47,6 +47,8 @@ agent = ["PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
 # trino and nats are imported (homelabnext/lake/trino.py, homelabnext/conform/adapters/
 # nats_jetstream.py); records and decide declare pydantic, which no module imports yet (kept so
 # the extra names stay stable until the records and decide validation choice is made)
+# the semantic context adapter (hybrid BM25 + dense retrieval; txtai brings torch, so it is opt-in)
+context-semantic = ["txtai>=9.14"]
 trino = ["trino>=0.328"]
 records = ["pydantic>=2"]
 decide = ["pydantic>=2"]
