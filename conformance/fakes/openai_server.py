@@ -101,6 +101,14 @@ class Fault:
         return self.count is None or self._seen <= self.after + self.count
 
 
+def decision_noul(text: str, rules: dict[str, float]) -> float:
+    """The fake decision model's probability for a question's instructions."""
+    for needle, p in rules.items():
+        if needle in text:
+            return p
+    return round(hashlib.sha256(text.encode()).digest()[0] / 255, 4)
+
+
 def embed_vector(text: str, dim: int) -> list[float]:
     """Deterministic unit vector derived from the text."""
     out: list[float] = []
@@ -124,6 +132,8 @@ class FakeOpenAIServer:
         faults: list[Fault] | None = None,
         logprob: float | None = None,
         embed_dim: int = 8,
+        decision_models: list[str] | None = None,
+        decision_rules: dict[str, float] | None = None,
         context_length: int | dict[str, int] | None = None,
         api_keys: list[str] | None = None,
         key_limits: dict[str, int] | None = None,
@@ -138,6 +148,13 @@ class FakeOpenAIServer:
         self.faults = list(faults or [])
         self.logprob = logprob
         self.embed_dim = embed_dim
+        # decision models (llama.cpp's decision mode): served on POST /v1/systemone only, they
+        # refuse chat, completions and embeddings with 501. Each noul question is answered with
+        # the probability of the first decision_rules substring its instructions contain, else a
+        # deterministic one derived from them.
+        self.decision_models = set(decision_models or ())
+        self.models += [m for m in sorted(self.decision_models) if m not in self.models]
+        self.decision_rules = dict(decision_rules or {})
         # loaded context length reported per model in /v1/models (``max_model_len``, as vLLM
         # does); an int applies to every model, a dict per model id, None reports nothing
         self.context_length = context_length
@@ -349,11 +366,46 @@ class FakeOpenAIServer:
                     "/v1/chat/completions",
                     "/v1/completions",
                     "/v1/embeddings",
+                    "/v1/systemone",
                 ):
                     self._error(404, f"no route {path}", "not_found")
                     return
                 if model not in server.models:
                     self._error(404, f"model {model!r} not served", "model_not_found")
+                    return
+                if (path == "/v1/systemone") != (model in server.decision_models):
+                    # a decision model answers /v1/systemone only; a chat model has no such route
+                    self._error(
+                        501 if model in server.decision_models else 404,
+                        f"{path} is not served by model {model!r}",
+                        "not_implemented" if model in server.decision_models else "not_found",
+                    )
+                    return
+                if path == "/v1/systemone":
+                    questions = req.get("questions")
+                    if not isinstance(questions, dict):
+                        self._error(400, "questions must be an object", "invalid_request_error")
+                        return
+                    answers = {
+                        qid: {
+                            "type": "noul",
+                            "noul": decision_noul(
+                                str((q or {}).get("instructions", "")), server.decision_rules
+                            ),
+                        }
+                        for qid, q in questions.items()
+                    }
+                    n = sum(
+                        len(str((q or {}).get("instructions", "")).split())
+                        for q in questions.values()
+                    )
+                    self._send(
+                        200,
+                        {
+                            "answers": answers,
+                            "usage": {"input_tokens": n, "output_tokens": len(answers)},
+                        },
+                    )
                     return
                 if path == "/v1/embeddings":
                     inp = req.get("input", [])

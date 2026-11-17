@@ -22,7 +22,7 @@ type call struct {
 	id           string
 	start        time.Time
 	caller       *caller
-	kind         string // chat or embedding
+	kind         string // chat, embedding or decision
 	alias        string // the requested role alias: every reply's model
 	role         *Role
 	body         map[string]json.RawMessage
@@ -116,6 +116,13 @@ func (s *Server) parseCall(w http.ResponseWriter, r *http.Request, c *caller, ki
 	}
 	cl := &call{id: newRequestID(), start: s.now(), caller: c, kind: kind, alias: model, role: role,
 		body: body, bodyBytes: size, tlpFields: r.Header.Values("X-HNX-TLP")}
+	if kind == "decision" {
+		// the one thing the gateway reads of a decision body: questions is the object the
+		// backend answers from (it forwards the rest as given)
+		if q, ok := body["questions"]; !ok || !isJSONObject(q) {
+			return nil, badRequest("invalid_request", "the body needs a questions object")
+		}
+	}
 	if kind == "chat" {
 		if raw, ok := body["stream"]; ok && json.Unmarshal(raw, &cl.stream) != nil {
 			return nil, badRequest("invalid_request", "stream must be a boolean")
@@ -180,6 +187,12 @@ func (s *Server) admit(cl *call) *apiError {
 	return nil
 }
 
+// isJSONObject: raw is a JSON object.
+func isJSONObject(raw json.RawMessage) bool {
+	s := strings.TrimSpace(string(raw))
+	return strings.HasPrefix(s, "{")
+}
+
 // jsonInt reads raw as a JSON integer (digits only: no fraction, no exponent) of at least min
 // that fits an int64.
 func jsonInt(raw json.RawMessage, min int64) (int64, bool) {
@@ -198,10 +211,11 @@ const maxEstimate = 1 << 40
 // estimate is what admission reserves on the token and cost windows for a call to role (ADR-0038 R16):
 // the output it may produce (max_completion_tokens or max_tokens, else the role's
 // max_context_tokens, else the configured default; times n) plus its input, estimated from the
-// body size. An embedding call produces no output tokens: its estimate is its input.
+// body size. An embedding or decision call produces no output tokens: its estimate is its input.
 func (s *Server) estimate(cl *call, role *Role) int {
 	in := int64(estimateTokens(cl.bodyBytes))
-	if cl.kind == "embedding" {
+	if cl.kind == "embedding" || cl.kind == "decision" {
+		// a decision answers with probabilities, not text: like an embedding, its estimate is its input
 		return int(min(in, maxEstimate))
 	}
 	var out int64

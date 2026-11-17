@@ -272,7 +272,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     ap.add_argument("--judge-model", default="fast-classifier")
     ap.add_argument("--judge-save", help="write the live verdicts here for replay")
-    ap.add_argument("--judge-threshold", type=float, default=0.5)
+    ap.add_argument("--judge-threshold", type=float, default=0.10)
+    ap.add_argument("--judge-mode", choices=("gate", "rerank"), default="gate")
+    ap.add_argument("--judge-workers", type=int, default=2)
     ap.add_argument("--judge-top-k", type=int, default=5)
     ap.add_argument("--only", help="comma-separated contenders to run")
     ap.add_argument("--json", action="store_true", help="print the numbers as JSON")
@@ -302,7 +304,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         judge = _make_judge(a)
         if judge is not None:
             contenders["semantic+judge"] = _judged(
-                sem, judge, top_k=a.judge_top_k, threshold=a.judge_threshold
+                sem,
+                judge,
+                top_k=a.judge_top_k,
+                threshold=a.judge_threshold,
+                mode=a.judge_mode,
+                workers=a.judge_workers,
             )
     if a.only:
         keep = set(a.only.split(","))
@@ -350,7 +357,12 @@ def _make_judge(a):
             timeout=60.0,
             allow_plaintext=a.judge_allow_plaintext,
         )
-        live = GatewayJudge(client, model=a.judge_model, tag="hnx-context-eval")
+        live = GatewayJudge(
+            client,
+            model=a.judge_model,
+            tag="hnx-context-eval",
+            threshold=getattr(a, "judge_threshold", 0.10),
+        )
         a._judge = _Recording(live) if a.judge_save else live
         return a._judge
     return None
