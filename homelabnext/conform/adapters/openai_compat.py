@@ -25,7 +25,7 @@ import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -205,6 +205,36 @@ class OpenAICompat:
         proxy from ``HTTP_PROXY``/``HTTPS_PROXY`` is used."""
         body = {"model": model, "messages": list(messages), "max_tokens": max_tokens}
         return _chat_result(self._fields_json("/v1/chat/completions", body, fields))
+
+    def decide_fields(
+        self,
+        model: str,
+        questions: Mapping[str, str],
+        fields: Sequence[tuple[str, str]] = (),
+        *,
+        state: str | None = None,
+    ) -> dict[str, float]:
+        """Ask a decision role noul questions (``{id: instructions}``): ``POST /v1/systemone``
+        with the extra request header ``fields`` (as :meth:`chat_fields` sends them). Returns the
+        probability each answer carries, by question id."""
+        body: dict[str, Any] = {
+            "model": model,
+            "questions": {q: {"type": "noul", "instructions": t} for q, t in questions.items()},
+        }
+        if state is not None:
+            body["state"] = state
+        doc = self._fields_json("/v1/systemone", body, fields)
+        try:
+            out: dict[str, float] = {}
+            for qid in questions:
+                ans = doc["answers"][qid]
+                p = float(ans["noul"])
+                if ans["type"] != "noul" or not 0.0 <= p <= 1.0:
+                    raise ValueError(qid)
+                out[qid] = p
+            return out
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InferenceError("systemone: unexpected shape") from exc
 
     def _fields_json(
         self, path: str, body: dict[str, Any], fields: Sequence[tuple[str, str]]
