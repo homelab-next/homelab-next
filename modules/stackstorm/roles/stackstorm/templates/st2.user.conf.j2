@@ -1,0 +1,44 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role stackstorm); local changes are overwritten. It holds the database's
+# and the message bus's passwords: owner-only (st2's group reads it), never in the compose file.
+# The order of merging: st2.conf < st2.docker.conf < st2.user.conf
+[auth]
+api_url = http://{{ stackstorm_c_services.api.host }}:{{ stackstorm_c_services.api.port }}/
+
+[messaging]
+url = amqp://st2:{{ stackstorm_rabbitmq_pw }}@rabbitmq:5672
+
+[keyvalue]
+encryption_key_path = {{ stackstorm_c_keys }}/datastore_key.json
+
+[database]
+host = mongo
+db_name = st2
+username = st2
+password = {{ stackstorm_mongo_pw }}
+connection_retry_max_delay_m = 1
+connection_retry_backoff_mul = 1
+connection_timeout = 3000
+
+[content]
+packs_base_paths = {{ stackstorm_c_packs }}
+
+[coordination]
+url = redis://{{ stackstorm_c_services.cache.host }}:{{ stackstorm_c_services.cache.port }}
+
+[rbac]
+enable = True
+backend = default
+
+[actionrunner]
+# the pack's virtualenv is built from this interpreter (homelabnext needs Python 3.11)
+python_binary = {{ stackstorm_python_binary }}
+virtualenv_opts = --always-copy
+
+[garbagecollector]
+{% if stackstorm_retention_days | int > 0 %}
+action_executions_ttl = {{ stackstorm_retention_days | int }}
+action_executions_output_ttl = {{ [stackstorm_retention_days | int, 7] | min }}
+trigger_instances_ttl = {{ [stackstorm_retention_days | int, 7] | min }}
+{% endif %}
+collection_interval = 600

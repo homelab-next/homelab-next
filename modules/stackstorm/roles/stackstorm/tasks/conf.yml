@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# What the containers read from the host: st2.user.conf (both databases' passwords), the sign-in
+# file, the datastore's encryption key, the database's first-start script and the RBAC definitions.
+# Every file with a secret in it is written owner-only, its group st2's (or the database's), under
+# no_log; a changed file recreates nothing by itself (compose_app starts what changed).
+- name: Read the credentials
+  ansible.builtin.set_fact:
+    stackstorm_rabbitmq_pw: "{{ lookup('hnx_secret', stackstorm_rabbitmq_login_ref) }}"
+    stackstorm_mongo_pw: "{{ lookup('hnx_secret', stackstorm_mongo_login_ref) }}"
+  no_log: true
+
+- name: Write st2.user.conf
+  ansible.builtin.template:
+    src: st2.user.conf.j2
+    dest: "{{ stackstorm_data_root }}/config/st2.user.conf"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_gid | int }}"
+    mode: "0640"
+  register: stackstorm_conf_written
+  no_log: true
+
+- name: Hash the admin password (a salt derived from the user, so a re-run writes the same line)
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - passwd
+      - -apr1
+      - -salt
+      - "{{ (stackstorm_logical_id ~ ':' ~ stackstorm_admin_user) | hash('sha256') | truncate(8, true, '') }}"
+      - -stdin
+    stdin: "{{ lookup('hnx_secret', stackstorm_admin_login_ref) }}"
+  register: stackstorm_admin_hash
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Write the sign-in file
+  ansible.builtin.copy:
+    dest: "{{ stackstorm_data_root }}/config/htpasswd"
+    content: "{{ stackstorm_admin_user }}:{{ stackstorm_admin_hash.stdout | trim }}\n"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_gid | int }}"
+    mode: "0640"
+  register: stackstorm_htpasswd_written
+  no_log: true
+
+- name: Write the datastore's encryption key
+  ansible.builtin.copy:
+    dest: "{{ stackstorm_data_root }}/keys/datastore_key.json"
+    content: "{{ lookup('hnx_secret', stackstorm_datastore_key_ref) | trim }}\n"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_gid | int }}"
+    mode: "0440"
+  no_log: true
+
+- name: Write the database's first-start script
+  ansible.builtin.template:
+    src: mongo-init.js.j2
+    dest: "{{ stackstorm_data_root }}/mongo-init/10-st2-user.js"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_mongo_gid | int }}"
+    mode: "0640"
+
+- name: Write the RBAC roles (one file each)
+  ansible.builtin.template:
+    src: rbac-role.yaml.j2
+    dest: "{{ stackstorm_data_root }}/rbac/roles/{{ item.name }}.yaml"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_gid | int }}"
+    mode: "0640"
+  loop: "{{ stackstorm_rbac_roles }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: stackstorm_rbac_written
+
+- name: Write the RBAC assignments (one file each)
+  ansible.builtin.template:
+    src: rbac-assignment.yaml.j2
+    dest: "{{ stackstorm_data_root }}/rbac/assignments/{{ item.user }}.yaml"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_gid | int }}"
+    mode: "0640"
+  loop: "{{ stackstorm_rbac_assignments }}"
+  loop_control:
+    label: "{{ item.user }}"
+  register: stackstorm_rbac_assign_written

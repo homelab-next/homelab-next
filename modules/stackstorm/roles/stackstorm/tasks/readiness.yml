@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# The service's dependencies are the container engine (docker_engine, applied before this module),
+# the rendered pack and wheel on the controller, and every credential in the secret store.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: The rendered pack is there and shadow-first
+      ansible.builtin.include_tasks: pack_check.yml
+    - name: The wheel is where the pin says
+      ansible.builtin.stat:
+        path: "{{ stackstorm_hnx_wheel }}"
+        checksum_algorithm: sha256
+        get_checksum: true
+      delegate_to: localhost
+      become: false
+      register: stackstorm_wheel_local
+    - name: It is the pinned wheel
+      ansible.builtin.assert:
+        that: stackstorm_wheel_local.stat.exists and stackstorm_wheel_local.stat.checksum == stackstorm_hnx_wheel_sha256
+        fail_msg: "stackstorm: {{ stackstorm_hnx_wheel }} is missing or does not hash to {{ stackstorm_hnx_wheel_sha256 }}"
+  tags: [readiness]

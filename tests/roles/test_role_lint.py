@@ -384,6 +384,12 @@ def _task(module, args):
         ("", "demo_role_peers:\n  - {name: db.example.internal}\n", True),
         ("", "demo_role_settings: {apt: {name: db.example.internal}}\n", True),
         ("", "demo_role_mirror: mirror.example.internal\n", True),
+        # a CDI device name (<vendor domain>/<class>=<id>) is the container runtime's name for a
+        # device; the same domain as a host, or with a path, is still a hostname
+        ("", "demo_role_device: nvidia.com/gpu=0\n", False),
+        (_task("ansible.builtin.debug", {"msg": "{{ ['nvidia.com/gpu=' ~ idx] }}"}), "", False),
+        ("", "demo_role_device: db.example.internal\n", True),
+        ("", "demo_role_device: db.example.internal/gpu\n", True),
         # a hostname-shaped value in a package-name context is not a reviewed package name
         ("", "demo_role_package: vault.example.internal\n", True),
         ("", "demo_role_packages: [db2.example.internal]\n", True),

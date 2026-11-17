@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (object-tree, docs/modules/data.md): <data root>/export/mongo/st2.archive.gz (what
+# StackStorm owns: its rules, runs, datastore, API keys, users' roles) and listing.jsonl (its size and
+# sha256). The pack is git's, the secrets the secret store's, the runtime the wheel's.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Dump and list
+      ansible.builtin.include_tasks: dump.yml
+  tags: [export]

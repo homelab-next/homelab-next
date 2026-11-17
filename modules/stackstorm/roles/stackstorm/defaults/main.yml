@@ -1,0 +1,153 @@
+# SPDX-License-Identifier: Apache-2.0
+# The automation provider (modules/stackstorm): StackStorm 3.9 as the official st2-docker stack,
+# run by compose_app: the st2 services (api, auth, stream, scheduler, workflow engine, action
+# runner, rules engine, timers engine, garbage collector) and st2web (the HTTP front nginx: it
+# maps /api/ to the API, which has no /api prefix of its own), plus MongoDB, RabbitMQ and Redis.
+# The rendered workflow pack (workflows/stackstorm/) is mounted read-only; rules ship disabled and
+# every pack rule runs in shadow mode. No public route.
+#
+# Required (no default; an address range, a registry id and a path are the site's):
+# stackstorm_logical_id: the instance's registry id, e.g. automation
+# stackstorm_network_subnet: the pinned compose network, an IPv4 CIDR from /16 to /29
+# stackstorm_pack_src: the rendered pack on the controller (the checkout's workflows/stackstorm/)
+# stackstorm_hnx_wheel / stackstorm_hnx_wheel_sha256 / stackstorm_hnx_constraints: the
+#   homelab-next wheel the pack's actions import, from the SAME commit as stackstorm_pack_src, and
+#   that commit's constraints/ci.txt (every dependency installed by hash) and constraints/bootstrap.txt
+# stackstorm_hnx_bootstrap: constraints/bootstrap.txt of the same commit (pip itself, by hash)
+#
+# --- images: all pinned by tag AND digest (a version at least 14 days old) --------------------
+stackstorm_release_tag: "3.9.0"
+stackstorm_release_digests:
+  st2api: "sha256:67bae49d085da17b4761496b70376182d88e79f1efca65d9ff79821ca406f14e"
+  st2auth: "sha256:4d78bb10f707fcbc189012538c4932bea3be548cbbe60b0c2af2178f79d595e7"
+  st2stream: "sha256:a2bc50d7f5f4909a655272b1080cc50a9feee318074d61422b877a104a7447ba"
+  st2scheduler: "sha256:890e96c2c4d9a301b40ccb239e4f53a49526deb3aced9974215fd3c39fc5fc42"
+  st2workflowengine: "sha256:0fc50f762060579070cf8f6ed33a84a6f387db674584f448b86a81fe948a1756"
+  st2actionrunner: "sha256:4bfd77236d8dd1e76f51f2a06a12dd5839f8311fa1fb6c5a70fb8d9bf8aa3102"
+  st2rulesengine: "sha256:16c010caa06fbb7f82e2c2a1708ec1b2278c4598a9c379bb1f45bac1627aaf02"
+  st2timersengine: "sha256:7bb9c5773b704a743da2db879fe346117baa1d1d439d542e29fd20bbce5f3cc9"
+  st2garbagecollector: "sha256:3a7e0d4b3af4311797472ac93a7401a94e77aebcd95dccfbab0e55b7cc667bad"
+  st2web: "sha256:859ce1d54fc5ae17a6bae2d0afcd13eaca67684a9d80c41fbd369a4cc59893ea"
+stackstorm_release_repository: docker.io/stackstorm
+stackstorm_mongo_image: "docker.io/library/mongo:4.4.30@sha256:4be76f674fc4b27859816811b8baa3c51830eb1dbf4ca81a51e26b79edd662ef"
+stackstorm_rabbitmq_image: "docker.io/library/rabbitmq:3.12.14@sha256:4dc5d5a5076f7c458b7f3468e2282f329a8911cc3c31c4ed4aefcedb27917da2"
+stackstorm_redis_image: "docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3"
+# a one-shot image that downloads the interpreter the pack needs (see stackstorm_python_version)
+stackstorm_python_provisioner_image: "ghcr.io/astral-sh/uv:0.8.22-bookworm-slim@sha256:c03c1fc1ae46c540a3e6613e8d44396e863bc99c5146ada267e52f40851860c0"
+# CPython 3.11.x (a relocatable build): homelabnext needs >= 3.11 and the st2 3.9 images carry 3.10
+stackstorm_python_version: "3.11.13"
+#
+# --- where it listens --------------------------------------------------------------------------
+# published on the guest's own address (never all interfaces); the guest firewall admits the
+# readers (the status hub, the operator's tooling). The role's own checks and the event bridge reach
+# it on that same address, from the guest itself (the traffic never leaves it).
+stackstorm_bind: "{{ ansible_host }}"
+stackstorm_port: 9101
+stackstorm_dir: /opt/compose/stackstorm
+stackstorm_owner: root
+stackstorm_group: root
+stackstorm_data_root: /var/lib/hnx-modules/stackstorm
+# the st2 containers' user (the image's own st2) and the datastore key's reader group
+stackstorm_uid: 103
+stackstorm_gid: 104
+# the database and the broker run as the images' own users
+stackstorm_mongo_uid: 999
+stackstorm_mongo_gid: 999
+stackstorm_rabbitmq_uid: 999
+stackstorm_rabbitmq_gid: 999
+stackstorm_redis_uid: 999
+stackstorm_redis_gid: 999
+stackstorm_start: true
+stackstorm_validate_with_docker: true
+stackstorm_health_timeout: 15
+stackstorm_ready_timeout: 300
+#
+# --- memory budget (the module's slice limit is its footprint: module.yml requires.hosts) ------
+# Sized for a guest that also runs other services; the official production minimum is 16 GB and
+# 4 cores for a busy install, this budget is for a handful of rules and a few runs a day.
+# stackstorm_mem_limit is read per service; the sum must stay under the footprint's memory.
+# the memory the module's role slice is given (module.yml requires.hosts[server].footprint.memory_mb;
+# a site that raises the footprint in its selection raises this to match)
+stackstorm_footprint_memory_mb: 6144
+stackstorm_mem_limit:
+  st2api: 512m
+  st2auth: 192m
+  st2stream: 192m
+  st2scheduler: 256m
+  st2workflowengine: 384m
+  st2actionrunner: 768m
+  st2rulesengine: 256m
+  st2timersengine: 192m
+  st2garbagecollector: 192m
+  st2web: 128m
+  mongo: 1024m
+  rabbitmq: 512m
+  redis: 128m
+# MongoDB's WiredTiger cache in GB (a number: it is not derived from the limit above)
+stackstorm_mongo_cache_gb: "0.25"
+#
+# --- the pack ------------------------------------------------------------------------------
+# Rules to turn on, by rule name (on_<pack>), from the rendered tree. EMPTY: every rule is shipped
+# disabled (the shadow-first guardrail). A rule named here is enabled in whatever mode the
+# binding pins; the role refuses a pack whose rule is `live` unless stackstorm_allow_live_rules.
+stackstorm_enabled_rules: []
+stackstorm_allow_live_rules: false
+# st2 retention (garbage collector), in days (7 or more; st2 refuses less); 0 keeps everything
+stackstorm_retention_days: 30
+#
+# --- credentials: secret:<name> references, resolved at deploy time ----------------------------
+stackstorm_admin_user: st2admin
+stackstorm_admin_login_ref: secret:stackstorm/admin-password
+stackstorm_mongo_root_login_ref: secret:stackstorm/mongo-root-password
+stackstorm_mongo_login_ref: secret:stackstorm/mongo-password
+stackstorm_rabbitmq_login_ref: secret:stackstorm/rabbitmq-password
+# the datastore's encryption key: the JSON `st2-generate-symmetric-crypto-key` writes
+stackstorm_datastore_key_ref: secret:stackstorm/datastore-key
+# keys the pack's runtime names its datastore entries with (homelabnext.kv_key, >= 32 characters)
+stackstorm_kv_key_ref: secret:stackstorm/kv-key
+# API keys (random strings the role registers by their hash for a named user): the bridge's, which
+# may only post webhooks, and the status hub's, which may only read executions
+stackstorm_webhook_key_ref: secret:stackstorm/webhook-key
+stackstorm_webhook_user: st2bridge
+stackstorm_status_key_ref: secret:stackstorm/status-token
+stackstorm_status_user: st2status
+# packs whose executions the status key may list (the pack's own, and core: the role's no-op check runs there)
+stackstorm_status_packs: [homelabnext, core]
+# the roles of the user rules run executions as (see vars/main.yml: hnx_runner = view of the pack config's one datastore key)
+stackstorm_runner_roles: [hnx_runner]
+# operators who may view the pack's actions and executions (never run them)
+stackstorm_operator_users: []
+#
+# --- the event bridge (bus -> StackStorm's webhook) --------------------------------------------
+# A systemd service on this guest running `hnx workflows st2 bridge` (docs/stackstorm.md). It
+# needs the hnx command (role hnx_runtime, applied to the guest by the site) and the bus: the
+# endpoint, a user for it, the user's password, the stream's subject prefix and the stream.
+stackstorm_bridge_enabled: true
+stackstorm_hnx_cli: /opt/hnx/bin/hnx
+stackstorm_events_endpoint: ""
+stackstorm_events_user: hnx-st2-bridge
+stackstorm_events_login_ref: secret:stackstorm/events-password
+stackstorm_events_ca_file: ""
+stackstorm_events_stream: HOMELABNEXT
+stackstorm_events_subject_prefix: lab
+stackstorm_events_api_prefix: ""
+stackstorm_bridge_user: hnx-st2-bridge
+stackstorm_bridge_state_dir: /var/lib/hnx-st2-bridge
+#
+# --- the broker socket (StackStorm's only way to change anything) ------------------------------
+# The broker has no network listener: a remote caller reaches it through an SSH-forwarded socket,
+# logging in as its own user on the broker host, which the broker's manifest maps to the
+# binding's actor (docs/broker.md, "Remote agents"). This service keeps that forward up. The key
+# is restricted on the broker host to the forward (restrict,port-forwarding,permitopen=<broker socket>,command="/bin/false").
+stackstorm_broker_tunnel_enabled: true
+stackstorm_broker_host: ""
+stackstorm_broker_ssh_user: hnx-agent-st2
+stackstorm_broker_ssh_port: 22
+# the broker host's public host key line (`ssh-keyscan` output), pinned: the forward never trusts on first use
+stackstorm_broker_host_key: ""
+stackstorm_broker_key_ref: secret:stackstorm/broker-ssh-key
+stackstorm_broker_remote_socket: /run/hnx-broker/broker.sock
+stackstorm_broker_socket_dir: /run/hnx-st2-broker
+stackstorm_broker_tunnel_user: hnx-st2-broker
+# the group of the pack's runner process (the socket's reader), and the socket's mode
+stackstorm_broker_socket_mode: "0660"
