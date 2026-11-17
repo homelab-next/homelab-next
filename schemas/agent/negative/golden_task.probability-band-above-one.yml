@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# A decision task's band reaches past a probability.
+suite: decision-smoke
+kind: decision
+role: fast-classifier
+tasks:
+  - id: rollback-named
+    prompt: "Change: upgrade the queue workers. Rollback: revert the commit."
+    question: "Does this change plan say how the change would be rolled back?"
+    expect: {scorer: probability, min: 1.5}

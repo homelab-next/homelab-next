@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/agent/golden_task/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/agent/golden_task/1.2",
   "title": "Golden task suite",
-  "description": "Describes the homelabnext.golden suite file format (homelabnext.golden.tasks.parse_suite). One suite names a model-role alias and a list of tasks, each with a prompt and an expect block naming a scorer. Task ids are unique within a suite (checked by the loader; JSON Schema cannot express it). Optional agent-profile fields (profile, min_version) let a suite gate a compiled profile. 1.1 (additive) adds the tool-using suites of the Code Mode golden harness (docs/codemode.md, CM-6): modes, grant and max_turns on the suite, fixtures, inject and checks on a task; a suite with modes also names its profile and grant, a per-mode max names both modes, and the loader holds each fixture to match the action's result schema in the generated search index.",
+  "description": "Describes the homelabnext.golden suite file format (homelabnext.golden.tasks.parse_suite). One suite names a model-role alias and a list of tasks, each with a prompt and an expect block naming a scorer. Task ids are unique within a suite (checked by the loader; JSON Schema cannot express it). Optional agent-profile fields (profile, min_version) let a suite gate a compiled profile. 1.1 (additive) adds the tool-using suites of the Code Mode golden harness (docs/codemode.md, CM-6): modes, grant and max_turns on the suite, fixtures, inject and checks on a task; a suite with modes also names its profile and grant, a per-mode max names both modes, and the loader holds each fixture to match the action's result schema in the generated search index. 1.2 (additive) adds decision suites (kind: decision) for a decision role (a model that answers noul questions on POST /v1/systemone and refuses chat): each task's prompt is the state, question the noul question's instructions, and expect the probability band its answer must fall in (scorer probability, min and/or max in [0, 1]); a decision task has no system or params, a decision suite no modes, and probability is a decision suite's only scorer and only a decision suite's (homelabnext.golden.runner.run_decision_suite). Those pairings, and a band of at least one bound with min <= max, are the loader's rules (homelabnext.golden.tasks.parse_suite): the schema only adds the fields, so 1.0 and 1.1 suites stay valid unchanged.",
   "type": "object",
   "properties": {
     "suite": {
@@ -10,6 +10,14 @@
     },
     "role": {
       "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "kind": {
+      "description": "chat (a completion per task, the default) or decision (a noul question per task on a decision role, POST /v1/systemone).",
+      "enum": [
+        "chat",
+        "decision"
+      ],
+      "default": "chat"
     },
     "pass_score": {
       "type": "number",
@@ -65,6 +73,11 @@
             "type": "string"
           },
           "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "question": {
+            "description": "Decision tasks only: the noul question's instructions; prompt is the state it is asked about.",
             "type": "string",
             "minLength": 1
           },
@@ -186,8 +199,19 @@
                   "regex",
                   "json_fields",
                   "json_schema",
-                  "max_length"
+                  "max_length",
+                  "probability"
                 ]
+              },
+              "min": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "max": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
               }
             },
             "required": [

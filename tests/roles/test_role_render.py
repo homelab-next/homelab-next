@@ -553,6 +553,188 @@ def test_compose_app_renders_a_gpu_render_node_and_groups_by_number(first):
     assert "devices" not in doc["services"]["db"] and "group_add" not in doc["services"]["db"]
 
 
+def _tmpfs(tmp_path):
+    s = spec(
+        read_only=True,
+        tmpfs=[
+            {"target": "/tmp", "size_bytes": 268435456, "mode": "1777"},
+            {"target": "/scratch", "size_bytes": "8589934592"},
+        ],
+    )
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path, s),
+    }
+
+
+@first_run(_tmpfs)
+def test_compose_app_renders_tmpfs_mounts_in_the_long_syntax(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    path = tmp_path / "app" / "docker-compose.yml"
+    web = yaml.safe_load(path.read_text())["services"]["web"]
+    # the short-syntax volumes are untouched and the tmpfs mounts follow them
+    assert web["volumes"][:2] == ["./data/web:/var/lib/web", "/srv/shared:/shared:ro"]
+    assert web["volumes"][2:] == [
+        # a leading 0 makes the mode octal: compose reads the number, 1777 would be decimal
+        {"type": "tmpfs", "target": "/tmp", "tmpfs": {"size": 268435456, "mode": 0o1777}},
+        {"type": "tmpfs", "target": "/scratch", "tmpfs": {"size": 8589934592}},
+    ]
+    assert web["read_only"] is True
+    assert "tmpfs" not in yaml.safe_load(path.read_text())["services"]["db"]
+    if docker_compose_ok():
+        c = subprocess.run(
+            ["docker", "compose", "-f", str(path), "config", "--format", "json"],
+            capture_output=True,
+            text=True,
+        )
+        assert c.returncode == 0, c.stderr
+        mounts = {
+            v["target"]: v
+            for v in json.loads(c.stdout)["services"]["web"]["volumes"]
+            if v["type"] == "tmpfs"
+        }
+        assert mounts["/tmp"]["tmpfs"]["mode"] == 0o1777
+        assert int(mounts["/scratch"]["tmpfs"]["size"]) == 8589934592
+
+
+@pytest.mark.parametrize(
+    "mount",
+    [
+        {"target": "/dev/shm", "size_bytes": 4096},  # allowed exactly
+        {"target": "/devx", "size_bytes": 4096},  # a prefix of a denied root is not under it
+        {"target": "/etcetera", "size_bytes": 4096},
+        {"target": "/usr2", "size_bytes": 4096},
+        {"target": "/runner", "size_bytes": 4096},
+        {"target": "/tmpx", "size_bytes": 4096},  # beside /tmp, not inside it
+        {"target": "/m", "size_bytes": 4096, "mode": "1777"},
+        {"target": "/m", "size_bytes": 4096, "mode": "0700"},
+        {"target": "/m", "size_bytes": 4096, "mode": "0755"},
+        {"target": "/m", "size_bytes": 4096, "mode": "755"},
+        {"target": "/m", "size_bytes": 4096, "mode": "001"},
+    ],
+)
+def test_compose_app_accepts_a_safe_tmpfs_mount(tmp_path, mount):
+    s = spec(tmpfs=[{"target": "/tmp", "size_bytes": 4096}, mount])
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    web = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]["web"]
+    got = next(v for v in web["volumes"] if isinstance(v, dict) and v["target"] == mount["target"])
+    if "mode" in mount:
+        assert got["tmpfs"]["mode"] == int(mount["mode"], 8)  # the leading 0 makes it octal
+
+
+def _only_tmpfs(tmp_path):
+    s = spec(tmpfs=[{"target": "/scratch", "size_bytes": 4096}])
+    s["services"]["web"].pop("volumes")
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path, s),
+    }
+
+
+@first_run(_only_tmpfs)
+def test_compose_app_renders_a_volumes_block_for_a_tmpfs_alone(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    web = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]["web"]
+    assert web["volumes"] == [{"type": "tmpfs", "target": "/scratch", "tmpfs": {"size": 4096}}]
+
+
+_DENIED_ROOTS = [
+    "/proc", "/sys", "/dev", "/etc", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
+    "/usr", "/run", "/var/run", "/boot",
+]  # fmt: skip
+DENIED_TARGETS = [
+    "/",
+    *_DENIED_ROOTS,
+    *(r + "/sub" for r in _DENIED_ROOTS),
+    "/dev/shm/sub",
+    "/dev/pts",
+]
+
+TMPFS_REJECTED = {
+    "not a list": {"tmpfs": {"target": "/x", "size_bytes": 4096}},
+    "a string": {"tmpfs": "/x"},
+    "an entry that is a string": {"tmpfs": ["/x"]},
+    "no target": {"tmpfs": [{"size_bytes": 4096}]},
+    "no size": {"tmpfs": [{"target": "/x"}]},
+    "an unknown key": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "uid": 0}]},
+    "a relative target": {"tmpfs": [{"target": "x", "size_bytes": 4096}]},
+    "the root": {"tmpfs": [{"target": "/", "size_bytes": 4096}]},
+    "a dot-dot target": {"tmpfs": [{"target": "/a/../b", "size_bytes": 4096}]},
+    "a trailing slash": {"tmpfs": [{"target": "/x/", "size_bytes": 4096}]},
+    "a target that adds a key": {
+        "tmpfs": [{"target": "/x\n    privileged: true", "size_bytes": 4096}]
+    },
+    "an options suffix": {"tmpfs": [{"target": "/x:ro", "size_bytes": 4096}]},
+    "zero bytes": {"tmpfs": [{"target": "/x", "size_bytes": 0}]},
+    "a negative size": {"tmpfs": [{"target": "/x", "size_bytes": -1}]},
+    "below a page": {"tmpfs": [{"target": "/x", "size_bytes": 4095}]},
+    "above 1 TiB": {"tmpfs": [{"target": "/x", "size_bytes": 1099511627777}]},
+    "a size with a unit": {"tmpfs": [{"target": "/x", "size_bytes": "8g"}]},
+    "a size that is a bool": {"tmpfs": [{"target": "/x", "size_bytes": True}]},
+    "a size that is a float": {"tmpfs": [{"target": "/x", "size_bytes": 4096.5}]},
+    "a size that adds a key": {
+        "tmpfs": [{"target": "/x", "size_bytes": "4096\n    privileged: true"}]
+    },
+    "a // target": {"tmpfs": [{"target": "//x", "size_bytes": 4096}]},
+    "a /./ target": {"tmpfs": [{"target": "/./x", "size_bytes": 4096}]},
+    "a setuid mode": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "4755"}]},
+    "a setgid mode": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "2755"}]},
+    "setuid and setgid": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "6777"}]},
+    "mode 000": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "000"}]},
+    "mode 0000": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "0000"}]},
+    "mode 1000 (sticky only)": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "1000"}]},
+    "a two-digit mode": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "77"}]},
+    "an 0o mode": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "0o755"}]},
+    **{
+        f"the denied path {t}": {"tmpfs": [{"target": t, "size_bytes": 4096}]}
+        for t in DENIED_TARGETS
+    },
+    "a decimal-looking mode (a bare number)": {
+        "tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": 1777}]
+    },
+    "a non-octal mode": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "1778"}]},
+    "a mode of five digits": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "01777"}]},
+    "the same target twice": {
+        "tmpfs": [{"target": "/x", "size_bytes": 4096}, {"target": "/x", "size_bytes": 4096}]
+    },
+    "a target inside another tmpfs": {
+        "tmpfs": [{"target": "/x", "size_bytes": 4096}, {"target": "/x/y", "size_bytes": 4096}]
+    },
+    "a target on a volume": {"tmpfs": [{"target": "/shared", "size_bytes": 4096}]},
+    "a target inside a volume": {"tmpfs": [{"target": "/shared/cache", "size_bytes": 4096}]},
+    "a target above a volume": {"tmpfs": [{"target": "/var/lib", "size_bytes": 4096}]},
+    "a target on an anonymous volume": {
+        "volumes": ["/var/lib/anon"],
+        "tmpfs": [{"target": "/var/lib/anon", "size_bytes": 4096}],
+    },
+}
+
+
+@pytest.mark.parametrize("case", sorted(TMPFS_REJECTED))
+def test_compose_app_refuses_a_bad_tmpfs_mount(tmp_path, case):
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, spec(**TMPFS_REJECTED[case]), compose_app_validate_with_docker=False),
+    )
+    assert r.returncode != 0, r.stdout
+    assert "refused tmpfs mount" in r.stdout + r.stderr, r.stdout  # this rule, not another
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
 REJECTED = {
     "device /dev/mem": lambda s: s["services"]["web"].update(devices=["/dev/mem"]),
     "device a disk": lambda s: s["services"]["web"].update(devices=["/dev/sda"]),

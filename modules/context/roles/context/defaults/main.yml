@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# The context retrieval service, the context provider (modules/context): one container built from this
+# repository (image/Dockerfile, homelabnext/context_service) serving the context contract's reads over
+# HTTP, its index built from the site's git sources, each item carrying its TLP label, every read at
+# the caller's ceiling; optionally gated by the gateway's decision role. Nothing here is a lab value:
+# the sources, the callers, the health query and the placement are the overlay's.
+# context_logical_id (required): the instance's registry id, e.g. context
+# context_image (required): repository:tag@sha256:<digest> of the image built from this repository
+#   (modules/context/README.md, "The image"); no default: there is no published image to pin.
+
+# optional: a local `docker save` of the pinned image (a path on the guest), loaded when the daemon lacks
+# the digest; the role refuses to go on if it is still missing. Empty: the daemon must have it.
+context_image_archive: ""
+# The repositories context_image may name: the image built from this repository; any other is refused.
+context_build_repositories: [localhost/hnx-context]
+# published on the guest's own address (the inventory's ansible_host), never all interfaces
+context_bind: "{{ ansible_host }}"
+context_port: 8094
+context_dir: /opt/compose/context
+# the module's data root (docs/modules/data.md): sources/ (the git checkouts), state/ (the last
+# reindex's record), home/ and cache/ (the libraries' scratch). All of it is derived: a reindex
+# rebuilds it from the sources, so nothing here is exported.
+context_data_root: /var/lib/hnx-modules/context
+context_owner: root
+# the container's user: an id no account on the host has
+context_uid: 61013
+context_gid: 61013
+# The sources: git repositories read at a ref (a branch or tag, tracked; or a 40-hex commit, pinned),
+# each with the TLP label of what it holds (ADR-0033) and the globs of the files to index:
+#   - {name: lessons, url: https://git.example.internal/ops/registers.git, ref: main, kind: lesson,
+#      tlp: amber, format: yaml-records, records_key: lessons, paths: [dev/lessons.yml],
+#      credential: secret:context/sources/registers}
+# format files (one document per file, the default) or yaml-records (one per record of a YAML list,
+# records_key the top-level key, id_field / title_field its fields); honour_item_labels: true keeps an
+# item's own looser label (a human-approve choice, ADR-0033 decision 3); credential (optional) is the
+# secret holding a token (credential_scheme bearer, the default) or user:password (basic) for the host.
+context_sources: []
+# The callers, each a token from the secret store with its TLP ceiling and scopes (query, reindex):
+#   - {name: agents, secret: secret:context/agents-token, ceiling: amber, scopes: [query]}
+#   - {name: automation, secret: secret:context/automation-token, ceiling: clear, scopes: [reindex]}
+# Only each token's sha256 reaches the service's configuration.
+context_callers: []
+# the admin token: the timer's reindex and the health hook's self-check (scopes reindex and health,
+# never query); written to the container's owner-only environment file
+context_admin_ref: secret:context/admin-token
+# The canned query of the health hook: text that must find the document expect (its id,
+# <kind>:<source>/<path or record id>) among the top hits, read at ceiling. Required: no default.
+#   {text: "the dashboard is blank after a plain build", expect: "lesson:lessons/LL-003", ceiling: amber}
+context_health_query: {}
+# --- the judge (an abstention gate through the gateway's decision role); off when the id is empty ---
+# The gateway's registry id (e.g. llm-gateway); the decision role answers on POST /v1/systemone.
+context_gateway_id: ""
+context_gateway_key_ref: secret:context/gateway-key
+context_judge_role: fast-classifier
+# the eval's numbers (README.md, "Why this design"): abstain when no top passage reaches 0.10
+context_judge_threshold: 0.10
+context_judge_workers: 2
+context_judge_top_k: 5
+# the most restrictive label a passage sent to the gateway may carry; above it the judge is not asked
+context_judge_ceiling: amber
+# a judge failure: fallback (the store's own ranking) or abstain (nothing)
+context_judge_on_error: fallback
+# Explicit opt-in, LAN only, for a gateway or a source with no TLS: the key or credential then
+# travels in clear. Off: the role refuses either over plain http.
+context_allow_plain_http: false
+# the semantic adapter's knobs (homelabnext/context_semantic.py): the eval ran with these
+context_dense_weight: 0.5
+context_min_similarity: 0.36
+context_min_score: 0.0
+# the reindex timer (fetch every source, index what changed) and its last-run record (role last_run)
+context_reindex_schedule: "*-*-* *:20:00 UTC"
+context_reindex_timeout_s: 1800
+context_last_run_dir: /var/lib/homelabnext/last-run
+context_last_run_group: root
+context_unit_dir: /etc/systemd/system
+context_systemctl_cli: systemctl
+context_docker_cli: /usr/bin/docker
+context_mem_limit: 3g
+context_start: true
+context_validate_with_docker: true
+context_health_timeout: 20
+# the health hook's self-check (the canned query; with the judge on, one decision call)
+context_check_timeout_s: 120

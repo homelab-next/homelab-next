@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: Apache-2.0
+# The service's configuration (config.json, read-only in the container) and its secrets (the
+# compose_app env file, owner-only): each caller as the sha256 of its token, each source's credential
+# as the name of the variable that holds it, the gateway's URL from the registry. The token values
+# reach the env file only.
+- name: Resolve the gateway's URL from the registry (the judge is on)
+  ansible.builtin.set_fact:
+    context_gateway_url: "{{ lookup('hnx_registry', context_gateway_id, field='url') }}"
+  when: context_gateway_id != ''
+
+- name: The gateway is reached by name, over https unless plain http was allowed
+  ansible.builtin.assert:
+    that:
+      - context_gateway_url is match('^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?\Z')
+      - (context_gateway_url | urlsplit('hostname')) is not match(context_ipv4_pattern)
+      - (context_gateway_url | urlsplit('hostname')) is not match(context_numeric_host_pattern)
+      - context_gateway_url is match('^https://') or context_allow_plain_http | bool
+    fail_msg: >-
+      context: the gateway {{ context_gateway_id }} resolves to {{ context_gateway_url }}: it must be an
+      http(s) URL with a host name, and https unless context_allow_plain_http is set
+  when: context_gateway_id != ''
+
+- name: Start the configuration's lists empty
+  ansible.builtin.set_fact:
+    context_config_callers: []
+    context_config_sources: []
+    context_source_secrets: {}
+
+- name: Digest each caller's token
+  ansible.builtin.set_fact:
+    context_config_callers: >-
+      {{ context_config_callers + [{'name': item.name, 'sha256': lookup('hnx_secret', item.secret) | hash('sha256'),
+                                    'ceiling': item.ceiling, 'scopes': item.scopes}] }}
+  loop: "{{ context_callers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Build the sources (a credential becomes the name of the variable that holds it)
+  ansible.builtin.set_fact:
+    context_config_sources: >-
+      {{ context_config_sources
+         + [(item | dict2items | rejectattr('key', 'equalto', 'credential') | list | items2dict)
+            | combine({'credential_env': 'CONTEXT_SOURCE_' ~ (item.name | upper | replace('-', '_'))}
+                      if item.credential | default('') != '' else {})] }}
+  loop: "{{ context_sources }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Read each source's git credential into the secret environment
+  ansible.builtin.set_fact:
+    context_source_secrets: >-
+      {{ context_source_secrets
+         | combine({'CONTEXT_SOURCE_' ~ (item.name | upper | replace('-', '_')): lookup('hnx_secret', item.credential)}) }}
+  loop: "{{ context_sources | selectattr('credential', 'defined') | rejectattr('credential', 'equalto', '') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Build the configuration and the secret environment
+  ansible.builtin.set_fact:
+    context_config:
+      port: "{{ context_container_port | int }}"
+      model_dir: "{{ context_container_model }}"
+      data_dir: "{{ context_container_data }}"
+      sources: "{{ context_config_sources }}"
+      callers: "{{ context_config_callers }}"
+      health:
+        text: "{{ context_health_query.text }}"
+        expect: "{{ context_health_query.expect }}"
+        ceiling: "{{ context_health_query.ceiling }}"
+      judge: >-
+        {{ None if context_gateway_id == '' else
+           {'url': context_gateway_url, 'key_env': 'CONTEXT_GATEWAY_KEY', 'role': context_judge_role,
+            'threshold': context_judge_threshold | float, 'workers': context_judge_workers | int,
+            'top_k': context_judge_top_k | int, 'ceiling': context_judge_ceiling,
+            'on_error': context_judge_on_error, 'tag': 'hnx/context',
+            'allow_plaintext': context_allow_plain_http | bool} }}
+      dense_weight: "{{ context_dense_weight | float }}"
+      min_similarity: "{{ context_min_similarity | float }}"
+      min_score: "{{ context_min_score | float }}"
+      allow_plain_http: "{{ context_allow_plain_http | bool }}"
+      git_timeout: "{{ [context_reindex_timeout_s | int, 7200] | min | float }}"
+    context_secret_env:
+      context: >-
+        {{ {'CONTEXT_ADMIN_TOKEN': lookup('hnx_secret', context_admin_ref)}
+           | combine({'CONTEXT_GATEWAY_KEY': lookup('hnx_secret', context_gateway_key_ref)}
+                     if context_gateway_id != '' else {})
+           | combine(context_source_secrets) }}
+  no_log: true

@@ -4,6 +4,7 @@
       "bindings": [
         {
           "backend": "svc:inference",
+          "kind": "chat",
           "mode": "fake",
           "params": {
             "max_tokens": 256,
@@ -71,6 +72,7 @@
       "bindings": [
         {
           "backend": "svc:inference",
+          "kind": "chat",
           "mode": "fake",
           "params": {},
           "pin": "sha256:dd76f4571d69c66d02a7d0a729798da9ea60620501005dffa04c574555179431",
@@ -136,6 +138,7 @@
   "golden": {
     "classifier-smoke": {
       "errors": 0,
+      "kind": "chat",
       "model_id": "fake-golden:fast-classifier",
       "ok": true,
       "passed": 3,
@@ -167,7 +170,7 @@
   },
   "inputs": {
     "canary": {
-      "code": "sha256:94bf80674a51fba003e494fa7353d59023218146d4337788aaacc3eab557c76d",
+      "code": "sha256:596fb5b43657ea02496290b470bbbe4978b80fd7dd998ec0806144dbc3ae8f9b",
       "metadata": "sha256:4823a1f2b212edb258cbe4c5edaebc61b64e814444faded40737e1f769fdac85",
       "params": {
         "fast-classifier": {
@@ -179,6 +182,12 @@
       "suite": "sha256:83f4b6d125b3958a07b565725ada63d080bb9b983ee6613248a5e9494a8eb9f9",
       "version": 2
     },
+    "code": {
+      "registry.models": "sha256:7d22a1c2e455305a64707e825e5051956966932c3776412587985816ee133b44",
+      "runner": "sha256:2e8c1df02d5b366a3cd9a043ba381791f551346c11938d236c7140a65f242113",
+      "scorers": "sha256:56c00a9ad13eb98dfed8f2e81250a729053e1ec5335efb4326be7e34131a9613",
+      "tasks": "sha256:1a2ac2ac8e9fde6ad8511a594de7e65274a6d2ef0f0abd66e8a97da69d7b4d11"
+    },
     "decide": {
       "gold": {
         "n": 200,
@@ -187,8 +196,12 @@
       "impact_keywords": "sha256:b52c8fbf86afbbb3b83e17950826b068a9d6b54888adb08b9d5c691cad28dd1a",
       "spec": "sha256:eebf1221c2f81b13bf23e90529e62b0d9230e2d8561c4b6f9406feb5821e4282"
     },
-    "digest": "sha256:b7c66045ece59d6fd659986244bec3b47311e1992f181cc8d0b1273eaafcfb06",
-    "eval": 2,
+    "digest": "sha256:03838699d23555dae1006190b980bb94263ab14e05d9245305a4ff93c011e769",
+    "eval": 3,
+    "kinds": {
+      "fast-classifier": "chat",
+      "main-reasoner": "chat"
+    },
     "pins": {
       "fast-classifier": [
         {
@@ -208,7 +221,8 @@
       ]
     },
     "suites": {
-      "classifier-smoke": "sha256:020b2f73361c3c52c2e33a309835532c6f8d8b9fc809cce0362ca4d991c35391"
+      "classifier-smoke": "sha256:020b2f73361c3c52c2e33a309835532c6f8d8b9fc809cce0362ca4d991c35391",
+      "decision-smoke": "sha256:b7e6d41acd85413964de8ab4400176cb2ee1a425b42916fe2e222687bc333ee9"
     }
   },
   "model": {

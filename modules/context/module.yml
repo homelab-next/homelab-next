@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: Apache-2.0
+# The context provider (docs/modules.md; README.md beside this file): the semantic adapter of the
+# context contract (homelabnext/context_semantic.py, a hybrid sparse + dense index over a small CPU
+# embedding model pinned by sha256) run as an HTTP service built from this repository
+# (homelabnext/context_service, image/Dockerfile), its index built from the site's git sources, every
+# item carrying its TLP label (ADR-0033) and every read made at the caller's ceiling; optionally gated
+# by the gateway's decision role as an abstention judge (homelabnext/context/judge.py). Adopted on the
+# retrieval eval (README.md, "Why this design"). Every real value (the sources, the callers, the
+# canned health query, the guest, the image the site built, the secret values) is the site's: the
+# overlay's lab/modules.yml, lab/services.yml, group variables and secret store.
+manifest_version: "1.0"
+id: context
+kind: provider
+title: Retrieval of the lab's own knowledge, by meaning, at each reader's TLP ceiling
+description: Fills the context slot with a hybrid (BM25 + dense) index over the site's git sources (registers,
+  runbooks, ADRs), each item labelled with its TLP and read only at or below the caller's ceiling, answered
+  over an authenticated HTTP API; with the gateway's decision role set, a query abstains when no top passage
+  answers it. One container built from this repository, a reindex timer and an authenticated reindex hook.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+# The product is this repository's own service (as the orchestration module's controller is): its index
+# library (txtai 9.14.0, image/requirements.txt) and the embedding model are dependencies pinned in the
+# image, not the product a swap replaces.
+product:
+  name: hnx-context-service
+  version: 0.1.0
+licence:
+  # the service is Apache-2.0; so are txtai and the embedding model (sentence-transformers/all-MiniLM-L6-v2)
+  kind: open-source
+  spdx: Apache-2.0
+credentials:
+  - secret: secret:context/admin-token
+    identity: token
+    holder: provider
+    purpose: the admin caller (the reindex timer and the health hook's self-check; scopes reindex and health, never query); written to the container's owner-only environment file
+  - secret: secret:context/gateway-key
+    identity: api-key
+    holder: provider
+    purpose: the key the judge presents to the gateway's decision role, read only when context_gateway_id is set
+identifiers:
+  - {kind: secret-name, name: context, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the admin token, every caller's token (only its sha256 reaches the service), the gateway key and the sources' git credentials are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint:
+        cpu: 2
+        memory_mb: 3072
+        disk_gb: 20
+      guest:
+        baselines: [server]
+      roles: [role:context]
+      purpose: runs the context container (docker_engine applied first; compose_app renders it) and the reindex timer
+prefers:
+  capabilities:
+    - cap: cap:inference
+      version: "1.0"
+      purpose: the gateway's decision role (kind decision, POST /v1/systemone) the judge asks whether a passage answers the question
+      fallback:
+        behaviour: the gate is off; queries return the index's own ranking and never abstain on a question the sources do not answer
+provides:
+  slots:
+    context:
+      adapter: homelabnext.conform.adapters.context_service:make
+      features: [semantic]
+      conformance:
+        target: conformance/target.yml
+egress:
+  - host: server
+    to: [internet]
+    purpose: the git hosts of the configured sources, fetched read-only at their ref by every reindex (an in-lab forge needs no grant beyond its row; a public one is the internet)
+contributes:
+  roles:
+    - file: roles/context
+  services:
+    - file: registry/services.yml
+  scheduler_jobs:
+    - {timer: timer:context/reindex}
+  preflight:
+    - {role: role:context, hook: readiness}
+  docs:
+    - file: README.md
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a new image the site built (tag and digest of the same repository): the role's upgrade hook validates and records it, then it converges; the index is rebuilt at start"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: false
+    discard_reason: the index, the checkouts and the last reindex's record are all derived from the git sources, which keep the data; nothing is lost when the data root goes
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]
