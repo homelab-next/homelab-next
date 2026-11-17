@@ -177,8 +177,6 @@ def _roles(drop: str = "", decision: str = "") -> dict:
 def test_a_cascade_tier_must_be_a_chat_role_of_the_repositorys_table(tmp_path):
     """G-11's cascade coverage (the check pins coverage no longer makes): every model tier of a
     tracked spec names a role of examples/model_roles.json that answers chat."""
-    if shutil.which("git") is None:
-        pytest.skip("needs git")
     roles = {t.get("model_role") for t in load(FIX / "good" / "batch-all-tiers.yml")["tiers"]}
     assert "mdl:fast-classifier" in roles
     assert _tracked_spec_with_table(tmp_path / "ok", _roles()) == (1, [])
