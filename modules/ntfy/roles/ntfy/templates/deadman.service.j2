@@ -13,5 +13,8 @@ ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ ntfy_l
 Nice=10
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths={{ ntfy_deadman_state_dir }} {{ ntfy_data_root }}/db
+# the message cache is only read (mode=ro): the namespace keeps it read-only, so a cache that needs
+# a journal recovery fails loud (exit 1) instead of being written by this script
+ReadWritePaths={{ ntfy_deadman_state_dir }} {{ ntfy_last_run_dir }}
+ReadOnlyPaths={{ ntfy_data_root }}/db
 PrivateTmp=true

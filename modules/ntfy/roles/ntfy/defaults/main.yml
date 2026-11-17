@@ -49,6 +49,9 @@ ntfy_deadman_alert_topic: homelabnext-alerts
 # of ntfy_deadman_schedules (vars/main.yml); the minutes between its runs
 # (ntfy_deadman_interval_minutes) are derived from it, so the limits can never disagree with the timer
 ntfy_deadman_schedule: "*-*-* *:0/5:00 UTC"
+# a watch that cannot read the message cache judges nothing (the dead-man is off): after this many
+# consecutive such runs it pages once, through the service, and once more when it reads again
+ntfy_deadman_unreadable_after_runs: 3
 ntfy_systemctl_cli: systemctl
 ntfy_unit_dir: /etc/systemd/system
 # the shared last-run record directory (role last_run) and the group that may read it

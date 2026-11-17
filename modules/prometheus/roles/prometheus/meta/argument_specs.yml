@@ -149,6 +149,10 @@ argument_specs:
         type: str
         description: "The dead-man heartbeat: the notify topic the forwarder posts one minimum-priority message to, only while the metrics service answers and its Watchdog rule fires. The notify service's host (never this guest) pages when the topic goes quiet (module ntfy, ntfy_deadman_beats). Empty: no heartbeat (no outside dead-man)."
         default: "hnx-heartbeat-metrics"
+      prometheus_heartbeat_allow_unresolved: &heartbeat_unresolved
+        type: bool
+        description: "Accept a heartbeat receiver whose name does not resolve on this guest (the placement guard cannot then show it is on another host). Off: refused."
+        default: false
       prometheus_heartbeat_every_minutes: &heartbeat_every_minutes
         type: int
         description: "Minutes between heartbeats (the watcher's threshold must be several times this)."
@@ -227,6 +231,7 @@ argument_specs:
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
       prometheus_heartbeat_topic: *heartbeat_topic
       prometheus_heartbeat_every_minutes: *heartbeat_every_minutes
+      prometheus_heartbeat_allow_unresolved: *heartbeat_unresolved
       prometheus_alert_schedule: *alert_schedule
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
@@ -272,6 +277,7 @@ argument_specs:
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
       prometheus_heartbeat_topic: *heartbeat_topic
       prometheus_heartbeat_every_minutes: *heartbeat_every_minutes
+      prometheus_heartbeat_allow_unresolved: *heartbeat_unresolved
       prometheus_alert_schedule: *alert_schedule
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
@@ -315,6 +321,7 @@ argument_specs:
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
       prometheus_heartbeat_topic: *heartbeat_topic
       prometheus_heartbeat_every_minutes: *heartbeat_every_minutes
+      prometheus_heartbeat_allow_unresolved: *heartbeat_unresolved
       prometheus_alert_schedule: *alert_schedule
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
@@ -363,6 +370,7 @@ argument_specs:
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
       prometheus_heartbeat_topic: *heartbeat_topic
       prometheus_heartbeat_every_minutes: *heartbeat_every_minutes
+      prometheus_heartbeat_allow_unresolved: *heartbeat_unresolved
       prometheus_alert_schedule: *alert_schedule
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir

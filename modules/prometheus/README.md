@@ -86,12 +86,17 @@ names a real host, address, VM id or secret value; those live only in the privat
   once when it returns. The heartbeat is silent on a failed post (it stays owed; the unit exits 2).
   **The receiver must not be on this guest**: the role compares the metrics row's and the notify
   row's registry `host_id` (and the endpoint's address against loopback and this guest's own
-  addresses) and refuses a heartbeat whose receiver would die with it; `prometheus_heartbeat_topic: ""`
+  addresses) and refuses a heartbeat whose receiver would die with it. It also **resolves the
+  receiver's name as this guest does** (`getent ahosts`: DNS, aliases, CNAMEs, IPv4 and IPv6) and
+  refuses when any answer is loopback or one of this guest's own addresses, or when the name does not
+  resolve (`prometheus_heartbeat_allow_unresolved: true` accepts that). A failing alert post skips
+  that run's heartbeat on purpose (the notify path is broken, so the watch's silence is the signal); `prometheus_heartbeat_topic: ""`
   turns the heartbeat off, and with it any outside monitor.
 - **A boot unit** (`prometheus_boot_unit`, default true; `compose_app_boot_unit`): a oneshot
   `hnx-compose-prometheus.service` runs `docker compose up -d` after docker at every boot, so a
   container that did not come back after a power cycle is started and a failure to start it is a
-  failed unit. `remove` disables and deletes it.
+  failed unit. `remove` disables and deletes it, and so does `prometheus_boot_unit: false` (an
+  existing unit is disabled and deleted, so the opt-out opts out).
 - **Nothing reloads through an HTTP API.** The lifecycle API stays off (anyone who could reach the
   port could shut the server down); a changed configuration is a `SIGHUP`, sent once the service
   reports ready (a signal sent earlier kills a process that has not installed its handler).

@@ -232,3 +232,19 @@ def test_no_boot_unit_when_nothing_is_started(tmp_path):
     r, units = _boot(tmp_path, compose_app_start=False, compose_app_boot_unit=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert list(units.iterdir()) == []
+
+
+def test_turning_the_boot_unit_off_disables_and_deletes_an_existing_one(tmp_path):
+    r, units = _boot(tmp_path, compose_app_start=True, compose_app_boot_unit=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    unit = units / "hnx-compose-demo-app.service"
+    assert unit.exists()
+    r, _ = _boot(tmp_path, compose_app_start=True, compose_app_boot_unit=False)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not unit.exists()
+    log = (tmp_path / "sc.log").read_text().splitlines()
+    assert "disable hnx-compose-demo-app.service" in log and log.count("daemon-reload") == 2
+    # and a second opt-out run has nothing left to do
+    r, _ = _boot(tmp_path, compose_app_start=True, compose_app_boot_unit=False)
+    assert r.returncode == 0
+    assert (tmp_path / "sc.log").read_text().splitlines().count("daemon-reload") == 2

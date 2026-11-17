@@ -70,6 +70,7 @@
           - ntfy_deadman_beats | map(attribute='max_age_minutes', default=0) | map('int') | min >= 2 * (ntfy_deadman_interval_minutes | int)
           - (ntfy_deadman_beats | map(attribute='max_age_minutes', default=0) | map('int') | max) * 60 * 2 <= ntfy_cache_seconds | int
           - ntfy_deadman_unwritable == []
+          - ntfy_deadman_unreadable_after_runs | int >= 1 and ntfy_deadman_unreadable_after_runs | int <= 100
           - ntfy_deadman_alert_topic is match('^[-_A-Za-z0-9]{1,64}\\Z')
           - ntfy_deadman_alert_topic not in (ntfy_deadman_beats | map(attribute='topic', default='') | list)
         fail_msg: >-

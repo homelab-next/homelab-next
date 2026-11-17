@@ -342,11 +342,38 @@ def notify():
         n.close()
 
 
-def cache(path: Path, rows=(), schema="topic TEXT, time INT, event TEXT") -> Path:
+# The message cache's table as ntfy v2.35.0 creates it (message/cache_sqlite_schema.go,
+# sqliteCreateTablesQuery), so a change of that schema in a later release breaks a test here.
+REAL_DDL = """
+CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, mid TEXT NOT NULL, sequence_id TEXT NOT NULL,
+    time INT NOT NULL, event TEXT NOT NULL, expires INT NOT NULL, topic TEXT NOT NULL,
+    message TEXT NOT NULL, title TEXT NOT NULL, priority INT NOT NULL, tags TEXT NOT NULL,
+    click TEXT NOT NULL, icon TEXT NOT NULL, actions TEXT NOT NULL, attachment_name TEXT NOT NULL,
+    attachment_type TEXT NOT NULL, attachment_size INT NOT NULL, attachment_expires INT NOT NULL,
+    attachment_url TEXT NOT NULL, attachment_deleted INT NOT NULL, sender TEXT NOT NULL,
+    user TEXT NOT NULL, content_type TEXT NOT NULL, encoding TEXT NOT NULL, published INT NOT NULL
+)
+"""
+
+
+def insert(c, topic, ago_min, event="message", published=1):
+    """One row as the server stores it; ``ago_min`` negative: dated in the future (a delayed one)."""
+    c.execute(
+        "INSERT INTO messages (mid, sequence_id, time, event, expires, topic, message, title,"
+        " priority, tags, click, icon, actions, attachment_name, attachment_type, attachment_size,"
+        " attachment_expires, attachment_url, attachment_deleted, sender, user, content_type,"
+        " encoding, published) VALUES ('m', 's', ?, ?, 0, ?, 'x', '', 1, '', '', '', '', '', '', 0,"
+        " 0, '', 0, '', '', '', '', ?)",
+        (NOW - ago_min * 60, event, topic, published),
+    )
+
+
+def cache(path: Path, rows=(), schema=None) -> Path:
     c = sqlite3.connect(path)
-    c.execute(f"CREATE TABLE messages ({schema})")
-    for topic, ago_min, event in rows:
-        c.execute("INSERT INTO messages VALUES (?, ?, ?)", (topic, NOW - ago_min * 60, event))
+    c.execute(f"CREATE TABLE messages ({schema})" if schema else REAL_DDL)
+    for row in rows:
+        insert(c, *row)
     c.commit()
     c.close()
     return path
@@ -364,6 +391,7 @@ def build(tmp_path, srv, beats=(BEAT,)):
         "ntfy_deadman_alert_topic": "alerts",
         "ntfy_deadman_auth_file": str(token),
         "ntfy_logical_id": "notify",
+        "ntfy_deadman_unreadable_after_runs": 3,
     }
     e = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
     e.filters["to_json"] = json.dumps
@@ -413,7 +441,7 @@ def test_silence_pages_once_at_urgent_priority_and_the_return_pages_once(tmp_pat
     assert headers["Authorization"] == "Bearer " + TOKEN
     assert run(script).returncode == 0 and len(srv.posts) == 1  # the same silence: no second page
     c = sqlite3.connect(db)
-    c.execute("INSERT INTO messages VALUES ('beat', ?, 'message')", (NOW,))
+    insert(c, "beat", 0)
     c.commit()
     c.close()
     assert run(script).returncode == 0 and len(srv.posts) == 2
@@ -459,6 +487,51 @@ def test_a_stopped_servers_wal_cache_is_read_without_creating_files(tmp_path, no
         n for n in before if n != "state"
     ]
     assert not (tmp_path / "cache.db-wal").exists() and not (tmp_path / "cache.db-shm").exists()
+
+
+def test_a_delayed_message_does_not_keep_the_topic_fresh(tmp_path, notify):
+    """A message with a Delay header is stored unpublished with a future time: it is not a heartbeat."""
+    cache(tmp_path / "cache.db", [("beat", 40, "message"), ("beat", -600, "message", 0)])
+    srv = notify()
+    assert run(build(tmp_path, srv)).returncode == 0
+    assert srv.posts and srv.posts[0][1]["Title"] == "DEAD-MAN: metrics silent on notify"
+
+
+def test_a_published_message_dated_far_in_the_future_is_an_error_not_a_heartbeat(tmp_path, notify):
+    cache(tmp_path / "cache.db", [("beat", -600, "message")])
+    srv = notify()
+    r = run(build(tmp_path, srv))
+    assert r.returncode == 1 and "dated in the future" in r.stderr and srv.posts == []
+
+
+def test_a_watch_that_cannot_read_pages_once_after_n_runs_and_once_when_it_reads_again(
+    tmp_path, notify
+):
+    srv = notify()
+    script = build(tmp_path, srv)  # no cache file: every run is exit 1
+    for _ in range(2):
+        assert run(script).returncode == 1
+    assert srv.posts == []  # not yet: a blip is not a page
+    assert run(script).returncode == 1
+    assert [p[1]["Title"] for p in srv.posts] == ["DEAD-MAN BLIND on notify"]
+    assert srv.posts[0][1]["Priority"] == "5"
+    assert run(script).returncode == 1 and len(srv.posts) == 1  # state-diffed: not again
+    cache(tmp_path / "cache.db", [("beat", 3, "message")])
+    assert run(script).returncode == 0
+    assert [p[1]["Title"] for p in srv.posts][1] == "dead-man watch reads again on notify"
+    assert run(script).returncode == 0 and len(srv.posts) == 2
+    assert state(tmp_path)["failures"] == 0
+
+
+def test_a_blind_page_that_could_not_be_sent_is_retried(tmp_path, notify):
+    srv = notify(status=503)
+    script = build(tmp_path, srv)
+    for _ in range(3):
+        run(script)
+    assert not state(tmp_path)["failure_paged"]
+    srv.status = 200
+    assert run(script).returncode == 1
+    assert state(tmp_path)["failure_paged"] and len(srv.posts) == 2  # the 503, then the retry
 
 
 @pytest.mark.parametrize("what", ["missing", "no table", "wrong columns"])
@@ -522,6 +595,8 @@ def test_with_beats_the_script_units_and_owner_only_token_are_installed_and_it_c
     assert token.read_text().strip() == TOKEN and oct(token.stat().st_mode & 0o777) == "0o400"
     service = (tmp_path / "units" / "hnx-ntfy-deadman.service").read_text()
     assert "User=" not in service and "--job timer:ntfy/deadman" in service
+    assert f"ReadOnlyPaths={tmp_path}/data/db" in service  # the cache is only read
+    assert f"{tmp_path}/last-run" in service.split("ReadWritePaths=")[1].splitlines()[0]
     assert "ExecStart=/usr/local/libexec/homelabnext/ntfy-deadman-watch\n" in service
     timer = (tmp_path / "units" / "hnx-ntfy-deadman.timer").read_text()
     assert "OnCalendar=*-*-* *:0/5:00 UTC" in timer and "OnBootSec" not in timer

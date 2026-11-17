@@ -127,3 +127,28 @@
       loop_control:
         label: "{{ item | join(' ') }}"
       changed_when: true
+
+# The opt-out has to opt out: with the boot unit off, one left by an earlier run is disabled and
+# deleted (idempotent: nothing to do when there is none).
+- name: Look for a boot unit left by an earlier run
+  ansible.builtin.stat:
+    path: "{{ compose_app_unit_dir }}/hnx-compose-{{ compose_app_name }}.service"
+  register: compose_app_boot_left
+  when: not (compose_app_boot_unit | bool)
+
+- name: Remove the boot unit the opt-out no longer wants
+  when: not (compose_app_boot_unit | bool) and compose_app_boot_left.stat.exists
+  block:
+    - name: Disable it
+      ansible.builtin.command:
+        argv: ["{{ compose_app_systemctl_cli }}", disable, "hnx-compose-{{ compose_app_name }}.service"]
+      changed_when: true
+      failed_when: false
+    - name: Delete the unit file
+      ansible.builtin.file:
+        path: "{{ compose_app_unit_dir }}/hnx-compose-{{ compose_app_name }}.service"
+        state: absent
+    - name: Reload systemd
+      ansible.builtin.command:
+        argv: ["{{ compose_app_systemctl_cli }}", daemon-reload]
+      changed_when: true

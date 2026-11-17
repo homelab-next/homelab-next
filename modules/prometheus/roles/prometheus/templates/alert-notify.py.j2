@@ -256,6 +256,8 @@ def main():
             print(f"alert not sent: {describe(exc)}", file=sys.stderr)
             rc = 2
     write_private(STATE, {"alerted": alerted, "misses": 0, "unreachable_posted": unreachable_posted})
+    # a failing alert post (rc 2) skips the heartbeat on purpose: the notify path is broken, so the
+    # heartbeat could not be delivered either, and the watch's silence is then the honest signal
     return rc or heartbeat(watchdog)
 
 

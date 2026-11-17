@@ -657,7 +657,32 @@ def _placement(tmp_path, notify_host=None):
     return path
 
 
-def _alerts(tmp_path, registry, **kw):
+GETENT = """import json, sys
+names = json.load(open(NAMES))
+addrs = names.get(sys.argv[2])
+if addrs is None:
+    sys.exit(2)
+for a in addrs:
+    print(a + "      STREAM " + sys.argv[2])
+"""
+ELSEWHERE = str(load(REGISTRY).hosts["lake-core"].address)  # another host of the example lab
+
+
+def _alerts(tmp_path, registry, resolves=None, **kw):
+    """``resolves``: what the fake getent answers by name (default: the notify alias resolves to an
+    address that is not this guest's)."""
+    from rolerun import fake
+
+    names = tmp_path / "names.json"
+    names.write_text(
+        json.dumps(
+            resolves if resolves is not None else {"notify.svc.example.internal": [ELSEWHERE]}
+        )
+    )
+    kw.setdefault(
+        "prometheus_getent_cli",
+        fake(tmp_path / "getent", GETENT.replace("NAMES", repr(str(names)))),
+    )
     extra = pvars(
         tmp_path,
         prometheus_unit_dir=str(tmp_path / "units"),
@@ -687,6 +712,30 @@ def test_a_heartbeat_receiver_on_the_metrics_guest_is_refused(tmp_path):
     out = r.stdout + r.stderr
     assert r.returncode != 0 and "runs on this" in out and "LL-571" in out
     assert not (tmp_path / "state").exists()  # nothing was written before the refusal
+
+
+ALIAS = "notify.svc.example.internal"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [[GUEST], ["::1"], [__import__("socket").gethostbyname("localhost")], [ELSEWHERE, GUEST]],
+    ids=["an alias of this guest", "loopback v6", "loopback v4", "one of several is this guest"],
+)
+def test_a_receiver_that_resolves_to_this_guest_is_refused_whatever_the_registry_says(
+    tmp_path, answer
+):
+    r = _alerts(tmp_path, _placement(tmp_path, "lake-core"), resolves={ALIAS: answer})
+    out = r.stdout + r.stderr
+    assert r.returncode != 0 and "runs on this" in out and "resolves to" in out
+
+
+def test_a_receiver_that_does_not_resolve_is_refused_unless_accepted(tmp_path):
+    reg = _placement(tmp_path, "lake-core")
+    r = _alerts(tmp_path, reg, resolves={})
+    assert r.returncode != 0 and "does not resolve" in r.stdout + r.stderr
+    ok = _alerts(tmp_path, reg, resolves={}, prometheus_heartbeat_allow_unresolved=True)
+    assert _outcome(ok.stdout + ok.stderr, "Refuse a receiver that does not resolve") == "skipping"
 
 
 def test_the_refusal_is_lifted_by_turning_the_heartbeat_off(tmp_path):

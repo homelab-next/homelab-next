@@ -96,6 +96,16 @@ monitor on the thing being monitored cannot see its own death. This module is th
   `host_id`) unless the heartbeat is turned off. It also cannot page if **this** service is down; the
   role's `health` (the watch's last-run record) and the registry row's health probe are what notice
   that, and `compose_app_boot_unit` is what starts a container that did not come back.
+- **A watch that cannot read the cache is itself paged.** It judges nothing then (the dead-man is
+  off), so after `ntfy_deadman_unreadable_after_runs` (3) consecutive runs that cannot read the
+  cache (missing, not the expected table, a message dated far in the future) it pages once
+  ("DEAD-MAN BLIND") and once more when it reads again. Only **published** messages count as a
+  heartbeat: a delayed message is stored unpublished with a future time and cannot keep a topic fresh.
+- **Known limit: the token's scope.** The watch pages, and the metrics forwarder posts its heartbeat,
+  with the shared publisher token, which may write every topic (`ntfy_publisher_topics`, default
+  `*`): any holder can forge a heartbeat. Scoping the token to the alert and beat topics needs a
+  separate account with its own secret and a second token in the forwarder; not done here
+  (one trusted sender). Narrowing `ntfy_publisher_topics` narrows it for everyone.
 - `health` fails (with beats) when the watch's last-run record is missing, older than five runs, or
   its last result was not `success`. `remove` deletes the units, script and token.
 

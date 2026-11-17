@@ -71,6 +71,9 @@ prometheus_notify_allow_plain_http: false
 # quiet. Empty topic: no heartbeat, and nothing outside this guest notices the metrics path die.
 prometheus_heartbeat_topic: hnx-heartbeat-metrics
 prometheus_heartbeat_every_minutes: 5
+# Accept a heartbeat receiver whose name does not resolve on this guest (the placement guard then
+# cannot show it is on another host; it still compares the registry placement). Off: refused.
+prometheus_heartbeat_allow_unresolved: false
 # The forwarder's timer (OnCalendar, ending in UTC): every minute, or every 30 seconds. The seconds
 # between its runs (prometheus_alert_interval_seconds, vars/main.yml) are derived from it, so the
 # unreachable counter can never disagree with the timer.

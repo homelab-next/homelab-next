@@ -39,7 +39,9 @@ NOTIFY_URL = {{ ('http://' ~ ntfy_bind ~ ':' ~ (ntfy_port | int | string)) | to_
 ALERT_TOPIC = {{ ntfy_deadman_alert_topic | to_json }}
 TOKEN_FILE = {{ ntfy_deadman_auth_file | to_json }}
 LAB = {{ ntfy_logical_id | to_json }}
+FAIL_AFTER = {{ ntfy_deadman_unreadable_after_runs | int }}
 STATE = os.path.join(STATE_DIR, "state.json")
+SKEW = 300  # seconds of clock difference tolerated between the sender and this host
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -80,7 +82,10 @@ def stopped():
     the server running the shared-memory file exists and the ordinary read-only open is used."""
     with open(DB, "rb") as fh:
         head = fh.read(20)
-    return len(head) == 20 and head[18] == 2 and head[19] == 2 and not os.path.exists(DB + "-shm")
+    if not (len(head) == 20 and head[18] == 2 and head[19] == 2) or os.path.exists(DB + "-shm"):
+        return False
+    # a crash leaves committed frames in -wal, which immutable=1 would ignore (stale reads)
+    return not (os.path.exists(DB + "-wal") and os.path.getsize(DB + "-wal") > 0)
 
 
 def newest(topics):
@@ -92,11 +97,15 @@ def newest(topics):
     con = sqlite3.connect("file:" + DB + "?mode=ro" + ("&immutable=1" if stopped() else ""), uri=True, timeout=10)
     try:
         cols = {r[1] for r in con.execute("PRAGMA table_info(messages)")}
-        if not {"topic", "time", "event"} <= cols:
-            raise ValueError("the message cache has no messages table with topic, time and event")
+        if not {"topic", "time", "event", "published"} <= cols:
+            raise ValueError("the message cache has no messages table with topic, time, event and published")
         out = {}
         for topic in topics:
-            row = con.execute("SELECT MAX(time) FROM messages WHERE topic = ? AND event = 'message'", (topic,)).fetchone()
+            row = con.execute("SELECT MAX(time) FROM messages WHERE topic = ? AND event = 'message' AND published = 1", (topic,)).fetchone()
+            # a delayed message is stored unpublished (filtered above) with a future time; anything
+            # still far in the future is not a heartbeat and must not keep the topic fresh
+            if row[0] is not None and row[0] > time.time() + SKEW:
+                raise ValueError(f"a message on {topic} is dated in the future")
             out[topic] = row[0]
         return out
     finally:
@@ -125,7 +134,13 @@ def load_state():
     except (OSError, ValueError):
         doc = {}
     armed, seen = doc.get("armed", {}), doc.get("state", {})
-    return (armed if isinstance(armed, dict) else {}), (seen if isinstance(seen, dict) else {})
+    fails = doc.get("failures", 0)
+    return (
+        armed if isinstance(armed, dict) else {},
+        seen if isinstance(seen, dict) else {},
+        fails if isinstance(fails, int) else 0,
+        doc.get("failure_paged") is True,
+    )
 
 
 def minutes(seconds):
@@ -134,13 +149,33 @@ def minutes(seconds):
 
 def main():
     now = time.time()
-    armed, states = load_state()
+    armed, states, failures, failure_paged = load_state()
     try:
         latest = newest([b["topic"] for b in BEATS])
     except (OSError, ValueError, sqlite3.Error) as exc:
+        # nothing is judged, so the dead-man is OFF for this run: after FAIL_AFTER runs in a row
+        # that is itself paged, once (a schema change after an upgrade would otherwise leave it
+        # silently off until someone runs health), and its recovery below
+        failures += 1
         print(f"nothing judged: {describe(exc)}", file=sys.stderr)
+        if failures >= FAIL_AFTER and not failure_paged:
+            try:
+                page(f"DEAD-MAN BLIND on {LAB}", f"The dead-man watch on {LAB} could not read the message cache {failures} runs in a row ({describe(exc)}); heartbeats are not being judged.", 5, "rotating_light,heartbeat")
+                failure_paged = True
+            except Exception as sent:
+                print(f"page not sent: {describe(sent)}", file=sys.stderr)
+        write_private(STATE, {"armed": armed, "state": states, "failures": failures, "failure_paged": failure_paged})
         return 1
     rc = 0
+    if failure_paged:
+        try:
+            page(f"dead-man watch reads again on {LAB}", "The dead-man watch can read the message cache again.", 3, "white_check_mark,heartbeat")
+            failure_paged = False
+        except Exception as sent:
+            print(f"page not sent: {describe(sent)}", file=sys.stderr)
+            rc = 2
+    if not failure_paged:
+        failures = 0
     for beat in BEATS:
         name, topic, limit = beat["name"], beat["topic"], int(beat["max_age_minutes"]) * 60
         armed.setdefault(name, now)
@@ -169,7 +204,7 @@ def main():
         except Exception as exc:  # the page stays owed
             print(f"page not sent: {describe(exc)}", file=sys.stderr)
             rc = 2
-    write_private(STATE, {"armed": armed, "state": states})
+    write_private(STATE, {"armed": armed, "state": states, "failures": failures, "failure_paged": failure_paged})
     return rc
 
 

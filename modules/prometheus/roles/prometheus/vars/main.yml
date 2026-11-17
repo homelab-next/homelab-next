@@ -25,3 +25,4 @@ prometheus_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
 prometheus_alert_schedules: {"*-*-* *:*:00 UTC": 60, "*-*-* *:*:00,30 UTC": 30}
 prometheus_alert_interval_seconds: "{{ prometheus_alert_schedules[prometheus_alert_schedule] }}"
 prometheus_alert_ignore_pattern: '^[A-Za-z0-9_/.|^$*+()-]{0,200}\Z'
+prometheus_getent_cli: getent
