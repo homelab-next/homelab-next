@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a new image the site built (context_target_image, tag and digest of the
+# same repository), then converge with the new pin (set context_image to the target in the overlay). The
+# index is rebuilt from the sources at start; run the health hook after (its self-check runs the canned
+# query).
+#   ansible-playbook -i <inventory> modules/context/playbooks/upgrade.yml -e context_target_image=<ref>
+- name: Upgrade the context service
+  hosts: mod_context_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: context
+        tasks_from: upgrade
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: context
+      vars:
+        context_image: "{{ context_target_image }}"

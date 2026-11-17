@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Synthetic golden suite for a fast-classifier alias served as a decision model (kind: decision):
+# each task asks one noul question about its prompt (the state) on POST /v1/systemone, and the
+# answer must fall in the task's probability band. Clearly-yes and clearly-no states only: a band
+# around 0.5 would grade calibration, which this smoke suite does not claim to.
+suite: decision-smoke
+kind: decision
+role: fast-classifier
+pass_score: 1.0
+tasks:
+  - id: rollback-named
+    prompt: "Change: upgrade the queue workers. Rollback: revert the commit."
+    question: "Does this change plan say how the change would be rolled back?"
+    expect: {scorer: probability, min: 0.8}
+  - id: rollback-refused
+    prompt: "Change: reindex the cache tier. NO-ROLLBACK."
+    question: "Does this change plan say how the change would be rolled back?"
+    expect: {scorer: probability, max: 0.2}
+  - id: unrelated-text
+    prompt: "Say hello in one word."
+    question: "Is this text a change plan for a production system?"
+    expect: {scorer: probability, max: 0.2}

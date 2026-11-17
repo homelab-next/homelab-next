@@ -14,6 +14,9 @@ Rules (each problem is reported as ``<rule>: <detail>``):
                    and audit sample are all present and sane (K-02).
 ``audit-sample``   ``sample_audit_pct`` is above 0: a spec nobody samples is never audited (K-02).
 ``in-git``         the file is tracked by git (K-02; discovery mode only).
+``model-roles``    every model tier's ``model_role`` is a chat-answering role of the repository's
+                   role table, ``examples/model_roles.json`` (G-11's cascade coverage; discovery
+                   mode, when the table is there).
 ``single-axis``    each question asks one thing (K-03).  Mechanically: the text ends with its only
                    ``?``, has no ``;``, and no standalone ``and``, ``or`` or ``and/or`` - the words
                    that join two questions into one.  A question needing them is two questions.
@@ -267,6 +270,32 @@ def _expand(paths: Iterable[Path]) -> list[Path]:
     return out
 
 
+#: the repository's role table, which a tracked spec's model tiers are held to (discovery mode)
+ROLE_TABLE = "examples/model_roles.json"
+
+
+def model_role_problems(doc: Any, table: Any) -> list[str]:
+    """Every model tier's ``model_role`` is a role of ``table`` that answers chat (not a decision
+    role: a cascade tier asks its question as a chat completion)."""
+    from homelabnext.registry.models import UnknownRole, normalize_role
+
+    out = []
+    tiers = doc.get("tiers") if isinstance(doc, dict) else None
+    for i, t in enumerate(tiers if isinstance(tiers, list) else ()):
+        role = t.get("model_role") if isinstance(t, dict) else None
+        if not isinstance(role, str):
+            continue
+        try:
+            r = table.roles.get(normalize_role(role))
+        except UnknownRole:
+            r = None
+        if r is None:
+            out.append(f"tiers[{i}]: {role} is not a role of {ROLE_TABLE}")
+        elif r.kind == "decision":
+            out.append(f"tiers[{i}]: {role} is a decision role; a cascade tier asks a chat model")
+    return out
+
+
 def lint_paths(paths: Sequence[Path], *, root: Path | None = None) -> tuple[int, list[Problem]]:
     """Lint ``paths`` (files or directories), or every spec in the git tree at ``root``.
 
@@ -283,6 +312,11 @@ def lint_paths(paths: Sequence[Path], *, root: Path | None = None) -> tuple[int,
             for p in untracked
         ]
         files = [*tracked, *untracked]
+    table = None
+    if not paths and (base / ROLE_TABLE).is_file():
+        from homelabnext.registry.models import RoleTable
+
+        table = RoleTable.load(base / ROLE_TABLE)
     for f in files:
         try:
             doc = load(f)
@@ -290,6 +324,8 @@ def lint_paths(paths: Sequence[Path], *, root: Path | None = None) -> tuple[int,
             raise LintError(f"{f}: unreadable: {exc}") from exc
         where = _rel(f, root or Path.cwd())
         problems += [Problem(where, rule, detail) for rule, detail in lint_doc(doc)]
+        if table is not None:
+            problems += [Problem(where, "model-roles", d) for d in model_role_problems(doc, table)]
     return len(files), problems
 
 

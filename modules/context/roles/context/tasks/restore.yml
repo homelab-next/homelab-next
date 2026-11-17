@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# There is nothing to restore: the index is derived from the git sources. Restoring the service is
+# converging it (main) and letting it reindex, which it does at every start.
+- name: Nothing to restore (a reindex rebuilds the index from the sources)
+  ansible.builtin.debug:
+    msg: "context: nothing to restore: converge the role and the service reindexes at start"
+  tags: [restore]

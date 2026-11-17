@@ -34,7 +34,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `agent/pregate_output` | `ok` / `degraded` / `stale` / `failed`, with per-source ages; a non-ok status needs a reason |
 | `agent/report_result` | `pack_id`, cites, unknowns, memory updates, optional structured `output`; `ok` needs at least one cite, `deferred` is how a job reports it did nothing |
 | `agent/handoff` | reader -> actor handoff: reader, actor, `output_schema`, the actions the actor may take and how their params bind to the output (G-04) |
-| `agent/golden_task` | the `homelabnext.golden` suite format; 1.1 adds the tool-using suites of the Code Mode golden harness (`modes`, `grant`, `max_turns`, a task's `fixtures`, `inject`, `checks`; [codemode](codemode.md#cm-6-golden-suites)) |
+| `agent/golden_task` | the `homelabnext.golden` suite format; 1.1 adds the tool-using suites of the Code Mode golden harness (`modes`, `grant`, `max_turns`, a task's `fixtures`, `inject`, `checks`; [codemode](codemode.md#cm-6-golden-suites)); 1.2 adds decision suites (`kind: decision`, a task's `question`, the `probability` scorer; [compute-model](compute-model.md#the-egress-canary)) |
 | `agent/prompt_template` | trusted `system`/`instructions`, slots each declaring `trust`; untrusted slots render only fenced |
 | `agent/injection_corpus` | versioned injection cases: payload, canary or forbidden tool, fake-model markers |
 | `broker/manifest` | the allowlist; `default` is the constant `deny`; `approvers` lists who may approve |
@@ -45,7 +45,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
 All are versioned 1.0 except `agent/profile` (1.7), `agent/report_result` (1.2),
-`agent/context_manifest` (1.3), `agent/golden_task` (1.1), `broker/manifest` (1.9),
+`agent/context_manifest` (1.3), `agent/golden_task` (1.2), `broker/manifest` (1.9),
 `broker/handler` (1.3), `broker/audit` (1.4) and `broker/decision` (1.2); every later minor is
 additive, and each schema's `description` says what each minor added. Every version is
 frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
