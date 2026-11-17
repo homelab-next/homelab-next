@@ -100,6 +100,12 @@ SOURCES: dict[str, tuple[str, str]] = {
         "digest to the build the old lake runs): compare with the project's release tags by hand, and "
         "move only with a catalog-file backup in hand",
     ),
+    "role:documents/documents_image": ("github", "paperless-ngx/paperless-ngx"),
+    "role:documents/documents_broker_image": (
+        "none",
+        "the Docker official image (docker.io/library/redis): compare its tags with the Redis "
+        "release page by hand, within the pinned major version (the broker holds only queued tasks)",
+    ),
     "role:gitea/gitea_image": ("github", "go-gitea/gitea"),
     "role:keycloak/keycloak_image": ("github", "keycloak/keycloak"),
     "role:keycloak/keycloak_postgres_image": (
@@ -194,6 +200,16 @@ NOTES: dict[str, str] = {
     "role:keycloak/keycloak_postgres_image": (
         "an image (modules/keycloak): the tag and its digest together, a minor version only "
         "(a major one is a dump and a restore)"
+    ),
+    "role:documents/documents_image": (
+        "an image (modules/documents): bump the tag and its digest together, with product.version in "
+        "modules/documents/module.yml and the lab registry's version; the same or a newer version only "
+        "(the application migrates its database forward on first start and cannot go back; the role "
+        "refuses an older target), so export the library first (the upgrade playbook does)"
+    ),
+    "role:documents/documents_broker_image": (
+        "an image (modules/documents): the tag and its digest together, within the pinned major version; "
+        "the broker holds queued tasks only, nothing to migrate"
     ),
     "role:media/media_image": (
         "an image (modules/media): bump the tag and its digest together, with product.version in "

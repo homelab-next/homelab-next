@@ -1,0 +1,148 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore from an export (README, "Migrating in" and "Restore drill"): documents_restore_source holds
+# library.tar and listing.jsonl. The source is checked first and nothing is written until it passes
+# (the listing names exactly the archive, with the size and sha256 it has; no member leaves the
+# directory, none is a link or a special file; it holds manifest.json). The product's importer
+# upserts by id and refuses to overwrite a file: it is not a merge. So the library must be EMPTY
+# (no document, no account; deploy with documents_admin_bootstrap: false) or the restore refuses
+# before it writes. The archive is extracted beside the data (export/.restoring), imported, and the
+# result is read: the imported records equal the database's and every document's files hash to
+# what the export recorded; only then is the staging directory removed and the API token seeded.
+# A failure leaves the staging directory for inspection.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Read the source's listing
+      ansible.builtin.slurp:
+        src: "{{ documents_restore_source }}/listing.jsonl"
+      register: documents_restore_listing
+    - name: Read the source's archive (size, sha256)
+      ansible.builtin.stat:
+        path: "{{ documents_restore_source }}/library.tar"
+        checksum_algorithm: sha256
+        follow: false
+      register: documents_restore_stat
+    - name: Refuse a source that is not exactly what its listing says (nothing is written)
+      ansible.builtin.assert:
+        that:
+          - documents_restore_stat.stat.exists
+          - not documents_restore_stat.stat.islnk
+          - (documents_restore_listing.content | b64decode).splitlines() | reject('equalto', '') | map('from_json') | map(attribute='key') | list == ['library.tar']
+          - (documents_restore_listing.content | b64decode).splitlines() | reject('equalto', '') | map('from_json') | map(attribute='sha256') | list == [documents_restore_stat.stat.checksum]
+          - (documents_restore_listing.content | b64decode).splitlines() | reject('equalto', '') | map('from_json') | map(attribute='size') | map('int') | list == [documents_restore_stat.stat.size | int]
+        fail_msg: "documents: {{ documents_restore_source }} is not an intact export (listing, size or sha256 differ)"
+    - name: List the archive's members (names, and kinds for the links)
+      ansible.builtin.command:
+        argv: [tar, --list, --file, "{{ documents_restore_source }}/library.tar"]
+      register: documents_members
+      changed_when: false
+    - name: List the archive's member types
+      ansible.builtin.command:
+        argv: [tar, --list, --verbose, --file, "{{ documents_restore_source }}/library.tar"]
+      register: documents_member_types
+      changed_when: false
+    - name: Refuse an archive that leaves its directory, holds a link or a special file, or has no manifest
+      ansible.builtin.assert:
+        that:
+          - documents_members.stdout_lines | select('match', '^/') | list | length == 0
+          - documents_members.stdout_lines | select('search', '(^|/)\.\.(/|$)') | list | length == 0
+          # a symlink (l), hard link (h), device, fifo: only regular files and directories are restored
+          - documents_member_types.stdout_lines | reject('match', '^[-d]') | list | length == 0
+          - "'manifest.json' in (documents_members.stdout_lines | map('regex_replace', '^\\./', '') | list)"
+        fail_msg: "documents: the archive leaves its directory, holds a link or special file, or holds no manifest.json"
+    - name: The application is up (the importer runs in it)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ documents_dir }}/docker-compose.yml", up, -d, --wait, broker, app]
+      changed_when: false
+    - name: Read what the library holds now
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ documents_dir }}/docker-compose.yml", exec, -T, app,
+               python3, manage.py, shell, -c, "{{ documents_state_code }}"]
+      register: documents_state
+      changed_when: false
+    - name: Refuse a library that already holds a document or an account (the import is not a merge)
+      ansible.builtin.assert:
+        that:
+          - documents_state.stdout_lines | select('match', '^HNX-STATE 0 0$') | list | length == 1
+        fail_msg: >-
+          documents: the library is not empty ({{ documents_state.stdout_lines | select('match', '^HNX-STATE') | list | first | default('no answer') }}).
+          The importer is not a merge: move {{ documents_data_root }} aside and deploy again with
+          documents_admin_bootstrap: false, then restore into that.
+    - name: Look for a staging directory an earlier restore left
+      ansible.builtin.stat:
+        path: "{{ documents_data_root }}/export/.restoring"
+      register: documents_stale_staging
+    - name: Refuse to extract over it
+      ansible.builtin.assert:
+        that: not documents_stale_staging.stat.exists
+        fail_msg: "documents: {{ documents_data_root }}/export/.restoring is left from an earlier restore; inspect it and move it away"
+    - name: Stage and import
+      block:
+        - name: Create the staging directory
+          ansible.builtin.file:
+            path: "{{ documents_data_root }}/export/.restoring"
+            state: directory
+            owner: "{{ documents_app_uid | int }}"
+            group: "{{ documents_app_gid | int }}"
+            mode: "0700"
+        - name: Extract the archive
+          ansible.builtin.command:
+            argv: [tar, --extract, --file, "{{ documents_restore_source }}/library.tar", --directory,
+                   "{{ documents_data_root }}/export/.restoring", --no-same-owner, --no-same-permissions]
+          changed_when: true
+        - name: Look for links in what was extracted
+          ansible.builtin.command:
+            argv: [find, "{{ documents_data_root }}/export/.restoring", -type, l]
+          register: documents_staged_links
+          changed_when: false
+        - name: Refuse links
+          ansible.builtin.assert:
+            that: documents_staged_links.stdout_lines | length == 0
+            fail_msg: "documents: the extracted export holds a link; nothing was imported"
+        - name: Give the staged export to the application's user
+          ansible.builtin.command:
+            argv: [chown, -R, "{{ documents_app_uid | int }}:{{ documents_app_gid | int }}", "{{ documents_data_root }}/export/.restoring"]
+          changed_when: true
+        - name: Import with the product's importer
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ documents_dir }}/docker-compose.yml", exec, -T, app,
+                   python3, manage.py, document_importer, "{{ documents_container_export }}/.restoring", --no-progress-bar]
+          changed_when: true
+        - name: Compare the imported records and every document's files with the export
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ documents_dir }}/docker-compose.yml", exec, -T,
+                   -e, "HNX_STAGING={{ documents_container_export }}/.restoring", app,
+                   python3, manage.py, shell, -c, "{{ documents_verify_code }}"]
+          register: documents_verify
+          changed_when: false
+          failed_when: >-
+            documents_verify.rc != 0 or
+            (documents_verify.stdout_lines | select('search', 'HNX-VERIFY .*"ok": true') | list | length) != 1
+      rescue:
+        - name: Say what was left behind
+          ansible.builtin.fail:
+            msg: >-
+              documents: the restore failed after the staging directory was made. {{ documents_data_root }}/export/.restoring
+              and anything already imported are LEFT for inspection (the importer is not a merge: move
+              {{ documents_data_root }} aside and deploy again empty before restoring again).
+    - name: Report, and by default switch off, what came in that can reach out by itself
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ documents_dir }}/docker-compose.yml", exec, -T, app,
+               python3, manage.py, shell, -c,
+               "{{ documents_egress_code | replace('DISABLE = False', 'DISABLE = ' ~ (documents_disable_imported_egress | bool | string)) }}"]
+      register: documents_egress
+      changed_when: documents_disable_imported_egress | bool
+    - name: Say which mail rules and workflows were found
+      ansible.builtin.debug:
+        msg: "{{ documents_egress.stdout_lines | select('match', '^HNX-EGRESS') | list }}"
+    - name: Remove the staging directory (a fixed path inside the data root's export directory)
+      ansible.builtin.file:
+        path: "{{ documents_data_root }}/export/.restoring"
+        state: absent
+    - name: Seed the API token now the accounts exist
+      ansible.builtin.include_tasks: token.yml
+  tags: [restore]
