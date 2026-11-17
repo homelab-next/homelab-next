@@ -14,6 +14,8 @@ import hashlib
 import json
 import os
 import pwd
+import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -79,6 +81,7 @@ def context_vars(tmp_path: Path, **kw) -> dict:
         "context_start": False,
         "context_validate_with_docker": False,
         "context_unit_dir": str(tmp_path / "units"),
+        "context_reindex_script": str(tmp_path / "bin" / "hnx-context-reindex"),
         "context_systemctl_cli": logging_fake(tmp_path, "systemctl", "enabled\n"),
         **last_run_vars(tmp_path, "context"),
     }
@@ -99,7 +102,7 @@ def _sha(token: str) -> str:
 
 @needs_ansible
 def test_main_renders_the_service_its_configuration_secrets_and_timer(tmp_path):
-    v = context_vars(tmp_path)
+    v = context_vars(tmp_path, context_docker_cli=logging_fake(tmp_path, "docker"))
     r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
     assert r.returncode == 0, r.stdout + r.stderr
     svc = compose(tmp_path)
@@ -132,8 +135,22 @@ def test_main_renders_the_service_its_configuration_secrets_and_timer(tmp_path):
     assert oct((tmp_path / "app" / "secrets" / "context.env").stat().st_mode & 0o777) == "0o600"
     assert oct((tmp_path / "data").stat().st_mode & 0o777) == "0o750"
     unit = (tmp_path / "units" / "hnx-context-reindex.service").read_text()
-    assert "exec -T context python -m homelabnext.context_service reindex 1800" in unit
+    assert "ExecStart=/usr/local/libexec/homelabnext/hnx-context-reindex" in unit
     assert "--job timer:context/reindex" in unit and "ExecStopPost=-" in unit
+    job = (tmp_path / "bin" / "hnx-context-reindex").read_text()
+    assert "hnx-script:" in job and '"reindex",' in job and '"1800",' in job
+    assert ADMIN not in job  # the token stays in the container's own environment
+    run = subprocess.run([sys.executable, str(tmp_path / "bin" / "hnx-context-reindex")])
+    assert run.returncode == 0
+    assert (
+        f"docker compose -f {tmp_path}/app/docker-compose.yml exec -T context python -m "
+        "homelabnext.context_service reindex 1800" in (tmp_path / "calls.log").read_text()
+    )
+    (tmp_path / "docker.fails").touch()
+    assert (
+        subprocess.run([sys.executable, str(tmp_path / "bin" / "hnx-context-reindex")]).returncode
+        == 1
+    )
     timer = (tmp_path / "units" / "hnx-context-reindex.timer").read_text()
     assert "OnCalendar=*-*-* *:20:00 UTC" in timer
     again = run_role(tmp_path, ROLE, "main", v, env=SECRETS)

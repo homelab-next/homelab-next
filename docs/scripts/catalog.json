@@ -302,6 +302,27 @@
     },
     {
       "exit": {
+        "0": "the reindex succeeded",
+        "1": "the reindex failed (the index is unchanged; the report says why)",
+        "2": "the service was busy, unreachable or refused the call"
+      },
+      "id": "context-reindex",
+      "inputs": "the context container (its configuration and the admin token in its own environment)",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-context-reindex",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the service's index and its record <data root>/state/last-reindex.json; the run's report on stdout",
+      "owner": "platform",
+      "path": "modules/context/roles/context/templates/reindex.py.j2",
+      "purpose": "Ask the running context service to fetch every configured git source and index what changed, and exit with the run's outcome.",
+      "status": "active",
+      "trigger": [
+        "timer:context/reindex",
+        "role:context"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "a seam has no contract test",
         "2": "usage error or an unresolvable range"
@@ -846,6 +867,7 @@
         "timer:aide/scan",
         "timer:caddy/acme-renew",
         "timer:clamav/scan",
+        "timer:context/reindex",
         "timer:lynis/scan",
         "timer:needrestart/check",
         "timer:needrestart/reboot",

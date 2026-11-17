@@ -10,6 +10,7 @@ context_container_data: /data
 context_container_model: /opt/hnx-context/model
 context_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
 context_reindex_unit: hnx-context-reindex
+context_reindex_script: /usr/local/libexec/homelabnext/hnx-context-reindex
 context_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
 context_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
 context_slug_pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'

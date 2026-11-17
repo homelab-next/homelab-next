@@ -10,12 +10,18 @@
     last_run_group: "{{ context_last_run_group }}"
     last_run_writer: "{{ context_last_run_writer }}"
 
+- name: Write the reindex job (the timer's ExecStart)
+  ansible.builtin.template:
+    src: reindex.py.j2
+    dest: "{{ context_reindex_script }}"
+    owner: "{{ context_owner }}"
+    mode: "0750"
+
 - name: Write the reindex service and timer units
   ansible.builtin.template:
     src: "reindex.{{ item }}.j2"
     dest: "{{ context_unit_dir }}/{{ context_reindex_unit }}.{{ item }}"
     owner: "{{ context_owner }}"
-    group: "{{ context_owner }}"
     mode: "0644"
   loop: [service, timer]
   register: context_units
