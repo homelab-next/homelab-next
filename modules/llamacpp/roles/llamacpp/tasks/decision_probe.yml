@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# One /v1/systemone probe of a decision model (input: llamacpp_probe_text). It fails unless the
+# server answered 200 AND the one answer we asked for is a noul with a real probability in [0, 1]:
+# an empty body, a missing answer, a boolean, a string or NaN is a failure, never a pass. The status
+# is asserted explicitly because failed_when replaces the uri module's own status check.
+- name: Ask one yes/no question of one state
+  ansible.builtin.uri:
+    url: "http://{{ llamacpp_bind }}:{{ llamacpp_port | int }}/v1/systemone"
+    method: POST
+    body_format: json
+    # a JSON string: a dict key is not templated, and the question id is a variable
+    body: >-
+      {{ {'model': llamacpp_served_model_name, 'state': llamacpp_probe_text,
+          'questions': {llamacpp_probe_id: {'type': 'noul', 'instructions': llamacpp_probe_question}}} | to_json }}
+    return_content: true
+    status_code: [200, 400, 404, 500, 501, 503]
+    timeout: "{{ llamacpp_health_timeout | int }}"
+  register: llamacpp_decision
+  changed_when: false
+  failed_when: false
+- name: The answer is a probability
+  ansible.builtin.assert:
+    that:
+      - llamacpp_decision.status == 200
+      - llamacpp_decision.json is mapping
+      - llamacpp_decision.json.answers is mapping
+      - llamacpp_decision.json.answers[llamacpp_probe_id] is mapping
+      - llamacpp_decision.json.answers[llamacpp_probe_id].type | default('') == 'noul'
+      - llamacpp_decision.json.answers[llamacpp_probe_id].noul is defined
+      - llamacpp_decision.json.answers[llamacpp_probe_id].noul is number
+      - llamacpp_decision.json.answers[llamacpp_probe_id].noul is not boolean
+      - llamacpp_decision.json.answers[llamacpp_probe_id].noul >= 0
+      - llamacpp_decision.json.answers[llamacpp_probe_id].noul <= 1
+    fail_msg: >-
+      llamacpp: decision mode needs POST /v1/systemone to answer 200 with a noul probability in
+      [0, 1] for {{ llamacpp_probe_text | length }} characters of state; got HTTP
+      {{ llamacpp_decision.status | default('none') }}: {{ llamacpp_decision.content | default('') | truncate(300) }}
+      (HTTP 500 'input too large' on a long state is llama-server's forced 512-token batch: -b and
+      -ub must equal llamacpp_context_size, LL-492)
