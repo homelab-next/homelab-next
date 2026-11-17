@@ -849,6 +849,7 @@
         "timer:lynis/scan",
         "timer:needrestart/check",
         "timer:needrestart/reboot",
+        "timer:ntfy/deadman",
         "timer:openbao/acme-renew",
         "timer:prometheus/alerts",
         "timer:rkhunter/scan",
@@ -1161,6 +1162,27 @@
       "status": "active",
       "trigger": [
         "role:module_census"
+      ]
+    },
+    {
+      "exit": {
+        "0": "checked (and paged, if a beat changed state)",
+        "1": "the message cache could not be read or is not the schema this expects (nothing was judged)",
+        "2": "a page could not be sent; it stays owed to the next run"
+      },
+      "id": "ntfy-deadman-watch",
+      "inputs": "the notify service's message cache (read-only) and the previous state file",
+      "installs_to": "/usr/local/libexec/homelabnext/ntfy-deadman-watch",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the state file and, on a change between alive and silent, one message to the alert topic (publish token)",
+      "owner": "platform",
+      "path": "modules/ntfy/roles/ntfy/templates/deadman-watch.py.j2",
+      "purpose": "Page, through this notify service, when an expected heartbeat topic has gone quiet (the metrics path is dead), and once more when it is back.",
+      "status": "active",
+      "trigger": [
+        "timer:ntfy/deadman",
+        "role:ntfy"
       ]
     },
     {

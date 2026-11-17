@@ -184,7 +184,8 @@ ntfy_drift_script: |
       c.close()
   print(json.dumps({"minted": minted, "users": [u[0] for u in users]}))
 # The dead-man watch's own files (fixed): the script, its state, the publish token it pages with
-# (the container's user's, 0400: the unit runs as that user), the message cache it reads.
+# (root's, 0400), the message cache it reads.
+# (the service unit names this path literally: a scheduled exec the script catalog can resolve)
 ntfy_deadman_script: /usr/local/libexec/homelabnext/ntfy-deadman-watch
 ntfy_deadman_state_dir: /var/lib/homelabnext/ntfy-deadman
 ntfy_deadman_auth_file: /etc/homelabnext/ntfy-deadman.auth

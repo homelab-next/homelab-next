@@ -18,7 +18,6 @@ import sqlite3
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -347,9 +346,7 @@ def cache(path: Path, rows=(), schema="topic TEXT, time INT, event TEXT") -> Pat
     c = sqlite3.connect(path)
     c.execute(f"CREATE TABLE messages ({schema})")
     for topic, ago_min, event in rows:
-        c.execute(
-            "INSERT INTO messages VALUES (?, ?, ?)", (topic, int(time.time() - ago_min * 60), event)
-        )
+        c.execute("INSERT INTO messages VALUES (?, ?, ?)", (topic, NOW - ago_min * 60, event))
     c.commit()
     c.close()
     return path
@@ -375,8 +372,21 @@ def build(tmp_path, srv, beats=(BEAT,)):
     return script
 
 
+# the watch reads the clock once: it is run under a fixed one (injected, not the wall clock), so
+# "40 minutes ago" is an exact number in the cache and the test never races a minute boundary
+NOW = 1_800_000_000
+FIXED_CLOCK = (
+    "import runpy, sys, time\n"
+    f"time.time = lambda: {NOW}\n"
+    "sys.argv = sys.argv[1:]\n"
+    "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+)
+
+
 def run(script):
-    return subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
+    return subprocess.run(
+        [sys.executable, "-c", FIXED_CLOCK, str(script)], capture_output=True, text=True
+    )
 
 
 def state(tmp_path):
@@ -403,7 +413,7 @@ def test_silence_pages_once_at_urgent_priority_and_the_return_pages_once(tmp_pat
     assert headers["Authorization"] == "Bearer " + TOKEN
     assert run(script).returncode == 0 and len(srv.posts) == 1  # the same silence: no second page
     c = sqlite3.connect(db)
-    c.execute("INSERT INTO messages VALUES ('beat', ?, 'message')", (int(time.time()),))
+    c.execute("INSERT INTO messages VALUES ('beat', ?, 'message')", (NOW,))
     c.commit()
     c.close()
     assert run(script).returncode == 0 and len(srv.posts) == 2
@@ -432,6 +442,23 @@ def test_a_failed_page_is_not_recorded_and_is_retried(tmp_path, notify):
     assert state(tmp_path)["state"] == {}  # owed
     srv.status = 200
     assert run(script).returncode == 0 and state(tmp_path)["state"] == {"metrics": "stale"}
+
+
+def test_a_stopped_servers_wal_cache_is_read_without_creating_files(tmp_path, notify):
+    """The watch runs as root: opening a WAL-mode cache whose server is not running would create
+    a root-owned -wal/-shm the server's own user could not open at its next start."""
+    db = cache(tmp_path / "cache.db", [("beat", 3, "message")])
+    c = sqlite3.connect(db)
+    c.execute("PRAGMA journal_mode=wal")
+    c.close()
+    srv = notify()
+    script = build(tmp_path, srv)
+    before = sorted(p.name for p in tmp_path.iterdir())
+    assert run(script).returncode == 0 and srv.posts == []
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name != "state") == [
+        n for n in before if n != "state"
+    ]
+    assert not (tmp_path / "cache.db-wal").exists() and not (tmp_path / "cache.db-shm").exists()
 
 
 @pytest.mark.parametrize("what", ["missing", "no table", "wrong columns"])
@@ -494,8 +521,8 @@ def test_with_beats_the_script_units_and_owner_only_token_are_installed_and_it_c
     token = tmp_path / "etc" / "auth"
     assert token.read_text().strip() == TOKEN and oct(token.stat().st_mode & 0o777) == "0o400"
     service = (tmp_path / "units" / "hnx-ntfy-deadman.service").read_text()
-    assert f"User={os.getuid()}" in service and "--job timer:ntfy/deadman" in service
-    assert f"ExecStart={script}" in service
+    assert "User=" not in service and "--job timer:ntfy/deadman" in service
+    assert "ExecStart=/usr/local/libexec/homelabnext/ntfy-deadman-watch\n" in service
     timer = (tmp_path / "units" / "hnx-ntfy-deadman.timer").read_text()
     assert "OnCalendar=*-*-* *:0/5:00 UTC" in timer and "OnBootSec" not in timer
     assert "enable --now hnx-ntfy-deadman.timer" in (tmp_path / "sc.log").read_text()

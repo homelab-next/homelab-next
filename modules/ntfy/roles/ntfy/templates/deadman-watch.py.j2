@@ -72,13 +72,24 @@ def write_private(path, doc):
     os.replace(tmp, path)
 
 
+def stopped():
+    """True for a journaled-in-WAL cache with no shared-memory file beside it: the server is not
+    running (its last connection removed the file on a clean close), so nothing writes it and
+    every commit is already in the main file.  Reading it immutable creates no -wal or -shm, which
+    this root-run script must not leave behind (the server's own user could not open them).  With
+    the server running the shared-memory file exists and the ordinary read-only open is used."""
+    with open(DB, "rb") as fh:
+        head = fh.read(20)
+    return len(head) == 20 and head[18] == 2 and head[19] == 2 and not os.path.exists(DB + "-shm")
+
+
 def newest(topics):
     """{topic: newest message time (epoch seconds) or None} from the cache, read-only.  A cache
     that is missing or has no messages table of the expected columns is an error (exit 1), never
     "no heartbeat": a check that cannot read must not look like a check that found silence."""
     if not os.path.isfile(DB) or os.path.islink(DB):
         raise ValueError(f"the message cache {DB} is missing (or a link)")
-    con = sqlite3.connect("file:" + DB + "?mode=ro", uri=True, timeout=10)
+    con = sqlite3.connect("file:" + DB + "?mode=ro" + ("&immutable=1" if stopped() else ""), uri=True, timeout=10)
     try:
         cols = {r[1] for r in con.execute("PRAGMA table_info(messages)")}
         if not {"topic", "time", "event"} <= cols:

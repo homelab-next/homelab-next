@@ -1,27 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
-# The dead-man watch (LL-571): the page token (the container's user's, 0400), the script, its
+# The dead-man watch (LL-571): the page token (root's, 0400), the script, its
 # state directory, the shared last-run writer, the service and timer units, enabled and started.
 # Nothing is installed with no beats.
 - name: Ensure the token, state and script directories exist
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: directory
-    owner: "{{ item.owner | default(omit) }}"
-    group: "{{ item.group | default(omit) }}"
     mode: "{{ item.mode }}"
   loop:
     - {path: "{{ ntfy_deadman_auth_file | dirname }}", mode: "0755"}
-    - {path: "{{ ntfy_deadman_state_dir }}", owner: "{{ ntfy_uid | int }}", group: "{{ ntfy_gid | int }}", mode: "0700"}
+    - {path: "{{ ntfy_deadman_state_dir }}", mode: "0700"}
     - {path: "{{ ntfy_deadman_script | dirname }}", mode: "0755"}
   loop_control:
     label: "{{ item.path }}"
 
-- name: Write the publish token the watch pages with (the container's user's, read-only)
+- name: Write the publish token the watch pages with (owner-only)
   ansible.builtin.copy:
     dest: "{{ ntfy_deadman_auth_file }}"
     content: "{{ lookup('hnx_secret', ntfy_publisher_key_ref) | trim }}\n"
-    owner: "{{ ntfy_uid | int }}"
-    group: "{{ ntfy_gid | int }}"
     mode: "0400"
   no_log: true
 
