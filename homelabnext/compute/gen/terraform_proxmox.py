@@ -9,8 +9,10 @@ keys, the default bridge, the API endpoint) are provider variables, never litera
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
+from typing import Any
 
-from homelabnext.compute.model import Fleet, Guest
+from homelabnext.compute.model import ComputeError, Fleet, Guest
 
 from . import cloudinit
 from ._text import HEADER, hcl_align, hq, hqlist, tf_ident
@@ -25,7 +27,7 @@ terraform {{
   required_providers {{
     proxmox = {{
       source  = "bpg/proxmox"
-      version = "~> 0.60"
+      version = "~> 0.76"
     }}
   }}
 }}
@@ -171,6 +173,20 @@ def _fw(g: Guest) -> str:
     return "true" if g.nic_firewall else "false"
 
 
+def virtiofs_dirs(g: Guest) -> list[Mapping[str, Any]]:
+    """A VM's ``shared_dirs`` (each must name a directory ``mapping``: a share with no renderable
+    form is refused, never dropped silently)."""
+    if g.kind != "vm":
+        return []
+    bad = [d["host_path"] for d in g.shared_dirs if not d.get("mapping")]
+    if bad:
+        raise ComputeError(
+            f"{g.id}: shared_dirs of a vm need a directory mapping to share by virtiofs "
+            f"(no mapping for {', '.join(bad)})"
+        )
+    return list(g.shared_dirs)
+
+
 def _vm(fleet: Fleet, g: Guest) -> str:
     bridge, vlan = _bridge(fleet, g)
     mem = g.memory
@@ -226,6 +242,10 @@ def _vm(fleet: Fleet, g: Guest) -> str:
                 else "    # resource_mapping unset: set one before apply"
             )
             L += ["    pcie   = true", "  }"]
+    for d in virtiofs_dirs(g):
+        # the mapping (created by hand on the cluster) names the host path; mount_path and
+        # read_only are the guest's own mount (the cloudinit target's mounts / fstab-virtiofs)
+        L += ["", "  virtiofs {", f"    mapping = {hq(d['mapping'])}", "  }"]
     ci = g.cloudinit
     if ci:
         L += ["", "  initialization {"]
@@ -263,9 +283,15 @@ def _vm(fleet: Fleet, g: Guest) -> str:
 
 def needs_user_data(g: Guest) -> bool:
     """Whether the VM's cloud-init asks for what the provider's ``user_account`` block cannot
-    express (a sudo rule, packages), so its user-data must come from the ``cloudinit`` target."""
+    express (a sudo rule, packages, a virtiofs mount), so its user-data must come from the ``cloudinit`` target."""
     ci = g.cloudinit
-    return bool(ci) and (ci.get("sudo", "none") != "none" or bool(ci.get("packages")))
+    # a mapped share is mounted by the user-data's ``mounts:``, which the provider's own
+    # ``user_account`` block cannot carry
+    return bool(ci) and (
+        ci.get("sudo", "none") != "none"
+        or bool(ci.get("packages"))
+        or any(d.get("mapping") for d in g.shared_dirs)
+    )
 
 
 def _pve_ostype(os_type: str) -> str:

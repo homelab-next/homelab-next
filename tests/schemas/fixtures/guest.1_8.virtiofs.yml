@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# guest 1.8: a VM that shares a host directory by virtiofs through a PVE directory mapping
+id: guest:share-box
+kind: vm
+provisioning: terraform
+placement: {node: hv-a, vmid: 250}
+resources:
+  cpu: {cores: 4}
+  memory: {size_mb: 8192}
+  disks: [{name: rootfs, size_gb: 40, pool: fast}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+cloudinit: {user: ansible}
+network: {zone: compute, ip: 198.51.100.150}
+shared_dirs:
+  - {host_path: /tank/pcap, mount_path: /data/pcap, read_only: true, mapping: pcap-share}
+capability: cap:inference
+owners: {primary: ml-team}
