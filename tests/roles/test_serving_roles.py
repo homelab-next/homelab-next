@@ -1459,7 +1459,11 @@ def _accounts_tasks() -> list[dict]:
 def test_model_store_creates_its_groups_then_its_owner_when_absent():
     """A fresh guest has none of the accounts the tree is chowned to: groups first (system), then
     the owner (system, primary group model_store_group, nologin, no home)."""
-    group_task, user_task = _accounts_tasks()
+    group_task, user_task = [
+        t
+        for t in _accounts_tasks()
+        if "ansible.builtin.getent" not in t and "ansible.builtin.assert" not in t
+    ]
     assert list(group_task).count("ansible.builtin.group") == 1
     g = group_task["ansible.builtin.group"]
     assert g["system"] is True and g["state"] == "present"
@@ -1492,13 +1496,25 @@ def test_model_store_main_creates_accounts_before_the_directories_and_can_opt_ou
 
 
 def test_model_store_account_tasks_run_in_check_mode_with_and_without_fixed_ids(tmp_path):
-    for kw in (
-        {},
-        {"model_store_uid": "1500", "model_store_gid": "1501", "model_store_exports_gid": "1502"},
-    ):
-        store = manifest()
+    """Fixed ids equal to the existing account's pass; accounts absent from the host take any id
+    (names here are free: the check-mode run only has to accept them)."""
+    gid, uid = grp.getgrnam(GROUP).gr_gid, _ME.pw_uid
+    fixed = {
+        "model_store_uid": str(uid),
+        "model_store_gid": str(gid),
+        "model_store_exports_gid": str(gid),
+    }
+    new = {
+        "model_store_owner": "ms-new-owner",
+        "model_store_group": "ms-new-group",
+        "model_store_exports_group": "ms-new-trainers",
+        "model_store_uid": "1500",
+        "model_store_gid": "1501",
+        "model_store_exports_gid": "1502",
+    }
+    for kw in ({}, fixed, new):
         v = store_vars(
-            tmp_path, store, model_store_manage_accounts=True, model_store_fetch=False, **kw
+            tmp_path, manifest(), model_store_manage_accounts=True, model_store_fetch=False, **kw
         )
         r = run_role(tmp_path, "model_store", "accounts", v, check=True)
         assert r.returncode == 0, r.stdout + r.stderr
@@ -1508,24 +1524,36 @@ def _role_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "ansible/roles/model_store"
 
 
-def test_model_store_hf_requirements_are_pinned_and_every_line_is_hashed():
-    """pip --require-hashes refuses an unhashed or unpinned line; hold the file to that too."""
+def _requirement_problems(text: str) -> list[str]:
+    """What pip --require-hashes would refuse: a requirement not pinned with == or carrying no
+    --hash=sha256:<64 hex>, and any absolute home path (a generator's `# via -r <path>` comment
+    leaked a workstation path once; the repository is public)."""
+    import re
+
+    problems = [f"home path: {m}" for m in re.findall(r"/(?:home|Users|root)/\S*", text)]
+    for e in re.split(r"\n(?=[A-Za-z0-9])", text.strip()):
+        m = re.match(r"([A-Za-z0-9_.-]+)==([^\s;]+)", e)
+        if not m:
+            problems.append(f"not pinned: {e[:40]}")
+        elif not re.search(r"--hash=sha256:[0-9a-f]{64}\b", e):
+            problems.append(f"no hash: {m.group(1)}")
+    return problems
+
+
+def test_model_store_hf_requirements_are_pinned_hashed_and_carry_no_home_path():
     import re
 
     text = (_role_dir() / "files/hf_requirements.txt").read_text()
-    entries = re.split(r"\n(?=[A-Za-z0-9])", text.strip())
-    names = {}
-    for e in entries:
-        if e.startswith("#"):
-            continue
-        m = re.match(r"([A-Za-z0-9_.-]+)==([^\s;]+)", e)
-        assert m, e[:60]
-        assert re.search(r"--hash=sha256:[0-9a-f]{64}", e), m.group(1)
-        names[m.group(1).lower().replace("_", "-")] = m.group(2)
+    assert _requirement_problems(text) == []
     version = __import__("yaml").safe_load((_role_dir() / "vars/main.yml").read_text())[
         "model_store_hf_version"
     ]
-    assert names["huggingface-hub"] == version
+    assert f"huggingface-hub=={version}" in text
+    # the check itself bites: stripping every hash, or adding a path comment, is caught
+    stripped = re.sub(r" *\\?\n? *--hash=sha256:[0-9a-f]{64}", "", text)
+    assert any(p.startswith("no hash") for p in _requirement_problems(stripped))
+    leaked = text + "    # via -r /home/someone/scratch/in.txt\n"
+    assert any(p.startswith("home path") for p in _requirement_problems(leaked))
 
 
 def test_model_store_installs_the_cli_by_hash_into_a_venv_and_defaults_to_it():
@@ -1545,7 +1573,16 @@ def test_model_store_installs_the_cli_by_hash_into_a_venv_and_defaults_to_it():
     assert "/bin/hf" in d["model_store_hf_cli"] and "model_store_hf_venv" in d["model_store_hf_cli"]
 
 
-@pytest.mark.parametrize("reported,ok", [("2.4.0", True), ("2.3.9", False)])
+@pytest.mark.parametrize(
+    "reported,ok",
+    [
+        ("2.4.0", True),
+        ("huggingface_hub version: 2.4.0", True),
+        ("2.3.9", False),
+        ("12.4.0", False),
+        ("2.4.0.dev0", False),
+    ],
+)
 @first_run(lambda tmp, reported, ok: {"role": "model_store", "tasks_from": "readiness",
     "extra_vars": {"model_store_hf_install": True, "model_store_fetch": True,
                    "model_store_hf_venv": str(tmp / "venv"),
@@ -1555,4 +1592,27 @@ def test_model_store_readiness_reports_the_cli_version_and_refuses_another_than_
 ):
     r, _ = first
     assert (r.returncode == 0) is ok, r.stdout
-    assert (f"hf CLI {reported}" in r.stdout) if ok else ("not the pinned 2.4.0" in r.stdout)
+    assert ("hf CLI " in r.stdout) if ok else ("not the pinned 2.4.0" in r.stdout)
+
+
+def _numbers() -> tuple[int, int]:
+    return grp.getgrnam(GROUP).gr_gid, _ME.pw_uid
+
+
+@pytest.mark.parametrize("which", ["gid", "exports_gid", "uid"])
+def test_model_store_never_renumbers_an_existing_account(tmp_path, which):
+    """An existing account whose number differs from the fixed one is reported, never changed."""
+    gid, uid = _numbers()
+    right = {"gid": gid, "exports_gid": gid, "uid": uid}[which]
+    var = {
+        "gid": "model_store_gid",
+        "exports_gid": "model_store_exports_gid",
+        "uid": "model_store_uid",
+    }[which]
+    base = store_vars(
+        tmp_path, manifest(), model_store_manage_accounts=True, model_store_fetch=False
+    )
+    bad = run_role(tmp_path, "model_store", "accounts", {**base, var: str(right + 1)}, check=True)
+    assert bad.returncode != 0 and "never renumbers an account" in bad.stdout, bad.stdout
+    ok = run_role(tmp_path, "model_store", "accounts", {**base, var: str(right)}, check=True)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
