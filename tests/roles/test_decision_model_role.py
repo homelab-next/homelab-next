@@ -24,12 +24,7 @@ import yaml
 from rolerun import fake, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
-pytestmark = [
-    pytest.mark.requires_tool("ansible-playbook"),
-    pytest.mark.skipif(
-        os.getuid() < 1000 or os.getgid() < 1000, reason="the role refuses an id below 1000"
-    ),
-]
+pytestmark = pytest.mark.requires_tool("ansible-playbook")
 # the role under test is the one that ships the decision-model probe (named by what it does, not by product)
 ROLE_DIR = next((ROOT / "modules").glob("*/roles/*/tasks/decision_probe.yml")).parents[1]
 ROLE = str(ROLE_DIR)
