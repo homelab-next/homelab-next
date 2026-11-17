@@ -6,10 +6,10 @@
   "min_lines": 5
  },
  "summary": {
-  "clones": 51,
-  "duplicated_lines": 807,
-  "total_lines": 200184,
-  "duplicated_percent": 0.4
+  "clones": 49,
+  "duplicated_lines": 779,
+  "total_lines": 202842,
+  "duplicated_percent": 0.38
  },
  "increases": [
   {
@@ -156,20 +156,6 @@
     "0767b514b8"
    ]
   },
-  "36b909e4ae163694": {
-   "tokens": 83,
-   "lines": 6,
-   "count": 1,
-   "files": [
-    "tools/migrate/jellyfin.py",
-    "tools/migrate/media_automation.py"
-   ],
-   "fingerprints": [
-    "00b885aa93",
-    "0679122e6a",
-    "12e1b15722"
-   ]
-  },
   "3fbfee55f7e6e4c9": {
    "tokens": 76,
    "lines": 5,
@@ -229,18 +215,6 @@
     "0ae869c5d5",
     "0b7d5d1b93",
     "0d398bc55c"
-   ]
-  },
-  "5e7576ff999e8845": {
-   "tokens": 68,
-   "lines": 8,
-   "count": 1,
-   "files": [
-    "tools/migrate/jellyfin.py",
-    "tools/migrate/media_automation.py"
-   ],
-   "fingerprints": [
-    "05a2630867"
    ]
   },
   "7b2d1d3e3382e36f": {
