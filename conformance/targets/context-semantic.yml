@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-# The hybrid (BM25 + dense) context adapter (homelabnext.context.semantic), needs the
+# The hybrid (BM25 + dense) context adapter (homelabnext.context_semantic), needs the
 # `context-semantic` extra and the pinned model directory in $HNX_CONTEXT_MODEL_DIR
 # (provision it with `python -m homelabnext.context.semantic_model DIR`).
 #   hnx conform run context --target context-semantic
 name: context-semantic
 capabilities:
   context:
-    adapter: homelabnext.context.semantic:make
+    adapter: homelabnext.context_semantic:make
     features: [semantic]

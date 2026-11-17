@@ -205,7 +205,7 @@ def _semantic(**kw):
     model = os.environ.get("HNX_CONTEXT_MODEL_DIR")
     if not model:
         pytest.skip("HNX_CONTEXT_MODEL_DIR is not set")
-    from homelabnext.context.semantic import SemanticContextStore
+    from homelabnext.context_semantic import SemanticContextStore
 
     return SemanticContextStore(model, **kw)
 

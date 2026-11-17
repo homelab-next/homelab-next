@@ -37,17 +37,18 @@ import os
 import re
 from collections import Counter
 from collections.abc import Callable, Sequence
+from contextvars import ContextVar
 from pathlib import Path
 
 from homelabnext import tlp as _tlp
-
-from . import model as _m
-from .model import Document, Hit, IndexReport, NotFound, Query
-from .semantic_model import check_dir
-from .store import MAX_DEPTH, ContextStore, _hit
+from homelabnext.context import ContextStore
+from homelabnext.context import model as _m
+from homelabnext.context.model import Document, Hit, IndexReport, NotFound, Query
+from homelabnext.context.semantic_model import check_dir
 
 __all__ = ["SemanticContextStore", "SemanticUnavailable", "default_tlp_of", "make"]
 
+_READING: ContextVar[_tlp.Label | None] = ContextVar("context_reader_ceiling", default=None)
 _WORD = re.compile(r"\w+")
 _MIN_DOCS_FOR_STOP = 20
 _STOP_SHARE = 0.5
@@ -134,35 +135,17 @@ class SemanticContextStore(ContextStore):
         return hit
 
     def query(self, q: Query, *, ceiling: str | _tlp.Label | None = None) -> list[Hit]:
-        c = self._reader(ceiling)
-        q = _m.check_query(q)
-        words = _m.terms(q.text)
-        if q.budget == 0 or (not words and not q.seeds):
-            return []
-        visible = [
-            d
-            for d in self._docs.values()
-            if _m.in_scope(d.id, q.allowed)
-            and _tlp.allows(c, self._tlp[d.id])
-            and (q.include_inactive or _m.is_active(d.status))
-        ]
-        visible.sort(key=lambda d: d.id)  # index order must not reach a float sum
-        scores = self._text_scores(q.text, words, visible)
-        dist = self._distances(visible, q.seeds)
-        hits: list[Hit] = []
-        for d in visible:
-            if q.kinds is not None and d.kind not in q.kinds:
-                continue
-            kw = scores.get(d.id, 0.0)
-            if d.id in dist:
-                score = (MAX_DEPTH + 1 - dist[d.id]) + kw
-            elif kw > 0:
-                score = kw
-            else:
-                continue
-            hits.append(_hit(d, round(score, 9), words))
-        hits.sort(key=lambda h: (-h.score, h.id))
-        return hits[: q.budget]
+        token = _READING.set(self._reader(ceiling))  # per call and per thread, never shared
+        try:
+            return super().query(q)
+        finally:
+            _READING.reset(token)
+
+    def _visible(self, q: Query) -> list[Document]:
+        c = _READING.get() or self._ceiling
+        seen = [d for d in super()._visible(q) if _tlp.allows(c, self._tlp[d.id])]
+        seen.sort(key=lambda d: d.id)  # index order must not reach a float sum
+        return seen
 
     # -- scoring -------------------------------------------------------------------------------
     def _reader(self, ceiling: str | _tlp.Label | None) -> _tlp.Label:
@@ -188,7 +171,7 @@ class SemanticContextStore(ContextStore):
         return got
 
     def _text_scores(
-        self, text: str, words: list[str], visible: list[Document]
+        self, q: Query, words: Sequence[str], visible: list[Document]
     ) -> dict[str, float]:
         """In [0, 1): fused BM25 and cosine for the visible documents that clear the cut-off."""
         if not words or not visible:
@@ -201,7 +184,7 @@ class SemanticContextStore(ContextStore):
         top = max((s for _, s in found), default=0.0)
         if top > 0:
             sparse = {str(i): round(s / top, 6) for i, s in found if s > 0}
-        qv = self._emb.batchtransform([text[:EMBED_CHARS]])[0]
+        qv = self._emb.batchtransform([q.text[:EMBED_CHARS]])[0]
         out: dict[str, float] = {}
         for d in visible:
             # batch padding moves the last float bits of a vector; five places hide that
@@ -226,7 +209,7 @@ def make(
     min_similarity: float = 0.36,
     min_score: float = 0.0,
 ) -> SemanticContextStore:
-    """The factory a conformance target names: ``adapter: homelabnext.context.semantic:make``.
+    """The factory a conformance target names: ``adapter: homelabnext.context_semantic:make``.
 
     ``model_dir`` defaults to the environment variable ``HNX_CONTEXT_MODEL_DIR``."""
     model_dir = model_dir or os.environ.get("HNX_CONTEXT_MODEL_DIR", "")

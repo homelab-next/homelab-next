@@ -132,14 +132,18 @@ def load_corpus(
     return out
 
 
-def _run(search: Callable[[str], Sequence[Hit]], questions: Sequence[Question]) -> Result:
+def _run(
+    search: Callable[[str], Sequence[Hit]],
+    questions: Sequence[Question],
+    clock: Callable[[], float] = time.perf_counter,
+) -> Result:
     res = Result("")
     ranks: dict[str, int | None] = {}
     times, abstained = [], set()
     for q in questions:
-        t = time.perf_counter()
+        t = clock()
         hits = search(q.q)
-        times.append((time.perf_counter() - t) * 1000)
+        times.append((clock() - t) * 1000)
         ids = [h.id for h in hits]
         if not ids:
             abstained.add(q.id)
@@ -167,6 +171,7 @@ def evaluate(
     contenders: dict[str, Callable[[list[Document]], Callable[[str], Sequence[Hit]]]],
     docs: list[Document],
     questions: Sequence[Question],
+    clock: Callable[[], float] = time.perf_counter,
 ) -> list[Result]:
     """Build each contender over ``docs`` and run every question through it."""
     ids = {d.id for d in docs}
@@ -175,10 +180,10 @@ def evaluate(
         raise ValueError(f"{len(missing)} expected answer id(s) are not in the corpus")
     out = []
     for name, build in contenders.items():
-        t = time.perf_counter()
+        t = clock()
         search = build(docs)
-        built = time.perf_counter() - t
-        r = _run(search, questions)
+        built = clock() - t
+        r = _run(search, questions, clock)
         r.name, r.index_s = name, built
         out.append(r)
     return out
@@ -218,7 +223,7 @@ def _keyword(docs: list[Document]):
 
 
 def _semantic(model_dir: str, labels, **kw):
-    from .semantic import SemanticContextStore
+    from homelabnext.context_semantic import SemanticContextStore
 
     def build(docs):
         s = SemanticContextStore(model_dir, tlp_of=lambda d: labels[d.id], **kw)
