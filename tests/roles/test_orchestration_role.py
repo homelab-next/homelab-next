@@ -92,7 +92,7 @@ def vars_for(tmp: Path, binary: Path, **kw) -> dict:
         "orchestration_binary": str(binary),
         "orchestration_binary_sha256": sha(binary),
         "orchestration_profiles_src": str(prof),
-        "orchestration_install_dir": str(tmp / "opt" / "hnx" / "orchestration"),
+        "orchestration_install_dir": str(tmp / "opt" / "hnx-orchestration"),
         "orchestration_config_dir": str(tmp / "etc" / "orchestration"),
         "orchestration_data_root": str(tmp / "var" / "orchestration"),
         "orchestration_systemd_dir": str(tmp / "units"),
