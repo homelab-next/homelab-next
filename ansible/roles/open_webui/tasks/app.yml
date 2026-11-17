@@ -1,5 +1,43 @@
 # SPDX-License-Identifier: Apache-2.0
 # The compose_app inputs (shared by main and the hooks that delegate to compose_app).
+# the per-request headers: Open WebUI's connection settings (OPENAI_API_CONFIGS, a JSON object by
+# connection index) carry static headers, and substitute {{USER_ID}} (and others) per request
+- name: The gateway headers and the sign-in settings
+  ansible.builtin.set_fact:
+    open_webui_gateway_headers: >-
+      {{ ({'X-HNX-TLP': open_webui_gateway_tlp} if open_webui_gateway_tlp | length > 0 else {})
+         | combine({'X-HNX-Tag': open_webui_gateway_tag_prefix
+                                 ~ (':' if open_webui_gateway_tag_prefix | length > 0 else '')
+                                 ~ ('{' ~ '{USER_ID}' ~ '}')}
+                    if open_webui_gateway_tag_per_user else
+                    ({'X-HNX-Tag': open_webui_gateway_tag_prefix}
+                     if open_webui_gateway_tag_prefix | length > 0 else {})) }}
+    open_webui_oidc_env: >-
+      {{ {'ENABLE_OAUTH_SIGNUP': 'true',
+          'OAUTH_CLIENT_ID': open_webui_oidc_client_id,
+          'OPENID_PROVIDER_URL': open_webui_oidc_issuer_url | regex_replace('/\Z', '')
+                                 ~ '/.well-known/openid-configuration',
+          'OPENID_REDIRECT_URI': open_webui_public_url ~ '/oauth/oidc/callback',
+          'OAUTH_PROVIDER_NAME': open_webui_oidc_provider_name,
+          'OAUTH_SCOPES': 'openid email profile',
+          'OAUTH_CODE_CHALLENGE_METHOD': 'S256',
+          'OAUTH_USERNAME_CLAIM': 'preferred_username',
+          'OAUTH_MERGE_ACCOUNTS_BY_EMAIL': 'false',
+          'ENABLE_OAUTH_ROLE_MANAGEMENT': 'true',
+          'OAUTH_ROLES_CLAIM': 'roles',
+          'OAUTH_ALLOWED_ROLES': 'user,admin',
+          'OAUTH_ADMIN_ROLES': 'admin'}
+         if open_webui_oidc_issuer_url | length > 0 else {} }}
+
+- name: The settings the role derives from its own inputs
+  ansible.builtin.set_fact:
+    open_webui_derived_env: >-
+      {{ open_webui_oidc_env
+         | combine({'OPENAI_API_CONFIGS': {'0': {'headers': open_webui_gateway_headers}} | to_json}
+                   if open_webui_gateway_headers | length > 0 else {})
+         | combine({'WEBUI_ADMIN_EMAIL': open_webui_admin_email}
+                   if open_webui_admin_email | length > 0 else {}) }}
+
 - name: Build the application spec
   ansible.builtin.set_fact:
     open_webui_app:
@@ -21,6 +59,7 @@
               {{ open_webui_extra_env | combine(open_webui_fixed_env)
                  | combine({'WEBUI_URL': open_webui_public_url, 'CORS_ALLOW_ORIGIN': open_webui_public_url}
                            if open_webui_public_url | length > 0 else {})
+                 | combine(open_webui_derived_env)
                  | combine({'OPENAI_API_BASE_URLS': lookup('hnx_registry', open_webui_gateway_id, field='url') ~ '/v1'}) }}
             ports: ["{{ open_webui_bind }}:{{ open_webui_port | int }}:8080"]
             volumes: ["{{ open_webui_dir }}/data:/app/backend/data"]
