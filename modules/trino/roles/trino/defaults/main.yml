@@ -68,6 +68,28 @@ trino_validate_with_docker: true
 trino_health_timeout: 10
 # --- the maintenance timer (the lake's snapshot and orphan-file hygiene) ---
 trino_maintenance_enabled: true
+# The timer is ARMED (enabled and started) only when trino_maintenance_enabled AND this is true. The
+# first maintenance run on a lake restored or migrated from another one is the dangerous one (a
+# current-only data copy under a full-history catalog: expire/orphan statements hang or delete), and the
+# role cannot see how the lake got here, so arming is an explicit operator act: set this true only after
+# `lake_verify.py` (its all-history check, on by default) passed (or the lake was never restored), and after the allow/skip lists
+# below say what may be touched. Until then the units are installed and the timer is stopped and disabled.
+trino_maintenance_acknowledged_restore: false
+# which tables are touched: schema or schema.table globs (lower case only, [a-z0-9_*?]: the engine's names are lower case, and an upper-case pattern would silently match nothing); deny (skip) wins
+trino_maintenance_schemas: ["*"]
+trino_maintenance_skip: []
+# per-schema values laid over the defaults below: {schema: {expire: 90d, retain_last: 50,
+# orphan_retention: 7d, orphan: false}}; every key optional, `orphan: false` skips remove_orphan_files
+trino_maintenance_overrides: {}
+# seconds the read-only history preflight ($snapshots, $all_manifests) may take per query
+trino_preflight_timeout: 300
+# after a cancel, seconds to wait for the engine to show the query gone (system.runtime.queries); if it is
+# still live the whole run stops. Keep (10 + 30 + this + the alert) under the unit's TimeoutStopSec (120).
+trino_cancel_confirm_timeout: 45
+# Persistent=true on the timer fires a missed run the moment the timer is started, i.e. the instant it is
+# armed. False (default): the first run is the next OnCalendar time, so arming never starts a run by itself
+# and the first run can be attended. True: catch up a run missed while the host was off.
+trino_maintenance_catch_up: false
 trino_maintenance_user: maintenance
 trino_maintenance_ref: secret:trino/maintenance-password
 # snapshots older than this are expired, always keeping the last trino_retain_last; orphan files
