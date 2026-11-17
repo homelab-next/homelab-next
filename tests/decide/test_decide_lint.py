@@ -141,3 +141,55 @@ def test_question_objects_parse_to_texts_and_callers():
     assert spec.inline and spec.callers == ("inline", "batch")
     batch = parse_spec(load(FIX / "good" / "batch-all-tiers.yml"))
     assert not batch.inline
+
+
+def _tracked_spec_with_table(tmp_path: Path, roles: dict) -> tuple[int, list]:
+    """A git tree with one good spec (its tiers name mdl:fast-classifier and mdl:main-reasoner)
+    and the repository's role table at ``examples/model_roles.json``."""
+    import json
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    shutil.copy(FIX / "good" / "batch-all-tiers.yml", tmp_path / "spec.yml")
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "examples" / "model_roles.json").write_text(json.dumps(roles))
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    return lint_paths([], root=tmp_path)
+
+
+def _roles(drop: str = "", decision: str = "") -> dict:
+    import json
+
+    doc = json.loads((ROOT / "examples" / "model_roles.json").read_text())
+    if drop:
+        doc["roles"].pop(drop)
+        for r in doc["roles"].values():
+            if r.get("fallback") == f"mdl:{drop}":
+                del r["fallback"]
+    if decision:
+        doc["roles"][decision]["kind"] = "decision"
+        doc["roles"][decision].pop("logprobs", None)
+        for r in doc["roles"].values():
+            if r.get("fallback") == f"mdl:{decision}":
+                del r["fallback"]
+    return doc
+
+
+def test_a_cascade_tier_must_be_a_chat_role_of_the_repositorys_table(tmp_path):
+    """G-11's cascade coverage (the check pins coverage no longer makes): every model tier of a
+    tracked spec names a role of examples/model_roles.json that answers chat."""
+    roles = {t.get("model_role") for t in load(FIX / "good" / "batch-all-tiers.yml")["tiers"]}
+    assert "mdl:fast-classifier" in roles
+    assert _tracked_spec_with_table(tmp_path / "ok", _roles()) == (1, [])
+    _, problems = _tracked_spec_with_table(tmp_path / "gone", _roles(drop="fast-classifier"))
+    assert [(p.rule, p.detail) for p in problems] == [
+        (
+            "model-roles",
+            f"tiers[{i}]: mdl:fast-classifier is not a role of examples/model_roles.json",
+        )
+        for i, t in enumerate(load(FIX / "good" / "batch-all-tiers.yml")["tiers"])
+        if t.get("model_role") == "mdl:fast-classifier"
+    ]
+    _, problems = _tracked_spec_with_table(tmp_path / "dec", _roles(decision="fast-classifier"))
+    assert problems and all(
+        p.rule == "model-roles" and "is a decision role" in p.detail for p in problems
+    )

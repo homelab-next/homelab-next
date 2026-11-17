@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: Apache-2.0
+# The settings, refused by name before anything is written. The service checks its configuration
+# again when it starts (homelabnext/context_service/config.py), so a value that slipped past here
+# still never half-applies.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - context_logical_id is match(context_slug_pattern)
+      - context_image is match(context_ref_pattern)
+      - context_tag is not match('^latest\Z')
+      - context_bind is match(context_ipv4_pattern)
+      - context_bind != '0.0.0.0'
+      - context_port | int >= 1024 and context_port | int <= 65535
+      - context_uid | int >= 1000 and context_gid | int >= 1000
+      - context_image_archive == '' or context_image_archive is match(context_path_pattern)
+      - >-
+        [context_dir, context_data_root, context_last_run_dir, context_unit_dir, context_docker_cli]
+        | reject('match', context_path_pattern) | list | length == 0
+      - not (context_data_root ~ '/').startswith(context_dir ~ '/') and not (context_dir ~ '/').startswith(context_data_root ~ '/')
+      - context_last_run_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - context_admin_ref is match(context_store_ref_pattern)
+      - context_gateway_key_ref is match(context_store_ref_pattern)
+      - "[context_admin_ref, context_gateway_key_ref] | map('split', ':', 1) | map('last') | reject('match', '^context/') | list | length == 0"
+      - context_gateway_id == '' or context_gateway_id is match(context_slug_pattern)
+      - context_judge_role is match(context_slug_pattern)
+      - context_judge_threshold | float >= 0 and context_judge_threshold | float <= 1
+      - context_judge_workers | int >= 1 and context_judge_workers | int <= 16
+      - context_judge_top_k | int >= 1 and context_judge_top_k | int <= 50
+      - context_judge_ceiling in context_tlp_labels
+      - context_judge_on_error in ['fallback', 'abstain']
+      - context_dense_weight | float >= 0 and context_dense_weight | float <= 1
+      - context_min_similarity | float >= 0 and context_min_similarity | float <= 1
+      - context_min_score | float >= 0 and context_min_score | float <= 1
+      - context_reindex_schedule is match('^[A-Za-z0-9*:/,. -]{1,64}\Z')
+      - context_reindex_timeout_s | int >= 60
+      - context_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - context_allow_plain_http is boolean
+      - context_start is boolean and context_validate_with_docker is boolean
+      - context_health_timeout | int >= 1 and context_check_timeout_s | int >= 10
+    fail_msg: >-
+      context: a registry id, an image pinned by tag and digest (never latest), the guest's IPv4 address to
+      publish on (not all interfaces), a port of 1024 or more, a container uid and gid of 1000 or more,
+      absolute canonical paths with the data root outside the compose directory, secret references in
+      the module's own namespace (context/), a gateway registry id (or empty), a judge threshold in [0, 1], 1 to 16 workers,
+      1 to 50 passages, a TLP label for the judge's ceiling, on_error fallback or abstain, the adapter's
+      knobs in [0, 1], a calendar for the timer, a timeout of 60 s or more and a memory limit like 3g
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Validate the sources (name, URL, ref, kind, TLP, globs, format, credential)
+  ansible.builtin.assert:
+    that:
+      - context_sources is sequence and context_sources is not string
+      - context_sources | length >= 1 and context_sources | length <= 64
+      - context_sources | map(attribute='name') | unique | list | length == context_sources | length
+    fail_msg: "context: context_sources lists 1 to 64 sources with distinct names (README.md, \"Sources\")"
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Validate each source
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.keys() | difference(['name', 'url', 'ref', 'kind', 'tlp', 'paths', 'format', 'records_key', 'id_field', 'title_field', 'honour_item_labels', 'credential', 'credential_scheme', 'max_documents']) | list | length == 0
+      - item.name | default('') is match('^[a-z][a-z0-9-]{0,39}\Z')
+      - >-
+        item.url | default('') is match('^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/%+-]*)?\Z')
+        or (context_allow_plain_http | bool and item.url | default('') is match('^http://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/%+-]*)?\Z'))
+      - item.ref | default('') is match('^([0-9a-f]{40}|[A-Za-z0-9][A-Za-z0-9._/-]{0,199})\Z')
+      - "'..' not in item.ref | default('') and not item.ref | default('') is match('.*(/|[.]lock)\\Z')"
+      - item.kind | default('') is match('^[a-z][a-z0-9-]{0,31}\Z')
+      - item.tlp | default('') in context_tlp_labels
+      - item.paths | default([]) is sequence and item.paths | default([]) is not string
+      - item.paths | default([]) | length >= 1
+      - item.paths | reject('match', '^[^/\s\\\\][^\s\\\\]*\Z') | list | length == 0
+      - item.paths | select('search', '(^|/)\.\.(/|$)') | list | length == 0
+      - item.format | default('files') in ['files', 'yaml-records']
+      - item.credential | default('') == '' or (item.credential is match(context_store_ref_pattern) and item.credential.split(':', 1)[1].startswith('context/'))
+      - item.credential_scheme | default('bearer') in ['bearer', 'basic']
+      - item.honour_item_labels | default(false) is boolean
+    fail_msg: >-
+      context: source {{ item.name | default('?') }}: a name (a-z, 0-9, -), an https URL with no credential
+      in it (http only with context_allow_plain_http), a branch, tag or 40-hex commit, a kind, a TLP label
+      ({{ context_tlp_labels | join(', ') }}), relative globs inside the repository, format files or
+      yaml-records, a credential in the module's own secret namespace (context/; bearer or basic), and no other key
+  loop: "{{ context_sources }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Validate the callers and the canned query
+  ansible.builtin.assert:
+    that:
+      - context_callers is sequence and context_callers is not string
+      - context_callers | map(attribute='name') | unique | list | length == context_callers | length
+      - context_callers | selectattr('name', 'equalto', 'admin') | list | length == 0
+      - context_callers | rejectattr('name', 'match', '^[a-z][a-z0-9-]{0,39}\Z') | list | length == 0
+      - context_callers | rejectattr('secret', 'match', context_store_ref_pattern) | list | length == 0
+      - context_callers | map(attribute='secret') | map('split', ':', 1) | map('last') | reject('match', '^context/') | list | length == 0
+      - context_callers | map(attribute='secret') | unique | list | length == context_callers | length
+      - context_callers | map(attribute='secret') | select('equalto', context_admin_ref) | list | length == 0
+      - context_callers | rejectattr('ceiling', 'in', context_tlp_labels) | list | length == 0
+      - context_callers | map(attribute='scopes') | map('difference', ['query', 'reindex']) | map('length') | select('gt', 0) | list | length == 0
+      - context_callers | map(attribute='scopes') | map('length') | select('eq', 0) | list | length == 0
+      - context_health_query is mapping
+      - context_health_query.text | default('') | length > 0
+      - context_health_query.expect | default('') is match('^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*/\S+\Z')
+      - context_health_query.ceiling | default('') in context_tlp_labels
+      - >-
+        context_sources | selectattr('name', 'equalto', (context_health_query.expect | default(':/')).split(':', 1)[-1].split('/', 1)[0]) | list | length == 1
+    fail_msg: >-
+      context: each caller a distinct name (never admin), its own secret in the module's namespace (context/; not the admin
+      token's), a TLP ceiling and scopes from query and reindex; context_health_query {text, expect: the id
+      of a document of one of the sources (<kind>:<source>/<name>), ceiling} is required
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: The image is the lab's own build
+  ansible.builtin.assert:
+    that:
+      - context_build_repositories is sequence and context_build_repositories is not string
+      - context_build_repositories | length > 0
+      - context_repository in context_build_repositories
+    fail_msg: >-
+      context: {{ context_image | truncate(100) | to_json }} is not the lab's own build: this module runs the
+      image built from this repository (modules/context/image/Dockerfile), from one of
+      {{ context_build_repositories }} (context_build_repositories), and no other image
+  tags: [health, backup, restore, export, upgrade, readiness]

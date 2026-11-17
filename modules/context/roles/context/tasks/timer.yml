@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# The reindex timer: on its calendar, the service fetches every source and indexes what changed
+# (`python -m homelabnext.context_service reindex` inside the container, the admin token from its
+# environment). Its service writes the job's last-run record on start and on stop (role last_run).
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ context_last_run_dir }}"
+    last_run_group: "{{ context_last_run_group }}"
+    last_run_writer: "{{ context_last_run_writer }}"
+
+- name: Write the reindex job (the timer's ExecStart)
+  ansible.builtin.template:
+    src: reindex.py.j2
+    dest: "{{ context_reindex_script }}"
+    owner: "{{ context_owner }}"
+    mode: "0750"
+
+- name: Write the reindex service and timer units
+  ansible.builtin.template:
+    src: "reindex.{{ item }}.j2"
+    dest: "{{ context_unit_dir }}/{{ context_reindex_unit }}.{{ item }}"
+    owner: "{{ context_owner }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: context_units
+
+- name: Ask whether the timer is enabled and started
+  ansible.builtin.command:
+    argv: ["{{ context_systemctl_cli }}", "{{ item }}", "{{ context_reindex_unit }}.timer"]
+  loop: [is-enabled, is-active]
+  register: context_timer_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd (units changed)
+  ansible.builtin.command:
+    argv: ["{{ context_systemctl_cli }}", daemon-reload]
+  when: context_units is changed
+  changed_when: true
+
+- name: Enable and start the timer
+  ansible.builtin.command:
+    argv: ["{{ context_systemctl_cli }}", enable, --now, "{{ context_reindex_unit }}.timer"]
+  when: >-
+    context_start | bool and (context_units is changed
+    or context_timer_state.results[0].stdout | default('') | trim != 'enabled'
+    or context_timer_state.results[1].stdout | default('') | trim != 'active')
+  changed_when: true

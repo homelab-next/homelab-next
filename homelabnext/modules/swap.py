@@ -16,7 +16,9 @@ trusted as written: :func:`module_swap_problems` recomputes it and refuses a dif
 
 A swap that moves the ``inference`` slot may rebind model roles: each ``model_roles`` leg names a
 role, its outgoing and incoming binding (by pin digest or by model-store entry) and the pinned
-evaluation report for the role table after the rebind.  :func:`model_role_problems` checks the
+evaluation report for the role table after the rebind.  A leg's ``change`` may instead be ``add``
+(a role only the table after has, with its one incoming binding and the same evidence) or
+``remove`` (a role only the table before has, with its outgoing binding).  :func:`model_role_problems` checks the
 legs against :class:`ModelEvidence` (both role tables, the reports, the store): every role whose
 bindings differ between the tables has exactly one leg and no other role has one, each binding
 resolves on the backend the incoming provider serves (``svc:<instance>`` of the leg's moving
@@ -181,6 +183,15 @@ def _ref_problem(ref: Any) -> str:
     return ""
 
 
+#: a leg's change, and the binding references it names: a rebind moves one binding of a role both
+#: tables have, an add brings a role with its one binding, a remove drops a role
+CHANGES = {"rebind": ("from", "to"), "add": ("to",), "remove": ("from",)}
+
+
+def _change(leg: Doc) -> str:
+    return leg.get("change", "rebind")
+
+
 def _leg_problem(leg: Any) -> str:
     """Why a leg is malformed ("" when its shape holds), so a record no schema has checked is
     refused by name, never by an internal error."""
@@ -189,7 +200,15 @@ def _leg_problem(leg: Any) -> str:
     for key in ("role", "instance"):
         if not isinstance(leg.get(key), str):
             return f"a leg's {key} must be a string"
+    change = leg.get("change", "rebind")
+    if change not in CHANGES:
+        return f"change must be one of {sorted(CHANGES)}"
+    names = CHANGES[change]
     for key in ("from", "to"):
+        if key not in names:
+            if key in leg:
+                return f"{'an' if change == 'add' else 'a'} {change} leg names no {key} binding"
+            continue
         if why := _ref_problem(leg.get(key)):
             return f"{key} {why}"
     ev = leg.get("evaluation")
@@ -245,33 +264,63 @@ def _new_entry_problem(report: Any, role: str, new: Binding) -> str:
     return ""
 
 
-def _changed_roles(models: ModelEvidence) -> tuple[set[str], list[str]]:
-    """The roles whose bindings differ between the tables, and the roles only one table has."""
+def _changed_roles(models: ModelEvidence) -> tuple[set[str], set[str], set[str]]:
+    """The roles whose bindings differ between the tables, the roles only the table after has
+    (added) and the roles only the table before has (removed)."""
     before, after = models.before.pins(), models.after.pins()
-    only = [
-        f"mdl:{r} is only in the role table {'before' if r in before else 'after'}: a model-role "
-        "leg rebinds a role both tables have, so the table change is not this swap's"
-        for r in sorted(set(before) ^ set(after))
-    ]
-    return {r for r in set(before) & set(after) if before[r] != after[r]}, only
+    changed = {r for r in set(before) & set(after) if before[r] != after[r]}
+    return changed, set(after) - set(before), set(before) - set(after)
+
+
+def _kind_problem(change: str, role: str, changed: set, added: set, removed: set) -> str:
+    """Why a leg's change does not fit what happened to its role between the tables ("" when it
+    does): a rebind is for a role both tables have, an add for one only the table after has, a
+    remove for one only the table before has."""
+    if role in added and change != "add":
+        return (
+            "the role is only in the role table after: a role the swap brings needs an add leg "
+            f"(change: add), not a {change}"
+        )
+    if role in removed and change != "remove":
+        return (
+            "the role is only in the role table before: a role the swap drops needs a remove leg "
+            f"(change: remove), not {'an' if change == 'add' else 'a'} {change}"
+        )
+    if change == "add" and role not in added:
+        return "an add leg brings a role only the table after has; this one is in the table before"
+    if change == "remove" and role not in removed:
+        return "a remove leg drops a role only the table before has; this one is in the table after"
+    return ""
 
 
 def model_role_problems(swap: Doc, models: ModelEvidence) -> list[str]:
-    """The ``model_roles`` legs against the role tables, the store and the pinned reports: every
-    role whose bindings differ between the tables has exactly one leg, which rebinds exactly that
-    binding, and no unchanged role has one; the role is in both tables, the old binding is one of
-    the table the swap starts from, the new one resolves in the table after it (and in the store)
-    and differs, its backend is the instance the leg moves (``svc:<instance>``, the row the swap
-    renames the incoming provider's to; inferred from the name, no manifest is read), and the
-    report the leg pins passes ``pins check`` against the table after, live as
-    :class:`ModelEvidence` says (and the fake-canary guard of ``pins check`` either way).  So a
-    leg cannot add a binding on another backend, a fallback included."""
+    """The ``model_roles`` legs against the role tables, the store and the pinned reports.
+
+    Every role that differs between the tables has exactly one leg, of the change that fits it,
+    and no unchanged role has one:
+
+    * **rebind** (the default) a role both tables have: the old binding is one of the table the
+      swap starts from, the new one resolves in the table after it (and in the store) and
+      differs, and the role's other bindings stay as they were;
+    * **add** a role only the table after has: its one binding is the leg's ``to``, resolves in
+      the store, and the role has no other binding; the record names the role in
+      ``model_role_changes``, since every field beside its pin arrives new (the gate holds that
+      name to the trust change, as for an existing role);
+    * **remove** a role only the table before has: the leg's ``from`` is its one binding, on the
+      instance the leg moves (the gate also refuses it while a configuration file names it).
+
+    A new binding's backend is the instance the leg moves (``svc:<instance>``, the row the swap
+    renames the incoming provider's to; inferred from the name, no manifest is read).  Every leg,
+    a remove included, pins the report for the table after, which must pass ``pins check``
+    against that table, live as :class:`ModelEvidence` says (and the fake-canary guard of
+    ``pins check`` either way): an add carries exactly the evidence a rebind does.  So a leg
+    cannot add a binding on another backend, a fallback included, and a role cannot appear or
+    disappear without a leg naming it."""
     legs = swap.get("model_roles", [])
     if not isinstance(legs, list) or ("model_roles" in swap and not legs):
         return ["model_roles must be a non-empty list of legs, or absent"]
     out: list[str] = []
-    changed, only = _changed_roles(models)
-    out += only
+    changed, added, removed = _changed_roles(models)
     moving = {si["instance"] for si in swap["slots"] if si["slot"] == "inference"}
     reports = {gp.report_digest(r): r for r in models.reports}
     example = gp._example_pins() == models.after.pins()
@@ -293,71 +342,127 @@ def model_role_problems(swap: Doc, models: ModelEvidence) -> list[str]:
             out.append(f"{where}: the role is rebound by more than one leg")
             continue
         seen.add(role)
-        try:
-            models.before.get(role)
-            models.after.get(role)
-        except UnknownRole as exc:
-            out.append(f"{where}: {exc.args[0]}")
-            continue
-        if role not in changed:
+        change = _change(leg)
+        if role not in changed | added | removed:
+            try:
+                models.before.get(role)
+                models.after.get(role)
+            except UnknownRole as exc:
+                out.append(f"{where}: {exc.args[0]}")
+                continue
             out.append(
                 f"{where}: the role's bindings are the same in both tables; nothing is rebound"
             )
             continue
-        old, why_old = _binding(leg["from"], models.before, role, models.store)
-        if old is None:
-            out.append(
-                f"{where}: the old binding does not resolve in the role table before: {why_old}"
-            )
-        new, why_new = _binding(leg["to"], models.after, role, models.store)
-        if new is None:
-            out.append(
-                f"{where}: the new binding does not resolve in the role table after: {why_new}"
-            )
+        if why := _kind_problem(change, role, changed, added, removed):
+            out.append(f"{where}: {why}")
             continue
-        if new.backend != leg["instance"]:
-            out.append(
-                f"{where}: the new binding's backend svc:{new.backend} is not the instance the leg "
-                f"moves (svc:{leg['instance']}): a leg rebinds onto the row the swap renames "
-                f"{swap.get('to_module')!r}'s to, never onto another backend"
-            )
-        if old is not None and _pin_of(old) == _pin_of(new):
-            out.append(f"{where}: the old and new binding are the same pin; nothing is rebound")
-        elif old is not None:
-            rest = sorted(_pin_of(b) for b in models.before.get(role).bindings)
-            rest.remove(_pin_of(old))
-            got = sorted(_pin_of(b) for b in models.after.get(role).bindings)
-            if sorted([*rest, _pin_of(new)]) != got:
+        old = new = None
+        if "from" in CHANGES[change]:
+            old, why_old = _binding(leg["from"], models.before, role, models.store)
+            if old is None:
                 out.append(
-                    f"{where}: the role's other bindings change too; a leg rebinds one binding, "
-                    "and the rest of the role stays as it was"
+                    f"{where}: the old binding does not resolve in the role table before: {why_old}"
+                )
+        if "to" in CHANGES[change]:
+            new, why_new = _binding(leg["to"], models.after, role, models.store)
+            if new is None:
+                out.append(
+                    f"{where}: the new binding does not resolve in the role table after: {why_new}"
+                )
+                continue
+            out += _new_binding_problems(where, leg, swap, new, models)
+        if change == "rebind" and old is not None and new is not None:
+            if _pin_of(old) == _pin_of(new):
+                out.append(f"{where}: the old and new binding are the same pin; nothing is rebound")
+            else:
+                rest = sorted(_pin_of(b) for b in models.before.get(role).bindings)
+                rest.remove(_pin_of(old))
+                got = sorted(_pin_of(b) for b in models.after.get(role).bindings)
+                if sorted([*rest, _pin_of(new)]) != got:
+                    out.append(
+                        f"{where}: the role's other bindings change too; a leg rebinds one "
+                        "binding, and the rest of the role stays as it was"
+                    )
+        if change == "add" and new is not None and len(models.after.get(role).bindings) != 1:
+            out.append(
+                f"{where}: the role is added with {len(models.after.get(role).bindings)} "
+                "bindings; an add leg brings a role with its one binding (each further binding "
+                "is evidenced on its own)"
+            )
+        if change == "add" and f"mdl:{role}" not in swap.get("model_role_changes", []):
+            out.append(
+                f"{where}: an added role brings every field beside its pin new (kind, fallback, "
+                "limits, params, tlp_ceiling, a binding's leaves_lab and provider_terms): the "
+                f"record names mdl:{role} in model_role_changes, as it would an existing role's "
+                "change, so a reviewer approves them"
+            )
+        if change == "remove" and old is not None:
+            gone = models.before.get(role).bindings
+            if old.backend != leg["instance"]:
+                out.append(
+                    f"{where}: the removed binding's backend svc:{old.backend} is not the instance "
+                    f"the leg moves (svc:{leg['instance']}): a leg removes only a role the swap's "
+                    "own instance serves"
+                )
+            if len(gone) != 1:
+                out.append(
+                    f"{where}: the role has {len(gone)} bindings; a remove leg drops a role with "
+                    "its one binding, the one it names (drop the others first, each on its own)"
                 )
         live = models.require_live or leg["evaluation"].get("require_live", False)
         if live and models.store is None:
             out.append(f"{where}: live evidence is required, and no model store is given")
-        elif models.store is not None:
-            entry, why = resolve_binding(models.store, new.model_id, digest=new.digest)
-            if entry is None:
-                out.append(f"{where}: the new binding does not resolve in the model store: {why}")
         ev = leg["evaluation"]
         report = reports.get(ev["report"])
         if report is None:
             out.append(
                 f"{where}: the evaluation report {ev['report'][:19]}... is not supplied; the leg's "
-                "evidence is the pinned report for the role table after the rebind"
+                "evidence is the pinned report for the role table after the change"
             )
             continue
         found = gp.check_report(report, models.after, models.suites, require_live=live)
         if not live:
             if guard := gp.fake_canary_on_a_real_table(report, models.after):
                 found.append(guard)
-            elif not example and (fake := _new_entry_problem(report, role, new)):
+            elif (
+                not example and new is not None and (fake := _new_entry_problem(report, role, new))
+            ):
                 found.append(fake)
         out += [f"{where}: pins check: {p}" for p in found]
     out += [
         f"mdl:{r}: its bindings differ between the role tables, and no model_roles leg rebinds it"
         for r in sorted(changed - seen)
     ]
+    out += [
+        f"mdl:{r} is only in the role table after, and no model_roles leg adds it (change: add, "
+        "with the new binding and the live report for the table after)"
+        for r in sorted(added - seen)
+    ]
+    out += [
+        f"mdl:{r} is only in the role table before, and no model_roles leg removes it "
+        "(change: remove, with the old binding and the report for the table after)"
+        for r in sorted(removed - seen)
+    ]
+    return out
+
+
+def _new_binding_problems(
+    where: str, leg: Doc, swap: Doc, new: Binding, models: ModelEvidence
+) -> list[str]:
+    """A rebind's or an add's new binding: on the instance the leg moves, and, with a store, one
+    of its entries."""
+    out = []
+    if new.backend != leg["instance"]:
+        out.append(
+            f"{where}: the new binding's backend svc:{new.backend} is not the instance the leg "
+            f"moves (svc:{leg['instance']}): a leg rebinds onto the row the swap renames "
+            f"{swap.get('to_module')!r}'s to, never onto another backend"
+        )
+    if models.store is not None:
+        entry, why = resolve_binding(models.store, new.model_id, digest=new.digest)
+        if entry is None:
+            out.append(f"{where}: the new binding does not resolve in the model store: {why}")
     return out
 
 

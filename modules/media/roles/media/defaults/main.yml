@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Jellyfin, the media provider (modules/media): one container, local accounts, a read-only library,
 # CPU transcoding. media_logical_id (required): the instance's registry id, e.g. media
-media_image: "docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db"
+media_image: "docker.io/jellyfin/jellyfin:12.1@sha256:78d3ea1207d1322471fcac39a614f004f2ccf7e878f95ab2977d752f07e4dd7e"
 # published on the guest's own address (the inventory's ansible_host), never all interfaces; the
 # guest firewall admits the edge and the TV clients' zone
 media_bind: "{{ ansible_host }}"
@@ -38,7 +38,25 @@ media_hwaccel: none
 # the server id a restored or imported config must answer with (data/device.txt); empty = not
 # checked. Set it at a cutover so health proves the Fire Cubes' server is the one that answers.
 media_expected_server_id: ""
-media_mem_limit: 8g
+# the container's memory limit. tmpfs pages (the transcode directory, /tmp) are charged to it, so it
+# must cover media_transcode_tmpfs_size and /tmp plus the server and its encoder: validation holds
+# it to at least those plus 2 GiB. The default is the default tmpfs (8 GiB) plus headroom.
+media_mem_limit: 12g
+# the transcode scratch directory, a RAM-backed tmpfs mounted at /transcode (server setting
+# TranscodingTempPath): size in BYTES, 8 GiB by default; 0 turns it off and the server transcodes into
+# the cache volume (/cache/transcodes) as before. The size is memory the guest must have and
+# playback fails when it fills: see the README's sizing rule.
+media_transcode_tmpfs_size: 8589934592
 media_start: true
 media_validate_with_docker: true
 media_health_timeout: 10
+# health proves the server STARTED, not only that something answers on the port: a server that
+# cannot open its database (a downgrade) can still answer /health. Every hook run reads the
+# container's log since it last started for the startup failures in media_startup_failure_patterns,
+# and, when this is above 0, signs in with the API key (media_api_login_ref, an administrator's key
+# made in the server's dashboard, or carried over by the import) and requires at least this many
+# libraries (virtual folders). Set it at a cutover to the source's library count (the importer's
+# report, "libraries").
+media_health_min_libraries: 0
+# the API key health signs in with, read only when media_health_min_libraries is above 0
+media_api_login_ref: secret:media/api-token

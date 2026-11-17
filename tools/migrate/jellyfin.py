@@ -30,14 +30,28 @@ Everything is verified after the copy: the server id is byte-identical and the c
 devices, libraries, items and watch-state rows read from the target equal those read from the
 source (``ImportFailed`` otherwise). Nothing is ever deleted: the new tree is built in a sibling
 directory (``DST.partial``) and renamed into place only after it verified; an existing DST that
-is empty or already a data root is renamed to ``DST.before-import`` first. A failed import leaves
+is empty or already a data root is renamed to ``DST.before-import`` first (or, when that name is
+taken by an earlier import, the first free ``DST.before-import.N``, N from 2: nothing is ever
+overwritten). A failed import leaves
 the previous DST untouched and the partial tree for inspection.
 
+**No downgrade.** A server cannot open a database a newer server has migrated: it fails to start
+("no such column"), and a health check that only asks ``/health`` may still say Healthy. So both
+``counts`` and ``import`` first read the source's migration history (``__EFMigrationsHistory``) and
+refuse a source that holds a migration the target does not know, or that a newer server version
+wrote, naming each. What the target knows is ``modules/media/known-migrations.json``: every
+migration id of every release up to the module's pinned version, generated from the product's
+source (``known-migrations``) and checked against the pin (``product.version`` in
+``modules/media/module.yml``) whenever it is read. A source with no history at all is refused
+too: nothing proves the target understands it.
+
 ``counts(data_dir)`` reads a config/data directory read-only and returns ``{users, devices,
-libraries, items, watch_state}``; the id is ``server_id(data_dir)``.
+libraries, items, watch_state}``; the id is ``server_id(data_dir)`` (without the byte order mark
+the server writes); the history check is ``check_schema(data_dir)``.
 
     python3 tools/migrate/jellyfin.py counts DIR
     python3 tools/migrate/jellyfin.py import SRC DST --map /old=/new [--map ...] [--no-accel-reset]
+    python3 tools/migrate/jellyfin.py known-migrations --repo CLONE --version V [--out FILE]
 
 Stop the source server before copying (or point SRC at a snapshot): a database copied while it is
 written is the SQLite online backup of one moment, but the files around it are not.
@@ -46,12 +60,14 @@ written is the SQLite online backup of one moment, but the files around it are n
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -72,6 +88,13 @@ HOST_PATH_TAGS = {
 # directories every container has; paths under them are fine
 CONTAINER_PREFIXES = ("/config", "/cache")
 MIN_COMPONENTS = 3  # a target shallower than /a/b/c is refused
+ASIDE_MAX = 99  # DST.before-import, then .2 to .99: the first free name
+# the module this tool imports for: its pinned product version and the migrations that version knows
+MODULE_DIR = Path(__file__).resolve().parents[2] / "modules" / "media"
+KNOWN_MIGRATIONS = MODULE_DIR / "known-migrations.json"
+HISTORY_TABLE = "__EFMigrationsHistory"
+BOM = "\ufeff"
+_MIGRATION_ID = re.compile(r"\d{14}_[A-Za-z0-9_]+")
 
 
 class ImportFailed(Exception):
@@ -87,7 +110,8 @@ def server_id(data_dir: Path) -> str:
     f = _abs(data_dir) / "data" / "device.txt"
     if not f.is_file():
         raise ImportFailed(f"{f}: no server id (is this a config/data directory?)")
-    return f.read_text(encoding="utf-8").strip()
+    # the server writes the file with a UTF-8 byte order mark; the id is what follows it
+    return f.read_text(encoding="utf-8-sig").strip()
 
 
 def _ro(path: Path) -> sqlite3.Connection:
@@ -149,6 +173,237 @@ def _require_understood(data_dir: Path, allow_empty: bool) -> None:
         )
     if users == 0 and not allow_empty:
         raise ImportFailed(f"{db_dir}: the source has no users (--allow-empty to import it anyway)")
+
+
+# ----------------------------------------------------------------------------- no downgrade
+
+
+def _version_key(text: str) -> tuple[int, ...] | None:
+    """``12.1`` (or with up to four parts, as the history records it) -> ``(12, 1, 0, 0)``; None
+    for anything that is not dotted digits."""
+    parts = text.strip().split(".")
+    if not 1 <= len(parts) <= 4 or not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts) + (0,) * (4 - len(parts))
+
+
+def pinned_version(module_dir: Path = MODULE_DIR) -> str:
+    """``product.version`` of the module's manifest (the version its image pin carries)."""
+    lines = (module_dir / "module.yml").read_text(encoding="utf-8").splitlines()
+    inside = False
+    for line in lines:  # a line scan of the top-level product: block (no YAML dependency)
+        if not line[:1].isspace():
+            inside = line.rstrip() == "product:"
+            continue
+        key, sep, value = line.strip().partition(":")
+        if inside and sep and key == "version":
+            version = value.strip().strip("\"'")
+            if _version_key(version) is not None:
+                return version
+    raise ImportFailed(f"{module_dir / 'module.yml'}: no product.version")
+
+
+def load_known(path: Path | None = None, *, expect_version: str | None = None) -> dict:
+    """The migration ids the target server knows (``known-migrations.json``). Read from the module,
+    it must be for the module's pinned version: a list for another version proves nothing."""
+    path = path or KNOWN_MIGRATIONS
+    try:
+        known = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ImportFailed(f"{path}: cannot read the target's known migrations ({e})") from e
+    version = str(known.get("product_version", ""))
+    if _version_key(version) is None or not known.get("database") or not known.get("code"):
+        raise ImportFailed(f"{path}: not a known-migrations list (product_version, database, code)")
+    # stored as [time, name] pairs (one id is "<time>_<name>"): a joined id reads to a secret
+    # scanner like a random token
+    for kind in ("database", "code"):
+        ids = [
+            "_".join(x) if isinstance(x, list) and all(isinstance(y, str) for y in x) else repr(x)
+            for x in known[kind]
+        ]
+        bad = [i for i in ids if not _MIGRATION_ID.fullmatch(i)]
+        if bad:
+            raise ImportFailed(f"{path}: malformed migration ids: {', '.join(bad[:5])}")
+        known[kind] = ids
+    if expect_version is None and path == KNOWN_MIGRATIONS:
+        expect_version = pinned_version()
+    if expect_version is not None and _version_key(version) != _version_key(expect_version):
+        raise ImportFailed(
+            f"{path} lists the migrations of {version} but the module pins {expect_version}: "
+            "regenerate it (known-migrations --version <pinned>) with the pin"
+        )
+    return known
+
+
+def migration_history(data_dir: Path) -> list[tuple[str, str, str]]:
+    """``(database, MigrationId, ProductVersion)`` of every row of every migration history."""
+    rows: list[tuple[str, str, str]] = []
+    for db in sorted((_abs(data_dir) / "data").glob("*.db")):
+        c = _ro(db)
+        try:
+            have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if HISTORY_TABLE in have:
+                rows += [
+                    (db.name, str(i), str(v or ""))
+                    for i, v in c.execute(
+                        f'SELECT MigrationId, ProductVersion FROM "{HISTORY_TABLE}"'
+                    )
+                ]
+        finally:
+            c.close()
+    return rows
+
+
+def check_schema(
+    data_dir: Path, known: dict | None = None, *, source_version: str | None = None
+) -> dict:
+    """Refuse a source the target server cannot open: one whose history holds a migration the
+    target does not know, or that a newer server version wrote (``ImportFailed``, naming them).
+    Returns what was read: the number of migrations, the newest, and the newest server version
+    that wrote one."""
+    known = known if known is not None else load_known()
+    target = str(known["product_version"])
+    tkey = _version_key(target)
+    db_dir = _abs(data_dir) / "data"
+    rows = migration_history(data_dir)
+    if not rows:
+        raise ImportFailed(
+            f"{db_dir}: no {HISTORY_TABLE} rows in any database: nothing proves the target server "
+            f"({target}) can open it; refusing"
+        )
+    code, database = set(known["code"]), set(known["database"])
+    unknown = sorted({(i, v) for _, i, v in rows if i not in code and i not in database})
+    # a code migration's row carries the server version that ran it; a schema migration's row
+    # carries the database library's version instead, so only the former says which server wrote it
+    written = [(v, i) for _, i, v in rows if i in code and _version_key(v) is not None]
+    newer = sorted({(v, i) for v, i in written if _version_key(v) > tkey})
+    newest_server = max((v for v, _ in written), key=_version_key, default="")
+    if source_version is not None:
+        if _version_key(source_version) is None:
+            raise ImportFailed(f"--source-version {source_version!r}: not a version")
+        if _version_key(source_version) > tkey:
+            raise ImportFailed(
+                f"{db_dir}: the source server is {source_version}, newer than the target {target}: "
+                "importing it would be a downgrade; pin the module to the source's version or newer"
+            )
+    if unknown or newer:
+        # an unknown row's version is the server's or the database library's: shown, not judged
+        named = [f"{i} (recorded as {v or 'no version'})" for i, v in unknown]
+        named += [f"{i} (written by {v})" for v, i in newer if (i, v) not in unknown]
+        raise ImportFailed(
+            f"{db_dir}: the source database was migrated by a newer server than the target "
+            f"{target}: {len(unknown)} migration(s) the target does not know"
+            + (f" and {len(newer)} written by a newer version" if newer else "")
+            + ": "
+            + ", ".join(named)
+            + ". The target server would fail to start on it (a downgrade). Pin the module to "
+            f"the source's version or newer (newest seen: {newest_server or 'unknown'}), "
+            "regenerate known-migrations.json, and import again"
+        )
+    return {
+        "target_version": target,
+        "migrations": len(rows),
+        "newest_migration": max(i for _, i, _ in rows),
+        "newest_server_version": newest_server,
+    }
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    ).stdout
+
+
+def _git_origin(repo: Path) -> str:
+    try:
+        return _git(repo, "config", "--get", "remote.origin.url").strip()
+    except subprocess.CalledProcessError:
+        return ""
+
+
+_TAG = re.compile(r"v(\d+)\.(\d+)(?:\.(\d+))?(?:-(alpha|beta|rc)(\d+))?")
+_PRE = {"alpha": 0, "beta": 1, "rc": 2, None: 3}
+_EF_ATTR = re.compile(r"\[Migration\(\s*\"(\d{14}_[A-Za-z0-9_]+)\"\s*\)\]")
+_CODE_ATTR = re.compile(
+    r"\[JellyfinMigration\(\s*\"([0-9T:\-]+)\"\s*,\s*(?:nameof\(\s*(\w+)\s*\)|\"(\w+)\")"
+)
+
+
+def _tag_key(tag: str) -> tuple[int, ...] | None:
+    m = _TAG.fullmatch(tag)
+    if not m:
+        return None
+    major, minor, patch, pre, n = m.groups()
+    return (int(major), int(minor), int(patch or 0), _PRE[pre], int(n or 0))
+
+
+def known_migrations(repo: Path, version: str) -> dict:
+    """Every migration id of every release up to ``version`` (``v<version>``), read from a clone of
+    the product's source: schema migrations by their ``[Migration("<id>")]`` attribute, code
+    migrations by ``[JellyfinMigration("<time>", nameof(<Name>))]`` as the server records them
+    (``yyyyMMddHHmmss_<Name>``). A release counts when its version is not above ``version`` and it
+    was tagged no later (a later patch of an older line may know migrations ``version`` does not).
+    A migration later removed from the source stays known: a database that ran it is still one
+    ``version`` opens."""
+    want = "v" + version
+    refs = {}
+    for line in _git(
+        repo, "for-each-ref", "--format=%(refname:short) %(creatordate:unix)", "refs/tags"
+    ).splitlines():
+        name, _, when = line.partition(" ")
+        if _tag_key(name) is not None:
+            refs[name] = int(when)
+    if want not in refs:
+        raise ImportFailed(f"{repo}: no release tag {want}")
+    releases = sorted(
+        (t for t, when in refs.items() if _tag_key(t) <= _tag_key(want) and when <= refs[want]),
+        key=_tag_key,
+    )
+    database: set[str] = set()
+    code: set[str] = set()
+    seen: set[str] = set()
+    for tag in releases:
+        for line in _git(repo, "ls-tree", "-r", tag).splitlines():
+            meta, _, path = line.partition("\t")
+            oid = meta.split()[2]
+            if (
+                not path.endswith(".cs")
+                or "/Migrations/" not in "/" + path
+                or path.startswith("tests/")
+                or oid in seen
+            ):
+                continue
+            seen.add(oid)
+            text = _git(repo, "cat-file", "blob", oid)
+            database.update(_EF_ATTR.findall(text))
+            for when, n1, n2 in _CODE_ATTR.findall(text):
+                stamp = datetime.datetime.fromisoformat(when).strftime("%Y%m%d%H%M%S")
+                code.add(f"{stamp}_{n1 or n2}")
+    if not database or not code:
+        raise ImportFailed(
+            f"{repo}: no migrations found up to {want}; is this the product's source?"
+        )
+    return {
+        "product_version": version,
+        "source": {
+            "repository": _git_origin(repo),
+            "tag": want,
+            "commit": _git(repo, "rev-parse", want + "^{commit}").strip(),
+            "releases": releases,
+        },
+        "database": sorted(database),
+        "code": sorted(code),
+    }
+
+
+def dump_known(known: dict) -> str:
+    """The list as stored: ids as ``[time, name]`` pairs, one per line (see ``load_known``)."""
+    head = {k: v for k, v in known.items() if k not in ("database", "code")}
+    text = json.dumps(head, indent=2)[: -len("\n}")]
+    for kind in ("database", "code"):
+        pairs = [json.dumps(i.split("_", 1)) for i in known[kind]]
+        text += f',\n  "{kind}": [\n    ' + ",\n    ".join(pairs) + "\n  ]"
+    return text + "\n}\n"
 
 
 def _device_tokens(data_dir: Path) -> list[str]:
@@ -442,8 +697,22 @@ def _guard_target(
                 )
             if not replace:
                 raise ImportFailed(
-                    f"{target}: already holds a data root (replace=True moves it aside to {target.name}.before-import)"
+                    f"{target}: already holds a data root (replace=True moves it aside to "
+                    f"{target.name}.before-import, or the first free {target.name}.before-import.N)"
                 )
+
+
+def _aside_path(target: Path) -> Path:
+    """Where a previous target is moved: ``<target>.before-import``, or when an earlier import
+    already took that name, the first free ``<target>.before-import.N`` (N = 2..99). A name that
+    exists in any form (a directory, a file, a dangling link) is taken; nothing is overwritten."""
+    for n in range(1, ASIDE_MAX + 1):
+        p = target.with_name(target.name + ".before-import" + ("" if n == 1 else f".{n}"))
+        if not (p.exists() or p.is_symlink()):
+            return p
+    raise ImportFailed(
+        f"{target}.before-import through .{ASIDE_MAX} all exist; inspect them and move some away"
+    )
 
 
 def import_config(
@@ -458,13 +727,17 @@ def import_config(
     allow_empty: bool = False,
     strict: bool = False,
     data_root: Path | None = None,
+    known: dict | None = None,
+    source_version: str | None = None,
 ) -> dict:
     """Copy a config/data directory into ``target`` with its identity, mapping library paths.
 
     ``source`` is read only and nothing is deleted. The new tree is built in ``<target>.partial``
     and, once verified, renamed into place; an existing ``target`` that is empty or a data root
-    (with ``replace=True``) is first renamed to ``<target>.before-import``. The new server must
-    be stopped. Returns a report: the counts at both ends, the server id, every change beyond the
+    (with ``replace=True``) is first renamed to ``<target>.before-import`` (the first free
+    ``.before-import.N`` when that is taken). A source the target server cannot open (its history
+    holds migrations ``known`` lacks, or a newer server wrote it: ``check_schema``) is refused
+    before anything is created. The new server must be stopped. Returns a report: the counts at both ends, the server id, every change beyond the
     copy, the symlinks not carried, host paths found in the settings, and warnings.
     """
     source, target = _abs(source), _abs(target)
@@ -472,13 +745,14 @@ def import_config(
     rules = _clean_map(path_map or {})
     sid = server_id(source)
     _require_understood(source, allow_empty)
+    schema = check_schema(source, known, source_version=source_version)
     _guard_target(source, target, list(rules.values()), replace, data_root)
     partial = target.with_name(target.name + ".partial")
-    aside = target.with_name(target.name + ".before-import")
+    replacing = target.exists() and not _is_empty_dir(target)
+    if replacing:
+        _aside_path(target)  # refuse now, before any copy, when every aside name is taken
     if partial.exists() or partial.is_symlink():
         raise ImportFailed(f"{partial}: left by an earlier import; inspect it and move it away")
-    if target.exists() and not _is_empty_dir(target) and (aside.exists() or aside.is_symlink()):
-        raise ImportFailed(f"{aside}: exists; move it away first")
 
     before = counts(source)
     tokens = _device_tokens(source)
@@ -487,7 +761,13 @@ def import_config(
     _copy_tree(source, partial, skipped)
 
     rewrite = _rewriter(rules)
-    report: dict = {"server_id": sid, "source": before, "changes": {}, "warnings": []}
+    report: dict = {
+        "server_id": sid,
+        "schema": schema,
+        "source": before,
+        "changes": {},
+        "warnings": [],
+    }
     if rules:
         unhandled: list[str] = []
         rows = sum(
@@ -572,6 +852,7 @@ def import_config(
         if _is_empty_dir(target):
             target.rmdir()  # an empty directory: nothing to lose
         else:
+            aside = _aside_path(target)  # chosen again just before the move: never an existing name
             os.rename(target, aside)
             report["previous_target"] = str(aside)
     os.rename(partial, target)
@@ -596,6 +877,9 @@ def main(argv: list[str] | None = None) -> int:
         "counts", help="print users/devices/libraries/items/watch_state and the server id"
     )
     c.add_argument("dir", type=Path)
+    c.add_argument(
+        "--known", type=Path, help="the target's known-migrations list (default: the module's)"
+    )
     i = sub.add_parser(
         "import", help="import SRC into DST keeping the server id, users, devices, watch state"
     )
@@ -616,16 +900,46 @@ def main(argv: list[str] | None = None) -> int:
     )
     i.add_argument("--data-root", type=Path, help="DST must lie inside this directory")
     i.add_argument("--chown", metavar="UID:GID")
+    i.add_argument(
+        "--known", type=Path, help="the target's known-migrations list (default: the module's)"
+    )
+    i.add_argument(
+        "--source-version",
+        metavar="V",
+        help="the source server's version, when known (its image tag): refused when newer than the target",
+    )
+    g = sub.add_parser(
+        "known-migrations",
+        help="list every migration id up to a release, from a clone of the product's source",
+    )
+    g.add_argument(
+        "--repo", type=Path, required=True, help="a clone of the product's source, with its tags"
+    )
+    g.add_argument(
+        "--version", required=True, help="the release, as the image tag names it (e.g. 12.1)"
+    )
+    g.add_argument("--out", type=Path, help="write here instead of standard output")
     a = ap.parse_args(argv)
     try:
+        if a.cmd == "known-migrations":
+            text = dump_known(known_migrations(a.repo, a.version))
+            if a.out:
+                a.out.write_text(text, encoding="utf-8")
+            else:
+                sys.stdout.write(text)
+            return 0
+        known = load_known(a.known) if a.known else None
         if a.cmd == "counts":
-            print(json.dumps({"server_id": server_id(a.dir), **counts(a.dir)}, indent=2))
+            sid = server_id(a.dir)
+            out = {"server_id": sid, **counts(a.dir), "schema": check_schema(a.dir, known)}
+            print(json.dumps(out, indent=2))
             return 0
         owner = tuple(int(x) for x in a.chown.split(":")) if a.chown else None
         rep = import_config(
             a.src, a.dst, _parse_map(a.map),
             hardware_accel=None if a.no_accel_reset else "none", replace=a.replace, owner=owner,
             allow_empty=a.allow_empty, strict=a.strict, data_root=a.data_root,
+            known=known, source_version=a.source_version,
         )  # fmt: skip
         print(json.dumps(rep, indent=2))
         return 0

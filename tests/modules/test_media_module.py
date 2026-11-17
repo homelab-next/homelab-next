@@ -2,7 +2,7 @@
 """The media provider module, ``modules/media`` (modules/media/README.md).
 
 * The public tree loads clean and the module's ``roles/`` holds only its one contributed role.
-* The manifest says what the README says: local accounts and no secrets, internet egress that the
+* The manifest says what the README says: local accounts and one optional secret (health's API key), internet egress that the
   site must grant, a pinned image whose version is the product's, a read-only library at a
   configurable path, CPU transcoding.
 * A fictional overlay that places it on a guest (and grants its egress and public route) passes
@@ -88,7 +88,7 @@ def overlay(tmp: Path) -> Path:
         "# SPDX-License-Identifier: Apache-2.0\n"
         "id: guest:media-1\nkind: vm\nprovisioning: terraform\nstatus: planned\n"
         "placement: {node: hv-01, vmid: 241, vmid_scheme: freeform}\n"
-        "resources:\n  cpu: {cores: 4}\n  memory: {size_mb: 8192}\n"
+        "resources:\n  cpu: {cores: 4}\n  memory: {size_mb: 12288}\n"
         "  disks: [{name: rootfs, size_gb: 40, pool: fast}]\n"
         "image: {logical: debian-13-cloudinit, kind: template-clone, os_type: linux-6}\n"
         "cloudinit: {user: ansible, ssh_authorized_keys: [operator]}\n"
@@ -137,7 +137,12 @@ def test_roles_holds_only_the_contributed_role():
 
 def test_the_manifest_keeps_local_accounts_and_declares_its_egress():
     manifest = ld.load_yaml(MODULE / "module.yml")
-    assert manifest["credentials"] == []  # the accounts are the server's own: nothing in the store
+    # the accounts are the server's own; the one secret is the API key health counts libraries with,
+    # and it is the one the role reads
+    assert [c["secret"] for c in manifest["credentials"]] == ["secret:media/api-token"]
+    defaults = ld.load_yaml(MODULE / "roles" / "media" / "defaults" / "main.yml")
+    assert defaults["media_api_login_ref"] == "secret:media/api-token"
+    assert defaults["media_health_min_libraries"] == 0  # read only when a site sets a minimum
     assert manifest["egress"][0]["to"] == ["internet"]
     row = ld.load_yaml(MODULE / "registry" / "services.yml")["services"]["media"]
     assert row["auth"] == "own" and row["port"] == 8096 and row["health"]["path"] == "/health"
@@ -236,3 +241,13 @@ def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
         [*lint, "--playbook", *books, "--inventory", inv], capture_output=True, text=True
     )
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_declared_footprint_memory_matches_the_default_memory_limit():
+    """The guest also hosts another module: the footprint is the container limit (12g), not the tmpfs plus it."""
+    manifest = yaml.safe_load((ROOT / "modules" / "media" / "module.yml").read_text())
+    defaults = yaml.safe_load(
+        (ROOT / "modules" / "media" / "roles" / "media" / "defaults" / "main.yml").read_text()
+    )
+    assert defaults["media_mem_limit"] == "12g"
+    assert manifest["requires"]["hosts"][0]["footprint"]["memory_mb"] == 12288

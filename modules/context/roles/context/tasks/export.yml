@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# There is no exit copy to write: the slot is stateless (examples/modules/slots.yml) and the index is
+# derived from the git sources, which are the data and stay where they are. Implemented explicitly as
+# a no-op (docs/role-interface.md, section 2) so a removal's export_first never waits on it.
+- name: Nothing to export (the index is derived from the sources)
+  ansible.builtin.debug:
+    msg: "context: nothing to export: the index is rebuilt from the git sources by a reindex"
+  tags: [export]

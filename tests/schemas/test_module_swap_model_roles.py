@@ -383,7 +383,8 @@ def test_a_role_only_one_table_has_is_refused(reports):
     doc["roles"]["extra-role"].pop("fallback", None)
     after = RoleTable.from_dict(doc)
     p = ms.model_role_problems(_swap(reports["live"]), _evidence(reports["live"], after=after))
-    assert p[0].startswith("mdl:extra-role is only in the role table after")
+    # refused unless a leg adds it (change: add, test_module_swap_model_role_add.py)
+    assert any(x.startswith("mdl:extra-role is only in the role table after, and no") for x in p)
 
 
 @pytest.mark.parametrize(
