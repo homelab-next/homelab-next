@@ -122,6 +122,22 @@ updates:
     commit-message:
       prefix: "deps"
 
+  # The speech module's image (modules/tts) is built FROM a Python 3.11 slim base: its wheels are
+  # cp311 and hash-locked (image/requirements-*.txt), so patch releases only; a new Python is a
+  # re-lock and a re-test of the voice, done by hand.
+  - package-ecosystem: docker
+    directories:
+      - "/modules/tts/image"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    commit-message:
+      prefix: "deps"
+
   # The lab's orchestrator image and the gateway module's image are built FROM the Go toolchain
   # image: patch releases only, since the module's go.mod names the toolchain (GOTOOLCHAIN=local)
   # and a minor bump moves both.

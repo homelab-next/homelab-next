@@ -51,16 +51,21 @@ jobs:
       - name: test code reads no wall clock or unseeded randomness
         run: python tools/hermetic_lint.py
 
-  # The suite in six shards per Python version: each job runs a sixth of the collected tests,
+  # The suite in twelve shards per Python version: each job runs a twelfth of the collected tests,
   # chosen by node id hash (tests/shard_report.py), and test-ok below proves from their reports
   # that together they ran every test exactly once and that each suite's summed time kept its
   # budget.  Run whole, the 3.12 job's pytest took 34.5 min on a runner (2026-10-25); in four
   # shards its slowest took 593 s against 491 s for the fastest (2026-10-26, near-equal test
   # counts: the spread is per-test cost, so more shards cut the slowest more than balancing would).
+  # Six shards then ran 13-24 min on main (2026-11-16/17) and 16-25 on pull requests, where 3 of 6
+  # 3.12 jobs hit the 25 min cap (#457, #463): the same shard's pytest took 1026 s and 1445 s on
+  # runs of one test count, and tests/roles (ansible-playbook per case) is ~85% of the time, so
+  # twelve shards halve each job's work (hashing keeps them even) for >= 40% headroom, and the
+  # timeout is a backstop only.  Roles' first runs are prefetched per shard, so nothing repeats.
   test:
-    name: test (${{ matrix.python.version }}, ${{ matrix.shard }}/6)
+    name: test (${{ matrix.python.version }}, ${{ matrix.shard }}/12)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30  # backstop: a twelfth of the suite takes 8-14 min, see above
     strategy:
       fail-fast: false
       matrix:
@@ -81,7 +86,7 @@ jobs:
             go: false
             require-modules: ""
             require-tools: ""
-        shard: [1, 2, 3, 4, 5, 6]  # --shard below names the 6: change both together
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]  # --shard below names the 12: change both together
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -126,7 +131,7 @@ jobs:
           sh "$(id -u)" "$(id -g)"
           python -m pytest -q -m "not live and not experimental"
           --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
-          --shard "$SHARD/6" --shard-report "$RUNNER_TEMP/shard.json"
+          --shard "$SHARD/12" --shard-report "$RUNNER_TEMP/shard.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()  # a failed shard's report says why to test-ok too
         with:

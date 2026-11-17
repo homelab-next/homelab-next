@@ -255,10 +255,12 @@ MIGRATION_PROOF = {
     "dataflow": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "detections": "reference: the detections protocol has no export/import_ yet",
     "dns": "reference: the dns protocol has no export/import_ yet",
+    "forge": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "events": "reference: the events protocol has no export/import_ yet",
     "hot-index": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "idp": "reference: the idp protocol has no export/import_ yet",
     "lake-catalog": "reference: the lake protocol has no export/import_ yet",
+    "documents": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "media": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "media-automation": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "object-store": "reference: the object_store protocol has no export/import_ yet",
@@ -266,6 +268,7 @@ MIGRATION_PROOF = {
     "projects": "reference: the projects protocol has no export/import_ yet",
     "records": "reference: the records protocol has no export/import_ yet",
     "secrets": "reference: the secrets protocol has no export/import_ yet",
+    "tts": "reference: the slot is provisional (no contract), so nothing can add export/import_",
 }
 
 

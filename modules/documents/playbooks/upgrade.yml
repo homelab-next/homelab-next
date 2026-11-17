@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (documents_target_image, tag and digest; the same
+# or a newer version, never an older one: the database cannot be migrated back), export the library
+# first (a newer application migrates its own database on first start), then converge with the new
+# pin (set documents_image to the target in the overlay).
+#   ansible-playbook -i <inventory> modules/documents/playbooks/upgrade.yml -e documents_target_image=<ref>
+- name: Upgrade the document library
+  hosts: mod_documents_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: documents
+        tasks_from: upgrade
+    - name: Export the library before the new image opens the database
+      ansible.builtin.include_role:
+        name: documents
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: documents
+      vars:
+        documents_image: "{{ documents_target_image }}"

@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# Stop and disable the lake's maintenance timer, and stop a run in flight (the script cancels its
+# query on SIGTERM). Safe when nothing is installed: it only acts on a timer systemd knows.
+- name: Ask whether the timer is installed
+  ansible.builtin.stat:
+    path: "{{ trino_unit_dir }}/hnx-lake-maintenance.timer"
+  register: trino_timer_unit_file
+
+- name: Ask whether the timer is enabled (disarm)
+  ansible.builtin.command:
+    argv: ["{{ trino_systemctl_cli }}", is-enabled, hnx-lake-maintenance.timer]
+  register: trino_disarm_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: trino_timer_unit_file.stat.exists
+
+- name: Ask whether the timer is started (disarm)
+  ansible.builtin.command:
+    argv: ["{{ trino_systemctl_cli }}", is-active, hnx-lake-maintenance.timer]
+  register: trino_disarm_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: trino_timer_unit_file.stat.exists
+
+- name: Stop and disable the timer, and stop a run in flight
+  ansible.builtin.command:
+    argv: "{{ [trino_systemctl_cli] + item }}"
+  loop:
+    - [disable, --now, hnx-lake-maintenance.timer]
+    - [stop, hnx-lake-maintenance.service]
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true
+  when: >-
+    trino_timer_unit_file.stat.exists and
+    (trino_disarm_enabled.stdout | default('') | trim in ['enabled', 'enabled-runtime', 'static', 'alias']
+     or trino_disarm_active.stdout | default('') | trim in ['active', 'activating'])

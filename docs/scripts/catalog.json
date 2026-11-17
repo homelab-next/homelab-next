@@ -368,6 +368,25 @@
     },
     {
       "exit": {
+        "0": "done (for restore, the target equals the manifest by counts and by every file's checksum)",
+        "1": "a count or a checksum differs, or the dump is not intact",
+        "2": "usage error, a refused target or a command on an endpoint failed"
+      },
+      "id": "documents-migrate",
+      "inputs": "two endpoints named on the command line (an ssh destination and the application container, never a literal in this file); for restore, a dump directory written by dump",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "a dump directory (export.tar, dump-manifest.json) for dump; the counts as JSON for counts, the verification report for restore",
+      "owner": "maintainers",
+      "path": "tools/migrate/documents.py",
+      "purpose": "Copy a document library (every document with its archive copy and thumbnail, tags, correspondents, document types, custom fields, notes and accounts) from one instance to another with the product's own exporter and importer, and prove the copy by counts and by the checksum of every file.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "no clone beyond the baseline and no stale entry",
         "1": "a new or grown clone, a stale baseline entry, or a baseline loosened against the base",
         "2": "usage error, a bad baseline, an unusable base, or an update that would raise the total"
@@ -472,6 +491,62 @@
       "trigger": [
         "ci:ci/regression-tests",
         "make:fix-check"
+      ]
+    },
+    {
+      "exit": {
+        "0": "done",
+        "1": "a check failed or the input is not usable (the reason on stderr, never a credential)",
+        "2": "usage error"
+      },
+      "id": "forge-helper",
+      "inputs": "wait | health | signin | dbcounts, with the settings as JSON on standard input (the credential is among them)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "JSON of facts on stdout; a one-line reason on stderr",
+      "owner": "platform",
+      "path": "modules/gitea/roles/gitea/files/hnx_gitea.py",
+      "purpose": "Read-only checks of the forge service (wait, health, signin) and the counts and content fingerprint of its database, read from a dump or a database file.",
+      "status": "active",
+      "trigger": [
+        "role:gitea"
+      ]
+    },
+    {
+      "exit": {
+        "0": "done (for verify, the target equals the export)",
+        "1": "the target differs from the export, or the source or the export is not intact",
+        "2": "usage error or a command on an endpoint failed"
+      },
+      "id": "forge-migrate",
+      "inputs": "two endpoints named on the command line (an ssh destination and a container name, never a literal in this file); for stage and verify, an export directory written by dump",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "an export directory (dump.zip, manifest.json, repos.tsv, listing.jsonl) for dump; JSON facts for the other commands",
+      "owner": "maintainers",
+      "path": "tools/migrate/forge.py",
+      "purpose": "Copy a forge instance (repositories, accounts, packages) from one place to another as a verified export, over ssh pipes, and prove the target holds exactly what the source held.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "placed",
+        "1": "refused or failed (the reason on stderr; the live paths are as they were)"
+      },
+      "id": "forge-restore",
+      "inputs": "the data directory, the dump, the container's ids and a stamp as JSON on standard input",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "JSON of what was placed, what was set aside and the restored database's counts",
+      "owner": "platform",
+      "path": "modules/gitea/roles/gitea/files/gitea_restore.py",
+      "purpose": "Place a forge dump into the module's data directory beside what is there (renamed, never deleted), taking only the repositories and the data directories the role does not own.",
+      "status": "active",
+      "trigger": [
+        "role:gitea"
       ]
     },
     {
@@ -787,7 +862,9 @@
       "exit": {
         "0": "every step ran",
         "1": "one or more steps failed (alerted once per change of the failing set)",
-        "2": "the tables could not be listed (engine unreachable, sign-in refused)"
+        "143": "terminated by SIGTERM (the running query cancelled, the state written and one alert sent)",
+        "2": "the tables could not be listed (engine unreachable, sign-in refused)",
+        "3": "degraded (a table's history was unreadable and it was skipped untouched; alerted, the last-run record fails)"
       },
       "id": "lake-maintenance",
       "inputs": "the query engine's table list (information_schema); the maintenance user's password and the notify token (the service's environment file); the previous state file",
@@ -806,15 +883,15 @@
     },
     {
       "exit": {
-        "0": "every table's count at its snapshot equals the reference (and the table count is the expected one)",
-        "1": "a count differs, a snapshot cannot be read, a reference table is missing, or the table count is not the expected one",
+        "0": "every table's count at its snapshot equals the reference, every table's whole snapshot history is readable (and the table count is the expected one)",
+        "1": "a count differs, a snapshot cannot be read, a table's history ($all_manifests) is unreadable, a reference table is missing, or the table count is not the expected one",
         "2": "usage error or an unreadable reference file"
       },
       "id": "lake-verify",
       "inputs": "a reference TSV (one row per table - the schema, table, snapshot id and row count the source answered); the query engine's URL, a sign-in and its CA",
       "kind": "tool",
       "language": "python",
-      "outputs": "one line per table (ok, MISMATCH, ERROR) and a summary, or the same as JSON",
+      "outputs": "one line per table (ok, MISMATCH, ERROR, HISTORY), with --all-catalog-tables a separate section for catalog tables the reference does not list, and a summary, or the same as JSON",
       "owner": "maintainers",
       "path": "tools/migrate/lake_verify.py",
       "purpose": "Compare each lake table's row count at a fixed snapshot with a reference TSV, to prove a copied lake (catalog and bucket) equals its source.",

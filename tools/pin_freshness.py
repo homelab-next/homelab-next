@@ -100,6 +100,13 @@ SOURCES: dict[str, tuple[str, str]] = {
         "digest to the build the old lake runs): compare with the project's release tags by hand, and "
         "move only with a catalog-file backup in hand",
     ),
+    "role:documents/documents_image": ("github", "paperless-ngx/paperless-ngx"),
+    "role:documents/documents_broker_image": (
+        "none",
+        "the Docker official image (docker.io/library/redis): compare its tags with the Redis "
+        "release page by hand, within the pinned major version (the broker holds only queued tasks)",
+    ),
+    "role:gitea/gitea_image": ("github", "go-gitea/gitea"),
     "role:keycloak/keycloak_image": ("github", "keycloak/keycloak"),
     "role:keycloak/keycloak_postgres_image": (
         "none",
@@ -265,6 +272,16 @@ NOTES: dict[str, str] = {
         "an image (modules/media-automation): bump the tag and its digest together, one app at a time "
         "with the upgrade playbook (the config is exported first; a library manager migrates its database on first start and cannot go back)"
     ),
+    "role:documents/documents_image": (
+        "an image (modules/documents): bump the tag and its digest together, with product.version in "
+        "modules/documents/module.yml and the lab registry's version; the same or a newer version only "
+        "(the application migrates its database forward on first start and cannot go back; the role "
+        "refuses an older target), so export the library first (the upgrade playbook does)"
+    ),
+    "role:documents/documents_broker_image": (
+        "an image (modules/documents): the tag and its digest together, within the pinned major version; "
+        "the broker holds queued tasks only, nothing to migrate"
+    ),
     "role:media/media_image": (
         "an image (modules/media): bump the tag and its digest together, with product.version in "
         "modules/media/module.yml and the lab registry's version; a newer server migrates its own "
@@ -283,6 +300,12 @@ NOTES: dict[str, str] = {
         "an image (modules/trino): bump the tag and its digest together, with product.version in "
         "modules/trino/module.yml and the lab registry's version; read the release notes of every "
         "version crossed (catalog properties and procedure options change between releases)"
+    ),
+    "role:gitea/gitea_image": (
+        "an image (modules/gitea, the rootless build): bump the tag and its digest together, with "
+        "product.version in modules/gitea/module.yml and the lab registry's version; the upgrade "
+        "playbook exports the instance first and refuses a target older than the running version (a "
+        "newer version migrates the database forward and an older one cannot open it)"
     ),
     "role:nifi/nifi_image": (
         "an image (modules/nifi): bump the tag and its digest together, with product.version in "

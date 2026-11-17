@@ -15,6 +15,9 @@ ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ trino_l
 ExecStart=/usr/local/libexec/homelabnext/hnx-lake-maintenance
 # a statement may run for an hour (remove_orphan_files lists the whole table prefix)
 TimeoutStartSec=6h
+# SIGTERM (stop, timeout) makes the script cancel its query on the engine, write its state and alert
+KillSignal=SIGTERM
+TimeoutStopSec=120
 ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ trino_last_run_dir }} --group {{ trino_last_run_group }} --job timer:trino/lake-maintenance --unit %n --calendar "{{ trino_maintenance_schedule }}" --delay 600
 Nice=10
 NoNewPrivileges=true

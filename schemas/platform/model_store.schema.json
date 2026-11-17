@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/model_store/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/platform/model_store/1.1",
   "title": "Model store manifest",
-  "description": "The one model store (ADR-0023): every model the lab keeps on disk, once per (source, revision, quant), under one root. format hf is a Hugging Face safetensors snapshot in the hub cache layout (hf/hub/models--<org>--<name>/snapshots/<revision>/), gguf one single-file GGUF under gguf/<org>/<name>/, export a fine-tune export under exports/<run>/ (layout safetensors or gguf, with the base entry it was trained from). source.revision is a full 40-hex commit, never a branch. Every file carries its sha256 and size; an entry's digest is sha256 of its sha256sum listing, the value a model-role binding pins. engines lists who may serve it: vllm serves safetensors only, llama-server GGUF only, unsloth-studio either. Semantic rules JSON Schema cannot express (one copy per source+revision+quant, export base resolves, exactly one .gguf per GGUF entry, bindings resolve) are checked by homelabnext.models.store (`hnx models store validate`).",
+  "description": "The one model store (ADR-0023): every model the lab keeps on disk, once per (source, revision, quant), under one root. format hf is a Hugging Face safetensors snapshot in the hub cache layout (hf/hub/models--<org>--<name>/snapshots/<revision>/), gguf one single-file GGUF under gguf/<org>/<name>/, export a fine-tune export under exports/<run>/ (layout safetensors or gguf, with the base entry it was trained from). source.revision is a full 40-hex commit, never a branch. Every file carries its sha256 and size; an entry's digest is sha256 of its sha256sum listing, the value a model-role binding pins. engines lists who may serve it: vllm serves safetensors only, llama-server GGUF only, unsloth-studio either, tts-server (the speech module) loads an hf entry's own checkpoint files. Semantic rules JSON Schema cannot express (one copy per source+revision+quant, export base resolves, exactly one .gguf per GGUF entry, bindings resolve) are checked by homelabnext.models.store (`hnx models store validate`).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -134,7 +134,8 @@
             "enum": [
               "vllm",
               "llama-server",
-              "unsloth-studio"
+              "unsloth-studio",
+              "tts-server"
             ]
           }
         },

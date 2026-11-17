@@ -17,6 +17,11 @@
       orphan: "{{ trino_orphan_retention }}"
       expire_timeout: "{{ trino_expire_timeout | int }}"
       orphan_timeout: "{{ trino_orphan_timeout | int }}"
+      cancel_wait: "{{ trino_cancel_confirm_timeout | int }}"
+      preflight_timeout: "{{ trino_preflight_timeout | int }}"
+      allow: "{{ trino_maintenance_schemas }}"
+      skip: "{{ trino_maintenance_skip }}"
+      overrides: "{{ trino_maintenance_overrides }}"
       notify_url: "{{ trino_notify_endpoint }}"
       notify_topic: "{{ trino_notify_topic }}"
       notify_priority: "{{ trino_notify_priority | int }}"
@@ -88,17 +93,21 @@
   failed_when: false
   check_mode: false
 
-- name: Reload systemd (units changed) and enable and start the timer (changed, or not both)
+- name: Reload systemd (units changed)
   ansible.builtin.command:
-    argv: "{{ [trino_systemctl_cli] + item }}"
-  vars:
-    trino_timer_owed: >-
-      {{ trino_maintenance_units is changed
-         or trino_timer_enabled.stdout | default('') | trim != 'enabled'
-         or trino_timer_active.stdout | default('') | trim != 'active' }}
-  loop: >-
-    {{ ([['daemon-reload']] if trino_maintenance_units is changed else [])
-       + ([['enable', '--now', 'hnx-lake-maintenance.timer']] if trino_timer_owed | bool else []) }}
-  loop_control:
-    label: "{{ item | join(' ') }}"
+    argv: ["{{ trino_systemctl_cli }}", daemon-reload]
+  when: trino_maintenance_units is changed
   changed_when: true
+
+- name: Enable and start the timer (armed, and changed or not both enabled and active)
+  ansible.builtin.command:
+    argv: ["{{ trino_systemctl_cli }}", enable, --now, hnx-lake-maintenance.timer]
+  when: >-
+    trino_maintenance_armed | bool and (trino_maintenance_units is changed
+    or trino_timer_enabled.stdout | default('') | trim != 'enabled'
+    or trino_timer_active.stdout | default('') | trim != 'active')
+  changed_when: true
+
+- name: Disarm the timer (not acknowledged, no unattended run on a lake nobody has cleared)
+  ansible.builtin.include_tasks: disarm.yml
+  when: not (trino_maintenance_armed | bool)

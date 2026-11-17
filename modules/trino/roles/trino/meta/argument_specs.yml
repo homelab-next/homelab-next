@@ -144,7 +144,7 @@ argument_specs:
         default: 10
       trino_maintenance_enabled:
         type: bool
-        description: Install the lake's maintenance timer.
+        description: Install the lake's maintenance timer and script. When false an already-installed timer is stopped and disabled.
         default: true
       trino_maintenance_user:
         type: str
@@ -174,6 +174,40 @@ argument_specs:
         type: int
         description: Seconds a remove_orphan_files statement may run.
         default: 3600
+      trino_preflight_timeout:
+        type: int
+        description: Seconds each read-only history preflight query ($snapshots, $all_manifests) may take per table.
+        default: 300
+      trino_cancel_confirm_timeout:
+        type: int
+        description: Seconds to wait, after cancelling a query, for system.runtime.queries to show it no longer live (5..60); still live means the run stops.
+        default: 45
+      trino_maintenance_catch_up:
+        type: bool
+        description: Timer Persistent=; true fires a missed run the moment the timer is started (arming). Default false.
+        default: false
+      trino_maintenance_acknowledged_restore:
+        type: bool
+        description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
+          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
+          trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
+        default: false
+      trino_maintenance_schemas:
+        type: list
+        elements: str
+        description: Allow list of schema or schema.table globs (lower case only, [a-z0-9_*?]) the maintenance touches.
+        default: ['*']
+      trino_maintenance_skip:
+        type: list
+        elements: str
+        description: Deny list of schema or schema.table globs; wins over the allow list.
+        default: []
+      trino_maintenance_overrides:
+        type: dict
+        description: 'Per-schema values: {schema: {expire: 90d, retain_last: 50, orphan_retention: 7d, orphan: false}}.
+          Every key is optional; durations are whole days and not under the engine floors; orphan false skips
+          remove_orphan_files for the schema.'
+        default: {}
       trino_maintenance_schedule:
         type: str
         description: systemd OnCalendar of the timer.
@@ -450,7 +484,7 @@ argument_specs:
         default: 10
       trino_maintenance_enabled:
         type: bool
-        description: Install the lake's maintenance timer.
+        description: Install the lake's maintenance timer and script. When false an already-installed timer is stopped and disabled.
         default: true
       trino_maintenance_user:
         type: str
@@ -480,6 +514,40 @@ argument_specs:
         type: int
         description: Seconds a remove_orphan_files statement may run.
         default: 3600
+      trino_preflight_timeout:
+        type: int
+        description: Seconds each read-only history preflight query ($snapshots, $all_manifests) may take per table.
+        default: 300
+      trino_cancel_confirm_timeout:
+        type: int
+        description: Seconds to wait, after cancelling a query, for system.runtime.queries to show it no longer live (5..60); still live means the run stops.
+        default: 45
+      trino_maintenance_catch_up:
+        type: bool
+        description: Timer Persistent=; true fires a missed run the moment the timer is started (arming). Default false.
+        default: false
+      trino_maintenance_acknowledged_restore:
+        type: bool
+        description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
+          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
+          trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
+        default: false
+      trino_maintenance_schemas:
+        type: list
+        elements: str
+        description: Allow list of schema or schema.table globs (lower case only, [a-z0-9_*?]) the maintenance touches.
+        default: ['*']
+      trino_maintenance_skip:
+        type: list
+        elements: str
+        description: Deny list of schema or schema.table globs; wins over the allow list.
+        default: []
+      trino_maintenance_overrides:
+        type: dict
+        description: 'Per-schema values: {schema: {expire: 90d, retain_last: 50, orphan_retention: 7d, orphan: false}}.
+          Every key is optional; durations are whole days and not under the engine floors; orphan false skips
+          remove_orphan_files for the schema.'
+        default: {}
       trino_maintenance_schedule:
         type: str
         description: systemd OnCalendar of the timer.
@@ -682,7 +750,7 @@ argument_specs:
         default: 10
       trino_maintenance_enabled:
         type: bool
-        description: Install the lake's maintenance timer.
+        description: Install the lake's maintenance timer and script. When false an already-installed timer is stopped and disabled.
         default: true
       trino_maintenance_user:
         type: str
@@ -712,6 +780,40 @@ argument_specs:
         type: int
         description: Seconds a remove_orphan_files statement may run.
         default: 3600
+      trino_preflight_timeout:
+        type: int
+        description: Seconds each read-only history preflight query ($snapshots, $all_manifests) may take per table.
+        default: 300
+      trino_cancel_confirm_timeout:
+        type: int
+        description: Seconds to wait, after cancelling a query, for system.runtime.queries to show it no longer live (5..60); still live means the run stops.
+        default: 45
+      trino_maintenance_catch_up:
+        type: bool
+        description: Timer Persistent=; true fires a missed run the moment the timer is started (arming). Default false.
+        default: false
+      trino_maintenance_acknowledged_restore:
+        type: bool
+        description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
+          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
+          trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
+        default: false
+      trino_maintenance_schemas:
+        type: list
+        elements: str
+        description: Allow list of schema or schema.table globs (lower case only, [a-z0-9_*?]) the maintenance touches.
+        default: ['*']
+      trino_maintenance_skip:
+        type: list
+        elements: str
+        description: Deny list of schema or schema.table globs; wins over the allow list.
+        default: []
+      trino_maintenance_overrides:
+        type: dict
+        description: 'Per-schema values: {schema: {expire: 90d, retain_last: 50, orphan_retention: 7d, orphan: false}}.
+          Every key is optional; durations are whole days and not under the engine floors; orphan false skips
+          remove_orphan_files for the schema.'
+        default: {}
       trino_maintenance_schedule:
         type: str
         description: systemd OnCalendar of the timer.
@@ -914,7 +1016,7 @@ argument_specs:
         default: 10
       trino_maintenance_enabled:
         type: bool
-        description: Install the lake's maintenance timer.
+        description: Install the lake's maintenance timer and script. When false an already-installed timer is stopped and disabled.
         default: true
       trino_maintenance_user:
         type: str
@@ -944,6 +1046,40 @@ argument_specs:
         type: int
         description: Seconds a remove_orphan_files statement may run.
         default: 3600
+      trino_preflight_timeout:
+        type: int
+        description: Seconds each read-only history preflight query ($snapshots, $all_manifests) may take per table.
+        default: 300
+      trino_cancel_confirm_timeout:
+        type: int
+        description: Seconds to wait, after cancelling a query, for system.runtime.queries to show it no longer live (5..60); still live means the run stops.
+        default: 45
+      trino_maintenance_catch_up:
+        type: bool
+        description: Timer Persistent=; true fires a missed run the moment the timer is started (arming). Default false.
+        default: false
+      trino_maintenance_acknowledged_restore:
+        type: bool
+        description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
+          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
+          trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
+        default: false
+      trino_maintenance_schemas:
+        type: list
+        elements: str
+        description: Allow list of schema or schema.table globs (lower case only, [a-z0-9_*?]) the maintenance touches.
+        default: ['*']
+      trino_maintenance_skip:
+        type: list
+        elements: str
+        description: Deny list of schema or schema.table globs; wins over the allow list.
+        default: []
+      trino_maintenance_overrides:
+        type: dict
+        description: 'Per-schema values: {schema: {expire: 90d, retain_last: 50, orphan_retention: 7d, orphan: false}}.
+          Every key is optional; durations are whole days and not under the engine floors; orphan false skips
+          remove_orphan_files for the schema.'
+        default: {}
       trino_maintenance_schedule:
         type: str
         description: systemd OnCalendar of the timer.
@@ -1146,7 +1282,7 @@ argument_specs:
         default: 10
       trino_maintenance_enabled:
         type: bool
-        description: Install the lake's maintenance timer.
+        description: Install the lake's maintenance timer and script. When false an already-installed timer is stopped and disabled.
         default: true
       trino_maintenance_user:
         type: str
@@ -1176,6 +1312,40 @@ argument_specs:
         type: int
         description: Seconds a remove_orphan_files statement may run.
         default: 3600
+      trino_preflight_timeout:
+        type: int
+        description: Seconds each read-only history preflight query ($snapshots, $all_manifests) may take per table.
+        default: 300
+      trino_cancel_confirm_timeout:
+        type: int
+        description: Seconds to wait, after cancelling a query, for system.runtime.queries to show it no longer live (5..60); still live means the run stops.
+        default: 45
+      trino_maintenance_catch_up:
+        type: bool
+        description: Timer Persistent=; true fires a missed run the moment the timer is started (arming). Default false.
+        default: false
+      trino_maintenance_acknowledged_restore:
+        type: bool
+        description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
+          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
+          trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
+        default: false
+      trino_maintenance_schemas:
+        type: list
+        elements: str
+        description: Allow list of schema or schema.table globs (lower case only, [a-z0-9_*?]) the maintenance touches.
+        default: ['*']
+      trino_maintenance_skip:
+        type: list
+        elements: str
+        description: Deny list of schema or schema.table globs; wins over the allow list.
+        default: []
+      trino_maintenance_overrides:
+        type: dict
+        description: 'Per-schema values: {schema: {expire: 90d, retain_last: 50, orphan_retention: 7d, orphan: false}}.
+          Every key is optional; durations are whole days and not under the engine floors; orphan false skips
+          remove_orphan_files for the schema.'
+        default: {}
       trino_maintenance_schedule:
         type: str
         description: systemd OnCalendar of the timer.
@@ -1382,7 +1552,7 @@ argument_specs:
         default: 10
       trino_maintenance_enabled:
         type: bool
-        description: Install the lake's maintenance timer.
+        description: Install the lake's maintenance timer and script. When false an already-installed timer is stopped and disabled.
         default: true
       trino_maintenance_user:
         type: str
@@ -1412,6 +1582,40 @@ argument_specs:
         type: int
         description: Seconds a remove_orphan_files statement may run.
         default: 3600
+      trino_preflight_timeout:
+        type: int
+        description: Seconds each read-only history preflight query ($snapshots, $all_manifests) may take per table.
+        default: 300
+      trino_cancel_confirm_timeout:
+        type: int
+        description: Seconds to wait, after cancelling a query, for system.runtime.queries to show it no longer live (5..60); still live means the run stops.
+        default: 45
+      trino_maintenance_catch_up:
+        type: bool
+        description: Timer Persistent=; true fires a missed run the moment the timer is started (arming). Default false.
+        default: false
+      trino_maintenance_acknowledged_restore:
+        type: bool
+        description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
+          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
+          trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
+        default: false
+      trino_maintenance_schemas:
+        type: list
+        elements: str
+        description: Allow list of schema or schema.table globs (lower case only, [a-z0-9_*?]) the maintenance touches.
+        default: ['*']
+      trino_maintenance_skip:
+        type: list
+        elements: str
+        description: Deny list of schema or schema.table globs; wins over the allow list.
+        default: []
+      trino_maintenance_overrides:
+        type: dict
+        description: 'Per-schema values: {schema: {expire: 90d, retain_last: 50, orphan_retention: 7d, orphan: false}}.
+          Every key is optional; durations are whole days and not under the engine floors; orphan false skips
+          remove_orphan_files for the schema.'
+        default: {}
       trino_maintenance_schedule:
         type: str
         description: systemd OnCalendar of the timer.

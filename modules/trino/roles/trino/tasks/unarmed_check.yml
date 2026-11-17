@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# A timer that is not armed (maintenance off, or the lake not acknowledged) must be neither running
+# nor enabled: an enabled-but-stopped timer re-arms at the next boot (the 2026-11-17 state). Health
+# is the backstop for disarm.yml, which acts on deploy. An absent unit ("not-found") passes.
+- name: Ask whether an unarmed timer is enabled (enabled re-arms at the next boot)
+  ansible.builtin.command:
+    argv: ["{{ trino_systemctl_cli }}", is-enabled, hnx-lake-maintenance.timer]
+  register: trino_unarmed_enabled
+  changed_when: false
+  failed_when: trino_unarmed_enabled.stdout | default('') | trim in ['enabled', 'enabled-runtime', 'static', 'alias']
+
+- name: Ask whether an unarmed timer is running
+  ansible.builtin.command:
+    argv: ["{{ trino_systemctl_cli }}", is-active, hnx-lake-maintenance.timer]
+  register: trino_unarmed_active
+  changed_when: false
+  failed_when: trino_unarmed_active.stdout | default('') | trim in ['active', 'activating']
