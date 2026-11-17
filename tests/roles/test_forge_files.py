@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from forge_front import dump_sql, make_dump
+from forge_front import ENCRYPTED_ROWS, dump_sql, make_dump
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -392,3 +392,93 @@ def test_an_export_that_records_no_fingerprints_cannot_be_restored(want):
 def test_a_missing_secret_is_an_error():
     with pytest.raises(helper.HelperError, match="internal_token"):
         helper.secret_fingerprints({**VALUES, "internal_token": ""})
+
+
+# ----------------------------------------------------------------------------- a SECRET_KEY never set
+FRESH = {**VALUES, "secret_key": "f" * 43}
+
+
+def _db(**kw) -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(dump_sql(**kw))
+    return conn
+
+
+def test_the_tables_read_are_the_ones_the_fixture_can_fill():
+    assert sorted(ENCRYPTED_ROWS) == sorted(helper.APP_KEY_USES)
+
+
+def test_rows_the_key_does_not_encrypt_are_not_counted_and_each_one_it_does_is():
+    assert helper.app_key_uses(_db()) == dict.fromkeys(helper.APP_KEY_USES, 0)
+    for table in helper.APP_KEY_USES:
+        uses = helper.app_key_uses(_db(encrypted=[table]))
+        assert uses[table] == 1 and sum(uses.values()) == 1, table
+
+
+def test_a_column_that_is_not_json_counts_as_holding_a_secret():
+    conn = _db()
+    conn.execute("INSERT INTO login_source VALUES (2, 2, 'odd', 'not json')")
+    assert helper.app_key_uses(conn)["login_source"] == 1
+
+
+@pytest.mark.parametrize("drop", ["DROP TABLE task", "ALTER TABLE webhook DROP COLUMN header_authorization_encrypted"])  # fmt: skip
+def test_an_unknown_schema_is_an_error_not_a_zero(drop):
+    conn = _db()
+    conn.execute(drop)
+    with pytest.raises(helper.HelperError, match=r"cannot prove|lacks columns"):
+        helper.app_key_uses(conn)
+
+
+def _builtin_manifest(**proof) -> dict:
+    return {
+        "secret_key_source": helper.KEY_BUILTIN,
+        "app_key_fingerprints": helper.secret_fingerprints(VALUES, helper.OTHER_SECRET_NAMES),
+        "secret_key_unused_proof": helper.unused_key_proof(dict.fromkeys(helper.APP_KEY_USES, 0))
+        | proof,
+    }
+
+
+def test_a_fresh_key_is_accepted_only_for_a_proved_export_and_the_archive_is_proved_again(tmp_path):
+    clean = make_dump(tmp_path / "clean.zip")
+    got = helper.check_app_key(
+        {"values": FRESH, "origin": "generated", "manifest": _builtin_manifest(), "zip": str(clean)}
+    )
+    assert got == {"secret_key": "fresh"}
+    # the manifest says zero, the archive holds a row: the archive wins
+    dirty = make_dump(tmp_path / "dirty.zip", encrypted=["two_factor"])
+    with pytest.raises(helper.HelperError, match="two_factor: 1 rows"):
+        helper.check_app_key(
+            {
+                "values": FRESH,
+                "origin": "generated",
+                "manifest": _builtin_manifest(),
+                "zip": str(dirty),
+            }
+        )
+
+
+@pytest.mark.parametrize("manifest, origin, values, message", [
+    (_builtin_manifest(), "source", FRESH, "cannot be carried"),
+    ({"app_key_fingerprints": helper.secret_fingerprints(VALUES)}, "generated", FRESH, "has its own SECRET_KEY"),
+    ({**_builtin_manifest(), "secret_key_unused_proof": None}, "generated", FRESH, "no proof"),
+    (_builtin_manifest(rules="1.0.0"), "generated", FRESH, "no proof"),
+    (_builtin_manifest(encrypted_rows=dict.fromkeys(helper.APP_KEY_USES, 0) | {"secret": 1}), "generated", FRESH, "records rows"),
+    (_builtin_manifest(), "generated", {**FRESH, "secret_key": helper.BUILTIN_APP_KEY}, "built-in default"),
+    (_builtin_manifest(), "generated", {**FRESH, "jwt_secret": "z" * 43}, "jwt_secret is not the source's"),
+    (_builtin_manifest(), "other", FRESH, "origin must be one of"),
+    ({**_builtin_manifest(), "secret_key_source": "guessed"}, "generated", FRESH, "unknown SECRET_KEY source"),
+])  # fmt: skip
+def test_every_way_a_key_does_not_fit_the_export_is_refused(manifest, origin, values, message):
+    with pytest.raises(helper.HelperError, match=message):
+        helper.check_app_key({"values": values, "origin": origin, "manifest": manifest})
+
+
+def test_a_source_with_its_own_key_is_copied_as_before():
+    manifest = {
+        "app_key_fingerprints": helper.secret_fingerprints(VALUES)
+    }  # an older export says nothing
+    assert helper.check_app_key({"values": VALUES, "origin": "source", "manifest": manifest}) == {
+        "secret_key": "copied"
+    }
+    with pytest.raises(helper.HelperError, match="secret_key is not the source's"):
+        helper.check_app_key({"values": FRESH, "origin": "source", "manifest": manifest})

@@ -99,7 +99,8 @@
         content: >-
           {{ {'format': 1, 'product_version': gitea_product_version, 'image': gitea_image,
               'counts': gitea_facts.counts, 'fingerprint': gitea_facts.fingerprint,
-              'app_key_fingerprints': gitea_keymat_fps, 'config_included': false,
+              'app_key_fingerprints': gitea_keymat_fps, 'secret_key_source': 'configured',
+              'config_included': false,
               'repositories': gitea_repos_lines | length} | to_nice_json(sort_keys=true) }}
         dest: "{{ gitea_data_root }}/export/manifest.json"
         owner: "{{ gitea_owner }}"
