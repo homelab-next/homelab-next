@@ -13,7 +13,7 @@ from homelabnext.registry.models import ModelClient, ModelResolver
 
 from .report import Report, TaskResult
 from .scorers import score
-from .tasks import Suite
+from .tasks import Suite, Task
 
 #: ``completer(messages, params) -> output text``
 Completer = Callable[[list[dict], dict], str]
@@ -72,26 +72,12 @@ def run_decision_suite(
     band.  The report is a chat suite's, the answer kept as text."""
     if suite.kind != "decision":
         raise ValueError(f"suite {suite.name}: not a decision suite (kind {suite.kind!r})")
-    role_name = (role or suite.role or "").removeprefix("mdl:")
-    rep = Report(suite.name, role_name, model_id, suite.pass_score)
-    for t in suite.tasks:
-        t0 = clock()
-        out, err = "", ""
-        s, detail = 0.0, "no output"
-        try:
-            p = one_probability(decider({t.id: t.question}, t.prompt), t.id)
-            out = f"{p:.4f}"
-            s, detail = score(repr(p), t.expect)
-        except Exception as exc:  # a backend failure or a malformed answer fails the task
-            err = f"{type(exc).__name__}: {exc}"
-        ms = (clock() - t0) * 1000
-        if err:
-            rep.results.append(TaskResult(t.id, 0.0, False, detail, out, err, ms, t.weight))
-            continue
-        rep.results.append(
-            TaskResult(t.id, s, s >= suite.pass_score, detail, out, "", ms, t.weight)
-        )
-    return rep
+
+    def answer(t: Task) -> tuple[str, float, str]:
+        p = one_probability(decider({t.id: t.question}, t.prompt), t.id)
+        return f"{p:.4f}", *score(repr(p), t.expect)
+
+    return _run(suite, answer, role, model_id, clock)
 
 
 def run_suite(
@@ -106,6 +92,34 @@ def run_suite(
         raise ValueError(
             f"suite {suite.name}: a decision suite runs through a decider (run_decision_suite)"
         )
+
+    def answer(t: Task) -> tuple[str, float, str]:
+        out = completer(t.messages(), dict(t.params))
+        try:
+            return out, *score(out, t.expect)
+        except Exception as exc:
+            raise _ScorerError(out, f"{type(exc).__name__}: {exc}") from exc
+
+    return _run(suite, answer, role, model_id, clock)
+
+
+class _ScorerError(Exception):
+    """A scorer failed on an output the backend did return (kept in the result)."""
+
+    def __init__(self, out: str, err: str):
+        super().__init__(err)
+        self.out, self.err = out, err
+
+
+def _run(
+    suite: Suite,
+    answer: Callable[[Task], tuple[str, float, str]],
+    role: str | None,
+    model_id: str,
+    clock: Callable[[], float],
+) -> Report:
+    """Every task of ``suite`` through ``answer(task) -> (output, score, detail)``; an exception
+    fails that task, never the run."""
     role_name = (role or suite.role or "").removeprefix("mdl:")
     rep = Report(suite.name, role_name, model_id, suite.pass_score)
     for t in suite.tasks:
@@ -113,12 +127,10 @@ def run_suite(
         out, err = "", ""
         s, detail = 0.0, "no output"
         try:
-            out = completer(t.messages(), dict(t.params))
-            try:
-                s, detail = score(out, t.expect)
-            except Exception as exc:
-                s, detail, err = 0.0, "scorer error", f"{type(exc).__name__}: {exc}"
-        except Exception as exc:  # a backend or scorer failure is a failed task, not a crashed run
+            out, s, detail = answer(t)
+        except _ScorerError as exc:
+            out, detail, err = exc.out, "scorer error", exc.err
+        except Exception as exc:  # a backend failure or a malformed answer fails the task
             err = f"{type(exc).__name__}: {exc}"
         ms = (clock() - t0) * 1000
         if err:
