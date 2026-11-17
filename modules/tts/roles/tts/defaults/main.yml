@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+# The speech service, the tts provider (modules/tts): one container built from this repository, the
+# operator's cloned voice (XTTS-v2 with four reference recordings), POST /synthesize as the old service
+# answered it. The weights are the model store's (role model_store, a pinned revision and a sha256 per
+# file) and are mounted read-only; nothing is downloaded at start or at run time.
+# tts_logical_id (required): the instance's registry id, e.g. tts
+# tts_image (required): repository:tag@sha256:<digest> of the image built from this repository
+#   (modules/tts/README.md, "The image"); no default: there is no published image to pin. The tag
+#   ends in -cpu or -cuda, the backend it was built for.
+
+# the engine's backend: cpu, or cuda (NVIDIA, the card handed over by its CDI device). cuda loads the
+# model into the card's memory per job and unloads it when idle, and refuses to load while the card's
+# power cap is above tts_power_cap_max_watts
+tts_backend: cpu
+# optional: a local `docker save` of the pinned image (a path on the guest). The image is built by the
+# lab, not pulled from a registry; when the daemon lacks the digest the role loads this archive and
+# refuses to go on if the digest is still missing. Empty: the daemon must have it.
+tts_image_archive: ""
+# The repositories tts_image may name: the image built from this repository, tagged with a repository
+# of the lab's own. Any other image is refused by name, whatever its tag or digest; a site that pushes
+# the build to its own registry lists that repository here.
+tts_build_repositories: [localhost/hnx-tts]
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the guest
+# firewall admits the publishing pipeline and the metrics scraper only
+tts_bind: "{{ ansible_host }}"
+tts_port: 8091
+tts_dir: /opt/compose/tts
+# the module's data root (docs/modules/data.md): voice/ (the operator's reference recordings, read-only
+# in the container), state/ (the speaker-embedding cache, the container's) and export/. Backed up.
+tts_data_root: /var/lib/hnx-modules/tts
+# scratch the libraries want (compiled kernels, a home directory): rebuilt, never backed up
+tts_cache_dir: /var/cache/hnx-modules/tts
+tts_owner: root
+# the container's user: an id no account on the host has, and no more than the group below
+tts_uid: 61012
+tts_gid: 61012
+# the model store (role model_store) and the one entry served from it: the voice model at a pinned
+# revision. The digest is sha256 of the entry's listing (hnx models store list prints it); the service
+# checks the listing against it and every file against the listing before every load.
+tts_store_root: /srv/models
+tts_model_repo: coqui/XTTS-v2
+tts_model_revision: 6c2b0d75eae4b7047358e3b6bd9325f857d43f77
+tts_model_store_id: xtts-v2
+tts_model_digest: "sha256:41212ef70a20240010e3846a6ff1dbb445409e21690f849e09384cdc7112bd24"
+# the model store's group id (read from the model's directory when empty): the container reads the
+# weights through it and can write none
+tts_models_gid: ""
+# the reference recordings (files in <data root>/voice): the voice itself. The service needs all of them.
+tts_voice_files: [ref1.wav, ref2.wav, ref3.wav, ref4.wav]
+# optional proof that the recordings are the operator's: {file name: sha256}. When set, every listed
+# file must match before start and in health (a wrong or half-copied recording is a different voice).
+tts_voice_expected_sha256: {}
+# seconds idle before the engine is unloaded (the card's memory freed); empty: 120 on cuda, never on
+# cpu (the model stays in memory). 0 means never.
+tts_idle_unload_s: ""
+# the operator's rule: the card's power cap must be at or under this many watts before any load
+# starts, at every load. It can only tighten the rule: 1 to 200, never above.
+tts_power_cap_max_watts: 200
+# cuda: the card's index in the container toolkit's CDI spec (nvidia.com/gpu=<index>) and nvidia-smi's -i
+tts_gpu_index: 0
+# the longest text one request may carry, in characters (the service answers 413 above it); a whole
+# episode script is tens of thousands
+tts_max_text_chars: 200000
+# seconds one synthesis may run before the service answers 504, abandons the job and loads a fresh engine
+# for the next one (0: no limit). A CPU render of a long episode takes hours, so the default is generous.
+tts_job_timeout_s: 7200
+# the most an export may hold once extracted, in bytes: a restore refuses a larger archive before
+# extracting anything (the recordings are tens of MB; the embeddings are KB)
+tts_restore_max_bytes: 268435456
+tts_mem_limit: 12g
+tts_start: true
+tts_validate_with_docker: true
+tts_health_timeout: 20
+# the health hook's real synthesis of a fixed sentence: it may load the model (a CPU render of a
+# sentence takes tens of seconds), and the WAV it gets back must last between these many seconds
+tts_check_timeout_s: 900
+tts_check_min_seconds: 0.8
+tts_check_max_seconds: 15

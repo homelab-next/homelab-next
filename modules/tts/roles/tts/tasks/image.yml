@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# The guest cannot pull the image (it is built by the lab, and a model runtime's egress is default-deny).
+# When tts_image_archive names a local `docker save` of that exact image (compressed or not; docker load
+# reads gzip, xz and zstd), the image is loaded from it if the daemon lacks the digest, and the role
+# refuses to go on if it is still missing.
+- name: Ask whether the daemon already has the pinned image
+  ansible.builtin.command:
+    argv: [docker, image, inspect, --format, "{{ '{{.Id}}' }}", "{{ tts_repository }}@{{ tts_digest }}"]
+  register: tts_have_image
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Load the pinned image from the archive when the daemon lacks it
+  when: tts_have_image.rc != 0
+  block:
+    - name: The archive is a regular file
+      ansible.builtin.stat:
+        path: "{{ tts_image_archive }}"
+        follow: false
+      register: tts_archive
+    - name: Refuse anything but a regular archive
+      ansible.builtin.assert:
+        that: tts_archive.stat.exists and tts_archive.stat.isreg
+        fail_msg: "tts: {{ tts_image_archive }} is not a regular file"
+    - name: Load the image
+      ansible.builtin.command:
+        argv: [docker, load, -i, "{{ tts_image_archive }}"]
+      changed_when: true
+    - name: The pinned digest is there now
+      ansible.builtin.command:
+        argv: [docker, image, inspect, --format, "{{ '{{.Id}}' }}", "{{ tts_repository }}@{{ tts_digest }}"]
+      changed_when: false
+      register: tts_loaded
+      failed_when: tts_loaded.rc != 0

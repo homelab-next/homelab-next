@@ -106,7 +106,8 @@
         "kind": {
           "enum": [
             "chat",
-            "embedding"
+            "embedding",
+            "decision"
           ]
         },
         "max_context_tokens": {
@@ -196,7 +197,7 @@
           ]
         },
         "protocol": {
-          "description": "openai: OpenAI-compatible chat and embeddings; anthropic: the Messages API (chat only)",
+          "description": "openai: OpenAI-compatible chat and embeddings, and the decision protocol (POST /v1/systemone) on a decision role; anthropic: the Messages API (chat only)",
           "enum": [
             "openai",
             "anthropic"

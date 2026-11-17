@@ -111,8 +111,8 @@ func (c *Config) validateRole(p *problems, r *Role) {
 	if !matches(slugRE, r.alias, maxSlug) {
 		p.add("%s: the alias is not a slug of at most %d characters", w, maxSlug)
 	}
-	if r.Kind != "chat" && r.Kind != "embedding" {
-		p.add("%s: kind %q is not chat or embedding", w, r.Kind)
+	if r.Kind != "chat" && r.Kind != "embedding" && r.Kind != "decision" {
+		p.add("%s: kind %q is not chat, embedding or decision", w, r.Kind)
 	}
 	if r.MaxContextTokens != nil && *r.MaxContextTokens <= 0 {
 		p.add("%s: max_context_tokens must be positive or null", w)
@@ -176,6 +176,9 @@ func validateDeployment(p *problems, r *Role, i int, d *Deployment) {
 	}
 	if d.Protocol == "anthropic" && r.Kind == "embedding" {
 		p.add("%s: an embedding role cannot be served by an anthropic deployment", w)
+	}
+	if d.Protocol == "anthropic" && r.Kind == "decision" {
+		p.add("%s: a decision role cannot be served by an anthropic deployment", w)
 	}
 	if d.Locality == "cloud" && !r.LeavesLab {
 		p.add("%s: a cloud deployment on a role with leaves_lab false", w)

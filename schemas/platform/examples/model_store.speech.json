@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "root": "/srv/models",
+  "models": {
+    "xtts-v2": {
+      "description": "The speech model of modules/tts (the operator's cloned voice is made from it and the reference recordings; the weights are the hub's, unmodified).",
+      "format": "hf",
+      "quant": "fp32",
+      "source": {
+        "repo": "coqui/XTTS-v2",
+        "revision": "6c2b0d75eae4b7047358e3b6bd9325f857d43f77"
+      },
+      "license": "coqui-public-model-license",
+      "served_model_name": "xtts-v2",
+      "engines": [
+        "tts-server"
+      ],
+      "files": [
+        {
+          "path": "LICENSE.txt",
+          "sha256": "190f6d7c19b8984f91b97712b94ce92d2b2e640fc677dacab966e955ece9d043",
+          "size": 4014
+        },
+        {
+          "path": "config.json",
+          "sha256": "ef262b1454dd2a77e1461b0b2cd53e19b8a7624cc131b837d36df67356bc75e8",
+          "size": 4368
+        },
+        {
+          "path": "dvae.pth",
+          "sha256": "b29bc227d410d4991e0a8c09b858f77415013eeb9fba9650258e96095557d97a",
+          "size": 210514388
+        },
+        {
+          "path": "mel_stats.pth",
+          "sha256": "1f69422a8a8f344c4fca2f0c6b8d41d2151d6615b7321e48e6bb15ae949b119c",
+          "size": 1067
+        },
+        {
+          "path": "model.pth",
+          "sha256": "c7ea20001c6a0a841c77e252d8409f6a74fb423e79b3206a0771ba5989776187",
+          "size": 1867929118
+        },
+        {
+          "path": "speakers_xtts.pth",
+          "sha256": "f0f6137c19a4eab0cbbe4c99b5babacf68b1746e50da90807708c10e645b943b",
+          "size": 7754818
+        },
+        {
+          "path": "vocab.json",
+          "sha256": "928260878a59da8a72a2a5b7687fea29d5106137669d90945430fe17e415304a",
+          "size": 361219
+        }
+      ]
+    }
+  }
+}

@@ -47,7 +47,7 @@ from .resolver import Endpoint, ResolutionError, Resolver
 ROLE_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
 MDL_RE = re.compile(r"^mdl:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
-KINDS = ("chat", "completion", "embedding")
+KINDS = ("chat", "completion", "embedding", "decision")
 #: a character no header value may hold (http.client would echo the value in its error)
 _CONTROL = re.compile(r"[^\x20-\x7e]")  # a bearer token is printable ASCII (RFC 6750)
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}\Z")
@@ -577,6 +577,15 @@ class ChatResult:
         return math.exp(sum(self.token_logprobs) / len(self.token_logprobs))
 
 
+@dataclass(frozen=True)
+class DecisionResult:
+    """What a decision model answered: ``probabilities`` maps each question id to its noul
+    (a probability in [0, 1]); ``usage`` is the backend's token counts."""
+
+    probabilities: Mapping[str, float]
+    usage: Mapping[str, int] = field(default_factory=dict)
+
+
 class ModelClient:
     """Minimal OpenAI-compatible client bound to a resolved role."""
 
@@ -639,6 +648,30 @@ class ModelClient:
             return doc["choices"][0]["text"]
         except (KeyError, IndexError, TypeError) as exc:
             raise ModelError("malformed", "unexpected completion response shape") from exc
+
+    def decide(self, questions: Mapping[str, str], *, state: Any = None) -> DecisionResult:
+        """Ask a decision role (``kind: decision``) noul questions, ``{id: instructions}``:
+        ``POST /v1/systemone``; each answer is a probability."""
+        body: dict[str, Any] = {
+            "model": self.model.model_id,
+            "questions": {
+                qid: {"type": "noul", "instructions": text} for qid, text in questions.items()
+            },
+        }
+        if state is not None:
+            body["state"] = state
+        doc = self._call("/v1/systemone", body)
+        try:
+            probs: dict[str, float] = {}
+            for qid in questions:
+                ans = doc["answers"][qid]
+                p = float(ans["noul"])
+                if ans.get("type") != "noul" or not 0.0 <= p <= 1.0:
+                    raise ValueError(qid)
+                probs[qid] = p
+            return DecisionResult(probs, dict(doc.get("usage") or {}))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ModelError("malformed", f"unexpected decision response shape ({exc!r})") from exc
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         doc = self._call("/v1/embeddings", {"model": self.model.model_id, "input": texts})

@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Refuse when the voice model is not in the store (run model_store first)
+  ansible.builtin.stat:
+    path: "{{ tts_model_top }}/snapshots/{{ tts_model_revision }}/model.pth"
+  register: tts_weights
+  failed_when: not tts_weights.stat.exists
+
+- name: Refuse when the entry's listing is not in the store
+  ansible.builtin.stat:
+    path: "{{ tts_listing }}"
+    follow: false
+  register: tts_listing_stat
+  failed_when: not (tts_listing_stat.stat.exists and tts_listing_stat.stat.isreg)
+
+- name: The voice is there before the service can start
+  ansible.builtin.include_tasks: voice.yml
+  when: tts_start | bool
+
+- name: Load the pinned image from the local archive when the daemon lacks it
+  ansible.builtin.include_tasks: image.yml
+  when: tts_image_archive != ''
+
+- name: Render and start the speech service
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ tts_app.compose_app_name }}"
+    compose_app_dir: "{{ tts_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ tts_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ tts_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ tts_app.compose_app_owner }}"
+    compose_app_group: "{{ tts_app.compose_app_group }}"
+    compose_app_start: "{{ tts_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ tts_app.compose_app_validate_with_docker }}"
+    compose_app_bind_extra: "{{ tts_app.compose_app_bind_extra }}"
+    compose_app_spec: "{{ tts_app.compose_app_spec }}"
+
+- name: Wait until the service answers
+  ansible.builtin.uri:
+    url: "http://{{ tts_bind }}:{{ tts_port | int }}/health"
+    status_code: 200
+    timeout: "{{ tts_health_timeout | int }}"
+  register: tts_ready
+  until: tts_ready.status == 200
+  retries: 30
+  delay: 2
+  changed_when: false
+  when: tts_start | bool and not ansible_check_mode

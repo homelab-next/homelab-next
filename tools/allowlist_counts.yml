@@ -17,7 +17,7 @@ counts:
   tls-verify-allow: 0
   workstation-refs-allow: 2
   yaml-loader-allow: 52
-  scrub-allow-markers: 71
+  scrub-allow-markers: 72
   no-raw-endpoint-markers: 359
 digests:
   product-names-allow: sha256:203639cfc160d3f5b5d0eb88576a61cf885414f1bd993314944489442596e176
