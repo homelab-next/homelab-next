@@ -294,6 +294,7 @@ Stand-ins wired through target files (fakes or adapters over a local test double
 | Target file | Adapter | What it is |
 |---|---|---|
 | [`conformance/targets/context-reference.yml`](../../conformance/targets/context-reference.yml) | [`homelabnext.context:ContextStore`](../../homelabnext/context/__init__.py) | Retrieval for agents: the `context` capability's data shapes and its reference store. |
+| [`conformance/targets/context-semantic.yml`](../../conformance/targets/context-semantic.yml) | [`homelabnext.context_semantic:make`](../../homelabnext/context_semantic.py) | A hybrid (sparse + dense) `context` adapter that declares the `semantic` feature. |
 
 ### Registry services
 
