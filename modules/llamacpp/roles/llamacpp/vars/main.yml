@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+llamacpp_backends: [vulkan, sycl, cuda, cpu]
+# the image tag each backend's build carries (the published llama-server images)
+llamacpp_tag_prefix:
+  vulkan: server-vulkan-
+  sycl: server-intel-
+  cuda: server-cuda-
+  cpu: server-
+llamacpp_gpu_backends: [vulkan, sycl, cuda]
+llamacpp_render_backends: [vulkan, sycl]
+llamacpp_repository: "{{ llamacpp_image.split('@')[0].rsplit(':', 1)[0] }}"
+llamacpp_tag: "{{ llamacpp_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+llamacpp_digest: "{{ llamacpp_image.split('@')[1] | default('') }}"
+# where the container sees the weights and its cache, and the port inside it
+llamacpp_container_models_dir: /models
+llamacpp_container_cache_dir: /cache
+llamacpp_container_port: 8080
+llamacpp_unit_name: hnx-llamacpp.service
+# canonical absolute paths: no //, no . or .. component, no trailing /
+llamacpp_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+llamacpp_digest_pattern: '^sha256:[0-9a-f]{64}\Z'
+llamacpp_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+llamacpp_model_dir: "{{ llamacpp_store_root }}/gguf/{{ llamacpp_model_repo }}"
+llamacpp_listing: "{{ llamacpp_store_root }}/manifests/listings/{{ llamacpp_model_store_id }}.sha256"
+llamacpp_gpu_layers: "{{ (llamacpp_n_gpu_layers | string) if llamacpp_backend in llamacpp_gpu_backends else '0' }}"
+# The server's whole command line (the image's entrypoint is llama-server): the weights from the
+# read-only mount, offline (nothing is fetched), no web UI, no slot-monitoring route, the
+# Prometheus route on. The context is per slot, so the server gets it times the slots, and a
+# slot's share is fixed (--no-kv-unified); its host and port are inside the container.
+llamacpp_command: >-
+  {{ ['-m', llamacpp_container_models_dir ~ '/' ~ llamacpp_model_file,
+      '-a', llamacpp_served_model_name,
+      '--host', '0.0.0.0', '--port', llamacpp_container_port | string,
+      '-c', (llamacpp_context_size | int * llamacpp_parallel | int) | string,
+      '-np', llamacpp_parallel | string, '--no-kv-unified',
+      '-ngl', llamacpp_gpu_layers, '-fa', llamacpp_flash_attn,
+      '--metrics', '--no-webui', '--no-slots', '--offline'] }}
+# the precheck's arguments: the power rule alone (the health hook), and with the weights (the unit)
+llamacpp_precheck_power: >-
+  {{ ['--backend', llamacpp_backend, '--max-watts', llamacpp_power_cap_max_watts | string]
+     + (['--render-node', llamacpp_render_node, '--attrs', llamacpp_power_cap_attrs | join(','), '--sysfs-root', llamacpp_sysfs_root]
+        if llamacpp_backend in llamacpp_render_backends else [])
+     + (['--gpu-index', llamacpp_gpu_index | string] if llamacpp_backend == 'cuda' else []) }}
+llamacpp_precheck_full: >-
+  {{ llamacpp_precheck_power + ['--model-file', llamacpp_model_file, '--listing', llamacpp_listing, '--digest', llamacpp_model_digest, '--model-dir', llamacpp_model_dir] }}
+# Where the render node and the hwmon power files are read: the guest's own /dev and /sys. Test seams
+# only: a role var, so no inventory or group variable can point the power check at another tree
+# (only an extra variable, which a test passes).
+llamacpp_dev_root: /dev
+llamacpp_sysfs_root: /sys
+# the operator's power rule: no setting raises it above this many watts
+llamacpp_power_cap_ceiling_watts: 200
+llamacpp_gid_max: 4294967295

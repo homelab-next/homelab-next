@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: Apache-2.0
+# The rendered pack (workflows/stackstorm/) from the controller, as an immutable release beside its
+# siblings and the one the containers mount read-only. The release is named by
+# the digest of every file of the tree and the enabled-rules choice, so the same inputs are the same
+# directory and a changed input is a new one, switched to only once complete (the link is the last
+# thing written). The only edit the role makes to the rendered tree is each rule's `enabled:` line:
+# the pack ships its rules enabled, a site ships them disabled until a person turns one on, and
+# the mode (shadow or live) is the pack's own (pinned/<pack>.json), never touched here.
+- name: Check the rendered tree
+  ansible.builtin.include_tasks: pack_check.yml
+
+- name: Hash the rendered tree (every file's content, so a changed file is a new release)
+  ansible.builtin.find:
+    paths: "{{ stackstorm_pack_src }}"
+    recurse: true
+    file_type: file
+    get_checksum: true
+  delegate_to: localhost
+  become: false
+  register: stackstorm_pack_files
+
+- name: Name the release
+  ansible.builtin.set_fact:
+    stackstorm_release: >-
+      {{ ((stackstorm_pack_files.files | map(attribute='path') | map('regex_replace', '^' ~ (stackstorm_pack_src | regex_escape), '') | zip(stackstorm_pack_files.files | map(attribute='checksum')) | map('join', ':') | sort | join('|'))
+          ~ '#' ~ (stackstorm_enabled_rules | sort | join(','))) | hash('sha256') | truncate(16, true, '') }}
+
+- name: Name the release directory
+  ansible.builtin.set_fact:
+    stackstorm_release_dir: "{{ stackstorm_data_root }}/pack-releases/{{ stackstorm_release }}"
+
+- name: Look for a finished release
+  ansible.builtin.stat:
+    path: "{{ stackstorm_release_dir }}/.complete"
+  register: stackstorm_release_done
+
+- name: Stage the release beside its siblings (the pack, then each rule's enabled flag)
+  when: not stackstorm_release_done.stat.exists
+  block:
+    - name: Create the release directory (not yet in use)
+      ansible.builtin.file:
+        path: "{{ stackstorm_release_dir }}"
+        state: directory
+        owner: "{{ stackstorm_owner }}"
+        group: "{{ stackstorm_gid | int }}"
+        mode: "0750"
+    - name: Copy the pack
+      ansible.builtin.copy:
+        src: "{{ stackstorm_pack_src }}/{{ stackstorm_pack_ref }}/"
+        dest: "{{ stackstorm_release_dir }}/{{ stackstorm_pack_ref }}/"
+        owner: "{{ stackstorm_owner }}"
+        group: "{{ stackstorm_gid | int }}"
+        directory_mode: "0750"
+        mode: "0640"
+    - name: Set each rule's enabled flag (everything is off unless the site named it)
+      ansible.builtin.replace:
+        path: "{{ stackstorm_release_dir }}/{{ stackstorm_pack_ref }}/rules/{{ item.path | basename }}"
+        regexp: '^enabled: (true|false)$'
+        replace: "enabled: {{ 'true' if (item.path | basename | regex_replace('\\.yaml\\Z', '')) in stackstorm_enabled_rules else 'false' }}"
+      loop: "{{ stackstorm_rule_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+    - name: Read the rules back (each says what it was set to)
+      ansible.builtin.command:
+        argv: [grep, -c, '^enabled: ', "{{ stackstorm_release_dir }}/{{ stackstorm_pack_ref }}/rules/{{ item.path | basename }}"]
+      loop: "{{ stackstorm_rule_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: stackstorm_enabled_lines
+      changed_when: false
+      failed_when: stackstorm_enabled_lines.stdout | trim != '1'
+    - name: Mark the release complete
+      ansible.builtin.copy:
+        dest: "{{ stackstorm_release_dir }}/.complete"
+        content: "{{ {'binding': stackstorm_provenance.binding, 'enabled_rules': stackstorm_enabled_rules | sort, 'version': stackstorm_pack_meta.version} | to_nice_json }}\n"
+        owner: "{{ stackstorm_owner }}"
+        group: "{{ stackstorm_gid | int }}"
+        mode: "0640"
+
+# The release directory is what the containers mount (a bind of a link resolves when the container is
+# created, and a recreate is then the only way to see a new release); naming the release in the
+# compose file makes a new release a changed spec, which compose_app's `up` recreates by itself.
+- name: Record the release the stack runs (the last step, so hooks that only read build the same spec)
+  ansible.builtin.copy:
+    dest: "{{ stackstorm_data_root }}/pack-release.current"
+    content: "{{ stackstorm_release_dir }}\n"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_gid | int }}"
+    mode: "0640"
+  register: stackstorm_pack_recorded
+
+- name: Remember whether the mounted pack changed
+  ansible.builtin.set_fact:
+    stackstorm_pack_changed: "{{ stackstorm_pack_recorded is changed }}"
+
+- name: Install the pack's config (the broker socket path inside the container, the datastore key reference)
+  ansible.builtin.copy:
+    src: "{{ stackstorm_pack_src }}/configs/{{ stackstorm_pack_ref }}.yaml"
+    dest: "{{ stackstorm_data_root }}/config/{{ stackstorm_pack_ref }}.yaml"
+    owner: "{{ stackstorm_owner }}"
+    group: "{{ stackstorm_gid | int }}"
+    mode: "0640"
+  register: stackstorm_pack_config_written
+
+- name: The pack's config names the socket the forward provides, and holds only datastore references
+  ansible.builtin.assert:
+    that:
+      - (lookup('ansible.builtin.file', stackstorm_pack_src ~ '/configs/' ~ stackstorm_pack_ref ~ '.yaml') | from_yaml).broker_socket == stackstorm_c_broker_socket
+      - (lookup('ansible.builtin.file', stackstorm_pack_src ~ '/configs/' ~ stackstorm_pack_ref ~ '.yaml') | from_yaml).kv_key is match('^\{\{ st2kv\.system\.')
+    fail_msg: >-
+      stackstorm: the pack's config sets another broker socket than {{ stackstorm_c_broker_socket }} (where the forward is
+      mounted), or a literal where the runtime's key belongs: re-render the pack from its binding
+  tags: [readiness]

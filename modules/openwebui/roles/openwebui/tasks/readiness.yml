@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Open WebUI's dependencies: the container engine, the gateway (its only backend) and the secrets.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Map this module's settings onto the core role's
+      ansible.builtin.include_tasks: map.yml
+    - name: The gateway accepts connections and is the gateway (core role readiness)
+      ansible.builtin.include_role:
+        name: open_webui
+        tasks_from: readiness
+    - name: Every secret this app reads resolves, and the gateway is the lab's own and no engine
+      ansible.builtin.assert:
+        that:
+          - lookup('hnx_registry', openwebui_gateway_id, field='impl') in openwebui_gateway_impls
+          - lookup('hnx_secret', openwebui_gateway_key_ref) | length >= 32
+          - lookup('hnx_secret', openwebui_session_key_ref) | length >= 32
+          - lookup('hnx_secret', openwebui_admin_login_ref) | length >= 12
+          - lookup('hnx_secret', openwebui_oidc_client_secret_ref) | length >= 32
+        fail_msg: >-
+          openwebui: {{ openwebui_gateway_id }} must be product {{ openwebui_gateway_impls | join(' or ') }}
+          (never an engine), {{ openwebui_gateway_key_ref }} and {{ openwebui_session_key_ref }} 32
+          characters or more, {{ openwebui_admin_login_ref }} 12 or more and
+          {{ openwebui_oidc_client_secret_ref }} (the identity provider's client secret) 32 or more
+      no_log: true
+  tags: [readiness]

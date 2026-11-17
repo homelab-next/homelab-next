@@ -107,7 +107,14 @@ SOURCES: dict[str, tuple[str, str]] = {
         "PostgreSQL release page by hand, within the pinned major version",
     ),
     "role:media/media_image": ("github", "jellyfin/jellyfin"),
+    "role:nifi/nifi_image": ("github", "apache/nifi"),
     "role:ntfy/ntfy_image": ("github", "binwiederhier/ntfy"),
+    "role:llamacpp/llamacpp_image": (
+        "none",
+        "ggml-org/llama.cpp tags builds bNNNNN, which the github source does not parse, and only "
+        "some builds have an image: compare with the server-<backend>-bNNNNN tags of "
+        "ghcr.io/ggml-org/llama.cpp by hand",
+    ),
     "role:openproject/openproject_image": ("github", "opf/openproject"),
     "role:openproject/openproject_postgres_image": (
         "none",
@@ -120,7 +127,27 @@ SOURCES: dict[str, tuple[str, str]] = {
         "memcached release notes by hand",
     ),
     "role:prometheus/prometheus_image": ("github", "prometheus/prometheus"),
+    "role:stackstorm/stackstorm_mongo_image": (
+        "none",
+        "the Docker official image (docker.io/library/mongo), held on the 4.4 line the pinned "
+        "StackStorm release supports: compare its 4.4 tags by hand",
+    ),
+    "role:stackstorm/stackstorm_rabbitmq_image": (
+        "none",
+        "the Docker official image (docker.io/library/rabbitmq), within the pinned minor line",
+    ),
+    "role:stackstorm/stackstorm_redis_image": (
+        "none",
+        "the Docker official image (docker.io/library/redis), within the pinned minor line",
+    ),
+    "role:stackstorm/stackstorm_python_provisioner_image": ("github", "astral-sh/uv"),
+    "role:stackstorm/stackstorm_python_version": (
+        "none",
+        "the CPython 3.11 patch the one-shot provisioner downloads: compare with the 3.11 "
+        "release page by hand",
+    ),
     "role:open_webui/open_webui_image": ("github", "open-webui/open-webui"),
+    "role:openwebui/openwebui_image": ("github", "open-webui/open-webui"),
     "role:openbao/openbao_version": ("github", "openbao/openbao"),
     "role:openbao/openbao_lego_version": ("github", "go-acme/lego"),
     "role:tailscale_node/tailscale_node_version": ("github", "tailscale/tailscale"),
@@ -141,6 +168,12 @@ NOTES: dict[str, str] = {
     "role:wazuh_agent/wazuh_agent_version": "never newer than the manager it reports to",
     "role:docker_engine/docker_engine_version": "docker-ce and docker-ce-cli move with it",
     "role:open_webui/open_webui_image": "an image: bump the tag and its digest together",
+    "role:openwebui/openwebui_image": (
+        "an image (modules/openwebui): bump the tag and its digest together, in this role's default "
+        "and the core open_webui role's (a test holds them equal), with product.version in "
+        "modules/openwebui/module.yml and the lab registry's version; the upgrade playbook exports "
+        "the data directory first (the database migrates forward on the first start)"
+    ),
     "role:caddy/caddy_image": (
         "an image (modules/caddy): bump the tag and its digest together, with product.version in "
         "modules/caddy/module.yml, the lab registry's version and the CI CADDY_VERSION/CADDY_SHA512"
@@ -180,6 +213,18 @@ NOTES: dict[str, str] = {
         "modules/trino/module.yml and the lab registry's version; read the release notes of every "
         "version crossed (catalog properties and procedure options change between releases)"
     ),
+    "role:nifi/nifi_image": (
+        "an image (modules/nifi): bump the tag and its digest together, with product.version in "
+        "modules/nifi/module.yml, nifi_product_version in the role's vars and the lab registry's "
+        "version; the upgrade playbook exports the state first and a newer version migrates its "
+        "repositories forward only (the role refuses an older target)"
+    ),
+    "role:llamacpp/llamacpp_image": (
+        "an image (modules/llamacpp, the vulkan build): bump the tag and its digest together, with "
+        "product.version in modules/llamacpp/module.yml (0.<build>.0), the lab registry's version "
+        "and the three other backends' pins in the README; a build at least 14 days old that has "
+        "an image for every backend"
+    ),
     "role:ntfy/ntfy_image": (
         "an image (modules/ntfy): bump the tag and its digest together, with product.version in "
         "modules/ntfy/module.yml and the lab registry's version"
@@ -199,6 +244,23 @@ NOTES: dict[str, str] = {
     ),
     "role:openproject/openproject_cache_image": (
         "an image (modules/openproject): bump the tag and its digest together"
+    ),
+    "role:stackstorm/stackstorm_mongo_image": (
+        "an image (modules/stackstorm): the tag and its digest together, within 4.4 (a data format "
+        "change is a dump and a restore)"
+    ),
+    "role:stackstorm/stackstorm_rabbitmq_image": (
+        "an image (modules/stackstorm): the tag and its digest together, within the minor line"
+    ),
+    "role:stackstorm/stackstorm_redis_image": (
+        "an image (modules/stackstorm): the tag and its digest together, within the minor line"
+    ),
+    "role:stackstorm/stackstorm_python_provisioner_image": (
+        "an image (modules/stackstorm): the tag and its digest together"
+    ),
+    "role:stackstorm/stackstorm_python_version": (
+        "a CPython 3.11 patch (modules/stackstorm): the pack's virtualenv is rebuilt from it on the "
+        "next run"
     ),
     "role:prometheus/prometheus_image": (
         "an image (modules/prometheus): bump the tag and its digest together, with product.version "

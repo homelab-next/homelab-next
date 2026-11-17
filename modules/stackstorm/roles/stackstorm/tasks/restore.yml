@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore from an export (README, "Restore drill"): the source is checked first and nothing is written
+# until it passes (listing.jsonl names exactly the archive, with the size and sha256 it has). Then,
+# with the st2 services STOPPED (the database and the broker stay up), the archive is staged in the
+# export directory, hashed again (what is restored is what was checked) and restored with --drop
+# for the st2 database only. The services are started again ONLY after the restore succeeded: after a
+# failed `mongorestore --drop` the database is half restored and the rules engine must not run on it,
+# so the st2 services stay stopped and the run fails naming the archive (re-run the restore, or
+# restore from the VM backup). Run health afterwards.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Refuse a source that is not an absolute canonical path
+      ansible.builtin.assert:
+        that:
+          - stackstorm_restore_source is string
+          - stackstorm_restore_source is match(stackstorm_path_pattern)
+          - not (stackstorm_restore_source is match('^' ~ (stackstorm_data_root | regex_escape) ~ '/(mongo|pack-releases|virtualenvs)(/|\Z)'))
+        fail_msg: "stackstorm: stackstorm_restore_source is an absolute canonical path to an export directory, never the database's own files or the staged releases"
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Read the source's listing
+      ansible.builtin.slurp:
+        src: "{{ stackstorm_restore_source }}/listing.jsonl"
+      register: stackstorm_restore_listing
+    - name: Read the source's archive (size, sha256)
+      ansible.builtin.stat:
+        path: "{{ stackstorm_restore_source }}/mongo/st2.archive.gz"
+        checksum_algorithm: sha256
+        follow: false
+      register: stackstorm_restore_stat
+    - name: Refuse a source that is not exactly what its listing says (nothing is written)
+      vars:
+        _rows: "{{ (stackstorm_restore_listing.content | b64decode).splitlines() | reject('equalto', '') | map('from_json') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _rows | length == 1
+          - _rows[0].key == 'mongo/st2.archive.gz'
+          - stackstorm_restore_stat.stat.exists
+          - not stackstorm_restore_stat.stat.islnk
+          - stackstorm_restore_stat.stat.size | int > 512
+          - stackstorm_restore_stat.stat.size | int == _rows[0].size | int
+          - stackstorm_restore_stat.stat.checksum == _rows[0].sha256
+        fail_msg: "stackstorm: {{ stackstorm_restore_source }} is not an intact export (one listed archive, its size and sha256)"
+    - name: Restore with the st2 services stopped
+      block:
+        - name: Stage, restore and clean up
+          block:
+            - name: Make sure the database is up
+              ansible.builtin.command:
+                argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", up, -d, --wait, mongo]
+              changed_when: false
+            - name: Stop the st2 services
+              ansible.builtin.command:
+                argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", stop, st2web, st2garbagecollector,
+                       st2timersengine, st2rulesengine, st2actionrunner, st2workflowengine, st2scheduler, st2stream,
+                       st2auth, st2api]
+              changed_when: true
+            - name: Stage the archive as the database's user
+              ansible.builtin.copy:
+                src: "{{ stackstorm_restore_source }}/mongo/st2.archive.gz"
+                dest: "{{ stackstorm_data_root }}/export/mongo/.restore.gz"
+                remote_src: true
+                owner: "{{ stackstorm_mongo_uid | int }}"
+                group: "{{ stackstorm_mongo_gid | int }}"
+                mode: "0600"
+            - name: Hash the staged copy
+              ansible.builtin.stat:
+                path: "{{ stackstorm_data_root }}/export/mongo/.restore.gz"
+                checksum_algorithm: sha256
+              register: stackstorm_staged
+            - name: What is staged is what was checked
+              ansible.builtin.assert:
+                that: stackstorm_staged.stat.checksum == stackstorm_restore_stat.stat.checksum
+                fail_msg: "stackstorm: the staged archive differs from the checked one"
+            - name: Restore the st2 database (dropping what it holds; no other database is touched)
+              ansible.builtin.command:
+                argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", exec, -T, mongo, sh, -c,
+                       'umask 077; printf "password: \"%s\"\n" "$MONGO_INITDB_ROOT_PASSWORD" > /tmp/restore.cfg; mongorestore --quiet --config=/tmp/restore.cfg --username=root --authenticationDatabase=admin --gzip --drop --nsInclude="st2.*" --archive={{ stackstorm_c_export }}/mongo/.restore.gz; rc=$?; rm -f /tmp/restore.cfg; exit $rc']
+              changed_when: true
+              no_log: true
+          always:
+            - name: Remove the staged copy
+              ansible.builtin.file:
+                path: "{{ stackstorm_data_root }}/export/mongo/.restore.gz"
+                state: absent
+        - name: Start the st2 services (only after the restore succeeded)
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", up, -d, --wait, --wait-timeout, "300", --remove-orphans]
+          changed_when: true
+      rescue:
+        - name: Leave the st2 services stopped and say why
+          ansible.builtin.fail:
+            msg: >-
+              stackstorm: the restore from {{ stackstorm_restore_source }}/mongo/st2.archive.gz (or starting the services after it) failed; the database may be
+              half restored, so the st2 services were NOT started (they are stopped; MongoDB is up). Fix the cause and run
+              restore again, or restore the VM from its backup.
+    - name: Prove the restored service (health)
+      ansible.builtin.include_tasks: health.yml
+  tags: [restore]

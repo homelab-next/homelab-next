@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the state first (export_first), stop and remove the container, and delete the
+# env_file that holds the passwords and the parameter values. The data root, the certificate files and
+# the export are kept for the operator to archive or delete; the decommission audit
+# (module.yml lifecycle.remove.audit) checks nothing still names the service.
+- name: Remove the dataflow service
+  hosts: mod_nifi_server
+  become: true
+  tasks:
+    - name: Export the state first
+      ansible.builtin.include_role:
+        name: nifi
+        tasks_from: export
+    - name: Stop and remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ nifi_dir | default('/opt/compose/nifi') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credentials the container was given
+      ansible.builtin.file:
+        path: "{{ nifi_dir | default('/opt/compose/nifi') }}/secrets/nifi.env"
+        state: absent

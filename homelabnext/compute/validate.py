@@ -401,6 +401,13 @@ def _check_guest(g: Guest, fleet: Fleet) -> list[Problem]:
             and tp > count
         ):
             out.append(Problem(g.id, f"gpu.tensor_parallel {tp} exceeds gpu.count {count}"))
+    maps = [d["mapping"] for d in g.shared_dirs if isinstance(d, dict) and d.get("mapping")]
+    paths = [d["mount_path"] for d in g.shared_dirs if isinstance(d, dict) and d.get("mount_path")]
+    for m in sorted({m for m in paths if paths.count(m) > 1}):
+        out.append(Problem(g.id, f"shared_dirs names mount_path {m} more than once"))
+    for m in sorted({m for m in maps if maps.count(m) > 1}):
+        # the guest mounts each share by tag = mapping id: two items with one tag cannot both mount
+        out.append(Problem(g.id, f"shared_dirs names mapping {m} more than once"))
     if g.provisioning == "manual" and not g.lifecycle.get("requires_root_steps"):
         out.append(
             Problem(

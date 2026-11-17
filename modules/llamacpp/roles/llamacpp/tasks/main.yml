@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Refuse when the weights are not in the store (run model_store first)
+  ansible.builtin.stat:
+    path: "{{ llamacpp_model_dir }}/{{ llamacpp_model_file }}"
+    follow: false
+  register: llamacpp_weights
+  failed_when: not (llamacpp_weights.stat.exists and llamacpp_weights.stat.isreg)
+
+- name: Create the directory of the pre-start check
+  ansible.builtin.file:
+    path: "{{ llamacpp_precheck_bin | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Install the pre-start check (power cap, then the weights' bytes)
+  ansible.builtin.copy:
+    src: hnx-llamacpp-precheck
+    dest: "{{ llamacpp_precheck_bin }}"
+    mode: "0755"
+
+- name: Load the pinned image from the local archive when the daemon lacks it
+  ansible.builtin.include_tasks: image.yml
+  when: llamacpp_image_archive != ''
+
+# The container is rendered but never started here: the unit below is its only starter.
+- name: Render the compose project
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ llamacpp_app.compose_app_name }}"
+    compose_app_dir: "{{ llamacpp_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ llamacpp_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ llamacpp_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ llamacpp_app.compose_app_owner }}"
+    compose_app_group: "{{ llamacpp_app.compose_app_group }}"
+    compose_app_bind_extra: "{{ llamacpp_app.compose_app_bind_extra }}"
+    compose_app_start: false
+    compose_app_validate_with_docker: "{{ llamacpp_validate_with_docker }}"
+    compose_app_spec: "{{ llamacpp_app.compose_app_spec }}"
+
+- name: Read the compose file's checksum (a changed project restarts the unit)
+  ansible.builtin.stat:
+    path: "{{ llamacpp_dir }}/docker-compose.yml"
+    checksum_algorithm: sha256
+    follow: false
+  register: llamacpp_compose
+  failed_when: not llamacpp_compose.stat.exists
+
+- name: Write the unit
+  ansible.builtin.template:
+    src: llamacpp.service.j2
+    dest: "{{ llamacpp_unit_dir }}/{{ llamacpp_unit_name }}"
+    mode: "0644"
+  vars:
+    llamacpp_compose_sum: "{{ llamacpp_compose.stat.checksum | default('') }}"
+  register: llamacpp_unit
+
+- name: Reload systemd when the unit changed (with llamacpp_start false the unit is only written)
+  ansible.builtin.command:
+    argv: ["{{ llamacpp_systemctl_cli }}", daemon-reload]
+  when: llamacpp_start | bool and llamacpp_unit is changed
+  changed_when: true
+
+- name: Restart the server when its unit or project changed
+  ansible.builtin.command:
+    argv: ["{{ llamacpp_systemctl_cli }}", restart, "{{ llamacpp_unit_name }}"]
+  when: llamacpp_start | bool and llamacpp_unit is changed
+  changed_when: true
+
+- name: Enable and start the server
+  ansible.builtin.command:
+    argv: ["{{ llamacpp_systemctl_cli }}", enable, --now, "{{ llamacpp_unit_name }}"]
+  when: llamacpp_start | bool
+  changed_when: false

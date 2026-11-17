@@ -247,9 +247,12 @@ def test_the_schema_negatives_are_refused_by_the_library_too():
 #: adapter whose migration suite run proves it.  A stateful slot missing here fails the test, so a
 #: new one cannot arrive without a decision about its migration proof.
 MIGRATION_PROOF = {
+    "automation": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "backup": "reference: the backup protocol has no export/import_ yet",
     "broker": "reference: the broker protocol has no export/import_ yet",
     "cases": "reference: the cases protocol has no export/import_ yet",
+    "chat": "reference: the slot is provisional (no contract), so nothing can add export/import_",
+    "dataflow": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "detections": "reference: the detections protocol has no export/import_ yet",
     "dns": "reference: the dns protocol has no export/import_ yet",
     "events": "reference: the events protocol has no export/import_ yet",

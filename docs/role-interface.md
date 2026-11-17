@@ -187,7 +187,13 @@ first on a `compose_app` module's host.
   JSON-quoted, so no value can add YAML of its own. The tag must match
   `^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`.
 * Every service gets `security_opt: [no-new-privileges:true]` and `cap_drop: [ALL]`;
-  `cap_add`, `user`, `read_only` and `mem_limit` are optional per service.
+  `cap_add`, `user`, `read_only`, `mem_limit`, `devices` and `group_add` are optional per service.
+* `devices` is how a container gets a GPU, and nothing else: each entry is a DRM render node
+  (`/dev/dri/renderD128`, the host's path is the container's) or a CDI GPU name
+  (`nvidia.com/gpu=0`, `nvidia.com/gpu=all`); a disk, `/dev/mem`, a control node or any other
+  device is refused. `group_add` lists supplementary groups by number (the render group's id on
+  the host, which does not resolve by name inside an image), never 0. A GPU container still gets
+  `cap_drop: [ALL]` and `no-new-privileges`.
 * Ports are always `host_ip:host_port:container_port`; nothing binds all interfaces
   by omission.
 * Secrets never go in `environment` (a secret-looking key is refused unless it ends

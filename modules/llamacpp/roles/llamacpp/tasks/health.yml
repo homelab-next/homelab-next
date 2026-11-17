@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the unit is active and its container healthy; the GPU's power cap is still within
+# the limit; /health says the model is loaded; /v1/models lists the served model id with the context
+# each slot has (K-14: the role table's max_context_tokens); /metrics answers; and one real token
+# comes back from a chat completion. The completion is the one deviation from role interface v1's
+# "health does not mutate the service": it leaves one short prompt in a slot's cache.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: The unit is active
+      ansible.builtin.command:
+        argv: ["{{ llamacpp_systemctl_cli }}", is-active, "{{ llamacpp_unit_name }}"]
+      register: llamacpp_active
+      changed_when: false
+      failed_when: llamacpp_active.stdout | trim != 'active'
+    - name: The card's power cap is within the limit now (the same rule as before a start)
+      ansible.builtin.command:
+        argv: "{{ [llamacpp_precheck_bin] + llamacpp_precheck_power + ['--power-only'] }}"
+      changed_when: false
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: llamacpp
+        compose_app_dir: "{{ llamacpp_app.compose_app_dir }}"
+        compose_app_spec: "{{ llamacpp_app.compose_app_spec }}"
+    - name: The server says the model is loaded
+      ansible.builtin.uri:
+        url: "http://{{ llamacpp_bind }}:{{ llamacpp_port | int }}/health"
+        status_code: 200
+        return_content: true
+        timeout: "{{ llamacpp_health_timeout | int }}"
+      register: llamacpp_loaded
+      changed_when: false
+      failed_when: llamacpp_loaded.status != 200 or (llamacpp_loaded.json.status | default('')) != 'ok'
+    - name: Ask what it serves
+      ansible.builtin.uri:
+        url: "http://{{ llamacpp_bind }}:{{ llamacpp_port | int }}/v1/models"
+        return_content: true
+        status_code: 200
+        timeout: "{{ llamacpp_health_timeout | int }}"
+      register: llamacpp_served
+      changed_when: false
+    - name: It serves the role's model id with the context each slot was given
+      ansible.builtin.assert:
+        that:
+          - llamacpp_served.json is mapping and llamacpp_served.json.data is defined
+          - llamacpp_served_model_name in (llamacpp_served.json.data | map(attribute='id') | list)
+          - (llamacpp_served.json.data | selectattr('id', 'equalto', llamacpp_served_model_name) | map(attribute='meta') | first | default({})).n_ctx | default(none) == llamacpp_context_size | int
+        fail_msg: >-
+          llamacpp: should serve {{ llamacpp_served_model_name }} with {{ llamacpp_context_size }} tokens
+          of context a slot but /v1/models says
+          {{ (llamacpp_served.json.data | default([])) | map(attribute='id') | list }} with
+          {{ (llamacpp_served.json.data | default([])) | selectattr('id', 'equalto', llamacpp_served_model_name)
+             | map(attribute='meta') | map(attribute='n_ctx', default='no n_ctx') | list }}
+    - name: The metrics route answers
+      ansible.builtin.uri:
+        url: "http://{{ llamacpp_bind }}:{{ llamacpp_port | int }}/metrics"
+        return_content: true
+        status_code: 200
+        timeout: "{{ llamacpp_health_timeout | int }}"
+      register: llamacpp_metrics
+      changed_when: false
+      failed_when: "'llamacpp:requests_processing' not in llamacpp_metrics.content"
+    - name: One token comes back from a chat completion
+      ansible.builtin.uri:
+        url: "http://{{ llamacpp_bind }}:{{ llamacpp_port | int }}/v1/chat/completions"
+        method: POST
+        body_format: json
+        body:
+          model: "{{ llamacpp_served_model_name }}"
+          messages: [{role: user, content: ping}]
+          max_tokens: 1
+          temperature: 0
+        return_content: true
+        status_code: 200
+        timeout: "{{ llamacpp_health_timeout | int }}"
+      register: llamacpp_completion
+      changed_when: false
+      failed_when: >-
+        (llamacpp_completion.json.choices | default([])) | length != 1
+        or (llamacpp_completion.json.usage.completion_tokens | default(0)) | int < 1
+  tags: [health]

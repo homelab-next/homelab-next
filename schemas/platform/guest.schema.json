@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.7",
+  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.8",
   "title": "Guest (compute) descriptor",
   "description": "One VM, container or physical host, described in vendor-neutral values. Zones are referenced by id (a site model owns them); capabilities by cap: id. Generators render Terraform, libvirt, cloud-init, an Ansible inventory, registry hosts and backup jobs from a directory of these files.",
   "type": "object",
@@ -274,7 +274,12 @@
         "properties": {
           "host_path": {"type": "string", "pattern": "^/[A-Za-z0-9_./-]*$"},
           "mount_path": {"type": "string", "pattern": "^/[A-Za-z0-9_./-]*$"},
-          "read_only": {"type": "boolean", "default": false}
+          "read_only": {"type": "boolean", "default": false},
+          "mapping": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "description": "(1.8) The hypervisor's directory mapping (a PVE cluster resource mapping of type dir) that shares this directory into a VM by virtiofs; the mapping, created by hand like a GPU resource mapping, names the host path, so host_path is documentation for a VM. Required for a VM on the terraform-proxmox target (a VM shared directory without one is refused, never dropped). The guest mounts it by tag = mapping id at mount_path, with the ro option when read_only; read_only is a guest mount option, not a host guarantee (the host exports the directory writable, and guest root can remount it read-write), so use a read-only source where that matters. A container ignores it. Each mapping is named once per guest."
+          }
         }
       }
     },

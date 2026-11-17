@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// Managed by homelabnext (role stackstorm). Runs once, when MongoDB first creates its data
+// directory: the database user StackStorm connects as, limited to its own database. StackStorm
+// authenticates against the admin database, so the user lives there with its one role on st2. The
+// password is read from the container's environment (a secret env_file), never written here.
+var admin = db.getSiblingDB("admin");
+admin.createUser({
+  user: "st2",
+  pwd: _getEnv("ST2_DB_PASSWORD"),
+  roles: [{role: "dbOwner", db: "st2"}]
+});

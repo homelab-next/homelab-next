@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compiled packages StackStorm's python runner imports (its action wrapper, st2common), at the
+# SAME versions the st2 3.9.0 images ship (their site-packages, `pip list`), built for CPython 3.11,
+# every one pinned by the hashes of its x86-64 manylinux wheels (or abi3/pure wheels that run on
+# 3.11). The st2 images carry CPython 3.10, and homelabnext (which the pack's actions import) needs
+# 3.11, so the pack's virtualenv runs on a 3.11 interpreter and reaches st2's own pure-Python
+# packages through st2's .pth; its compiled ones are cp310 builds that 3.11 cannot load, so these
+# shadow them (the virtualenv's own site-packages come first). Installed with --require-hashes
+# --no-deps; regenerate with the module README's "Refreshing the runner's compiled packages" when the
+# st2 images move. Left out on purpose: python-ldap and netifaces (only st2auth's LDAP backend
+# and a network helper import them; the action wrapper never does).
+bcrypt==5.0.0 \
+    --hash=sha256:0c8e093ea2532601a6f686edbc2c6b2ec24131ff5c52f7610dd64fa4553b5464 \
+    --hash=sha256:560ddb6ec730386e7b3b26b8b4c88197aaed924430e7b74666a586ac997249ef \
+    --hash=sha256:611f0a17aa4a25a69362dcc299fda5c8a3d4f160e2abb3831041feb77393a14a \
+    --hash=sha256:7aeef54b60ceddb6f30ee3db090351ecf0d40ec6e2abf41430997407a46d2254 \
+    --hash=sha256:89042e61b5e808b67daf24a434d89bab164d4de1746b37a8d173b6b14f3db9ff \
+    --hash=sha256:f8429e1c410b4073944f03bd778a9e066e7fad723564a52ff91841d278dfc822
+cffi==1.17.1 \
+    --hash=sha256:610faea79c43e44c71e1ec53a554553fa22321b65fae24889706c0a84d4ad86d
+charset-normalizer==3.4.4 \
+    --hash=sha256:7a32c560861a02ff789ad905a2fe94e3f840803362c84fecf1851cb4cf3dc37f \
+    --hash=sha256:840c25fb618a231545cbab0564a799f101b63b9901f2569faecd6b222ac72381
+ciso8601==2.3.3 \
+    --hash=sha256:a5839ea7d2edf22e0199587e2ea71bc082b0e7ffce90389c7bdd407c05dbf230
+cryptography==43.0.3 \
+    --hash=sha256:0f996e7268af62598f2fc1204afa98a3b5712313a55c4c9d434aef49cadc91d4 \
+    --hash=sha256:74f57f24754fe349223792466a709f8e0c093205ff0dca557af51072ff47ab18 \
+    --hash=sha256:7e1ce50266f4f70bf41a2c6dc4358afadae90e2a1e5342d3c08883df1675374f \
+    --hash=sha256:c2e6fc39c4ab499049df3bdf567f768a723a5e8464816e8f009f121a5a9f4405
+greenlet==3.1.1 \
+    --hash=sha256:9e8f8c9cb53cdac7ba9793c276acd90168f416b9ce36799b9b885790f8ad6c0a \
+    --hash=sha256:e347b3bfcf985a05e8c0b7d462ba6f15b1ee1c909e2dcad795e49e91b152c383
+markupsafe==3.0.3 \
+    --hash=sha256:0bf2a864d67e76e5c9a34dc26ec616a66b9888e25e7b9460e1c76d3293bd9dbf
+msgpack==1.1.2 \
+    --hash=sha256:454e29e186285d2ebe65be34629fa0e8605202c60fbc7c4c650ccd41870896ef
+orjson==3.10.15 \
+    --hash=sha256:b0482b21d0462eddd67e7fce10b89e0b6ac56570424662b685a0d6fccf581e13
+psutil==7.1.0 \
+    --hash=sha256:8c70e113920d51e89f212dd7be06219a9b88014e63a4cec69b684c327bc474e3
+pymongo==4.6.3 \
+    --hash=sha256:c2ad3e5bfcd345c0bfe9af69a82d720860b5b043c1657ffb513c18a0dee19c19
+pynacl==1.6.0 \
+    --hash=sha256:16c60daceee88d04f8d41d0a4004a7ed8d9a5126b997efd2933e08e93a3bd850 \
+    --hash=sha256:49c336dd80ea54780bcff6a03ee1a476be1612423010472e60af83452aa0f442 \
+    --hash=sha256:8bfaa0a28a1ab718bad6239979a5a57a8d1506d0caf2fba17e524dbb409441cf
+pyrsistent==0.20.0 \
+    --hash=sha256:c55acc4733aad6560a7f5f818466631f07efc001fd023f34a6c203f8b6df0f0b \
+    --hash=sha256:cae40a9e3ce178415040a0383f00e8d68b569e97f31928a3a8ad37e3fde6df6a
+simplejson==3.20.2 \
+    --hash=sha256:21e7a066528a5451433eb3418184f05682ea0493d14e9aae690499b7e1eb6b81 \
+    --hash=sha256:3b6bb7fb96efd673eac2e4235200bfffdc2353ad12c54117e1e4e2fc485ac017
+ujson==5.11.0 \
+    --hash=sha256:7e0ec1646db172beb8d3df4c32a9d78015e671d2000af548252769e33079d9a6
+wrapt==2.0.1 \
+    --hash=sha256:4d2ce1bf1a48c5277d7969259232b57645aae5686dba1eaeade39442277afbca \
+    --hash=sha256:df0b6d3b95932809c5b3fecc18fda0f1e07452d05e2662a0b35548985f256e28
+zstandard==0.23.0 \
+    --hash=sha256:fd30d9c67d13d891f2360b2a120186729c111238ac63b43dbd37a5a40670b8ca

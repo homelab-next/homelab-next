@@ -164,6 +164,22 @@ def test_the_scheme_agrees_with_the_registry_model_for_every_protocol_and_tls():
             assert mod._platform_scheme({"protocol": protocol, "tls": tls}) == svc.scheme
 
 
+def test_impl_is_the_product_that_provides_the_capability(platform, tmp_path):
+    """Two kinds of provider can answer one capability (a gateway and an engine behind it): the
+    row's ``impl`` tells them apart; a row that does not say reads empty."""
+    reg = tmp_path / "impl.yml"
+    reg.write_text(
+        PLATFORM + "  front: {capability: inference, impl: gate, host: hnx-apps-01, protocol: http,"
+        " port: 4100, tls: none}\n"
+    )
+    spec = importlib.util.spec_from_file_location("hnx_registry", PLUGIN)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    run = mod.LookupModule().run
+    assert run(["front"], {"hnx_registry_file": str(reg)}, field="impl") == ["gate"]
+    assert run(["alert"], {"hnx_registry_file": str(reg)}, field="impl") == [""]
+
+
 def test_host_id_is_the_placement_while_host_stays_the_alias(platform):
     """Placement is not addressing: ``host_id`` is the row's logical host id, ``host`` its alias."""
     assert platform(["alert", "bus"], field="host_id") == ["hnx-apps-01", "hnx-apps-01"]
