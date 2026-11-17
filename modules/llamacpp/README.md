@@ -94,14 +94,50 @@ own, and the guest firewall admitting only the gateway and the metrics scraper i
 (with `--api-key` set llama-server would also lock `/metrics`, `/props` and `/v1/models`, which the
 scraper and the probe read; `/health` stays open either way).
 
+## Decision mode (`llamacpp_mode: decision`)
+
+Some GGUF models (Clef, llama.cpp PR #29831) are **decision models**: llama-server refuses
+`POST /v1/chat/completions` for them **by design** (HTTP 501 "This model is a decision model
+without text generation, use /v1/systemone"). They answer `POST /v1/systemone`:
+
+```
+request:  {"model": "clef", "state": "<text>",
+           "questions": {"<id>": {"type": "noul", "instructions": "<a yes/no question>"}}}
+response: {"answers": {"<id>": {"type": "noul", "noul": <probability 0..1>}}, "usage": {...}}
+```
+
+Set `llamacpp_mode: decision` (default `generate`) for such a model. The role then:
+
+- starts the server with `-b` and `-ub` **equal to `llamacpp_context_size`** (the per-slot
+  context). **LL-492:** in decision and embedding mode llama-server forces `n_batch = n_ubatch =
+  512`, so a state of about 500 tokens or more returns HTTP 500 "input is too large to process"
+  while a short probe works, which is how a smoke test with a one-line input passes and the real
+  corpus fails. With both raised to the slot context, any state that fits a slot fits the batch.
+- replaces the health hook's chat completion with a `/v1/systemone` probe: a fixed tiny state and
+  one `noul` question must come back **HTTP 200 with a number in [0, 1]** under the question's id
+  (a missing answer, an empty body, a boolean, a string, NaN, another `type` or any other status
+  fails), and, when a slot holds at least 2048 tokens, a second probe with a state past 512 tokens
+  proves the batch flags took (a server still capped at 512 answers 500, and health says LL-492).
+  The status is asserted explicitly: a task's `failed_when` replaces the HTTP module's own status
+  check, so a 200 requirement written only as `status_code: 200` would not hold.
+- leaves `/health`, `/v1/models` (with `meta.n_ctx`) and `/metrics` as they are.
+
+**Chat completions are refused by design in this mode**, so a client (and the model gateway)
+must call `/v1/systemone`. The platform's model roles know the kinds `chat`, `completion` and
+`embedding` only (`homelabnext/registry/models.py`, `KINDS`), so the registry row stays
+`capability: inference` and the role table cannot yet declare a decision role: a consumer of a
+decision instance addresses the server's `/v1/systemone` itself, not a gateway role. The
+inference conformance suite (chat, streaming, determinism) does not apply to a decision instance.
+
 ## Health and readiness
 
 `readiness` (preflight, before `main`): the container engine is ready, the weights file and the
 store's listing exist, the render node exists. `health`: the unit is active; the power cap holds;
 every container is running and healthy; `/health` says `ok`; `/v1/models` lists the served id
 with `meta.n_ctx` equal to `llamacpp_context_size`; `/metrics` answers; **one token comes back**
-from a real chat completion (the one place the hook touches the service: it leaves a short prompt
-in a slot's cache).
+from a real chat completion (mode `generate`; the one place the hook touches the service: it
+leaves a short prompt in a slot's cache) or, in mode `decision`, a probability from
+`/v1/systemone` (above).
 
 ## Conformance
 
