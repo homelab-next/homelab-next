@@ -100,6 +100,7 @@ SOURCES: dict[str, tuple[str, str]] = {
         "digest to the build the old lake runs): compare with the project's release tags by hand, and "
         "move only with a catalog-file backup in hand",
     ),
+    "role:gitea/gitea_image": ("github", "go-gitea/gitea"),
     "role:keycloak/keycloak_image": ("github", "keycloak/keycloak"),
     "role:keycloak/keycloak_postgres_image": (
         "none",
@@ -212,6 +213,12 @@ NOTES: dict[str, str] = {
         "an image (modules/trino): bump the tag and its digest together, with product.version in "
         "modules/trino/module.yml and the lab registry's version; read the release notes of every "
         "version crossed (catalog properties and procedure options change between releases)"
+    ),
+    "role:gitea/gitea_image": (
+        "an image (modules/gitea, the rootless build): bump the tag and its digest together, with "
+        "product.version in modules/gitea/module.yml and the lab registry's version; the upgrade "
+        "playbook exports the instance first and refuses a target older than the running version (a "
+        "newer version migrates the database forward and an older one cannot open it)"
     ),
     "role:nifi/nifi_image": (
         "an image (modules/nifi): bump the tag and its digest together, with product.version in "

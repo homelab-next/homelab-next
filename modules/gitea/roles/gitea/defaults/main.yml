@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# The forge provider (modules/gitea): one compose_app container (Gitea's rootless image) in the
+# module's slice. HTTPS only on the published port, with a certificate from the lab's internal CA; git
+# over SSH on its own published port (Gitea's built-in SSH server, no sshd in the container), with
+# the host keys the site provides, so a client's known_hosts entry survives a move. SQLite, kept as the
+# source instance had it. The container registry is the same HTTPS listener (/v2/).
+# Required, with no default (the site's): gitea_logical_id (the instance's registry id) and
+# gitea_hostname (the internal DNS name the certificate names: every clone URL and registry
+# reference is built from it).
+gitea_image: "docker.io/gitea/gitea:28.4.0-rootless@sha256:15ab7fadb44981a2b781f40c712cad07066197f395100ea1c6326e14e5bb073a"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# hypervisor's per-VM firewall admits the clients on these two ports
+gitea_bind: "{{ ansible_host }}"
+gitea_port: 3443
+gitea_ssh_port: 2222
+gitea_dir: /opt/compose/gitea
+gitea_owner: root
+gitea_group: root
+# the module's data root (docs/modules/data.md): data/ (everything the container writes under
+# /var/lib/gitea: the repositories, gitea.db, avatars, attachments, packages), conf/ (/etc/gitea),
+# export/ (the exit copy and the restore's source)
+gitea_data_root: /var/lib/hnx-modules/gitea
+# the container's user and group: the image's own, 1000:1000; files the container writes belong to them
+gitea_uid: 1000
+gitea_gid: 1000
+# the administrator created on an EMPTY database; a restored database brings its own accounts, and
+# then this is the name of the one whose password gitea_admin_login_ref holds
+gitea_admin_user: admin
+gitea_admin_login_ref: secret:gitea/admin-password
+# true: when the administrator cannot sign in with the secret's password, set it to that value (an
+# explicit, audited step after a migration whose source password is not the secret); false: health
+# fails and names the command
+gitea_admin_password_sync: false
+gitea_app_key_ref: secret:gitea/secret-key
+gitea_internal_auth_ref: secret:gitea/internal-token
+gitea_signing_ref: secret:gitea/jwt-secret
+gitea_tls_cert_ref: secret:gitea/tls-cert
+gitea_tls_key_ref: secret:gitea/tls-key
+gitea_ca_ref: secret:gitea/ca
+# host key type -> secret reference; every type listed is carried and verified by health
+gitea_ssh_host_key_refs:
+  ed25519: secret:gitea/ssh-host-key-ed
+  rsa: secret:gitea/ssh-host-key-rsa
+  ecdsa: secret:gitea/ssh-host-key-ecdsa
+# an OpenID Connect sign-in is opt-in: the auth source is created when absent and updated when it
+# differs (local accounts stay); the issuer's certificate is verified against the lab CA
+gitea_oidc_enabled: false
+gitea_oidc_name: sso
+gitea_oidc_issuer_url: ""
+gitea_oidc_client_id: ""
+gitea_oidc_cred_ref: secret:gitea/oidc-client-secret
+# the registry's pull account: when set, health proves that its token (scope read:package) is
+# accepted by the registry; the lab's guests log in to the registry with it (README, "The registry")
+gitea_registry_pull_user: ""
+gitea_pull_auth_ref: secret:gitea/registry-pull-token
+gitea_mem_limit: 1g
+gitea_start: true
+gitea_validate_with_docker: true
+gitea_health_timeout: 15
+# seconds to wait for the service after a start (the first start of a new version migrates the database)
+gitea_ready_timeout: 300
+# a restore (gitea_restore_source, required there: the directory of an export) refuses an export that
+# lists no repository or no account unless this is true
+gitea_restore_allow_empty: false
