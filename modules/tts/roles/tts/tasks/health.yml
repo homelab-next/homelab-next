@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy; /health answers in the old shape; /ready says every
+# gate holds (the voice files, the model's listing, the power cap on a card); and a REAL synthesis of a
+# fixed sentence comes back as a 24 kHz mono WAV of a plausible length (this may load the model: on a
+# cpu it takes tens of seconds, and the job leaves the model loaded or, on a card, unloaded by the idle
+# timeout). Nothing else is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: The voice is still there
+      ansible.builtin.include_tasks: voice.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: tts
+        compose_app_dir: "{{ tts_app.compose_app_dir }}"
+        compose_app_spec: "{{ tts_app.compose_app_spec }}"
+    - name: The service answers /health
+      ansible.builtin.uri:
+        url: "http://{{ tts_bind }}:{{ tts_port | int }}/health"
+        status_code: 200
+        timeout: "{{ tts_health_timeout | int }}"
+      register: tts_health
+      changed_when: false
+    - name: It answers in the shape the old service did
+      ansible.builtin.assert:
+        that:
+          - tts_health.json.status | default('') == 'ok'
+          - tts_health.json.model_loaded is boolean
+          - tts_health.json.refs | default([]) | map('basename') | list == tts_voice_files
+        fail_msg: "tts: /health did not answer {status: ok, model_loaded, refs: the voice files}"
+    - name: Every gate holds (readiness)
+      ansible.builtin.uri:
+        url: "http://{{ tts_bind }}:{{ tts_port | int }}/ready"
+        status_code: [200, 503]
+        return_content: true
+        timeout: "{{ tts_health_timeout | int }}"
+      register: tts_gates
+      changed_when: false
+    - name: The voice files, the model's listing and the power cap all hold
+      ansible.builtin.assert:
+        that:
+          - tts_gates.status == 200
+          - tts_gates.json.ready | default(false)
+          - tts_gates.json.backend | default('') == tts_backend
+        fail_msg: "tts: /ready is not ready: {{ tts_gates.content | default('') | truncate(600) }}"
+    - name: One real synthesis of the fixed sentence (24 kHz mono WAV, a plausible length)
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ tts_dir }}/docker-compose.yml"
+          - exec
+          - -T
+          - tts
+          - python
+          - -m
+          - tts_service
+          - check
+          - --min-seconds
+          - "{{ tts_check_min_seconds }}"
+          - --max-seconds
+          - "{{ tts_check_max_seconds }}"
+          - --timeout
+          - "{{ tts_check_timeout_s | int }}"
+      register: tts_check
+      changed_when: false
+      failed_when: false
+    - name: The synthesis passed
+      ansible.builtin.assert:
+        that:
+          - tts_check.rc == 0
+          - (tts_check.stdout | from_json).ok
+          - (tts_check.stdout | from_json).sample_rate == 24000
+        fail_msg: "tts: the check synthesis failed (exit {{ tts_check.rc }}): {{ tts_check.stdout | default('') | truncate(400) }} {{ tts_check.stderr | default('') | truncate(200) }}"
+  tags: [health]

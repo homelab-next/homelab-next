@@ -13,6 +13,8 @@
 #     "0": every step ran
 #     "1": one or more steps failed (alerted once per change of the failing set)
 #     "2": the tables could not be listed (engine unreachable, sign-in refused)
+#     "3": degraded (a table's history was unreadable and it was skipped untouched; alerted, the last-run record fails)
+#     "143": terminated by SIGTERM (the running query cancelled, the state written and one alert sent)
 # Managed by homelabnext (module trino, role trino); local changes are overwritten.
 """Lake maintenance: expire old snapshots and remove orphan files, table by table.
 
@@ -22,6 +24,26 @@ Run by the hnx-lake-maintenance timer. For every Iceberg base table the query en
      clean_expired_metadata => true)       snapshots older than <expire>, always keeping the last <n>
   2. ALTER TABLE ... EXECUTE remove_orphan_files(retention_threshold => '<orphan>')
                                            files no snapshot references and older than <orphan>
+
+Guards (RCA of the 2026-11-17 first run on a restored lake):
+
+  * allow/deny: only tables that match an ``allow`` glob and no ``skip`` glob are touched (a glob is a
+    schema, or schema.table; deny wins); per-schema ``overrides`` set expire/retain_last/orphan values or
+    turn orphan removal off for a schema.
+  * preflight: before any procedure the table's ``$snapshots`` and ``$all_manifests`` must read within
+    ``preflight_timeout``. A table whose history is unreadable (a snapshot's manifest list was never
+    copied) is logged "skipped: unreadable history", NOT touched, and the run is DEGRADED (alert, exit 3).
+  * remove_orphan_files never runs on a table whose expire_snapshots did not succeed in this run: that
+    expiry may still be committing, and orphan removal concurrent with a commit can delete a live file.
+  * the preflight reads each snapshot's manifest LIST ($all_manifests), not every manifest file: a missing
+    manifest file still reaches expire_snapshots, which then fails or hangs and is cancelled, and orphan
+    removal is skipped behind it (fails closed).
+  * a query that outlives its deadline, or the run being stopped (SIGTERM), is CANCELLED on the engine
+    (DELETE of its nextUri, then system.runtime.kill_query), never merely abandoned: an abandoned query
+    keeps running server-side and blocks the next table's statement. After the cancel the script POLLS
+    system.runtime.queries (bounded by ``cancel_wait``) until the query is no longer running; if it still is,
+    the whole run STOPS (no further table is touched), is marked degraded and alerts. Whether a cancel also
+    stops Iceberg's post-commit file cleanup is not proven here: the first armed run must be attended.
 
 Why both, and why retain_last is always spelled out. expire_snapshots drops snapshot METADATA and the
 files only those snapshots used; it never removes a file no snapshot references (LL-052), so orphans
@@ -34,14 +56,16 @@ properties, which the role sets to the values below), so a typo here cannot dele
 Outputs: the state file (owner-only) and, when the SET of failing steps changes, one alert on the
 notify channel (state-diffed: an unchanged failing set is silent, and one more message says when the
 set empties). Exit: 0 every step ran; 1 one or more steps failed; 2 the tables could not be listed
-(engine unreachable, sign-in refused). With --test-notify: one low-priority message through the
+(engine unreachable, sign-in refused); 3 degraded (an unreadable table skipped); 143 terminated. With --test-notify: one low-priority message through the
 alert path; with --dry-run: the statements, executed nowhere.
 """
 
 import base64
+import fnmatch
 import json
 import os
 import re
+import signal
 import ssl
 import sys
 import time
@@ -49,10 +73,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+# the settings are rendered as JSON, which is Python except for these three words
+true, false, null = True, False, None
 CONFIG = {{ trino_maintenance_config | to_json }}
 STATE = os.path.join(CONFIG["state_dir"], "state.json")
 NAME = re.compile(r"[A-Za-z0-9_]{1,128}\Z")
 _SECRETS = []
+STILL_RUNNING = []  # queries a SIGTERM cancel could not confirm gone
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -79,38 +106,106 @@ class EngineError(Exception):
     pass
 
 
-def run_sql(opener, sql, timeout):
-    """Run one statement through the engine's REST protocol; return its rows. Raises EngineError
-    (never carrying the credential) on a refusal, a query failure or the deadline."""
+class Terminated(BaseException):
+    """The run was told to stop (SIGTERM); a BaseException so no step's handler swallows it."""
+
+
+def _headers():
     password = os.environ.get("HNX_LAKE_MAINT_PASSWORD", "")
     if not password:
         raise EngineError("HNX_LAKE_MAINT_PASSWORD is not set")
-    _SECRETS.append(password)
+    if password not in _SECRETS:
+        _SECRETS.append(password)
     basic = base64.b64encode(f"{CONFIG['user']}:{password}".encode()).decode()
-    headers = {"X-Trino-User": CONFIG["user"], "Authorization": "Basic " + basic,
-               "X-Trino-Source": "hnx-lake-maintenance"}
+    return {"X-Trino-User": CONFIG["user"], "Authorization": "Basic " + basic,
+            "X-Trino-Source": "hnx-lake-maintenance"}
+
+
+_LIVE = ("QUEUED", "WAITING_FOR_RESOURCES", "DISPATCHING", "PLANNING", "STARTING", "RUNNING", "FINISHING")
+
+
+class StillRunning(Exception):
+    """A cancelled query is still live on the engine after the bounded wait: the run must stop."""
+
+
+def _gone(opener, query_id):
+    """True when the engine no longer lists the query as live (absent or in a terminal state)."""
+    rows = run_sql(opener, f"SELECT state FROM system.runtime.queries WHERE query_id = '{query_id}'", 30,
+                   cancel=False)
+    return not rows or str(rows[0][0]) not in _LIVE
+
+
+def cancel_query(opener, headers, query_id, next_uri):
+    """Stop the query ON THE ENGINE and confirm it. First DELETE of its nextUri (the protocol's cancel),
+    then system.runtime.kill_query by id (in case the DELETE was not honoured), then poll
+    system.runtime.queries until the query is not live (bounded by CONFIG cancel_wait). Never raises
+    (except Terminated); returns True when the query is confirmed gone, False when it is still live or
+    its state could not be read."""
+    if next_uri:
+        try:
+            with opener.open(urllib.request.Request(next_uri, headers=headers, method="DELETE"),
+                             timeout=10) as resp:
+                resp.read()
+        except Exception:  # the engine may already have ended it
+            pass
+    if not (query_id and NAME.match(query_id)):
+        return False  # cannot name it, cannot confirm it
+    try:
+        run_sql(opener, f"CALL system.runtime.kill_query(query_id => '{query_id}', "
+                        "message => 'cancelled by hnx-lake-maintenance')", 30, cancel=False)
+    except EngineError:
+        pass
+    limit = time.monotonic() + float(CONFIG.get("cancel_wait", 45))
+    while True:
+        try:
+            if _gone(opener, query_id):
+                return True
+        except EngineError:
+            pass
+        if time.monotonic() >= limit:
+            return False
+        time.sleep(float(CONFIG.get("cancel_poll", 2)))
+
+
+def run_sql(opener, sql, timeout, cancel=True):
+    """Run one statement through the engine's REST protocol; return its rows. Raises EngineError
+    (never carrying the credential) on a refusal, a query failure or the deadline. On the deadline,
+    or when the run is terminated mid-query, the query is cancelled on the engine before returning."""
+    headers = _headers()
     deadline = time.monotonic() + timeout
     req = urllib.request.Request(CONFIG["url"] + "/v1/statement", data=sql.encode(), headers=headers,
                                  method="POST")
     rows = []
-    while True:
-        try:
-            with opener.open(req, timeout=max(1.0, min(60.0, deadline - time.monotonic()))) as resp:
-                doc = json.loads(resp.read())
-        except urllib.error.HTTPError as exc:
-            raise EngineError(f"HTTP {exc.code} from the query engine") from None
-        except (urllib.error.URLError, OSError, ValueError) as exc:
-            raise EngineError(scrub(f"{type(exc).__name__}: {exc}")) from None
-        if doc.get("error"):
-            raise EngineError(scrub(str(doc["error"].get("message", "query failed"))))
-        rows.extend(doc.get("data") or [])
-        nxt = doc.get("nextUri")
-        if not nxt:
-            return rows
-        if time.monotonic() > deadline:
-            raise EngineError(f"no result within {timeout} s")
-        time.sleep(0.2)
-        req = urllib.request.Request(nxt, headers=headers, method="GET")
+    query_id = nxt = None
+    try:
+        while True:
+            try:
+                with opener.open(req, timeout=max(1.0, min(60.0, deadline - time.monotonic()))) as resp:
+                    doc = json.loads(resp.read())
+            except urllib.error.HTTPError as exc:
+                raise EngineError(f"HTTP {exc.code} from the query engine") from None
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                raise EngineError(scrub(f"{type(exc).__name__}: {exc}")) from None
+            query_id = doc.get("id") or query_id
+            if doc.get("error"):
+                nxt = None  # finished
+                raise EngineError(scrub(str(doc["error"].get("message", "query failed"))))
+            rows.extend(doc.get("data") or [])
+            nxt = doc.get("nextUri")
+            if not nxt:
+                return rows
+            if time.monotonic() > deadline:
+                raise EngineError(f"no result within {timeout} s (query cancelled)")
+            time.sleep(0.2)
+            req = urllib.request.Request(nxt, headers=headers, method="GET")
+    except (EngineError, Terminated, OSError, ValueError) as exc:
+        if cancel and nxt and not cancel_query(opener, headers, query_id, nxt):
+            if isinstance(exc, Terminated):
+                STILL_RUNNING.append(query_id or "unknown")
+                raise
+            raise StillRunning(f"query {query_id or 'unknown'} still running on the engine "
+                               f"{CONFIG.get('cancel_wait', 45)} s after cancel") from None
+        raise
 
 
 def tables(opener):
@@ -120,18 +215,59 @@ def tables(opener):
     return [(r[0], r[1]) for r in run_sql(opener, sql, 120)]
 
 
+def _matches(patterns, schema, table):
+    """A pattern is a schema glob, or a schema.table glob; matching is case-sensitive."""
+    for pat in patterns:
+        if "." in pat:
+            if fnmatch.fnmatchcase(f"{schema}.{table}", pat):
+                return True
+        elif fnmatch.fnmatchcase(schema, pat):
+            return True
+    return False
+
+
+def selected(schema, table):
+    """Allowed by an allow glob and denied by no skip glob (deny wins)."""
+    return _matches(CONFIG["allow"], schema, table) and not _matches(CONFIG["skip"], schema, table)
+
+
+def settings(schema):
+    """The retention values for one schema: the defaults with the schema's override laid over."""
+    out = {"expire": CONFIG["expire"], "retain_last": int(CONFIG["retain_last"]),
+           "orphan": CONFIG["orphan"], "orphan_enabled": True}
+    over = CONFIG.get("overrides", {}).get(schema, {})
+    for key, dest in (("expire", "expire"), ("retain_last", "retain_last"),
+                      ("orphan_retention", "orphan"), ("orphan", "orphan_enabled")):
+        if key in over:
+            out[dest] = over[key]
+    out["retain_last"] = int(out["retain_last"])
+    return out
+
+
+def preflight(schema, table):
+    """The read-only history check: (step name, SQL, timeout) for ``$snapshots`` then ``$all_manifests``.
+    The second fails fast on any retained snapshot whose manifest list is missing."""
+    base = f'{CONFIG["catalog"]}."{schema}"."{table}'
+    return [(f"preflight:{meta}", f'SELECT count(*) FROM {base}${meta}"', int(CONFIG["preflight_timeout"]))
+            for meta in ("snapshots", "all_manifests")]
+
+
 def statements(schema, table):
-    """The two steps for one table: (step name, SQL, timeout)."""
+    """The steps for one table: (step name, SQL, timeout); orphan removal only when the schema keeps it."""
     full = f'{CONFIG["catalog"]}."{schema}"."{table}"'
-    return [
+    cfg = settings(schema)
+    steps = [
         ("expire_snapshots",
-         f"ALTER TABLE {full} EXECUTE expire_snapshots(retention_threshold => '{CONFIG['expire']}', "
-         f"retain_last => {int(CONFIG['retain_last'])}, clean_expired_metadata => true)",
+         f"ALTER TABLE {full} EXECUTE expire_snapshots(retention_threshold => '{cfg['expire']}', "
+         f"retain_last => {cfg['retain_last']}, clean_expired_metadata => true)",
          int(CONFIG["expire_timeout"])),
-        ("remove_orphan_files",
-         f"ALTER TABLE {full} EXECUTE remove_orphan_files(retention_threshold => '{CONFIG['orphan']}')",
-         int(CONFIG["orphan_timeout"])),
     ]
+    if cfg["orphan_enabled"]:
+        steps.append(
+            ("remove_orphan_files",
+             f"ALTER TABLE {full} EXECUTE remove_orphan_files(retention_threshold => '{cfg['orphan']}')",
+             int(CONFIG["orphan_timeout"])))
+    return steps
 
 
 def _send(title, body, priority):
@@ -195,44 +331,114 @@ def report(failed, ran, state):
     return now if ok else prior
 
 
+def _on_term(signum, frame):
+    raise Terminated()
+
+
+def _now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _stopped(state, failed, skipped, unfinished, total, code, what):
+    """End the run early (SIGTERM, or a cancelled query still live): record, alert once, exit."""
+    failed["run:terminated" if code == 143 else "run:aborted"] = (
+        what + ("; unfinished: " + ", ".join(unfinished) if unfinished else ""))[:300]
+    print(what + "; unfinished: " + ", ".join(unfinished), file=sys.stderr)
+    state.update({"time": _now(), "tables": total, "failed": failed, "skipped": skipped, "degraded": True,
+                  "terminated": code == 143, "unfinished": unfinished})
+    state["alerted"] = report(failed, total, state)
+    save_state(state)
+    return code
+
+
 def main(argv):
     if "--test-notify" in argv:
         text = f"lake maintenance channel test from {os.uname().nodename}"
         return 0 if alert(text, text, priority=1) else 1
     dry = "--dry-run" in argv
+    signal.signal(signal.SIGTERM, _on_term)
     opener = _opener()
     state = load_state()
-    failed = {}
+    failed, skipped, done, todo = {}, {}, [], []
     try:
         found = tables(opener)
     except EngineError as exc:
         failed["run:list-tables"] = str(exc)
         print(f"cannot list the tables: {exc}", file=sys.stderr)
-        state.update({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "failed": failed})
+        state.update({"time": _now(), "failed": failed, "skipped": {}, "degraded": False})
         state["alerted"] = report(failed, 0, state)
         save_state(state)
         return 2
+    except StillRunning as exc:
+        return _stopped(state, failed, skipped, [], 0, 1, f"the table listing was cancelled and {exc}")
+    except Terminated:
+        what = "terminated while listing the tables"
+        if STILL_RUNNING:
+            what += "; query still running after cancel: " + ", ".join(STILL_RUNNING)
+        return _stopped(state, failed, skipped, [], 0, 143, what)
     for schema, table in found:
         if not (NAME.match(schema) and NAME.match(table)):
             failed[f"{schema}.{table}"] = "name not safe to put in a statement; skipped"
-            continue
-        for step, sql, timeout in statements(schema, table):
-            if dry:
-                print(sql)
+        elif selected(schema, table):
+            todo.append((schema, table))
+        else:
+            skipped[f"{schema}.{table}"] = "not selected by the allow/skip lists"
+    try:
+        for schema, table in todo:
+            name = f"{schema}.{table}"
+            readable = True
+            for step, sql, timeout in preflight(schema, table):
+                if dry:
+                    print(sql)
+                    continue
+                try:
+                    run_sql(opener, sql, timeout)
+                except EngineError as exc:
+                    readable = False
+                    failed[f"{name}:preflight"] = f"skipped: unreadable history ({step}): {exc}"
+                    print(f"{name}: skipped: unreadable history ({step}): {exc}", file=sys.stderr)
+                    break
+            if not readable:
+                done.append(name)
                 continue
-            try:
-                run_sql(opener, sql, timeout)
-            except EngineError as exc:
-                failed[f"{schema}.{table}:{step}"] = str(exc)
-                print(f"{schema}.{table}: {step} failed: {exc}", file=sys.stderr)
+            expired = True
+            for step, sql, timeout in statements(schema, table):
+                if dry:
+                    print(sql)
+                    continue
+                if step == "remove_orphan_files" and not expired:
+                    skipped[f"{name}:{step}"] = "expire_snapshots did not succeed in this run"
+                    print(f"{name}: {step} skipped: expire_snapshots did not succeed", file=sys.stderr)
+                    continue
+                try:
+                    run_sql(opener, sql, timeout)
+                except EngineError as exc:
+                    failed[f"{name}:{step}"] = str(exc)
+                    print(f"{name}: {step} failed: {exc}", file=sys.stderr)
+                    if step == "expire_snapshots":
+                        expired = False
+            done.append(name)
+    except StillRunning as exc:
+        unfinished = [f"{s}.{t}" for s, t in todo if f"{s}.{t}" not in done]
+        return _stopped(state, failed, skipped, unfinished, len(found), 1, f"run stopped: {exc}")
+    except Terminated:
+        unfinished = [f"{s}.{t}" for s, t in todo if f"{s}.{t}" not in done]
+        what = "stopped (SIGTERM) before finishing"
+        if STILL_RUNNING:
+            what += "; query still running after cancel: " + ", ".join(STILL_RUNNING)
+        return _stopped(state, failed, skipped, unfinished, len(found), 143, what)
     if dry:
         return 0
-    state.update({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tables": len(found),
-                  "failed": failed})
+    degraded = any(k.endswith(":preflight") for k in failed)
+    state.update({"time": _now(), "tables": len(found), "failed": failed, "skipped": skipped,
+                  "degraded": degraded, "terminated": False, "unfinished": []})
     state["alerted"] = report(failed, len(found), state)
     save_state(state)
-    print(f"{len(found)} table(s), {len(failed)} failing step(s)")
-    return 1 if failed else 0
+    print(f"{len(found)} table(s), {len(failed)} failing step(s), {len(skipped)} skipped"
+          + (", DEGRADED" if degraded else ""))
+    if any(not k.endswith(":preflight") for k in failed):
+        return 1
+    return 3 if degraded else 0
 
 
 if __name__ == "__main__":

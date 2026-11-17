@@ -57,6 +57,7 @@ fails on drift in any of them.
 |---|---|---|
 | `hf` (safetensors BF16/FP16/FP8/AWQ/GPTQ) | `hf/hub/.../snapshots/<revision>/` | `vllm`, `unsloth-studio` |
 | `gguf` | `gguf/<org>/<name>/` | `llama-server`, `unsloth-studio` |
+| `hf` (a speech model's own checkpoint files, e.g. `.pth`, kept at a pinned revision and a sha256 per file) | `hf/hub/.../snapshots/<revision>/` | `tts-server` (`modules/tts`; the layout name is the hub cache's, not a claim that the files are safetensors) |
 | `export`, `layout: safetensors` | `exports/<run>/` | `vllm`, `unsloth-studio` |
 | `export`, `layout: gguf` | `exports/<run>/` | `llama-server`, `unsloth-studio` |
 

@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+# The documents provider on Paperless-ngx (docs/modules.md; README.md beside this file): the
+# application (web server, task worker, consumer and scheduler run by the one image) and its broker
+# as compose_app containers in the module's slice, the database (SQLite), the originals, the
+# archive copies, the thumbnails and the search index under the module's data root. Local accounts
+# and API tokens are the product's own (auth: own); there is NO public route: the people and agents
+# that read the library reach it over the lab's network, through its API. Every real value (the
+# guest, its address, the secret values, the public name if the site ever adds a route) is the
+# site's: the overlay's lab/modules.yml, lab/services.yml, group variables and secret store.
+manifest_version: "1.0"
+id: documents
+kind: provider
+title: Document library on Paperless-ngx
+description: Fills the documents slot with Paperless-ngx and its broker as compose_app containers;
+  local accounts and API tokens; a consumption inbox; OCR languages as data; the whole library
+  (documents, archive copies, thumbnails, tags, correspondents, document types, custom fields,
+  notes, accounts) exportable and restorable with the product's own exporter and importer, so a
+  migration is an export, a freeze and an import proved by counts and by every file's checksum.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: paperless-ngx
+  version: 3.4.2
+licence:
+  kind: open-source
+  spdx: GPL-3.0-only
+credentials:
+  - secret: secret:documents/secret-key
+    identity: key
+    holder: provider
+    purpose: the application's signing key (sessions, CSRF); it need not equal the source instance's after a migration, only be stable between restarts
+  - secret: secret:documents/admin-password
+    identity: password
+    holder: provider
+    purpose: the first administrator's password, read only when documents_admin_bootstrap is true (a fresh library); an imported library brings its own accounts
+  - secret: secret:documents/api-token
+    identity: token
+    holder: provider
+    purpose: the ADMINISTRATOR's API token (it can delete the library); the role seeds it (an export carries none) for the health hook and operators; agents never get it
+  - secret: secret:documents/agent-token
+    identity: token
+    holder: provider
+    purpose: the agents' API token, on a non-admin account that can view and change documents but never delete (documents_agent_user); the role seeds it; the concierge and the research tools use this one
+identifiers:
+  - {kind: secret-name, name: documents, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the signing key, the admin password and the API token are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 2, memory_mb: 3072, disk_gb: 20}
+      guest:
+        baselines: [base]
+      roles: [role:documents]
+      purpose: runs the application and its broker (docker_engine applied first, compose_app renders them); the library, its search index and the database live on this guest's disk
+provides:
+  slots:
+    documents:
+      adapter: homelabnext.conform.adapters.documents:make
+      provisional: true
+      reason: documents has no contract yet; the obvious standard is the application answering a sign-in page and refusing an anonymous read of the library through its API
+      migration: {formats: [object-tree], export: role:documents, import: role:documents}
+egress: none
+contributes:
+  roles:
+    - file: roles/documents
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:documents, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: library
+    kind: files
+    prefix: documents/
+    description: The whole library as the product's own export - manifest.json (every record), the originals, the archive (OCR) copies and the thumbnails of every document, with a sha256 listing - so it restores into an empty instance of the same or a newer version.
+    export: {formats: [object-tree], via: role:documents}
+    import: {formats: [object-tree], via: role:documents}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest) of the same or a newer version: validated and recorded, the library exported, then converged; the application migrates its own database on first start"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

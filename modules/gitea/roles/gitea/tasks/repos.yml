@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# The repositories' manifest (gitea_repos_script) of the data root as the container sees it, taken in a
+# one-off container of the pinned image with the service STOPPED: one line per repository, path, refs,
+# digest, fsck verdict. Sets gitea_repos_lines.
+- name: Take the repositories' manifest
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ gitea_dir }}/docker-compose.yml", run, --rm, -T, --no-deps,
+           "{{ gitea_service }}", sh, -c, "{{ gitea_repos_script }}", sh, "{{ gitea_container_repos }}"]
+  args:
+    # the script's own $-variables are the container shell's to expand, never this host's
+    expand_argument_vars: false
+  register: gitea_repos_run
+  changed_when: false
+  check_mode: false
+
+- name: Name the lines
+  ansible.builtin.set_fact:
+    gitea_repos_lines: "{{ gitea_repos_run.stdout_lines | map('trim') | reject('equalto', '') | list }}"

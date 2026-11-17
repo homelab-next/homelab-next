@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). Only the HTTPS
+# listener and the git SSH listener are published. The three application secrets reach the service
+# only as files (GITEA__<section>__<KEY>__FILE names the path), mounted read-only from the project's
+# own 0750 directory with the files 0440, so `docker inspect` shows a path and no value; the
+# certificate, its key and the SSH host keys are mounted the same way.
+- name: Name the settings that depend on the site
+  ansible.builtin.set_fact:
+    gitea_site_env: >-
+      {{ {'GITEA__server__DOMAIN': gitea_hostname,
+          'GITEA__server__SSH_DOMAIN': gitea_hostname,
+          'GITEA__server__SSH_PORT': gitea_ssh_port | string,
+          'GITEA__server__ROOT_URL': gitea_root_url,
+          'GITEA__server__SSH_SERVER_HOST_KEYS': (gitea_ssh_host_key_refs.keys() | sort
+                                                  | map('regex_replace', '^', gitea_container_sshkeys ~ '/gitea.')
+                                                  | join(','))}
+         | combine({'SSL_CERT_FILE': gitea_container_tls ~ '/ca.pem'} if gitea_oidc_enabled | bool else {}) }}
+
+- name: Name the [oauth2_client] settings as the product's environment
+  ansible.builtin.set_fact:
+    gitea_oauth_env: "{{ dict(gitea_oauth_client_settings.keys() | map('regex_replace', '^', 'GITEA__oauth2_client__') | zip(gitea_oauth_client_settings.values())) }}"
+
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    gitea_app:
+      compose_app_name: gitea
+      compose_app_dir: "{{ gitea_dir }}"
+      compose_app_data_dir: "{{ gitea_data_root }}"
+      compose_app_export_dir: "{{ gitea_data_root }}/export"
+      compose_app_owner: "{{ gitea_owner }}"
+      compose_app_group: "{{ gitea_group }}"
+      compose_app_start: "{{ gitea_start }}"
+      compose_app_validate_with_docker: "{{ gitea_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          gitea:
+            image: "{{ gitea_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ gitea_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ gitea_image.split('@')[1] }}"
+            user: "{{ gitea_uid | int }}:{{ gitea_gid | int }}"
+            environment: "{{ gitea_fixed_env | combine(gitea_oauth_env) | combine(gitea_site_env) }}"
+            ports:
+              - "{{ gitea_bind }}:{{ gitea_port | int }}:{{ gitea_container_http_port }}"
+              - "{{ gitea_bind }}:{{ gitea_ssh_port | int }}:{{ gitea_container_ssh_port }}"
+            volumes:
+              - "{{ gitea_data_root }}/data:{{ gitea_container_data }}"
+              - "{{ gitea_data_root }}/conf:{{ gitea_container_conf }}"
+              - "{{ gitea_data_root }}/export:{{ gitea_container_export }}"
+              - "{{ gitea_dir }}/tls:{{ gitea_container_tls }}:ro"
+              - "{{ gitea_dir }}/sshkeys:{{ gitea_container_sshkeys }}:ro"
+              - "{{ gitea_dir }}/appsecrets:{{ gitea_container_keydir }}:ro"
+            mem_limit: "{{ gitea_mem_limit }}"
+            # -k: a liveness probe from inside the container, which holds the certificate for the
+            # service's public name, not for localhost; the hooks verify the chain and the name
+            healthcheck:
+              test: [CMD, curl, -fsSk, -o, /dev/null, "https://localhost:{{ gitea_container_http_port }}/api/healthz"]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 60s
+  tags: [health, backup, restore, export, upgrade]

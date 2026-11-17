@@ -2,7 +2,7 @@
 # The project's own fakes (fake inference server, fake case system) and the one-shot initialiser,
 # in one small image.  Build context is the repository root:
 #   docker build -f compose/lab-in-a-box/fakes/Dockerfile .
-FROM python:3.15.0-slim-bookworm@sha256:0e019bbdfb5d9874cb2389f1c2884b64aa2ac97c99960b5bc521cef978c0617d
+FROM python:3.15.1-slim-bookworm@sha256:575f8bc12ec26542e0678bc6b60e385218248019d433157ec327264a78c3a853
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 RUN useradd --system --uid 10001 --no-create-home lab
 WORKDIR /app

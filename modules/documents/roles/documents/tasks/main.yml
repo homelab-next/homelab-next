@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+# The signing key (and, while the role creates the first administrator, the admin password) reach
+# only the env_file (0600). The API token is not an environment value at all: it is written into the
+# product's own token table by token.yml. A reference with no value stops the run in credentials.yml,
+# naming it, before any file is written (an unset secret never yields a half-configured service).
+- name: Read the credentials
+  ansible.builtin.set_fact:
+    documents_secret_env:
+      app: >-
+        {{ {'PAPERLESS_SECRET_KEY': lookup('hnx_secret', documents_signing_ref)}
+           | combine({'PAPERLESS_ADMIN_PASSWORD': lookup('hnx_secret', documents_admin_login_ref)}
+                     if documents_admin_bootstrap | bool else {}) }}
+  no_log: true
+
+- name: Render and start the document library
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ documents_app.compose_app_name }}"
+    compose_app_dir: "{{ documents_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ documents_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ documents_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ documents_app.compose_app_owner }}"
+    compose_app_group: "{{ documents_app.compose_app_group }}"
+    compose_app_start: "{{ documents_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ documents_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ documents_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ documents_secret_env }}"
+    compose_app_bind_roots: ["{{ documents_dir }}", "{{ documents_data_root }}"]
+  no_log: true
+
+- name: Wait for the application to answer (its first start migrates the database)
+  ansible.builtin.uri:
+    url: "http://{{ documents_bind }}:{{ documents_port | int }}/accounts/login/"
+    status_code: 200
+    timeout: "{{ documents_health_timeout | int }}"
+  register: documents_up
+  until: documents_up.status | default(0) == 200
+  retries: "{{ ((documents_ready_timeout | int) / 5) | int }}"
+  delay: 5
+  changed_when: false
+  when: documents_start | bool
+
+- name: Seed the API token
+  ansible.builtin.include_tasks: token.yml
+  when: documents_start | bool

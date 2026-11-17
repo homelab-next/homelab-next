@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - documents_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - documents_image is match(documents_pinned_ref_pattern)
+      - documents_tag is match(documents_version_tag_pattern)
+      - documents_broker_image is match(documents_pinned_ref_pattern)
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - documents_bind is match(documents_ipv4_pattern)
+      - documents_bind != '0.0.0.0'
+      - documents_port | int >= 1 and documents_port | int <= 65535
+      - documents_app_uid | int >= 1000 and documents_app_gid | int >= 1000
+      - documents_broker_uid | int >= 1000 and documents_broker_gid | int >= 1000
+      - >-
+        [documents_dir, documents_data_root] | reject('match', documents_path_pattern) | list | length == 0
+      # a recursive removal of a path under the data root needs the root to be a real directory, never a shallow one
+      - documents_data_root.split('/') | length >= 4
+      - documents_timezone is match('^[A-Za-z][A-Za-z0-9_+/-]{0,63}\Z')
+      # the languages are data: a non-empty list of codes the image ships (it cannot install one as a non-root user)
+      - documents_ocr_languages is sequence and documents_ocr_languages is not string
+      - documents_ocr_languages | length >= 1 and documents_ocr_languages | unique | length == documents_ocr_languages | length
+      - documents_ocr_languages | difference(documents_ocr_available) | length == 0
+      - documents_url == '' or documents_url is match(documents_url_pattern)
+      - documents_admin_bootstrap is boolean
+      - documents_admin_user is match(documents_user_pattern)
+      - documents_api_user is match(documents_user_pattern)
+      - documents_consumer_recursive is boolean and documents_consumer_subdirs_as_tags is boolean
+      - documents_task_workers | int >= 1 and documents_task_workers | int <= 16
+      - documents_threads_per_worker | int >= 1 and documents_threads_per_worker | int <= 16
+      - documents_extra_env is mapping
+      - documents_extra_env | dict2items | map(attribute='key') | reject('match', documents_extra_env_name_pattern) | list | length == 0
+      - documents_extra_env | dict2items | map(attribute='key') | select('in', documents_fixed_env_names) | list | length == 0
+      - >-
+        documents_extra_env | dict2items | map(attribute='key') | select('search', '(?i)(pass|secret|token|api_?key|private_?key|credential|salt)') | list | length == 0
+      - documents_extra_env | dict2items | map(attribute='value') | map('string') | reject('match', documents_extra_env_value_pattern) | list | length == 0
+      - documents_expected_min_documents | int >= 0
+      - documents_mail_fetch is boolean and documents_disable_imported_egress is boolean
+      # the agents' account: empty (none), or a name that is not the administrator's, with only
+      # view, change and (named on purpose) add permissions: never delete
+      - documents_agent_user == '' or (documents_agent_user is match(documents_user_pattern) and documents_agent_user != documents_api_user and documents_agent_user != documents_admin_user)
+      - documents_agent_permissions is sequence and documents_agent_permissions is not string
+      - documents_agent_permissions | reject('match', documents_agent_permission_pattern) | list | length == 0
+      - documents_agent_permissions | unique | length == documents_agent_permissions | length
+      - documents_agent_user == '' or documents_agent_permissions | length > 0
+      - >-
+        documents_refs | reject('match', documents_ref_pattern) | list | length == 0
+      - documents_refs | unique | length == documents_refs | length
+      - >-
+        [documents_mem_limit, documents_broker_mem_limit]
+        | reject('match', '^[1-9][0-9]{0,5}[kmg]\Z') | list | length == 0
+    fail_msg: >-
+      documents: a registry id, two images pinned by tag and digest (the application's tag a
+      version like 3.4.2), the guest's IPv4 address to publish on (not all interfaces), a port,
+      container uids of 1000 or more, absolute
+      canonical directories, a timezone, a non-empty list of OCR languages the image ships
+      ({{ documents_ocr_available | join(', ') }}), an http(s) URL or empty, account names, three
+      distinct secret: references (a fourth for the agents' account), an agent account that is not the administrator with permissions that are view, change or add (never delete), extra PAPERLESS_ settings that are neither the role's own nor
+      secrets, a minimum document count of 0 or more and memory limits like 512m
+  tags: [health, backup, restore, export, upgrade]

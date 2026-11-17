@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - gitea_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - gitea_hostname is match(gitea_hostname_pattern)
+      # pinned by tag and digest, a rootless build of a numbered release (the layout the module's data root assumes)
+      - gitea_image is match(gitea_pinned_ref_pattern)
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - gitea_bind is match(gitea_ipv4_pattern)
+      - gitea_bind != '0.0.0.0'
+      - gitea_port | int >= 1 and gitea_port | int <= 65535
+      - gitea_ssh_port | int >= 1 and gitea_ssh_port | int <= 65535
+      - gitea_port | int != gitea_ssh_port | int
+      - gitea_uid | int >= 1000 and gitea_gid | int >= 1000
+      - gitea_admin_user is match(gitea_user_pattern)
+      - >-
+        ([gitea_app_key_ref, gitea_internal_auth_ref, gitea_signing_ref, gitea_admin_login_ref,
+          gitea_tls_cert_ref, gitea_tls_key_ref, gitea_ca_ref, gitea_oidc_cred_ref,
+          gitea_pull_auth_ref] + (gitea_ssh_host_key_refs.values() | list))
+        | reject('match', gitea_ref_pattern) | list | length == 0
+      - >-
+        ([gitea_app_key_ref, gitea_internal_auth_ref, gitea_signing_ref, gitea_admin_login_ref,
+          gitea_tls_cert_ref, gitea_tls_key_ref, gitea_ca_ref, gitea_oidc_cred_ref,
+          gitea_pull_auth_ref] + (gitea_ssh_host_key_refs.values() | list))
+        | unique | length == 9 + (gitea_ssh_host_key_refs | length)
+      # at least one host key, only the types the SSH server reads
+      - gitea_ssh_host_key_refs is mapping and gitea_ssh_host_key_refs | length > 0
+      - gitea_ssh_host_key_refs.keys() | difference(gitea_ssh_key_types) | length == 0
+      - gitea_oidc_enabled | bool or gitea_oidc_issuer_url == ''
+      - not (gitea_oidc_enabled | bool) or gitea_oidc_issuer_url is match(gitea_issuer_pattern)
+      - not (gitea_oidc_enabled | bool) or gitea_oidc_client_id is match(gitea_name_pattern)
+      - gitea_oidc_name is match(gitea_name_pattern)
+      - gitea_registry_pull_user == '' or gitea_registry_pull_user is match(gitea_user_pattern)
+      # absolute, canonical paths (no //, no . or .. component, no trailing /)
+      - >-
+        [gitea_dir, gitea_data_root] | reject('match', gitea_path_pattern) | list | length == 0
+      - gitea_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      forge: a registry id, an internal DNS name, the image pinned by tag and digest (a rootless
+      numbered release), the guest's IPv4 address to publish on (not all interfaces), two different
+      ports, container ids of 1000 or more, an administrator's name, distinct secret: references, at
+      least one SSH host key of type ed25519, rsa or ecdsa, an identity provider's issuer (https) and
+      client when oidc is on, absolute canonical directories and a memory limit like 512m
+  tags: [health, backup, restore, export, upgrade]

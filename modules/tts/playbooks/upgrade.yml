@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a new image the site built (tts_target_image, tag and digest of the same
+# repository and backend), then converge with the new pin (set tts_image to the target in the overlay).
+# The voice and the weights do not move; run the health hook after (it makes one real synthesis).
+#   ansible-playbook -i <inventory> modules/tts/playbooks/upgrade.yml -e tts_target_image=<ref>
+- name: Upgrade the speech service
+  hosts: mod_tts_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: tts
+        tasks_from: upgrade
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: tts
+      vars:
+        tts_image: "{{ tts_target_image }}"
