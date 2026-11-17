@@ -109,6 +109,8 @@ capabilities:
   cap:tunnel: [exec]  # the connector that publishes a lab name to the internet: changing what it serves acts on every user
   cap:media: [read]  # the media slot: a server that plays a library to its clients
   cap:documents: [read]  # the documents slot: a library of filed documents read through its API
+  cap:tts: [read]  # the tts slot: a service that renders text to speech in the operator's voice (it changes nothing)
+  cap:chat: [exec]  # the chat slot: a front end that sends people's prompts to the model gateway under its own key; broker-only, an agent has no use for it
   # the capabilities the other example registries use (examples/four-box-lab, lab-topology,
   # minimal); each would otherwise be unclassified, refused to every profile, and an overlay would
   # hand-patch this table or grant a broader class to get it

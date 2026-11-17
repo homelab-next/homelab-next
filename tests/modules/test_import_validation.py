@@ -251,6 +251,7 @@ MIGRATION_PROOF = {
     "backup": "reference: the backup protocol has no export/import_ yet",
     "broker": "reference: the broker protocol has no export/import_ yet",
     "cases": "reference: the cases protocol has no export/import_ yet",
+    "chat": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "dataflow": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "detections": "reference: the detections protocol has no export/import_ yet",
     "dns": "reference: the dns protocol has no export/import_ yet",
@@ -265,6 +266,7 @@ MIGRATION_PROOF = {
     "projects": "reference: the projects protocol has no export/import_ yet",
     "records": "reference: the records protocol has no export/import_ yet",
     "secrets": "reference: the secrets protocol has no export/import_ yet",
+    "tts": "reference: the slot is provisional (no contract), so nothing can add export/import_",
 }
 
 

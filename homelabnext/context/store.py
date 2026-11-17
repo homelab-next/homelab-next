@@ -113,17 +113,14 @@ class ContextStore:
         words = terms(q.text)
         if q.budget == 0 or (not words and not q.seeds):
             return []
-        visible = [
-            d
-            for d in self._docs.values()
-            if in_scope(d.id, q.allowed) and (q.include_inactive or is_active(d.status))
-        ]
+        visible = self._visible(q)
+        scores = self._text_scores(q, words, visible)
         dist = self._distances(visible, q.seeds)
         hits: list[Hit] = []
         for d in visible:
             if q.kinds is not None and d.kind not in q.kinds:
                 continue
-            kw = keyword_score(words, self._words[d.id])
+            kw = scores.get(d.id, 0.0)
             if d.id in dist:
                 score = (MAX_DEPTH + 1 - dist[d.id]) + kw
             elif kw > 0:
@@ -133,6 +130,21 @@ class ContextStore:
             hits.append(_hit(d, round(score, 9), words))
         hits.sort(key=lambda h: (-h.score, h.id))
         return hits[: q.budget]
+
+    # -- the two steps a subclass may replace (scope and ranking order stay as above) ---------
+    def _visible(self, q: Query) -> list[Document]:
+        """The documents the caller may see (scope, and active unless ``include_inactive``)."""
+        return [
+            d
+            for d in self._docs.values()
+            if in_scope(d.id, q.allowed) and (q.include_inactive or is_active(d.status))
+        ]
+
+    def _text_scores(
+        self, q: Query, words: Sequence[str], visible: list[Document]
+    ) -> dict[str, float]:
+        """In [0, 1): the keyword score of each visible document (absent: no match)."""
+        return {d.id: keyword_score(words, self._words[d.id]) for d in visible}
 
     def _distances(self, visible: list[Document], seeds: Sequence[str]) -> dict[str, int]:
         ids = {d.id for d in visible}

@@ -1,6 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
 llamacpp_backends: [vulkan, sycl, cuda, cpu]
+llamacpp_modes: [generate, decision]
+# the fixed health probe of a decision model: one tiny state and one yes/no question, and a long
+# state (only when a slot holds it) that proves the batch flags took (llama-server forces 512 in this mode otherwise)
+llamacpp_probe_id: hnx-health
+llamacpp_probe_state: The server room is quiet and every light is green.
+llamacpp_probe_question: Is the text a statement about a room?
+llamacpp_probe_long_words: 600
+llamacpp_probe_long_min_context: 2048
 # the image tag each backend's build carries (the published llama-server images)
 llamacpp_tag_prefix:
   vulkan: server-vulkan-
@@ -35,7 +43,8 @@ llamacpp_command: >-
       '-c', (llamacpp_context_size | int * llamacpp_parallel | int) | string,
       '-np', llamacpp_parallel | string, '--no-kv-unified',
       '-ngl', llamacpp_gpu_layers, '-fa', llamacpp_flash_attn,
-      '--metrics', '--no-webui', '--no-slots', '--offline'] }}
+      '--metrics', '--no-webui', '--no-slots', '--offline']
+     + (['-b', llamacpp_context_size | string, '-ub', llamacpp_context_size | string] if llamacpp_mode == 'decision' else []) }}
 # the precheck's arguments: the power rule alone (the health hook), and with the weights (the unit)
 llamacpp_precheck_power: >-
   {{ ['--backend', llamacpp_backend, '--max-watts', llamacpp_power_cap_max_watts | string]

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Refuse a target of another repository than the one running
+      ansible.builtin.assert:
+        that:
+          - openwebui_target_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+          - openwebui_target_image.split('@')[0].rsplit(':', 1)[0] == openwebui_image.split('@')[0].rsplit(':', 1)[0]
+        fail_msg: "openwebui: the target must be {{ openwebui_image.split('@')[0].rsplit(':', 1)[0] }}:<tag>@sha256:<64 hex>"
+    - name: Map this module's settings onto the core role's
+      ansible.builtin.include_tasks: map.yml
+    - name: Validate and record the bump (core role upgrade)
+      ansible.builtin.include_role:
+        name: open_webui
+        tasks_from: upgrade
+      vars:
+        open_webui_target_image: "{{ openwebui_target_image }}"
+  tags: [upgrade]

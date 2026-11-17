@@ -124,7 +124,7 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	switch route := r.Method + " " + r.URL.Path; route {
 	case "GET /healthz":
 		s.healthz(w)
-	case "GET /v1/models", "GET /v1/usage", "POST /v1/chat/completions", "POST /v1/embeddings":
+	case "GET /v1/models", "GET /v1/usage", "POST /v1/chat/completions", "POST /v1/embeddings", "POST /v1/systemone":
 		c := s.secrets.authenticate(r)
 		if c == nil {
 			errAuth.write(w)
@@ -146,8 +146,11 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}
 			defer release()
 			kind := "chat"
-			if route == "POST /v1/embeddings" {
+			switch route {
+			case "POST /v1/embeddings":
 				kind = "embedding"
+			case "POST /v1/systemone":
+				kind = "decision"
 			}
 			s.modelCall(w, r, c, kind)
 		}

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Inputs of requirements-cuda.txt. Regenerate (the date is the age gate: nothing newer than it is taken):
+#   uv pip compile requirements-cuda.in --generate-hashes --python-version 3.11 \
+#     --python-platform x86_64-manylinux_2_28 --exclude-newer 2026-11-01T00:00:00Z \
+#     --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple \
+#     --index-strategy unsafe-best-match -o requirements-cuda.txt
+# then put the extra-index-url line of requirements-cuda.txt back (the compiler drops it) and set setuptools to
+# 84.2.1 (one wheel hash) by hand: torch's metadata asks for <82, which has open advisories, and the install
+# is --no-deps.
+coqui-tts[cpu,codec]==0.28.0
+transformers>=5.10
+torch==2.11.0+cu128
+torchaudio==2.11.0+cu128
+soundfile

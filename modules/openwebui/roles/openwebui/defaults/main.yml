@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# Open WebUI, the chat slot's provider (modules/openwebui): the core open_webui role (a compose_app)
+# with this module's policy. Required, with no default (the site's): openwebui_logical_id (the
+# instance's registry id, also the OpenID Connect client's id), openwebui_gateway_id (the lab's own
+# LLM gateway's registry id), openwebui_gateway_impls (the product that gateway row names: the
+# gateway and an engine behind it both answer as 'inference', and this app may reach the gateway only),
+# openwebui_public_url (https://<the row's public_hostname>),
+# openwebui_oidc_issuer_url (https://<sso name>/realms/<realm>), openwebui_oidc_client_secret_ref
+# (the realm generator's name for this row's client secret) and openwebui_admin_email.
+openwebui_image: "ghcr.io/open-webui/open-webui:v0.12.5@sha256:03443b8de6b617da9d900edd09b4bf1cb0ddbfdcba6afb42c548336a0b821ded"
+# this app's own key at the gateway (the gateway spec's `keys:` entry for it); outside this module's
+# namespace, since the gateway's spec names it, and read by name at deploy time
+openwebui_gateway_key_ref: secret:gateway/key-openwebui
+# the label of what this app sends (X-HNX-TLP on every gateway call) and the usage tag's prefix; the
+# tag is <prefix>:<signed-in user's id>, so the gateway's records say whose calls they are
+openwebui_gateway_tlp: amber
+openwebui_gateway_tag_prefix: openwebui
+openwebui_session_key_ref: secret:openwebui/session-key
+openwebui_admin_login_ref: secret:openwebui/admin-password
+openwebui_oidc_provider_name: SSO
+# published on the guest's own address, never all interfaces: the edge guest reaches it there
+openwebui_bind: "{{ ansible_host }}"
+openwebui_port: 8080
+openwebui_dir: /opt/compose/openwebui
+openwebui_owner: root
+openwebui_group: root
+openwebui_mem_limit: 2g
+# extra, non-secret settings from the core role's allowlist (open_webui_allowed_env)
+openwebui_extra_env: {}
+openwebui_export_dir: /var/backups/compose/openwebui/export
+openwebui_start: true
+openwebui_validate_with_docker: true
+openwebui_health_timeout: 10

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Map this module's settings onto the core role's
+  ansible.builtin.include_tasks: map.yml
+
+# the core role validates its own inputs (the gateway's capability and product, the headers, the
+# sign-in, the administrator, the allowlist of extra settings), renders the compose project with
+# the keys only in the 0600 env_file, and starts it
+- name: Converge Open WebUI (core role open_webui)
+  ansible.builtin.include_role:
+    name: open_webui
