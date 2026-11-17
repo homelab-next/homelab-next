@@ -11,7 +11,6 @@ direct-to-proxy sign-in probe is used, and the probe's own behaviour against a l
 from __future__ import annotations
 
 import json
-import shutil
 import ssl
 import subprocess
 import sys
@@ -61,8 +60,6 @@ def test_the_assertions_are_kept():
 
 @pytest.fixture
 def edge(tmp_path):
-    if not shutil.which("openssl"):
-        pytest.skip("openssl is needed to make a certificate")
     key, crt = tmp_path / "k.pem", tmp_path / "c.pem"
     subprocess.run(
         [
@@ -124,6 +121,7 @@ def probe(port, bundle, names):
     return json.loads(r.stdout)
 
 
+@pytest.mark.requires_tool("openssl")
 def test_the_probe_asks_the_site_by_name_on_the_edge_address_and_reads_the_redirect(edge):
     port, bundle, seen = edge
     out = probe(port, bundle, [SITE])
@@ -132,6 +130,7 @@ def test_the_probe_asks_the_site_by_name_on_the_edge_address_and_reads_the_redir
     assert quote(f"https://{SITE}/oauth2/callback", safe="") in out[SITE]["location"]
 
 
+@pytest.mark.requires_tool("openssl")
 def test_the_probe_refuses_a_certificate_that_does_not_verify_by_the_site_name(edge):
     port, bundle, _ = edge
     out = probe(port, bundle, ["other.example.internal"])
