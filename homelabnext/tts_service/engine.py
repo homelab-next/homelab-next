@@ -33,6 +33,36 @@ class Unavailable(Exception):
     """The engine cannot take the job now (a refused or failed load); the message is the 503."""
 
 
+class JobTimeout(Exception):
+    """One job ran past its limit."""
+
+
+def run_with_timeout(fn: Callable[[], Any], timeout_s: float) -> Any:
+    """Call ``fn`` in a daemon thread; give up after ``timeout_s`` (0: wait for ever).
+
+    A running model call cannot be interrupted, so on a timeout the thread is left to finish by
+    itself and its result is discarded; the caller must stop trusting the engine it used.
+    """
+    if timeout_s <= 0:
+        return fn()
+    box: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # handed to the caller
+            box["error"] = exc
+
+    t = threading.Thread(target=run, name="tts-job", daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        raise JobTimeout(f"synthesis exceeded {timeout_s:g} seconds")
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
 class Engine(Protocol):
     def synthesize(self, text: str, temperature: float, top_p: float) -> Sequence[float]: ...
 
@@ -58,6 +88,7 @@ class EngineHost:
         self._last_used = clock()
         self.loads = 0
         self.unloads = 0
+        self.abandoned = 0
 
     @property
     def loaded(self) -> bool:
@@ -83,6 +114,13 @@ class EngineHost:
                 yield self._engine
             finally:
                 self._last_used = self._clock()
+
+    def abandon(self) -> None:
+        """Forget the engine of the running job (call inside the lease): it may be stuck, and its
+        memory is freed when its thread ends. The next job loads a new one; the lock is released
+        by the lease as usual."""
+        self._engine = None
+        self.abandoned += 1
 
     def reap(self) -> bool:
         """Unload the engine if it is idle past the timeout and no job is running; True if it did."""

@@ -38,6 +38,11 @@ app) and its caller (the episode generator), and pinned by `tests/tts_service/te
 * **422** `{"detail": [{"type", "loc", "msg", "input"}, ...]}` for a body that is not a JSON object of
   that shape (the shape the old framework answered with). One deliberate difference: the old service
   coerced a numeric string for `temperature`; this one answers 422 (the caller sends numbers).
+* **413** `{"detail": "text is longer than N characters"}` for a text over `tts_max_text_chars` (default 200000;
+  new: the old service had no bound) and for a body over 4 MiB.
+* **504** `{"detail": "synthesis exceeded N seconds"}` when one job runs past `tts_job_timeout_s` (default 7200, 0 =
+  no limit; new). A running model call cannot be interrupted, so the job is abandoned, the lock is released and
+  the next job loads a fresh engine (the stuck one frees its memory when it ends).
 * **503** `{"detail": ...}` when the engine cannot take the job: before, "model not loaded yet"; now
   also a refused load (the power cap, the weights, the voice files), with the reason.
 * `GET /health` is **200** `{"status": "ok", "model_loaded": bool, "refs": [path, ...]}`. New and extra:
@@ -45,7 +50,7 @@ app) and its caller (the episode generator), and pinned by `tests/tts_service/te
 * One text rule belongs to the service: the literal upper-case token `US` is spoken as `U.S.` (the
   engine reads it as the pronoun otherwise). The old service's own tests are ported verbatim.
 * Sampling is fixed at `language="en"`, `split_sentences=True` and the model's own sampler settings, as
-  before. A request is one job: jobs run one at a time (a second request waits for the first; the caller
+  before. A client that stalls (sends nothing, or a body that never ends) is cut off after 60 s without holding a thread. A request is one job: jobs run one at a time (a second request waits for the first; the caller
   already allows 30 minutes).
 
 ## What the role does
@@ -53,7 +58,8 @@ app) and its caller (the episode generator), and pinned by `tests/tts_service/te
 - **One container, built from this repository.** There is no published image to pin: `image/Dockerfile`
   builds `homelabnext/tts_service` with the hashed dependency set `requirements-<backend>.txt` on a base
   pinned by digest (python 3.11.14, Debian 13 slim). Every wheel is hash-checked (`--require-hashes`,
-  `--no-deps`). `compose_app` renders it with `cgroup_parent`, no capability, `no-new-privileges`, a user
+  `--no-deps`, `--only-binary=:all:`; the one exception is `docopt`, a pure-python package published only as a
+  source archive, so it is built from its hashed sdist). `compose_app` renders it with `cgroup_parent`, no capability, `no-new-privileges`, a user
   of its own (`tts_uid`), the model store's group for reading the weights, and the voice, the weights and
   the listing mounted **read-only**; its only writable paths are `state/` (the embeddings cache) and the
   scratch cache.
@@ -70,7 +76,7 @@ app) and its caller (the episode generator), and pinned by `tests/tts_service/te
 - **The power-cap rule (the operator's).** Before **every** load on `cuda` the service reads the card's
   `power.limit` (`nvidia-smi` inside the container, CDI) and refuses unless it is a number above 0 and at
   most `tts_power_cap_max_watts` (default **200 W**; a setting can only tighten it, above 200 is refused
-  by the role and by the service). Unreadable, unparseable or 0 ("no limit set") refuses. The refusal is a
+  by the role and by the service). Unreadable, unparseable, `nan`, infinite, 0 ("no limit set") or negative refuses: only a finite number above 0 and within the limit passes. The refusal is a
   503 with the reason, and `/ready` reports it, so a cap raised after the start turns the health hook red.
   The cap itself is the baseline's job (or a udev rule): this module only refuses to load without it.
 - **Identical sound, faster.** The reference recordings are the same four files and the call is the same
@@ -127,7 +133,7 @@ lab (read-only there: `voice-tts/refs/`) through the same door as any restore:
    (`{"key": "tts-data.tar.gz", "size": N, "sha256": "<hex of the archive>"}`) in one directory;
 2. run the role's `restore` hook with `tts_restore_source=<that directory>`. It checks the archive's
    hash against the listing, refuses links, special files and anything but `voice/` and `state/`,
-   stages and verifies every recording (and the pinned bytes, below), stops the service, moves the
+   refuses an archive that extracts to more than `tts_restore_max_bytes` (default 256 MiB), stages and verifies every recording (and the pinned bytes, below), stops the service, moves the
    live directories aside (never deleted) and moves the staged ones in.
 
 `tts_voice_expected_sha256` pins each recording by sha256 (the archive's `MANIFEST.sha256` has them): when

@@ -428,3 +428,67 @@ def test_build_wires_every_gate_before_the_engine_loads(tmp_path):
     with pytest.raises(Unavailable, match=r"model\.pth is sha256"), svc.host.lease():
         pass
     assert not svc.host.loaded
+
+
+def test_a_text_over_the_configured_limit_is_413_and_never_reaches_the_engine(tmp_path):
+    log: list = []
+    with Running(tmp_path, log, env_over={"TTS_MAX_TEXT_CHARS": "20"}) as s:
+        status, _, data = s.post({"text": "y" * 21})
+        ok = s.post({"text": "y" * 20})[0]
+    assert status == 413 and "20 characters" in json.loads(data)["detail"] and ok == 200
+    assert [x for x in log if x[0] == "synth"] == [("synth", "y" * 20, 0.6, 0.85)]
+
+
+def test_a_job_past_its_timeout_is_504_releases_the_lock_and_the_next_job_gets_a_fresh_engine(
+    tmp_path,
+):
+    log: list = []
+    release = threading.Event()
+
+    class Stuck(FakeEngine):
+        def synthesize(self, text, temperature, top_p):
+            if text == "stuck":
+                release.wait(10)
+            return super().synthesize(text, temperature, top_p)
+
+    h = EngineHost(lambda: (log.append(("load",)), Stuck(log))[1], None, 0.0)
+    try:
+        with Running(tmp_path, log, env_over={"TTS_JOB_TIMEOUT_S": "0.3"}, engine_host=h) as s:
+            status, _, data = s.post({"text": "stuck"})
+            assert status == 504 and "0.3 seconds" in json.loads(data)["detail"]
+            assert h.abandoned == 1 and not h.loaded
+            # the lock is free: the next job runs at once, on a new engine
+            assert s.post({"text": "fine"})[0] == 200
+            assert h.loads == 2
+    finally:
+        release.set()
+
+
+def test_a_client_that_sends_nothing_does_not_hold_its_thread(tmp_path):
+    import socket
+
+    env = make_env(tmp_path)
+    cfg = server.Config.from_env(env)
+    svc = server.Service(cfg, host([]))
+    httpd = ThreadingHTTPServer(("localhost", 0), server.make_handler(svc, timeout_s=0.3))
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        with socket.create_connection(("localhost", httpd.server_address[1]), timeout=5) as sock:
+            sock.sendall(
+                b"POST /synthesize HTTP/1.1\r\nContent-Length: 100\r\n\r\nabc"
+            )  # then stalls
+            sock.settimeout(5)
+            assert sock.recv(10) == b""  # the server closed the connection by itself
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_the_config_refuses_a_bad_limit_or_timeout(tmp_path):
+    base = make_env(tmp_path)
+    for over in ({"TTS_MAX_TEXT_CHARS": "0"}, {"TTS_JOB_TIMEOUT_S": "-1"}):
+        with pytest.raises(ValueError):
+            server.Config.from_env({**base, **over})
+    cfg = server.Config.from_env(base)
+    assert cfg.max_text_chars == 200_000 and cfg.job_timeout_s == 7200

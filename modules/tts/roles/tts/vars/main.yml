@@ -37,3 +37,5 @@ tts_container_env:
   TTS_IDLE_UNLOAD_S: "{{ tts_idle_effective_s }}"
   TTS_POWER_CAP_MAX_WATTS: "{{ tts_power_cap_max_watts }}"
   TTS_GPU_INDEX: "{{ tts_gpu_index }}"
+  TTS_MAX_TEXT_CHARS: "{{ tts_max_text_chars }}"
+  TTS_JOB_TIMEOUT_S: "{{ tts_job_timeout_s }}"

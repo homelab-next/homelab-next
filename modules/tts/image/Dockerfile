@@ -12,7 +12,8 @@ FROM python:3.11.14-slim-trixie@sha256:c8271b1f627d0068857dce5b53e14a9558603b527
 ARG BACKEND=cpu
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 COPY modules/tts/image/requirements-${BACKEND}.txt /tmp/requirements.txt
-RUN python -m pip install --require-hashes --no-deps -r /tmp/requirements.txt && rm /tmp/requirements.txt
+# wheels only, but for docopt (a pure-python package that is published as a source archive only)
+RUN python -m pip install --require-hashes --no-deps --only-binary=:all: --no-binary=docopt -r /tmp/requirements.txt && rm /tmp/requirements.txt
 WORKDIR /app
 COPY homelabnext/tts_service /app/tts_service
 # nothing may be downloaded at run time, and every writable path is the one /cache mount (USER: the

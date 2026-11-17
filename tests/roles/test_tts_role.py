@@ -99,6 +99,7 @@ def test_main_renders_read_only_weights_and_voice_one_state_and_no_secrets(tmp_p
     assert env["TTS_REF_FILES"] == ",".join(REFS) and env["TTS_BACKEND"] == "cpu"
     assert env["TTS_IDLE_UNLOAD_S"] == "0"  # the model stays in memory on a cpu
     assert env["TTS_POWER_CAP_MAX_WATTS"] == "200"
+    assert env["TTS_MAX_TEXT_CHARS"] == "200000" and env["TTS_JOB_TIMEOUT_S"] == "7200"
     # a cpu backend: no device, no privilege; nothing to fetch, nothing secret
     assert "devices" not in svc and not svc.get("privileged")
     assert not (tmp_path / "app" / "secrets").exists()
@@ -169,6 +170,9 @@ def test_the_container_joins_the_role_slice_the_module_play_names(tmp_path):
         {"tts_voice_expected_sha256": {"ref1.wav": "not-a-hash"}},
         {"tts_voice_expected_sha256": {"other.wav": "a" * 64}},  # a file that is not in the voice
         {"tts_mem_limit": "lots"},
+        {"tts_max_text_chars": 0},
+        {"tts_job_timeout_s": -1},
+        {"tts_restore_max_bytes": 10},
         {"tts_store_root": "relative/store"},
         {"tts_data_root": "/var/lib/../etc"},
         {"tts_check_min_seconds": 9, "tts_check_max_seconds": 2},
@@ -504,6 +508,37 @@ def test_restore_refuses_members_outside_the_data(tmp_path, name):
     r, log = _restore(tmp_path, add)
     assert r.returncode != 0 and "leaves its directory" in r.stdout
     assert not log.exists()
+
+
+def test_the_text_limit_and_the_job_timeout_reach_the_container(tmp_path):
+    v = tts_vars(tmp_path, tts_max_text_chars=5000, tts_job_timeout_s=0)
+    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+    env = compose(tmp_path)["environment"]
+    assert env["TTS_MAX_TEXT_CHARS"] == "5000" and env["TTS_JOB_TIMEOUT_S"] == "0"
+
+
+def test_restore_refuses_an_archive_that_extracts_to_more_than_the_cap_before_extracting(tmp_path):
+    def add(t):
+        data = b"x" * 2_000_000
+        info = tarfile.TarInfo("state/big.pt")
+        info.size = len(data)
+        t.addfile(info, __import__("io").BytesIO(data))
+
+    r, log = _restore(tmp_path, add, tts_restore_max_bytes=1_048_576)
+    assert r.returncode != 0 and "more than tts_restore_max_bytes" in r.stdout
+    assert not log.exists() and not (tmp_path / "data" / "restoring").exists()
+    ok, _ = _restore_again(tmp_path)
+    assert ok.returncode == 0, ok.stdout
+
+
+def _restore_again(tmp_path):
+    v = tts_vars(tmp_path)
+    src = tmp_path / "src"
+    _write_archive(src, lambda t: None)  # four small recordings, under the default cap
+    log = _docker_log(tmp_path)
+    return run_role(
+        tmp_path, ROLE, "restore", {**v, "tts_restore_source": str(src)}, env=_env(tmp_path)
+    ), log
 
 
 def test_restore_refuses_an_archive_that_lacks_a_recording_and_changes_nothing(tmp_path):

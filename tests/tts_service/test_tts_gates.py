@@ -209,3 +209,21 @@ def test_readiness_names_a_missing_voice_file_and_a_hot_card(tmp_path):
     assert "ref1.wav" in out["checks"]["voice_refs"]["detail"]
     assert "above the 200 W limit" in out["checks"]["power_cap"]["detail"]
     assert out["checks"]["weights_listing"]["ok"] is True
+
+
+@pytest.mark.parametrize("reported", ["nan", "NaN", "NAN", "inf", "-inf", "Infinity", "-Infinity"])
+def test_a_non_finite_cap_refuses(reported):
+    """float() parses these, and every comparison with them is false: they must not pass."""
+    with pytest.raises(g.Refusal):
+        g.check_power_cap("cuda", 200, 0, smi(reported))
+
+
+@pytest.mark.parametrize("reported", ["0", "0.0", "-0.5", "-200", "200.0001", "201"])
+def test_zero_negative_and_above_the_cap_refuse(reported):
+    with pytest.raises(g.Refusal):
+        g.check_power_cap("cuda", 200, 0, smi(reported))
+
+
+@pytest.mark.parametrize("reported", ["200", "200.0", "0.5", "199.99"])
+def test_a_finite_cap_up_to_and_including_the_limit_passes(reported):
+    assert g.check_power_cap("cuda", 200, 0, smi(reported))["watts"] == float(reported)

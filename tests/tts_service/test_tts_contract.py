@@ -136,3 +136,24 @@ def test_every_problem_is_reported_not_only_the_first():
     with pytest.raises(c.ApiError) as e:
         c.parse_synthesize(body(temperature=0, top_p=2))
     assert [p["loc"][1] for p in e.value.body["detail"]] == ["text", "temperature", "top_p"]
+
+
+def test_a_text_over_the_limit_is_a_413_and_one_at_the_limit_passes():
+    assert c.parse_synthesize(body(text="x" * 50), 50).text == "x" * 50
+    with pytest.raises(c.ApiError) as e:
+        c.parse_synthesize(body(text="x" * 51), 50)
+    assert e.value.status == 413 and e.value.body == {"detail": "text is longer than 50 characters"}
+
+
+def test_the_default_limit_is_two_hundred_thousand_characters():
+    assert c.DEFAULT_MAX_TEXT_CHARS == 200_000
+    assert c.parse_synthesize(body(text="a" * 200_000)).text
+    with pytest.raises(c.ApiError) as e:
+        c.parse_synthesize(body(text="a" * 200_001))
+    assert e.value.status == 413
+
+
+def test_the_length_is_checked_after_the_shape_and_emptiness():
+    with pytest.raises(c.ApiError) as e:
+        c.parse_synthesize(body(text="  "), 1)
+    assert e.value.status == 400

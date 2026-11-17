@@ -58,6 +58,15 @@ tts_idle_unload_s: ""
 tts_power_cap_max_watts: 200
 # cuda: the card's index in the container toolkit's CDI spec (nvidia.com/gpu=<index>) and nvidia-smi's -i
 tts_gpu_index: 0
+# the longest text one request may carry, in characters (the service answers 413 above it); a whole
+# episode script is tens of thousands
+tts_max_text_chars: 200000
+# seconds one synthesis may run before the service answers 504, abandons the job and loads a fresh engine
+# for the next one (0: no limit). A CPU render of a long episode takes hours, so the default is generous.
+tts_job_timeout_s: 7200
+# the most an export may hold once extracted, in bytes: a restore refuses a larger archive before
+# extracting anything (the recordings are tens of MB; the embeddings are KB)
+tts_restore_max_bytes: 268435456
 tts_mem_limit: 12g
 tts_start: true
 tts_validate_with_docker: true

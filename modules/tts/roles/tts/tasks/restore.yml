@@ -49,6 +49,14 @@
           - >-
             tts_members.stdout_lines | map('regex_replace', '^\./', '') | reject('match', '^(voice|state)(/|$)') | list | length == 0
         fail_msg: "tts: the archive leaves its directory, holds a link or special file, or holds anything but voice/ and state/"
+    - name: Refuse an archive that would extract to more than the cap
+      ansible.builtin.assert:
+        that:
+          # tar -tv: <mode> <owner/group> <size> <date> <time> <name>; the sizes of every member
+          - >-
+            tts_member_types.stdout_lines | map('regex_replace', '^\\S+\\s+\\S+\\s+(\\d+)\\s.*$', '\\1')
+            | map('int') | sum <= tts_restore_max_bytes | int
+        fail_msg: "tts: the archive extracts to more than tts_restore_max_bytes ({{ tts_restore_max_bytes }} bytes); nothing was extracted"
     - name: Look for a staging directory an earlier restore left
       ansible.builtin.stat:
         path: "{{ tts_data_root }}/restoring"

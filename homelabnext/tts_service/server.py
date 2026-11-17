@@ -22,6 +22,7 @@ from typing import Any
 
 from . import gates
 from .contract import (
+    DEFAULT_MAX_TEXT_CHARS,
     MAX_BODY_BYTES,
     SAMPLE_RATE,
     ApiError,
@@ -29,7 +30,7 @@ from .contract import (
     normalize_for_speech,
     parse_synthesize,
 )
-from .engine import EngineHost, Unavailable
+from .engine import EngineHost, JobTimeout, Unavailable, run_with_timeout
 
 #: the fixed sentence of the health check: short, plain, no number or abbreviation to be spoken
 CHECK_TEXT = "This is a short test of the narration voice."
@@ -49,6 +50,8 @@ class Config:
     idle_unload_s: float
     power_cap_max_watts: int
     gpu_index: int
+    max_text_chars: int = DEFAULT_MAX_TEXT_CHARS
+    job_timeout_s: float = 7200.0
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Config:
@@ -66,6 +69,10 @@ class Config:
         idle = float(env.get("TTS_IDLE_UNLOAD_S", "0"))
         if idle < 0:
             raise ValueError("TTS_IDLE_UNLOAD_S must be 0 (never) or more")
+        max_chars = int(env.get("TTS_MAX_TEXT_CHARS", str(DEFAULT_MAX_TEXT_CHARS)))
+        job_timeout = float(env.get("TTS_JOB_TIMEOUT_S", "7200"))
+        if max_chars < 1 or job_timeout < 0:
+            raise ValueError("TTS_MAX_TEXT_CHARS must be 1 or more and TTS_JOB_TIMEOUT_S 0 or more")
         refs = tuple(x for x in env.get("TTS_REF_FILES", ",".join(DEFAULT_REFS)).split(",") if x)
         if not refs or any("/" in r or r.startswith(".") for r in refs):
             raise ValueError("TTS_REF_FILES must be file names")
@@ -81,6 +88,8 @@ class Config:
             idle_unload_s=idle,
             power_cap_max_watts=cap,
             gpu_index=int(env.get("TTS_GPU_INDEX", "0")),
+            max_text_chars=max_chars,
+            job_timeout_s=job_timeout,
         )
 
     @property
@@ -141,21 +150,35 @@ class Service:
         return (200 if report["ready"] else 503), report
 
     def synthesize(self, body: bytes) -> bytes:
-        req = parse_synthesize(body)
+        req = parse_synthesize(body, self.config.max_text_chars)
+        text = normalize_for_speech(req.text)
         try:
             with self.host.lease() as engine:
-                samples = engine.synthesize(
-                    normalize_for_speech(req.text), req.temperature, req.top_p
-                )
+                try:
+                    samples = run_with_timeout(
+                        lambda: engine.synthesize(text, req.temperature, req.top_p),
+                        self.config.job_timeout_s,
+                    )
+                except JobTimeout as exc:
+                    self.host.abandon()  # maybe stuck: the next job loads its own engine
+                    raise detail(504, str(exc)) from exc
         except Unavailable as exc:
             raise detail(503, str(exc)) from exc
         return wav_bytes(samples)
 
 
-def make_handler(service: Service) -> type[BaseHTTPRequestHandler]:
+HANDLER_TIMEOUT_S = 60.0
+
+
+def make_handler(
+    service: Service, timeout_s: float = HANDLER_TIMEOUT_S
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
+        # a client that stalls (sends nothing, or a body that never ends) frees its thread after
+        # this many seconds; a running synthesis is not a socket wait and is not affected
         protocol_version = "HTTP/1.1"
         server_version = "tts"
+        timeout = timeout_s
 
         def log_message(self, fmt: str, *args: Any) -> None:
             sys.stderr.write(f"{self.address_string()} - {fmt % args}\n")
@@ -204,7 +227,11 @@ def make_handler(service: Service) -> type[BaseHTTPRequestHandler]:
                 self._json(413, {"detail": "request body too large"})
                 self.close_connection = True
                 return
-            body = self.rfile.read(length)
+            try:
+                body = self.rfile.read(length)
+            except OSError:  # the client stalled past the handler timeout, or went away
+                self.close_connection = True
+                return
             try:
                 self._send(200, service.synthesize(body), "audio/wav")
             except ApiError as exc:

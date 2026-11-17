@@ -12,8 +12,12 @@ Derived from the archived service (``voice-tts/service/app.py`` of the old lab) 
 * 200: the body is a WAV file (RIFF, 24000 Hz, mono, 16-bit PCM), ``Content-Type: audio/wav``.
 * 400 ``{"detail": "text must not be empty"}`` for a text that is empty or only white space
   (checked before anything about the engine).
+* 413 ``{"detail": "text is longer than N characters"}`` for a text over ``TTS_MAX_TEXT_CHARS`` (default
+  200000; new: the old service had no bound) and for a body over 4 MiB.
 * 422 ``{"detail": [{"type", "loc", "msg", "input"}, ...]}`` for a body that is not a JSON object
   of that shape (the shape FastAPI answered with).
+* 504 ``{"detail": "synthesis exceeded N seconds"}`` when one job runs past ``TTS_JOB_TIMEOUT_S`` (default
+  7200; 0 = no limit; new): the job is abandoned and the next one gets a freshly loaded engine.
 * 503 ``{"detail": ...}`` when the engine cannot take the job (before: "model not loaded yet";
   now also a refused load: the power cap, the weights, the voice files).
 * ``GET /health`` is 200 ``{"status": "ok", "model_loaded": bool, "refs": [path, ...]}``.
@@ -38,6 +42,8 @@ MAX_TEMPERATURE = 1.5
 MAX_TOP_P = 1.0
 #: a whole episode's script is tens of KiB; nothing legitimate is near this
 MAX_BODY_BYTES = 4 * 1024 * 1024
+#: the longest text one request may carry, in characters (a whole episode script is tens of thousands)
+DEFAULT_MAX_TEXT_CHARS = 200_000
 
 # Raw "US" (the country) is a homograph of the pronoun "us"; matched on the literal upper-case
 # token only (word boundary), so the pronoun is never touched.
@@ -77,7 +83,9 @@ def _number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def parse_synthesize(body: bytes) -> SynthesizeRequest:
+def parse_synthesize(
+    body: bytes, max_text_chars: int = DEFAULT_MAX_TEXT_CHARS
+) -> SynthesizeRequest:
     """Validate a request body; raises :class:`ApiError` (422, or 400 for an empty text)."""
     try:
         doc = json.loads(body.decode("utf-8"))
@@ -125,4 +133,6 @@ def parse_synthesize(body: bytes) -> SynthesizeRequest:
     assert isinstance(text, str)
     if not text.strip():
         raise detail(400, "text must not be empty")
+    if len(text) > max_text_chars:
+        raise detail(413, f"text is longer than {max_text_chars} characters")
     return SynthesizeRequest(text, values["temperature"], values["top_p"])

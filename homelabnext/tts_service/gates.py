@@ -17,6 +17,7 @@ that the HTTP layer answers with 503 and the readiness endpoint reports.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import subprocess
 from collections.abc import Callable, Mapping
@@ -88,13 +89,16 @@ def check_power_cap(
             f"the power cap limit {max_watts} W is outside 1..{POWER_CAP_CEILING_WATTS} W"
         )
     watts = power_cap_watts(gpu_index, run, smi)
-    if watts <= 0:
+    # NaN and the infinities parse as floats and compare false against everything: only a finite
+    # number inside (0, limit] is a cap that holds
+    if not (math.isfinite(watts) and 0 < watts <= max_watts):
+        if math.isfinite(watts) and watts > max_watts:
+            raise Refusal(
+                f"GPU {gpu_index}'s power limit is {watts:g} W, above the {max_watts} W limit"
+            )
         raise Refusal(
-            f"GPU {gpu_index}'s power limit is {watts:g}: no limit is set, which is not within {max_watts} W"
-        )
-    if watts > max_watts:
-        raise Refusal(
-            f"GPU {gpu_index}'s power limit is {watts:g} W, above the {max_watts} W limit"
+            f"GPU {gpu_index}'s power limit is {watts:g}: not a finite cap above 0, "
+            f"so not within {max_watts} W"
         )
     return {"backend": "cuda", "limit_watts": max_watts, "watts": watts}
 

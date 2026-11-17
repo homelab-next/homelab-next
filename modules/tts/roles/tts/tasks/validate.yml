@@ -34,6 +34,9 @@
       - tts_idle_unload_s | string == '' or tts_idle_unload_s | string is match('^[0-9]{1,6}\Z')
       - tts_power_cap_max_watts | int >= 1 and tts_power_cap_max_watts | int <= tts_power_cap_ceiling_watts
       - tts_gpu_index | int >= 0 and tts_gpu_index | int <= 63
+      - tts_max_text_chars | int >= 1 and tts_max_text_chars | int <= 4000000
+      - tts_job_timeout_s | int >= 0
+      - tts_restore_max_bytes | int >= 1048576
       - tts_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
       - tts_start is boolean and tts_validate_with_docker is boolean
       - tts_check_timeout_s | int >= 10
@@ -46,7 +49,8 @@
       and a sha256 digest, one to sixteen distinct .wav file names for the voice (and 64-hex sha256s
       for those only), an idle timeout in whole seconds or empty, a power cap limit of 1 to
       {{ tts_power_cap_ceiling_watts }} W (the operator's rule cannot be loosened), a card index, a
-      memory limit like 12g and a duration range for the health check
+      memory limit like 12g, a text limit of 1 to 4000000 characters, a job timeout (0 or more), a restore size
+      cap of at least 1 MiB and a duration range for the health check
   tags: [health, backup, restore, export, upgrade, readiness]
 
 - name: The image is the lab's own build

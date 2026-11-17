@@ -152,6 +152,20 @@ argument_specs:
         type: float
         description: The longest the health check's WAV may be, in seconds.
         default: 15
+      tts_max_text_chars:
+        type: int
+        description: The longest text one request may carry, in characters (413 above it).
+        default: 200000
+      tts_job_timeout_s:
+        type: int
+        description: 'Seconds one synthesis may run before a 504, the job abandoned and a fresh engine
+          for the next (0: no limit).'
+        default: 7200
+      tts_restore_max_bytes:
+        type: int
+        description: The most an export may hold extracted, in bytes; a restore refuses a larger archive
+          before extracting.
+        default: 268435456
   health:
     short_description: Fail unless the container is healthy, /health and /ready say so and one real synthesis
       of a fixed sentence comes back as a 24 kHz mono WAV of a plausible length.
@@ -303,6 +317,20 @@ argument_specs:
         type: float
         description: The longest the health check's WAV may be, in seconds.
         default: 15
+      tts_max_text_chars:
+        type: int
+        description: The longest text one request may carry, in characters (413 above it).
+        default: 200000
+      tts_job_timeout_s:
+        type: int
+        description: 'Seconds one synthesis may run before a 504, the job abandoned and a fresh engine
+          for the next (0: no limit).'
+        default: 7200
+      tts_restore_max_bytes:
+        type: int
+        description: The most an export may hold extracted, in bytes; a restore refuses a larger archive
+          before extracting.
+        default: 268435456
   readiness:
     short_description: Fail unless the container engine is ready, the model's weights and listing are
       in the store and the voice recordings are there.
@@ -454,6 +482,20 @@ argument_specs:
         type: float
         description: The longest the health check's WAV may be, in seconds.
         default: 15
+      tts_max_text_chars:
+        type: int
+        description: The longest text one request may carry, in characters (413 above it).
+        default: 200000
+      tts_job_timeout_s:
+        type: int
+        description: 'Seconds one synthesis may run before a 504, the job abandoned and a fresh engine
+          for the next (0: no limit).'
+        default: 7200
+      tts_restore_max_bytes:
+        type: int
+        description: The most an export may hold extracted, in bytes; a restore refuses a larger archive
+          before extracting.
+        default: 268435456
   backup:
     short_description: Name the data root (the recordings and the embeddings); the weights are the model
       store's.
@@ -605,6 +647,20 @@ argument_specs:
         type: float
         description: The longest the health check's WAV may be, in seconds.
         default: 15
+      tts_max_text_chars:
+        type: int
+        description: The longest text one request may carry, in characters (413 above it).
+        default: 200000
+      tts_job_timeout_s:
+        type: int
+        description: 'Seconds one synthesis may run before a 504, the job abandoned and a fresh engine
+          for the next (0: no limit).'
+        default: 7200
+      tts_restore_max_bytes:
+        type: int
+        description: The most an export may hold extracted, in bytes; a restore refuses a larger archive
+          before extracting.
+        default: 268435456
   export:
     short_description: Write the exit copy of the recordings and the embeddings (tts-data.tar.gz and its
       listing).
@@ -756,6 +812,20 @@ argument_specs:
         type: float
         description: The longest the health check's WAV may be, in seconds.
         default: 15
+      tts_max_text_chars:
+        type: int
+        description: The longest text one request may carry, in characters (413 above it).
+        default: 200000
+      tts_job_timeout_s:
+        type: int
+        description: 'Seconds one synthesis may run before a 504, the job abandoned and a fresh engine
+          for the next (0: no limit).'
+        default: 7200
+      tts_restore_max_bytes:
+        type: int
+        description: The most an export may hold extracted, in bytes; a restore refuses a larger archive
+          before extracting.
+        default: 268435456
   restore:
     short_description: Restore the recordings and the embeddings from an export, staged and checked, the
       live ones moved aside.
@@ -911,6 +981,20 @@ argument_specs:
         type: path
         description: The directory holding tts-data.tar.gz and listing.jsonl.
         required: true
+      tts_max_text_chars:
+        type: int
+        description: The longest text one request may carry, in characters (413 above it).
+        default: 200000
+      tts_job_timeout_s:
+        type: int
+        description: 'Seconds one synthesis may run before a 504, the job abandoned and a fresh engine
+          for the next (0: no limit).'
+        default: 7200
+      tts_restore_max_bytes:
+        type: int
+        description: The most an export may hold extracted, in bytes; a restore refuses a larger archive
+          before extracting.
+        default: 268435456
   upgrade:
     short_description: Validate a new image of the same repository and backend and record it as pending.
     options:
@@ -1065,3 +1149,17 @@ argument_specs:
         type: str
         description: repository:tag@sha256:<digest> of the build to move to (same repository and backend).
         required: true
+      tts_max_text_chars:
+        type: int
+        description: The longest text one request may carry, in characters (413 above it).
+        default: 200000
+      tts_job_timeout_s:
+        type: int
+        description: 'Seconds one synthesis may run before a 504, the job abandoned and a fresh engine
+          for the next (0: no limit).'
+        default: 7200
+      tts_restore_max_bytes:
+        type: int
+        description: The most an export may hold extracted, in bytes; a restore refuses a larger archive
+          before extracting.
+        default: 268435456
