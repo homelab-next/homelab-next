@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate and record an image bump (compose_app upgrade): the target (gitea_target_image) is pinned
+# by tag and digest, of the same repository, and NOT OLDER than the running version: a newer Gitea
+# migrates the database forward and an older one refuses to open it. The playbook exports first,
+# then converges.
+- block:
+    - name: Name the target
+      ansible.builtin.set_fact:
+        gitea_up_target: "{{ gitea_target_image | default('') }}"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Refuse a target that is not pinned, is another repository or is older than the running version
+      ansible.builtin.assert:
+        that:
+          - gitea_up_target is match(gitea_pinned_ref_pattern)
+          - gitea_up_target.split('@')[0].rsplit(':', 1)[0] == gitea_image.split('@')[0].rsplit(':', 1)[0]
+          - gitea_up_target.split('@')[0].rsplit(':', 1)[1] | regex_replace('-rootless\Z', '') is version(gitea_image.split('@')[0].rsplit(':', 1)[1] | regex_replace('-rootless\Z', ''), '>=')
+        fail_msg: >-
+          forge: name a target {{ gitea_image.split('@')[0].rsplit(':', 1)[0] }}:<X.Y.Z>-rootless@sha256:<64 hex> that is
+          not older than {{ gitea_image.split('@')[0].rsplit(':', 1)[1] }} (a database a newer version has
+          migrated cannot be opened by an older one)
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: gitea
+        compose_app_dir: "{{ gitea_app.compose_app_dir }}"
+        compose_app_owner: "{{ gitea_app.compose_app_owner }}"
+        compose_app_group: "{{ gitea_app.compose_app_group }}"
+        compose_app_spec: "{{ gitea_app.compose_app_spec }}"
+        compose_app_upgrade_service: "{{ gitea_service }}"
+        compose_app_upgrade_tag: "{{ gitea_up_target.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ gitea_up_target.split('@')[1] }}"
+  tags: [upgrade]

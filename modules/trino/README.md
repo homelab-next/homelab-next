@@ -82,12 +82,59 @@ floors under them (`iceberg.expire-snapshots.min-retention` 7d, `iceberg.remove-
 make it refuse a shorter retention from anyone, so a typo cannot delete live data (the engine's
 default floor for orphans is 7 days, which would refuse the 3 asked for).
 
+### Guards (RCA of the first run on a restored lake, 2026-11-17)
+
+The first maintenance run on a lake restored from another one (a current-snapshot-only data copy under
+a catalog that still lists every old snapshot) hung for hours, kept writing after it was stopped and
+deleted history. The script now refuses each of those shapes:
+
+- **Cancel, never abandon.** A statement past its deadline, or a stop (SIGTERM, `systemctl stop`), is
+  cancelled on the engine: `DELETE` of the query's `nextUri`, then `CALL system.runtime.kill_query`, then
+  the script polls `system.runtime.queries` (up to `trino_cancel_confirm_timeout`, default 45 s) until the
+  query is no longer live. **If it is still live the whole run stops**: no further table is touched, the
+  run is degraded, `run:aborted` is alerted once and the exit status is 1.
+  **Unproven:** that a cancel also stops Iceberg's post-commit file cleanup (the retry loop over missing
+  manifest lists that hung the first run) has only been exercised against a fake engine. Treat the first
+  armed run on any real lake as attended (watch the Trino log and `system.runtime.queries`).
+  Before, the client merely stopped polling and the engine kept running the query until its own client
+  timeout, blocking the next table's statement. On SIGTERM the script also writes its state and sends
+  ONE alert naming the unfinished tables (exit 143).
+- **Preflight per table.** Before any procedure the script reads `"<t>$snapshots"` and
+  `"<t>$all_manifests"` (each bounded by `trino_preflight_timeout`, default 300 s; `$all_manifests` reads
+  every retained snapshot's manifest list and fails fast on a missing one). A table that cannot be read
+  is logged `skipped: unreadable history`, **nothing is done to it**, and the run is **degraded**: the
+  failing set includes `<table>:preflight` (so the alert fires and the `health` hook fails), the state
+  file says `"degraded": true` and the exit status is 3 (the last-run record shows a failed run).
+- **No orphan removal behind a failed expiry.** `remove_orphan_files` runs on a table only when its
+  `expire_snapshots` succeeded in the same run (a timed-out expiry may still be committing); otherwise
+  the step is recorded under `skipped` in the state file.
+- **Allow and deny lists, per-schema retention.** Patterns and override keys are **lower case only**
+  (the engine's names are; an upper-case pattern would validate and silently match nothing, which for the
+  deny list means a table is maintained that was meant to be spared, so `main` refuses it). `trino_maintenance_schemas` (allow, default `["*"]`) and
+  `trino_maintenance_skip` (deny; wins) take globs of a schema (`cti`) or a table (`cti.nrd_*`). 
+  `trino_maintenance_overrides` is `{schema: {expire, retain_last, orphan_retention, orphan}}` (every key
+  optional; `orphan: false` turns orphan removal off for the schema). `main` refuses a malformed glob, an
+  unknown key, a duration under the engine's floor or a `retain_last` outside 1..1000.
+- **No unattended arming on a restored lake.** The role cannot see how the lake got here, so arming is an
+  explicit act: the timer is enabled and started only when `trino_maintenance_enabled` **and**
+  `trino_maintenance_acknowledged_restore` are both true (default false). Otherwise the script and units
+  are installed and the timer is **stopped and disabled**, and `health` checks that it is not running.
+  **The timer does not catch up a missed run** (`trino_maintenance_catch_up: false`, i.e. `Persistent=false`),
+  so arming never starts a run by itself: the first run is the next `OnCalendar` time. With `true`, a
+  run missed while the host was off fires the moment the timer is started. To attend the first run:
+  `hnx-lake-maintenance --dry-run` by hand, set the acknowledgement, then watch at the next scheduled time
+  (or start the service by hand while watching).
+  Set the acknowledgement only after `tools/migrate/lake_verify.py` (its all-history check) passes on the
+  lake, or when the lake was never restored, and with the allow/skip lists and retention you want.
+- **Off means off.** With `trino_maintenance_enabled: false` an already-installed timer is stopped and
+  disabled (and a run in flight stopped); a host that never had one is left alone.
+
 **Failure alert, state-diffed.** The script keeps an owner-only state file. When the **set** of
 failing steps changes it posts one message to the notify channel (`trino_notify_*`, a publish token
 by secret reference, `https` unless `trino_notify_allow_plain_http` opts a LAN endpoint in), one more
 when the set empties, and nothing while it is unchanged. Exit status: 0 all steps ran, 1 some failed,
-2 the tables could not be listed. The `health` hook fails when the last run had a failing step.
-`--dry-run` prints the statements; `--test-notify` sends one low-priority message through the
+2 the tables could not be listed, 3 degraded (a table skipped as unreadable), 143 terminated. The `health` hook fails when the last run had a failing step.
+`--dry-run` prints the preflight and procedure statements; `--test-notify` sends one low-priority message through the
 alert path. The script, the units and the owner-only env file holding the maintenance password and
 the notify token are the role's; `contributes.scheduler_jobs` names the timer.
 
@@ -97,7 +144,7 @@ the notify token are the role's; `contributes.scheduler_jobs` names the timer.
 |---|---|
 | `main` | validates, writes the configuration, the PEM, the password file and the rules, renders and starts the engine, restarts it when its configuration changed, installs the timer |
 | `readiness` | docker_engine ready; every credential in its form; the catalog and the object store answer |
-| `health` | container healthy; `/v1/info` over HTTPS verified against the lab CA, started; an anonymous statement refused; the maintenance user signs in; the timer enabled and active; the last run clean |
+| `health` | container healthy; `/v1/info` over HTTPS verified against the lab CA, started; an anonymous statement refused; the maintenance user signs in; the timer enabled and active (only when armed; when not armed, including `trino_maintenance_enabled: false`, it must be neither active nor enabled); the last run clean |
 | `backup` | names the data root (the engine is stateless) |
 | `export`, `restore` | nothing to do: stateless (the lake's data is the catalog's and the object store's) |
 | `upgrade` | validates a tag@digest bump of the same repository and records it |

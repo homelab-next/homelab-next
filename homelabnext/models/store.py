@@ -64,6 +64,10 @@ ENGINES: dict[str, frozenset[tuple[str, str]]] = {
     "unsloth-studio": frozenset(
         {("hf", "safetensors"), ("gguf", "gguf"), ("export", "safetensors"), ("export", "gguf")}
     ),
+    # the speech server (modules/tts) loads a hub snapshot's own checkpoint files (the voice model's
+    # .pth), fetched like any hf entry (hub cache layout, pinned revision, a sha256 per file); the
+    # layout name is the cache's, not a claim that the files are safetensors
+    "tts-server": frozenset({("hf", "safetensors")}),
 }
 ENTRY_KEYS = {
     "description", "format", "layout", "quant", "source", "license", "served_model_name",

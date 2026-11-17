@@ -1,0 +1,1222 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the document library as two compose_app containers (application and broker)
+      with local accounts, an inbox and no public route.
+    options:
+      documents_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. documents).
+        required: true
+      documents_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 3.4.2).
+        default: ghcr.io/paperless-ngx/paperless-ngx:3.4.2@sha256:d704e84f88300eb6ab001ab15720a2330ff99169cf9f94d6b8fcc44b63a84c84
+      documents_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      documents_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      documents_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8000
+      documents_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/documents
+      documents_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      documents_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      documents_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, media/, consume/, broker/ and export/.'
+        default: /var/lib/hnx-modules/documents
+      documents_app_uid:
+        type: int
+        description: The application container's user id (no account on the host has it); owns data/,
+          media/, consume/ and export/.
+        default: 61040
+      documents_app_gid:
+        type: int
+        description: The application container's group id.
+        default: 61040
+      documents_broker_uid:
+        type: int
+        description: The broker container's user id; owns broker/.
+        default: 61041
+      documents_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61041
+      documents_timezone:
+        type: str
+        description: The application's time zone (PAPERLESS_TIME_ZONE).
+        default: Etc/UTC
+      documents_ocr_languages:
+        type: list
+        description: The OCR languages (Tesseract codes) as data; each must be one the image ships (deu,
+          eng, fra, ita, spa).
+        default: &id001
+        - eng
+      documents_url:
+        type: str
+        description: 'The public URL when the site adds a route (empty: none); the application then trusts
+          the name for sign-in and CSRF.'
+        default: ''
+      documents_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty database. False when the library is to
+          be imported (the import brings its own accounts).
+        default: true
+      documents_admin_user:
+        type: str
+        description: The first administrator's login, used only when documents_admin_bootstrap is true.
+        default: admin
+      documents_api_user:
+        type: str
+        description: The account that owns the API token; it must be an administrator (the status read).
+        default: admin
+      documents_signing_ref:
+        type: str
+        description: 'The secret: reference of the application''s signing key.'
+        default: secret:documents/secret-key
+      documents_admin_login_ref:
+        type: str
+        description: 'The secret: reference of the first administrator''s password (read only when documents_admin_bootstrap
+          is true).'
+        default: secret:documents/admin-password
+      documents_api_login_ref:
+        type: str
+        description: 'The secret: reference of the service account''s API token (40 hex characters).'
+        default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: &id002
+        - view_document
+        - change_document
+        - view_note
+        - change_note
+        - view_tag
+        - change_tag
+        - view_correspondent
+        - change_correspondent
+        - view_documenttype
+        - change_documenttype
+        - view_storagepath
+        - change_storagepath
+        - view_customfield
+        - change_customfield
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
+      documents_consumer_recursive:
+        type: bool
+        description: Read the inbox's subdirectories too.
+        default: false
+      documents_consumer_subdirs_as_tags:
+        type: bool
+        description: Tag a document with the names of the inbox subdirectories it came through.
+        default: false
+      documents_task_workers:
+        type: int
+        description: Parallel document-processing workers.
+        default: 1
+      documents_threads_per_worker:
+        type: int
+        description: Threads of each worker.
+        default: 2
+      documents_extra_env:
+        type: dict
+        description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
+        default: &id003 {}
+      documents_expected_min_documents:
+        type: int
+        description: 'Health fails when the library holds fewer documents than this (0: not checked);
+          set it to the source''s count at a cutover.'
+        default: 0
+      documents_mem_limit:
+        type: str
+        description: Memory limit of the application container.
+        default: 2g
+      documents_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      documents_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      documents_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      documents_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      documents_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one migrates
+          the database).
+        default: 600
+  health:
+    short_description: Fail unless both containers are healthy, the sign-in page answers, an anonymous
+      read of the library is refused, and the administrator's and the agents' tokens read the library
+      (at least the expected number of documents) with the database and broker OK.
+    options:
+      documents_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. documents).
+        required: true
+      documents_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 3.4.2).
+        default: ghcr.io/paperless-ngx/paperless-ngx:3.4.2@sha256:d704e84f88300eb6ab001ab15720a2330ff99169cf9f94d6b8fcc44b63a84c84
+      documents_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      documents_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      documents_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8000
+      documents_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/documents
+      documents_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      documents_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      documents_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, media/, consume/, broker/ and export/.'
+        default: /var/lib/hnx-modules/documents
+      documents_app_uid:
+        type: int
+        description: The application container's user id (no account on the host has it); owns data/,
+          media/, consume/ and export/.
+        default: 61040
+      documents_app_gid:
+        type: int
+        description: The application container's group id.
+        default: 61040
+      documents_broker_uid:
+        type: int
+        description: The broker container's user id; owns broker/.
+        default: 61041
+      documents_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61041
+      documents_timezone:
+        type: str
+        description: The application's time zone (PAPERLESS_TIME_ZONE).
+        default: Etc/UTC
+      documents_ocr_languages:
+        type: list
+        description: The OCR languages (Tesseract codes) as data; each must be one the image ships (deu,
+          eng, fra, ita, spa).
+        default: *id001
+      documents_url:
+        type: str
+        description: 'The public URL when the site adds a route (empty: none); the application then trusts
+          the name for sign-in and CSRF.'
+        default: ''
+      documents_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty database. False when the library is to
+          be imported (the import brings its own accounts).
+        default: true
+      documents_admin_user:
+        type: str
+        description: The first administrator's login, used only when documents_admin_bootstrap is true.
+        default: admin
+      documents_api_user:
+        type: str
+        description: The account that owns the API token; it must be an administrator (the status read).
+        default: admin
+      documents_signing_ref:
+        type: str
+        description: 'The secret: reference of the application''s signing key.'
+        default: secret:documents/secret-key
+      documents_admin_login_ref:
+        type: str
+        description: 'The secret: reference of the first administrator''s password (read only when documents_admin_bootstrap
+          is true).'
+        default: secret:documents/admin-password
+      documents_api_login_ref:
+        type: str
+        description: 'The secret: reference of the service account''s API token (40 hex characters).'
+        default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: *id002
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
+      documents_consumer_recursive:
+        type: bool
+        description: Read the inbox's subdirectories too.
+        default: false
+      documents_consumer_subdirs_as_tags:
+        type: bool
+        description: Tag a document with the names of the inbox subdirectories it came through.
+        default: false
+      documents_task_workers:
+        type: int
+        description: Parallel document-processing workers.
+        default: 1
+      documents_threads_per_worker:
+        type: int
+        description: Threads of each worker.
+        default: 2
+      documents_extra_env:
+        type: dict
+        description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
+        default: *id003
+      documents_expected_min_documents:
+        type: int
+        description: 'Health fails when the library holds fewer documents than this (0: not checked);
+          set it to the source''s count at a cutover.'
+        default: 0
+      documents_mem_limit:
+        type: str
+        description: Memory limit of the application container.
+        default: 2g
+      documents_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      documents_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      documents_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      documents_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      documents_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one migrates
+          the database).
+        default: 600
+  readiness:
+    short_description: Fail unless the container engine is ready, the inputs are valid and every secret
+      resolves.
+    options:
+      documents_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. documents).
+        required: true
+      documents_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 3.4.2).
+        default: ghcr.io/paperless-ngx/paperless-ngx:3.4.2@sha256:d704e84f88300eb6ab001ab15720a2330ff99169cf9f94d6b8fcc44b63a84c84
+      documents_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      documents_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      documents_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8000
+      documents_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/documents
+      documents_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      documents_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      documents_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, media/, consume/, broker/ and export/.'
+        default: /var/lib/hnx-modules/documents
+      documents_app_uid:
+        type: int
+        description: The application container's user id (no account on the host has it); owns data/,
+          media/, consume/ and export/.
+        default: 61040
+      documents_app_gid:
+        type: int
+        description: The application container's group id.
+        default: 61040
+      documents_broker_uid:
+        type: int
+        description: The broker container's user id; owns broker/.
+        default: 61041
+      documents_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61041
+      documents_timezone:
+        type: str
+        description: The application's time zone (PAPERLESS_TIME_ZONE).
+        default: Etc/UTC
+      documents_ocr_languages:
+        type: list
+        description: The OCR languages (Tesseract codes) as data; each must be one the image ships (deu,
+          eng, fra, ita, spa).
+        default: *id001
+      documents_url:
+        type: str
+        description: 'The public URL when the site adds a route (empty: none); the application then trusts
+          the name for sign-in and CSRF.'
+        default: ''
+      documents_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty database. False when the library is to
+          be imported (the import brings its own accounts).
+        default: true
+      documents_admin_user:
+        type: str
+        description: The first administrator's login, used only when documents_admin_bootstrap is true.
+        default: admin
+      documents_api_user:
+        type: str
+        description: The account that owns the API token; it must be an administrator (the status read).
+        default: admin
+      documents_signing_ref:
+        type: str
+        description: 'The secret: reference of the application''s signing key.'
+        default: secret:documents/secret-key
+      documents_admin_login_ref:
+        type: str
+        description: 'The secret: reference of the first administrator''s password (read only when documents_admin_bootstrap
+          is true).'
+        default: secret:documents/admin-password
+      documents_api_login_ref:
+        type: str
+        description: 'The secret: reference of the service account''s API token (40 hex characters).'
+        default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: *id002
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
+      documents_consumer_recursive:
+        type: bool
+        description: Read the inbox's subdirectories too.
+        default: false
+      documents_consumer_subdirs_as_tags:
+        type: bool
+        description: Tag a document with the names of the inbox subdirectories it came through.
+        default: false
+      documents_task_workers:
+        type: int
+        description: Parallel document-processing workers.
+        default: 1
+      documents_threads_per_worker:
+        type: int
+        description: Threads of each worker.
+        default: 2
+      documents_extra_env:
+        type: dict
+        description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
+        default: *id003
+      documents_expected_min_documents:
+        type: int
+        description: 'Health fails when the library holds fewer documents than this (0: not checked);
+          set it to the source''s count at a cutover.'
+        default: 0
+      documents_mem_limit:
+        type: str
+        description: Memory limit of the application container.
+        default: 2g
+      documents_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      documents_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      documents_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      documents_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      documents_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one migrates
+          the database).
+        default: 600
+  backup:
+    short_description: Name the data root for the backup.
+    options:
+      documents_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. documents).
+        required: true
+      documents_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 3.4.2).
+        default: ghcr.io/paperless-ngx/paperless-ngx:3.4.2@sha256:d704e84f88300eb6ab001ab15720a2330ff99169cf9f94d6b8fcc44b63a84c84
+      documents_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      documents_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      documents_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8000
+      documents_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/documents
+      documents_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      documents_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      documents_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, media/, consume/, broker/ and export/.'
+        default: /var/lib/hnx-modules/documents
+      documents_app_uid:
+        type: int
+        description: The application container's user id (no account on the host has it); owns data/,
+          media/, consume/ and export/.
+        default: 61040
+      documents_app_gid:
+        type: int
+        description: The application container's group id.
+        default: 61040
+      documents_broker_uid:
+        type: int
+        description: The broker container's user id; owns broker/.
+        default: 61041
+      documents_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61041
+      documents_timezone:
+        type: str
+        description: The application's time zone (PAPERLESS_TIME_ZONE).
+        default: Etc/UTC
+      documents_ocr_languages:
+        type: list
+        description: The OCR languages (Tesseract codes) as data; each must be one the image ships (deu,
+          eng, fra, ita, spa).
+        default: *id001
+      documents_url:
+        type: str
+        description: 'The public URL when the site adds a route (empty: none); the application then trusts
+          the name for sign-in and CSRF.'
+        default: ''
+      documents_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty database. False when the library is to
+          be imported (the import brings its own accounts).
+        default: true
+      documents_admin_user:
+        type: str
+        description: The first administrator's login, used only when documents_admin_bootstrap is true.
+        default: admin
+      documents_api_user:
+        type: str
+        description: The account that owns the API token; it must be an administrator (the status read).
+        default: admin
+      documents_signing_ref:
+        type: str
+        description: 'The secret: reference of the application''s signing key.'
+        default: secret:documents/secret-key
+      documents_admin_login_ref:
+        type: str
+        description: 'The secret: reference of the first administrator''s password (read only when documents_admin_bootstrap
+          is true).'
+        default: secret:documents/admin-password
+      documents_api_login_ref:
+        type: str
+        description: 'The secret: reference of the service account''s API token (40 hex characters).'
+        default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: *id002
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
+      documents_consumer_recursive:
+        type: bool
+        description: Read the inbox's subdirectories too.
+        default: false
+      documents_consumer_subdirs_as_tags:
+        type: bool
+        description: Tag a document with the names of the inbox subdirectories it came through.
+        default: false
+      documents_task_workers:
+        type: int
+        description: Parallel document-processing workers.
+        default: 1
+      documents_threads_per_worker:
+        type: int
+        description: Threads of each worker.
+        default: 2
+      documents_extra_env:
+        type: dict
+        description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
+        default: *id003
+      documents_expected_min_documents:
+        type: int
+        description: 'Health fails when the library holds fewer documents than this (0: not checked);
+          set it to the source''s count at a cutover.'
+        default: 0
+      documents_mem_limit:
+        type: str
+        description: Memory limit of the application container.
+        default: 2g
+      documents_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      documents_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      documents_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      documents_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      documents_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one migrates
+          the database).
+        default: 600
+  restore:
+    short_description: Check an export (listing, sha256, members) and import it into an EMPTY library
+      with the product's importer, verify the records and every file, and seed the API token.
+    options:
+      documents_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. documents).
+        required: true
+      documents_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 3.4.2).
+        default: ghcr.io/paperless-ngx/paperless-ngx:3.4.2@sha256:d704e84f88300eb6ab001ab15720a2330ff99169cf9f94d6b8fcc44b63a84c84
+      documents_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      documents_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      documents_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8000
+      documents_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/documents
+      documents_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      documents_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      documents_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, media/, consume/, broker/ and export/.'
+        default: /var/lib/hnx-modules/documents
+      documents_app_uid:
+        type: int
+        description: The application container's user id (no account on the host has it); owns data/,
+          media/, consume/ and export/.
+        default: 61040
+      documents_app_gid:
+        type: int
+        description: The application container's group id.
+        default: 61040
+      documents_broker_uid:
+        type: int
+        description: The broker container's user id; owns broker/.
+        default: 61041
+      documents_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61041
+      documents_timezone:
+        type: str
+        description: The application's time zone (PAPERLESS_TIME_ZONE).
+        default: Etc/UTC
+      documents_ocr_languages:
+        type: list
+        description: The OCR languages (Tesseract codes) as data; each must be one the image ships (deu,
+          eng, fra, ita, spa).
+        default: *id001
+      documents_url:
+        type: str
+        description: 'The public URL when the site adds a route (empty: none); the application then trusts
+          the name for sign-in and CSRF.'
+        default: ''
+      documents_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty database. False when the library is to
+          be imported (the import brings its own accounts).
+        default: true
+      documents_admin_user:
+        type: str
+        description: The first administrator's login, used only when documents_admin_bootstrap is true.
+        default: admin
+      documents_api_user:
+        type: str
+        description: The account that owns the API token; it must be an administrator (the status read).
+        default: admin
+      documents_signing_ref:
+        type: str
+        description: 'The secret: reference of the application''s signing key.'
+        default: secret:documents/secret-key
+      documents_admin_login_ref:
+        type: str
+        description: 'The secret: reference of the first administrator''s password (read only when documents_admin_bootstrap
+          is true).'
+        default: secret:documents/admin-password
+      documents_api_login_ref:
+        type: str
+        description: 'The secret: reference of the service account''s API token (40 hex characters).'
+        default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: *id002
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
+      documents_consumer_recursive:
+        type: bool
+        description: Read the inbox's subdirectories too.
+        default: false
+      documents_consumer_subdirs_as_tags:
+        type: bool
+        description: Tag a document with the names of the inbox subdirectories it came through.
+        default: false
+      documents_task_workers:
+        type: int
+        description: Parallel document-processing workers.
+        default: 1
+      documents_threads_per_worker:
+        type: int
+        description: Threads of each worker.
+        default: 2
+      documents_extra_env:
+        type: dict
+        description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
+        default: *id003
+      documents_expected_min_documents:
+        type: int
+        description: 'Health fails when the library holds fewer documents than this (0: not checked);
+          set it to the source''s count at a cutover.'
+        default: 0
+      documents_mem_limit:
+        type: str
+        description: Memory limit of the application container.
+        default: 2g
+      documents_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      documents_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      documents_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      documents_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      documents_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one migrates
+          the database).
+        default: 600
+      documents_restore_source:
+        type: path
+        description: Directory holding an export (library.tar and listing.jsonl).
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest; the same or a newer version) and record
+      it as pending.
+    options:
+      documents_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. documents).
+        required: true
+      documents_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 3.4.2).
+        default: ghcr.io/paperless-ngx/paperless-ngx:3.4.2@sha256:d704e84f88300eb6ab001ab15720a2330ff99169cf9f94d6b8fcc44b63a84c84
+      documents_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      documents_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      documents_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8000
+      documents_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/documents
+      documents_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      documents_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      documents_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, media/, consume/, broker/ and export/.'
+        default: /var/lib/hnx-modules/documents
+      documents_app_uid:
+        type: int
+        description: The application container's user id (no account on the host has it); owns data/,
+          media/, consume/ and export/.
+        default: 61040
+      documents_app_gid:
+        type: int
+        description: The application container's group id.
+        default: 61040
+      documents_broker_uid:
+        type: int
+        description: The broker container's user id; owns broker/.
+        default: 61041
+      documents_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61041
+      documents_timezone:
+        type: str
+        description: The application's time zone (PAPERLESS_TIME_ZONE).
+        default: Etc/UTC
+      documents_ocr_languages:
+        type: list
+        description: The OCR languages (Tesseract codes) as data; each must be one the image ships (deu,
+          eng, fra, ita, spa).
+        default: *id001
+      documents_url:
+        type: str
+        description: 'The public URL when the site adds a route (empty: none); the application then trusts
+          the name for sign-in and CSRF.'
+        default: ''
+      documents_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty database. False when the library is to
+          be imported (the import brings its own accounts).
+        default: true
+      documents_admin_user:
+        type: str
+        description: The first administrator's login, used only when documents_admin_bootstrap is true.
+        default: admin
+      documents_api_user:
+        type: str
+        description: The account that owns the API token; it must be an administrator (the status read).
+        default: admin
+      documents_signing_ref:
+        type: str
+        description: 'The secret: reference of the application''s signing key.'
+        default: secret:documents/secret-key
+      documents_admin_login_ref:
+        type: str
+        description: 'The secret: reference of the first administrator''s password (read only when documents_admin_bootstrap
+          is true).'
+        default: secret:documents/admin-password
+      documents_api_login_ref:
+        type: str
+        description: 'The secret: reference of the service account''s API token (40 hex characters).'
+        default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: *id002
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
+      documents_consumer_recursive:
+        type: bool
+        description: Read the inbox's subdirectories too.
+        default: false
+      documents_consumer_subdirs_as_tags:
+        type: bool
+        description: Tag a document with the names of the inbox subdirectories it came through.
+        default: false
+      documents_task_workers:
+        type: int
+        description: Parallel document-processing workers.
+        default: 1
+      documents_threads_per_worker:
+        type: int
+        description: Threads of each worker.
+        default: 2
+      documents_extra_env:
+        type: dict
+        description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
+        default: *id003
+      documents_expected_min_documents:
+        type: int
+        description: 'Health fails when the library holds fewer documents than this (0: not checked);
+          set it to the source''s count at a cutover.'
+        default: 0
+      documents_mem_limit:
+        type: str
+        description: Memory limit of the application container.
+        default: 2g
+      documents_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      documents_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      documents_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      documents_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      documents_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one migrates
+          the database).
+        default: 600
+      documents_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> to move to.
+        required: true
+  export:
+    short_description: Write the exit copy (object-tree) of the whole library to <data root>/export with
+      the product's exporter, and fail unless the export is whole.
+    options:
+      documents_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. documents).
+        required: true
+      documents_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 3.4.2).
+        default: ghcr.io/paperless-ngx/paperless-ngx:3.4.2@sha256:d704e84f88300eb6ab001ab15720a2330ff99169cf9f94d6b8fcc44b63a84c84
+      documents_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      documents_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      documents_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8000
+      documents_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/documents
+      documents_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      documents_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      documents_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, media/, consume/, broker/ and export/.'
+        default: /var/lib/hnx-modules/documents
+      documents_app_uid:
+        type: int
+        description: The application container's user id (no account on the host has it); owns data/,
+          media/, consume/ and export/.
+        default: 61040
+      documents_app_gid:
+        type: int
+        description: The application container's group id.
+        default: 61040
+      documents_broker_uid:
+        type: int
+        description: The broker container's user id; owns broker/.
+        default: 61041
+      documents_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61041
+      documents_timezone:
+        type: str
+        description: The application's time zone (PAPERLESS_TIME_ZONE).
+        default: Etc/UTC
+      documents_ocr_languages:
+        type: list
+        description: The OCR languages (Tesseract codes) as data; each must be one the image ships (deu,
+          eng, fra, ita, spa).
+        default: *id001
+      documents_url:
+        type: str
+        description: 'The public URL when the site adds a route (empty: none); the application then trusts
+          the name for sign-in and CSRF.'
+        default: ''
+      documents_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty database. False when the library is to
+          be imported (the import brings its own accounts).
+        default: true
+      documents_admin_user:
+        type: str
+        description: The first administrator's login, used only when documents_admin_bootstrap is true.
+        default: admin
+      documents_api_user:
+        type: str
+        description: The account that owns the API token; it must be an administrator (the status read).
+        default: admin
+      documents_signing_ref:
+        type: str
+        description: 'The secret: reference of the application''s signing key.'
+        default: secret:documents/secret-key
+      documents_admin_login_ref:
+        type: str
+        description: 'The secret: reference of the first administrator''s password (read only when documents_admin_bootstrap
+          is true).'
+        default: secret:documents/admin-password
+      documents_api_login_ref:
+        type: str
+        description: 'The secret: reference of the service account''s API token (40 hex characters).'
+        default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: *id002
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
+      documents_consumer_recursive:
+        type: bool
+        description: Read the inbox's subdirectories too.
+        default: false
+      documents_consumer_subdirs_as_tags:
+        type: bool
+        description: Tag a document with the names of the inbox subdirectories it came through.
+        default: false
+      documents_task_workers:
+        type: int
+        description: Parallel document-processing workers.
+        default: 1
+      documents_threads_per_worker:
+        type: int
+        description: Threads of each worker.
+        default: 2
+      documents_extra_env:
+        type: dict
+        description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
+        default: *id003
+      documents_expected_min_documents:
+        type: int
+        description: 'Health fails when the library holds fewer documents than this (0: not checked);
+          set it to the source''s count at a cutover.'
+        default: 0
+      documents_mem_limit:
+        type: str
+        description: Memory limit of the application container.
+        default: 2g
+      documents_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      documents_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      documents_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      documents_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      documents_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one migrates
+          the database).
+        default: 600

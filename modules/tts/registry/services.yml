@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes, keyed by the slot and renamed to the
+# instance the site selects; version is product.version (never repeated here), host is the module's
+# host role, which the site places on a guest. The lab registry (lab/services.yml) must carry it exactly
+# as bound (hnx modules check, docs/modules/registry-rows.md). Internal only: no public_hostname and
+# no public route. The service holds no key (the old one did not either: its callers are the
+# publishing pipeline, and the guest firewall admitting only that guest and the metrics scraper is the
+# control), so auth: none says what the network is doing.
+services:
+  tts:
+    capability: tts
+    impl: coqui-tts
+    host: server
+    protocol: http
+    port: 8091
+    health: {kind: http, path: /health, expect_status: 200}
+    owner: operator
+    tls: none
+    auth: none
+    tags: [compute, speech]
+    description: "The operator's cloned voice for the podcasts (POST /synthesize: JSON text in, 24 kHz mono WAV out). No public route, no egress; loads per job."

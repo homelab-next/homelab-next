@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data voice, object-tree): <data root>/export/{tts-data.tar.gz,listing.jsonl}. The
+# recordings and the embeddings cache are archived (the embeddings are written by renaming a finished
+# file into place, so a tar of them is never a half file; the cache and the weights are left out). The
+# service keeps running: it only reads the recordings. It is a snapshot: every run writes a new one.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Archive the recordings and the embeddings
+      ansible.builtin.command:
+        argv: >-
+          {{ ['tar', '-czf', tts_data_root ~ '/export/tts-data.tar.gz', '-C', tts_data_root] + tts_export_members }}
+      changed_when: true
+    - name: Hash the archive
+      ansible.builtin.stat:
+        path: "{{ tts_data_root }}/export/tts-data.tar.gz"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: tts_archive
+    - name: Write the listing
+      ansible.builtin.copy:
+        dest: "{{ tts_data_root }}/export/listing.jsonl"
+        content: "{{ {'key': 'tts-data.tar.gz', 'size': tts_archive.stat.size, 'sha256': tts_archive.stat.checksum} | to_json }}\n"
+        owner: "{{ tts_uid | int }}"
+        group: "{{ tts_gid | int }}"
+        mode: "0600"
+    - name: The archive belongs to the container's user
+      ansible.builtin.file:
+        path: "{{ tts_data_root }}/export/tts-data.tar.gz"
+        owner: "{{ tts_uid | int }}"
+        group: "{{ tts_gid | int }}"
+        mode: "0600"
+  tags: [export]

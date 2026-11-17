@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The cloned-voice speech service: a compose_app container built from this repository, the voice model from the model store (read-only, every file checked by sha256 before every load), the operator's reference recordings as data, loaded per job and unloaded when idle."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

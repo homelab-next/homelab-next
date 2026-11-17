@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: stop and remove the container (compose down). The data root (the operator's reference
+# recordings and the embeddings cache) and the compose project are kept for the operator to delete,
+# and the module's export hook (export_first) takes the exit copy before this runs; the weights are the
+# model store's. The decommission audit (module.yml lifecycle.remove.audit) checks nothing still names
+# the service.
+- name: Remove the speech service
+  hosts: mod_tts_server
+  become: true
+  tasks:
+    - name: Remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ tts_dir | default('/opt/compose/tts') }}/docker-compose.yml", down]
+      changed_when: true

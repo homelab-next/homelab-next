@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: Apache-2.0
+# What the service needs in its own database, through its own command line: the first administrator
+# when the database has no account (a restored database brings its own), the OpenID Connect source
+# when enabled, and the administrator's password when the sync is on and the secret's value is not
+# the one that signs in. Every secret travels in the environment of the docker client, named without
+# a value (`-e NAME`), so it is in no argv and in no log.
+- name: List the accounts
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ gitea_dir }}/docker-compose.yml", exec, -T, "{{ gitea_service }}", gitea, admin, user, list]
+  register: gitea_users
+  changed_when: false
+  check_mode: false
+
+- name: Create the administrator when there is no account
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ gitea_dir }}/docker-compose.yml"
+      - exec
+      - -T
+      - -e
+      - HNX_FORGE_PASSWORD
+      - "{{ gitea_service }}"
+      - sh
+      - -c
+      - 'exec gitea admin user create --admin --username "$1" --email "$2" --password "$HNX_FORGE_PASSWORD" --must-change-password=false'
+      - sh
+      - "{{ gitea_admin_user }}"
+      - "{{ gitea_admin_user }}@{{ gitea_hostname }}"
+  environment:
+    HNX_FORGE_PASSWORD: "{{ lookup('hnx_secret', gitea_admin_login_ref) }}"
+  when: (gitea_users.stdout_lines | map('trim') | reject('equalto', '') | list | length) <= 1
+  args:
+    expand_argument_vars: false
+  changed_when: true
+  no_log: true
+
+- name: Does the secret's password sign the administrator in
+  ansible.builtin.include_tasks: helper.yml
+  vars:
+    gitea_helper_cmd: signin
+  when: gitea_admin_password_sync | bool
+
+- name: Set the administrator's password to the secret's value
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ gitea_dir }}/docker-compose.yml"
+      - exec
+      - -T
+      - -e
+      - HNX_FORGE_PASSWORD
+      - "{{ gitea_service }}"
+      - sh
+      - -c
+      - 'exec gitea admin user change-password --username "$1" --password "$HNX_FORGE_PASSWORD" --must-change-password=false'
+      - sh
+      - "{{ gitea_admin_user }}"
+  environment:
+    HNX_FORGE_PASSWORD: "{{ lookup('hnx_secret', gitea_admin_login_ref) }}"
+  when: gitea_admin_password_sync | bool and not (gitea_facts.signin | default(true))
+  args:
+    expand_argument_vars: false
+  changed_when: true
+  no_log: true
+
+- name: List the authentication sources
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ gitea_dir }}/docker-compose.yml", exec, -T, "{{ gitea_service }}", gitea, admin, auth, list]
+  register: gitea_sources
+  changed_when: false
+  check_mode: false
+  when: gitea_oidc_enabled | bool
+
+- name: Name the source's id when it exists
+  ansible.builtin.set_fact:
+    gitea_oidc_id: >-
+      {{ gitea_sources.stdout | regex_findall('(?m)^\s*([0-9]+)\s+' ~ (gitea_oidc_name | regex_escape) ~ '\s')
+         | first | default('', true) }}
+  when: gitea_oidc_enabled | bool
+
+- name: Create or update the OpenID Connect source
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ gitea_dir }}/docker-compose.yml"
+      - exec
+      - -T
+      - -e
+      - HNX_FORGE_OIDC_SECRET
+      - "{{ gitea_service }}"
+      - sh
+      - -c
+      - 'exec gitea admin auth "$1" ${2:+--id "$2"} --name "$3" --provider openidConnect --key "$4" --secret "$HNX_FORGE_OIDC_SECRET" --auto-discover-url "$5" --scopes openid --scopes profile --scopes email'
+      - sh
+      - "{{ 'update-oauth' if gitea_oidc_id != '' else 'add-oauth' }}"
+      - "{{ gitea_oidc_id }}"
+      - "{{ gitea_oidc_name }}"
+      - "{{ gitea_oidc_client_id }}"
+      - "{{ gitea_oidc_issuer_url | regex_replace('/\\Z', '') }}/.well-known/openid-configuration"
+  environment:
+    HNX_FORGE_OIDC_SECRET: "{{ lookup('hnx_secret', gitea_oidc_cred_ref) }}"
+  # an update is idempotent in effect; the source is rewritten from the role's settings each run
+  args:
+    expand_argument_vars: false
+  changed_when: gitea_oidc_id == ''
+  no_log: true
+  when: gitea_oidc_enabled | bool
