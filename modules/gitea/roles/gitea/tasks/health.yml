@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy; /api/healthz passes over HTTPS verified against
+# the lab CA and for the service's name; an anonymous read is REFUSED; the administrator signs in
+# with the secret's password and the service reports the expected version; the registry answers its
+# authentication challenge (and, with a pull account, accepts its token); the SSH port answers and
+# presents exactly the host keys the secrets hold. Read-only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: gitea
+        compose_app_dir: "{{ gitea_app.compose_app_dir }}"
+        compose_app_spec: "{{ gitea_app.compose_app_spec }}"
+    - name: The service answers as the checks above say
+      ansible.builtin.include_tasks: helper.yml
+      vars:
+        gitea_helper_cmd: health
+  tags: [health]

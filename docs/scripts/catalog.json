@@ -495,6 +495,62 @@
     },
     {
       "exit": {
+        "0": "done",
+        "1": "a check failed or the input is not usable (the reason on stderr, never a credential)",
+        "2": "usage error"
+      },
+      "id": "forge-helper",
+      "inputs": "wait | health | signin | dbcounts, with the settings as JSON on standard input (the credential is among them)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "JSON of facts on stdout; a one-line reason on stderr",
+      "owner": "platform",
+      "path": "modules/gitea/roles/gitea/files/hnx_gitea.py",
+      "purpose": "Read-only checks of the forge service (wait, health, signin) and the counts and content fingerprint of its database, read from a dump or a database file.",
+      "status": "active",
+      "trigger": [
+        "role:gitea"
+      ]
+    },
+    {
+      "exit": {
+        "0": "done (for verify, the target equals the export)",
+        "1": "the target differs from the export, or the source or the export is not intact",
+        "2": "usage error or a command on an endpoint failed"
+      },
+      "id": "forge-migrate",
+      "inputs": "two endpoints named on the command line (an ssh destination and a container name, never a literal in this file); for stage and verify, an export directory written by dump",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "an export directory (dump.zip, manifest.json, repos.tsv, listing.jsonl) for dump; JSON facts for the other commands",
+      "owner": "maintainers",
+      "path": "tools/migrate/forge.py",
+      "purpose": "Copy a forge instance (repositories, accounts, packages) from one place to another as a verified export, over ssh pipes, and prove the target holds exactly what the source held.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "placed",
+        "1": "refused or failed (the reason on stderr; the live paths are as they were)"
+      },
+      "id": "forge-restore",
+      "inputs": "the data directory, the dump, the container's ids and a stamp as JSON on standard input",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "JSON of what was placed, what was set aside and the restored database's counts",
+      "owner": "platform",
+      "path": "modules/gitea/roles/gitea/files/gitea_restore.py",
+      "purpose": "Place a forge dump into the module's data directory beside what is there (renamed, never deleted), taking only the repositories and the data directories the role does not own.",
+      "status": "active",
+      "trigger": [
+        "role:gitea"
+      ]
+    },
+    {
+      "exit": {
         "0": "deps installed, or every check of the suite passed",
         "1": "a setting is missing or wrong, a process did not come up, or a check did not pass"
       },

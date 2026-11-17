@@ -9,11 +9,11 @@
 counts:
   product-names-allow: 87
   no-raw-endpoints-allow: 75
-  scripts-allow: 27
+  scripts-allow: 28
   caddy-lint-allow: 4
   credential-headers-allow: 1
   run-output-lint-allow: 0
-  shared-helpers-allow: 10
+  shared-helpers-allow: 11
   tls-verify-allow: 0
   workstation-refs-allow: 2
   yaml-loader-allow: 52
@@ -22,11 +22,11 @@ counts:
 digests:
   product-names-allow: sha256:203639cfc160d3f5b5d0eb88576a61cf885414f1bd993314944489442596e176
   no-raw-endpoints-allow: sha256:4cd649047149dfe3e3a6ca94977736a0a5af97f559aefa2f7c4ec3a92dd925a2
-  scripts-allow: sha256:28b546623ce392564d2b7481630e494114f537c70b5f72c515fc121b32fb9d6f
+  scripts-allow: sha256:a5e062bc9062407c7d0e18af2b4a3f057eae478d3b7210deb53b9f8f66d6586e
   caddy-lint-allow: sha256:b14357e3e396abaf43255c870a43e23f4acedbdb85692c67777de507fe0740c8
   credential-headers-allow: sha256:741f0c84795e4d682d16a229a223a75fc3080304ad8d56716be9730c2524c230
   run-output-lint-allow: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-  shared-helpers-allow: sha256:92b5755bf712d547abe9b6158ab4d7f2b3e48171cc48264a02bbb748cebd9585
+  shared-helpers-allow: sha256:dbf301f13e547f88feffd0505d0946e29c25e7557cbf72e3903b0b612fd95a30
   tls-verify-allow: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   workstation-refs-allow: sha256:efc83f88ce7abea0c7e7b37f84bdf9b1ab41dcb56bec6ca6ff33dd296054c887
   yaml-loader-allow: sha256:b1868fa91fa08eed5370660b2c0c039d9db8862907915a7b995152a5987be441

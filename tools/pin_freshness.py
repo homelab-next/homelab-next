@@ -106,6 +106,7 @@ SOURCES: dict[str, tuple[str, str]] = {
         "the Docker official image (docker.io/library/redis): compare its tags with the Redis "
         "release page by hand, within the pinned major version (the broker holds only queued tasks)",
     ),
+    "role:gitea/gitea_image": ("github", "go-gitea/gitea"),
     "role:keycloak/keycloak_image": ("github", "keycloak/keycloak"),
     "role:keycloak/keycloak_postgres_image": (
         "none",
@@ -228,6 +229,12 @@ NOTES: dict[str, str] = {
         "an image (modules/trino): bump the tag and its digest together, with product.version in "
         "modules/trino/module.yml and the lab registry's version; read the release notes of every "
         "version crossed (catalog properties and procedure options change between releases)"
+    ),
+    "role:gitea/gitea_image": (
+        "an image (modules/gitea, the rootless build): bump the tag and its digest together, with "
+        "product.version in modules/gitea/module.yml and the lab registry's version; the upgrade "
+        "playbook exports the instance first and refuses a target older than the running version (a "
+        "newer version migrates the database forward and an older one cannot open it)"
     ),
     "role:nifi/nifi_image": (
         "an image (modules/nifi): bump the tag and its digest together, with product.version in "

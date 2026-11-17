@@ -17,13 +17,22 @@ and never its value.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from collections.abc import Callable, Iterable
 from typing import Any
 
 from homelabnext.registry import Endpoint, ResolutionError, Resolver
+from homelabnext.registry.model import secret_env_name
 
-__all__ = ["AdapterConfigError", "env_reader", "env_secret", "resolve", "run_token"]
+__all__ = [
+    "AdapterConfigError",
+    "env_reader",
+    "env_secret",
+    "optional_credential",
+    "resolve",
+    "run_token",
+]
 
 _RUN_TOKEN: str | None = None
 
@@ -97,6 +106,17 @@ def env_secret(var: str) -> Callable[[], str]:
     """:func:`env_reader` for one variable: a callable returning its value."""
     read = env_reader(var)
     return lambda: read()[0]
+
+
+def optional_credential(ref: Any, pattern: re.Pattern[str]) -> Callable[[], str] | None:
+    """The reader of an adapter's optional ``credential`` setting: ``None`` when it is not given,
+    else :func:`env_secret` of the variable the secret reference (``secret:<name>``, matching
+    ``pattern``) names; a value that is not a reference is refused without echoing it."""
+    if ref is None:
+        return None
+    if not isinstance(ref, str) or not pattern.fullmatch(ref):
+        raise AdapterConfigError("credential is a secret name (secret:<name>), never a value")
+    return env_secret(secret_env_name(ref))
 
 
 def run_token() -> str:

@@ -20,9 +20,9 @@ orchestration_manage_accounts: true
 # the owner and group of what is root's (the releases, the configuration, the unit); root on a host
 orchestration_owner: root
 orchestration_owner_group: root
-orchestration_install_dir: /opt/hnx-orchestration
+orchestration_install_dir: /opt/hnx/orchestration
 orchestration_keep_releases: 2
-orchestration_config_dir: /etc/orchestration
+orchestration_config_dir: /etc/hnx/orchestration
 # the module's data root on its host (docs/modules/data.md): controller.db (the store, owner-only),
 # runs/ (each session's working directory), usage/ and export/
 orchestration_data_root: /var/lib/hnx-modules/orchestration

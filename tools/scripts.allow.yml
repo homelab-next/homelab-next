@@ -38,6 +38,12 @@ uncalled:
     and container names as arguments: dump and rehearsal restore ahead of a cutover, then freeze,
     final dump, restore and re-count in the cutover window (modules/openproject/README.md,
     "Migrating in"); it names no instance of its own, so no unit or workflow can call it
+  forge-migrate: >-
+    the operator (or the cutover agent) runs it by hand, with the two instances' ssh destinations
+    and container names as arguments: a rehearsal dump and stage ahead of a cutover, then freeze,
+    final dump, stage, the role's restore and verify in the cutover window
+    (modules/gitea/README.md, "Migrating in"); it names no instance of its own, so no unit or
+    workflow can call it
   lab-rehearsal-swap-lake-query: >-
     run by lab-smoke (compose/lab-in-a-box/smoke.sh) through its `rehearsals/*.sh` glob, which
     names no path the scanner can resolve; the nightly workflow runs lab-smoke
