@@ -106,7 +106,7 @@ def main_ok(tmp_path, **kw):
 # ----------------------------------------------------------------------------- render
 
 
-def test_main_renders_the_stack_pinned_and_hardened(tmp_path):
+def test_main_renders_the_stack_pinned_and_hardened_exactly(tmp_path):
     main_ok(tmp_path)
     svc = compose(tmp_path)
     assert sorted(svc) == sorted(
@@ -132,7 +132,7 @@ def test_main_renders_the_stack_pinned_and_hardened(tmp_path):
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-def test_the_download_clients_are_inside_the_vpn_namespace_and_publish_nothing(tmp_path):
+def test_the_download_clients_are_inside_the_vpn_namespace_and_publish_nothing_exactly(tmp_path):
     """The kill-switch: no network of their own, so no route but the tunnel."""
     main_ok(tmp_path)
     svc = compose(tmp_path)
@@ -165,7 +165,7 @@ def test_only_the_vpn_client_has_net_admin_and_the_tunnel_device(tmp_path):
     assert "SERVER_HOSTNAMES" not in env  # optional: empty lets the client pick
 
 
-def test_server_hostnames_and_no_forwarded_port_are_plain_optional_settings(tmp_path):
+def test_server_hostnames_and_no_forwarded_port_are_plain_optional_settings_as_documented(tmp_path):
     main_ok(
         tmp_path,
         media_automation_vpn_server_hostnames="a.example.internal,b.example.internal",
@@ -204,7 +204,7 @@ def test_the_library_is_writable_at_the_same_path_with_downloads_inside_it(tmp_p
     assert f"{tmp_path}/cache:/temp" in svc["tdarr"]["volumes"]
 
 
-def test_the_apps_run_as_the_configured_ids_and_the_request_app_as_its_own(tmp_path):
+def test_the_apps_run_as_the_configured_ids_and_the_request_app_as_its_own_as_documented(tmp_path):
     main_ok(tmp_path)  # the ids are the unprivileged test's own: it can chown to no other
     ids = f"{os.getuid()}:{os.getgid()}"
     svc = compose(tmp_path)
@@ -561,7 +561,7 @@ def test_health_fails_when_the_library_is_no_longer_mounted(tmp_path):
     assert r.returncode != 0 and "is not a mounted library" in r.stdout
 
 
-def test_health_fails_when_a_helper_timer_is_not_active(tmp_path):
+def test_health_fails_when_a_helper_timer_is_not_active_as_documented(tmp_path):
     with Stack() as s:
         r = _health(
             tmp_path,
@@ -599,7 +599,9 @@ def _docker_log(tmp_path: Path) -> Path:
     return log
 
 
-def test_export_archives_the_configs_with_the_stack_stopped_and_restore_checks_it(tmp_path):
+def test_export_archives_the_configs_with_the_stack_stopped_and_restore_checks_it_as_documented(
+    tmp_path,
+):
     v = mv(tmp_path)
     _config(tmp_path / "data")
     log = _docker_log(tmp_path)
