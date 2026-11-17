@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: Apache-2.0
+# The dead-man watch (LL-571): the page token (root's, 0400), the script, its
+# state directory, the shared last-run writer, the service and timer units, enabled and started.
+# Nothing is installed with no beats.
+- name: Ensure the token, state and script directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ ntfy_deadman_auth_file | dirname }}", mode: "0755"}
+    - {path: "{{ ntfy_deadman_state_dir }}", mode: "0700"}
+    - {path: "{{ ntfy_deadman_script | dirname }}", mode: "0755"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Write the publish token the watch pages with (owner-only)
+  ansible.builtin.copy:
+    dest: "{{ ntfy_deadman_auth_file }}"
+    content: "{{ lookup('hnx_secret', ntfy_publisher_key_ref) | trim }}\n"
+    mode: "0400"
+  no_log: true
+
+- name: Write the watch script
+  ansible.builtin.template:
+    src: deadman-watch.py.j2
+    dest: "{{ ntfy_deadman_script }}"
+    mode: "0755"
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ ntfy_last_run_dir }}"
+    last_run_group: "{{ ntfy_last_run_group }}"
+    last_run_writer: "{{ ntfy_last_run_writer }}"
+
+- name: Write the service and timer units
+  ansible.builtin.template:
+    src: "deadman.{{ item }}.j2"
+    dest: "{{ ntfy_unit_dir }}/hnx-ntfy-deadman.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: ntfy_deadman_units
+
+- name: Ask whether the watch's timer is enabled
+  ansible.builtin.command:
+    argv: ["{{ ntfy_systemctl_cli }}", is-enabled, hnx-ntfy-deadman.timer]
+  register: ntfy_deadman_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Ask whether the watch's timer is started
+  ansible.builtin.command:
+    argv: ["{{ ntfy_systemctl_cli }}", is-active, hnx-ntfy-deadman.timer]
+  register: ntfy_deadman_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd (units changed) and enable and start the timer (changed, or not both)
+  ansible.builtin.command:
+    argv: "{{ [ntfy_systemctl_cli] + item }}"
+  vars:
+    ntfy_deadman_owed: >-
+      {{ ntfy_deadman_units is changed
+         or ntfy_deadman_enabled.stdout | default('') | trim != 'enabled'
+         or ntfy_deadman_active.stdout | default('') | trim != 'active' }}
+  loop: >-
+    {{ ([['daemon-reload']] if ntfy_deadman_units is changed else [])
+       + ([['enable', '--now', 'hnx-ntfy-deadman.timer']] if ntfy_deadman_owed | bool else []) }}
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true

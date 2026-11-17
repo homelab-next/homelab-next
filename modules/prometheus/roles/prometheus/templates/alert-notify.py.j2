@@ -7,12 +7,12 @@
 #   owner: platform
 #   trigger: [timer:prometheus/alerts, role:prometheus]
 #   inputs: the metrics service's /api/v1/alerts on this host; the previous state file
-#   outputs: the state file and the last send's outcome (owner-only) and, on a change of the firing set, one alert to the notify service (ntfy, publish token)
+#   outputs: the state file and the last send's outcome (owner-only) and, on a change of the firing set, one alert to the notify service (ntfy, publish token); and, while the Watchdog rule fires, the dead-man heartbeat (one minimum-priority message to the heartbeat topic, at most every few minutes)
 #   installs_to: /usr/local/libexec/homelabnext/prometheus-alert-notify
 #   exit:
 #     "0": checked (and alerted, if the firing set changed)
 #     "1": the metrics service could not be asked (alerted once after the configured number of minutes) (or, with --test, the channel did not deliver)
-#     "2": the alert could not be sent; it stays owed to the next run
+#     "2": the alert or the heartbeat could not be sent; it stays owed to the next run
 """Managed by homelabnext (role prometheus); local changes are overwritten.  The metrics service
 evaluates the alert rules; this posts what fires.  State-diffed, as every alerting control here:
 a message goes out only when the SET of firing alerts differs from the set last posted (new ones
@@ -37,9 +37,13 @@ TOPIC = {{ prometheus_notify_topic | to_json }}
 PRIORITY = {{ prometheus_notify_priority | int }}
 TOKEN_FILE = {{ prometheus_notify_auth_file | to_json }}
 LAB = {{ prometheus_logical_id | to_json }}
+HEARTBEAT_TOPIC = {{ prometheus_heartbeat_topic | to_json }}
+HEARTBEAT_EVERY = {{ (prometheus_heartbeat_every_minutes | int) * 60 }}
 UNREACHABLE_AFTER = {{ ((prometheus_unreachable_after_minutes | int * 60) // (prometheus_alert_interval_seconds | int)) | int }}
 STATE = os.path.join(STATE_DIR, "alert-state.json")
 SEND_STATUS = os.path.join(STATE_DIR, "send-status.json")
+HEARTBEAT = os.path.join(STATE_DIR, "heartbeat.json")
+WATCHDOG = "Watchdog"  # the always-firing rule: its presence proves the rules are loaded and evaluated
 SAFE = re.compile(r"[^A-Za-z0-9.+_:/ %~=,()-]")
 CRITICAL = 4  # the priority of a message that names a critical alert
 
@@ -98,24 +102,28 @@ def record(error=None):
 
 
 def firing_alerts():
-    """{key: (severity, summary)} for the alerts in the firing state (pending is not yet)."""
+    """({key: (severity, summary)}, watchdog_firing) for the alerts in the firing state (pending
+    is not yet).  The Watchdog is the heartbeat's proof of life, never an alert to post."""
     req = urllib.request.Request(API + "/api/v1/alerts", headers={"Accept": "application/json"})
     with OPENER.open(req, timeout=10) as resp:
         doc = json.load(resp)
     if doc.get("status") != "success":
         raise ValueError("the metrics service answered a status other than success")
-    found = {}
+    found, watchdog = {}, False
     for alert in doc["data"]["alerts"]:
         if alert.get("state") != "firing":
             continue
         labels = alert.get("labels", {})
+        if labels.get("alertname") == WATCHDOG:
+            watchdog = True
+            continue
         key = "|".join([clean(labels.get("alertname", "?"), 64)] + [f"{k}={clean(v, 64)}" for k, v in sorted(labels.items()) if k not in ("alertname", "severity")])
         summary = clean(alert.get("annotations", {}).get("summary") or key)
         found[key] = (clean(labels.get("severity", ""), 16), summary)
-    return found
+    return found, watchdog
 
 
-def _deliver(title, body, priority):
+def _deliver(title, body, priority, topic=None, tags="homelabnext,prometheus"):
     with open(TOKEN_FILE, encoding="utf-8") as fh:
         token = fh.read().strip()
     if not token:
@@ -124,19 +132,19 @@ def _deliver(title, body, priority):
         # never quoted: http.client's own refusal would print the whole header value
         raise ValueError(f"the token in {TOKEN_FILE} is not printable ASCII")
     _SECRETS.append(token)
-    headers = {"Title": title, "Priority": str(priority), "Tags": "homelabnext,prometheus",
+    headers = {"Title": title, "Priority": str(priority), "Tags": tags,
                "Content-Type": "text/plain; charset=utf-8", "Authorization": "Bearer " + token}
-    req = urllib.request.Request(f"{NOTIFY_URL}/{TOPIC}", data=body.encode("utf-8"), headers=headers, method="POST")
+    req = urllib.request.Request(f"{NOTIFY_URL}/{topic or TOPIC}", data=body.encode("utf-8"), headers=headers, method="POST")
     with OPENER.open(req, timeout=10) as resp:
         resp.read()
         if not 200 <= resp.status < 300:
             raise ValueError(f"the notify endpoint answered HTTP {resp.status}")
 
 
-def send(title, body, priority=None):
-    """Deliver one alert and record the outcome (the last attempt, for health)."""
+def send(title, body, priority=None, topic=None, tags="homelabnext,prometheus"):
+    """Deliver one message and record the outcome (the last attempt, for health)."""
     try:
-        _deliver(title, body, priority or PRIORITY)
+        _deliver(title, body, priority or PRIORITY, topic, tags)
     except Exception as exc:
         record(describe(exc))
         raise
@@ -153,6 +161,35 @@ def run_test():
         print(f"channel test failed: {describe(exc)}", file=sys.stderr)
         return 1
     print(f"channel test ok: {text}")
+    return 0
+
+
+def heartbeat(watchdog):
+    """The dead-man's heartbeat: one minimum-priority message to the heartbeat topic of the notify
+    service, at most once per HEARTBEAT_EVERY, and only when this run proved the whole chain: the
+    metrics service answered AND its Watchdog rule is firing (rules loaded and evaluated).  The
+    notify service's host (not this guest) watches that topic and pages when it goes quiet; so a
+    dead metrics container, a dead timer, a dead guest or a broken rule file all end in silence
+    there, and silence is what pages.  Returns 0, or 2 when the post failed (owed to the next run)."""
+    if not HEARTBEAT_TOPIC:
+        return 0
+    if not watchdog:
+        print(f"no heartbeat: the {WATCHDOG} rule is not firing (rules not loaded or not yet evaluated)", file=sys.stderr)
+        return 0
+    try:
+        with open(HEARTBEAT, encoding="utf-8") as fh:
+            last = float(json.load(fh).get("sent", 0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        last = 0.0
+    now = time.time()
+    if now - last < HEARTBEAT_EVERY - 10:
+        return 0
+    try:
+        send(f"heartbeat {LAB}", f"metrics path of {LAB} alive", 1, topic=HEARTBEAT_TOPIC, tags="homelabnext,heartbeat")
+    except Exception as exc:
+        print(f"heartbeat not sent: {describe(exc)}", file=sys.stderr)
+        return 2
+    write_private(HEARTBEAT, {"sent": now})
     return 0
 
 
@@ -195,7 +232,7 @@ def main():
     alerted, misses, unreachable_posted = load_state()
     rc = 0
     try:
-        firing = firing_alerts()
+        firing, watchdog = firing_alerts()
     except Exception as exc:
         misses += 1
         print(f"the metrics service could not be asked: {describe(exc)}", file=sys.stderr)
@@ -219,7 +256,9 @@ def main():
             print(f"alert not sent: {describe(exc)}", file=sys.stderr)
             rc = 2
     write_private(STATE, {"alerted": alerted, "misses": 0, "unreachable_posted": unreachable_posted})
-    return rc
+    # a failing alert post (rc 2) skips the heartbeat on purpose: the notify path is broken, so the
+    # heartbeat could not be delivered either, and the watch's silence is then the honest signal
+    return rc or heartbeat(watchdog)
 
 
 if __name__ == "__main__":

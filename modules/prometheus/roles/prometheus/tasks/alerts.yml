@@ -13,6 +13,67 @@
       - prometheus_notify_url is match('^https://') or prometheus_notify_allow_plain_http | bool
     fail_msg: "prometheus: the notify endpoint {{ prometheus_notify_url }} is not http(s), or the token would go over plain http (set prometheus_notify_allow_plain_http for a LAN endpoint with no TLS)"
 
+# The dead-man is only a dead-man if its receiver is somewhere else: a notify service on THIS guest
+# dies with it, and the heartbeat would be watched by the thing it watches (LL-571). Judged by the
+# registry's placement (the metrics row's host_id against the notify row's) and by the address
+# the endpoint names (loopback, this guest's bind address or any of its own addresses).
+- name: Name where the heartbeat receiver lives and where this guest is
+  ansible.builtin.set_fact:
+    prometheus_notify_host: "{{ prometheus_notify_url | regex_replace('^https?://(\\[[^]]*\\]|[^/:]+).*$', '\\1') }}"
+    prometheus_notify_row_host: "{{ lookup('hnx_registry', prometheus_notify_id, field='host_id') }}"
+    prometheus_own_row_host: "{{ lookup('hnx_registry', prometheus_logical_id, field='host_id') }}"
+  when: prometheus_heartbeat_topic | length > 0
+
+# The receiver's name is resolved as this guest resolves it (getent: DNS, aliases, CNAMEs, hosts
+# file; IPv4 and IPv6), because the registry's alias name and the URL's host say nothing about
+# which machine answers. Any resolved address that is loopback or one of this guest's own is a
+# refusal; so is a name that does not resolve (nothing can be judged), unless
+# prometheus_heartbeat_allow_unresolved says the operator accepts that.
+- name: Resolve the heartbeat receiver as this guest does
+  ansible.builtin.command:
+    argv: ["{{ prometheus_getent_cli }}", ahosts, "{{ prometheus_notify_host | regex_replace('^\\[|\\]$', '') }}"]
+  register: prometheus_receiver_lookup
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: prometheus_heartbeat_topic | length > 0
+
+- name: Name the receiver's addresses and this guest's own
+  ansible.builtin.set_fact:
+    prometheus_receiver_addresses: >-
+      {{ prometheus_receiver_lookup.stdout_lines | default([]) | map('split') | map('first') | map('lower')
+         | map('regex_replace', '%.*$', '') | unique | list }}
+    prometheus_own_addresses: >-
+      {{ ([prometheus_bind] + (ansible_facts.all_ipv4_addresses | default([]))
+          + (ansible_facts.all_ipv6_addresses | default([]))) | map('lower') | unique | list }}
+  when: prometheus_heartbeat_topic | length > 0
+
+- name: Refuse a heartbeat receiver on the metrics guest itself
+  ansible.builtin.assert:
+    that:
+      - prometheus_notify_row_host != prometheus_own_row_host
+      - prometheus_notify_host != 'localhost'
+      - prometheus_notify_host != prometheus_bind
+      - prometheus_notify_host != (ansible_facts.hostname | default(''))
+      - prometheus_receiver_addresses | select('match', '^(127\\.|::1\\Z)') | list | length == 0
+      - prometheus_receiver_addresses | intersect(prometheus_own_addresses) | length == 0
+    fail_msg: >-
+      prometheus: the notify service ({{ prometheus_notify_id }}, {{ prometheus_notify_url }}) runs on this
+      metrics guest (it resolves to {{ prometheus_receiver_addresses }}), so the dead-man heartbeat would be
+      received and watched by the thing it watches: when this guest dies, nothing pages (LL-571). Place
+      the notify service on another host, or set prometheus_heartbeat_topic to "" to run with no outside dead-man
+  when: prometheus_heartbeat_topic | length > 0
+
+- name: Refuse a receiver that does not resolve (nothing can show it is elsewhere)
+  ansible.builtin.assert:
+    that:
+      - prometheus_receiver_lookup.rc == 0 and prometheus_receiver_addresses | length > 0
+    fail_msg: >-
+      prometheus: the heartbeat receiver {{ prometheus_notify_host }} does not resolve on this guest, so it
+      cannot be shown to be on another host. Fix the name, or set prometheus_heartbeat_allow_unresolved
+      to accept that, or prometheus_heartbeat_topic to "" for no outside dead-man
+  when: prometheus_heartbeat_topic | length > 0 and not (prometheus_heartbeat_allow_unresolved | bool)
+
 - name: Warn that the token goes over plain http (the explicit opt-in)
   ansible.builtin.debug:
     msg: "prometheus: the publish token goes in clear to {{ prometheus_notify_url }} (prometheus_notify_allow_plain_http); LAN only, prefer TLS"
