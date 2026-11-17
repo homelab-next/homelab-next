@@ -500,7 +500,7 @@
         "2": "usage error"
       },
       "id": "forge-helper",
-      "inputs": "wait | health | signin | dbcounts, with the settings as JSON on standard input (the credential is among them)",
+      "inputs": "wait | health | signin | dbcounts | strip | secretfp | appkey, with the settings as JSON on standard input (the credential is among them)",
       "kind": "tool",
       "language": "python",
       "outputs": "JSON of facts on stdout; a one-line reason on stderr",
