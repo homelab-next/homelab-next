@@ -88,7 +88,7 @@ def overlay(tmp: Path) -> Path:
         "# SPDX-License-Identifier: Apache-2.0\n"
         "id: guest:media-1\nkind: vm\nprovisioning: terraform\nstatus: planned\n"
         "placement: {node: hv-01, vmid: 241, vmid_scheme: freeform}\n"
-        "resources:\n  cpu: {cores: 4}\n  memory: {size_mb: 8192}\n"
+        "resources:\n  cpu: {cores: 4}\n  memory: {size_mb: 16384}\n"
         "  disks: [{name: rootfs, size_gb: 40, pool: fast}]\n"
         "image: {logical: debian-13-cloudinit, kind: template-clone, os_type: linux-6}\n"
         "cloudinit: {user: ansible, ssh_authorized_keys: [operator]}\n"

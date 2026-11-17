@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# The server's EncodingOptions (config/encoding.xml), written before the container is created so a
+# new or recreated container starts with them (the server reads the file at start). Enabled: the
+# transcode directory is the tmpfs, throttling and segment deletion keep one long stream from filling
+# it. Disabled (media_transcode_tmpfs_size 0): only a TranscodingTempPath this role pointed at the
+# tmpfs is cleared, so the server falls back to its default under /cache. The server writes one
+# element per line; an element that is absent is added before the closing tag.
+- name: Seed config/encoding.xml (a fresh install only; an existing file is edited in place below)
+  ansible.builtin.copy:
+    dest: "{{ media_data_root }}/config/config/encoding.xml"
+    content: "{{ media_encoding_xml_seed }}"
+    owner: "{{ media_uid | int }}"
+    group: "{{ media_gid | int }}"
+    mode: "0600"
+    force: false
+  when: media_transcode_tmpfs_size | int > 0
+
+- name: Set the transcode directory, throttling and segment deletion
+  ansible.builtin.lineinfile:
+    path: "{{ media_data_root }}/config/config/encoding.xml"
+    regexp: '^\s*<{{ item.tag }}(\s*/>|>[^<]*</{{ item.tag }}>)\s*$'
+    line: "  <{{ item.tag }}>{{ item.value }}</{{ item.tag }}>"
+    insertbefore: '^</EncodingOptions>'
+  loop:
+    - {tag: TranscodingTempPath, value: "{{ media_transcode_path }}"}
+    - {tag: EnableThrottling, value: "true"}
+    - {tag: ThrottleDelaySeconds, value: "{{ media_transcode_throttle_seconds | int }}"}
+    - {tag: EnableSegmentDeletion, value: "true"}
+    - {tag: SegmentKeepSeconds, value: "{{ media_transcode_keep_seconds | int }}"}
+  loop_control:
+    label: "{{ item.tag }}"
+  when: media_transcode_tmpfs_size | int > 0
+
+- name: Look at encoding.xml
+  ansible.builtin.stat:
+    path: "{{ media_data_root }}/config/config/encoding.xml"
+  register: media_encoding_stat
+  check_mode: false
+  when: media_transcode_tmpfs_size | int == 0
+
+- name: Clear a TranscodingTempPath that points at the tmpfs when the tmpfs is off
+  ansible.builtin.replace:
+    path: "{{ media_data_root }}/config/config/encoding.xml"
+    regexp: '^(\s*)<TranscodingTempPath>{{ media_transcode_path }}</TranscodingTempPath>\s*$'
+    replace: '\1<TranscodingTempPath />'
+  when:
+    - media_transcode_tmpfs_size | int == 0
+    - media_encoding_stat.stat.exists | default(false)

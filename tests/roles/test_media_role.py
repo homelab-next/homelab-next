@@ -114,6 +114,148 @@ def test_the_container_joins_the_role_slice_the_module_play_names(tmp_path):
     assert doc["services"]["media"]["cgroup_parent"] == "hnx-media-server.slice"
 
 
+GIB = 1 << 30
+
+
+def _encoding(tmp_path: Path) -> str:
+    return (tmp_path / "data" / "config" / "config" / "encoding.xml").read_text()
+
+
+def test_main_runs_a_read_only_root_with_the_transcode_tmpfs_and_points_the_server_at_it(tmp_path):
+    v = media_vars(tmp_path)
+    r = run_role(tmp_path, ROLE, "main", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    svc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]["media"]
+    assert svc["read_only"] is True
+    tmpfs = [m for m in svc["volumes"] if isinstance(m, dict)]
+    assert {m["target"]: m for m in tmpfs} == {
+        "/tmp": {"type": "tmpfs", "target": "/tmp", "tmpfs": {"size": 256 << 20, "mode": 0o1777}},
+        "/transcode": {
+            "type": "tmpfs",
+            "target": "/transcode",
+            "tmpfs": {"size": 8 * GIB, "mode": 0o1777},
+        },
+    }
+    assert svc["mem_limit"] == "12g"
+    xml = _encoding(tmp_path)
+    assert "<TranscodingTempPath>/transcode</TranscodingTempPath>" in xml
+    assert "<EnableThrottling>true</EnableThrottling>" in xml
+    assert "<EnableSegmentDeletion>true</EnableSegmentDeletion>" in xml
+    assert "<ThrottleDelaySeconds>60</ThrottleDelaySeconds>" in xml
+    assert "<SegmentKeepSeconds>300</SegmentKeepSeconds>" in xml
+    enc = tmp_path / "data" / "config" / "config" / "encoding.xml"
+    assert oct(enc.stat().st_mode & 0o777) == "0o600"
+    again = run_role(tmp_path, ROLE, "main", v)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+EXISTING_ENCODING = """<?xml version="1.0" encoding="utf-8"?>
+<EncodingOptions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <EncodingThreadCount>-1</EncodingThreadCount>
+  <TranscodingTempPath>/old/transcodes</TranscodingTempPath>
+  <EnableThrottling>false</EnableThrottling>
+  <ThrottleDelaySeconds>180</ThrottleDelaySeconds>
+  <EnableSegmentDeletion>false</EnableSegmentDeletion>
+  <SegmentKeepSeconds>720</SegmentKeepSeconds>
+  <HardwareAccelerationType>none</HardwareAccelerationType>
+</EncodingOptions>
+"""
+
+
+def test_an_existing_encoding_xml_is_edited_in_place_and_keeps_its_other_settings(tmp_path):
+    v = media_vars(tmp_path)
+    cfg = tmp_path / "data" / "config" / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "encoding.xml").write_text(EXISTING_ENCODING)
+    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+    xml = _encoding(tmp_path)
+    assert "/old/transcodes" not in xml and xml.count("<TranscodingTempPath>") == 1
+    assert "<TranscodingTempPath>/transcode</TranscodingTempPath>" in xml
+    assert (
+        "<EnableThrottling>true</EnableThrottling>" in xml and "false</EnableThrottling>" not in xml
+    )
+    assert "<EnableSegmentDeletion>true</EnableSegmentDeletion>" in xml
+    assert "<SegmentKeepSeconds>300</SegmentKeepSeconds>" in xml
+    assert "<EncodingThreadCount>-1</EncodingThreadCount>" in xml
+    assert "<HardwareAccelerationType>none</HardwareAccelerationType>" in xml
+    assert xml.rstrip().endswith("</EncodingOptions>") and xml.count("<EncodingOptions") == 1
+
+
+def test_an_empty_transcoding_path_element_is_filled(tmp_path):
+    cfg = tmp_path / "data" / "config" / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "encoding.xml").write_text(
+        EXISTING_ENCODING.replace(
+            "<TranscodingTempPath>/old/transcodes</TranscodingTempPath>", "<TranscodingTempPath />"
+        )
+    )
+    assert run_role(tmp_path, ROLE, "main", media_vars(tmp_path)).returncode == 0
+    xml = _encoding(tmp_path)
+    assert xml.count("TranscodingTempPath") == 2 and "<TranscodingTempPath>/transcode<" in xml
+
+
+def test_a_size_of_zero_keeps_transcodes_in_the_cache_volume(tmp_path):
+    v = media_vars(tmp_path, media_transcode_tmpfs_size=0, media_mem_limit="4g")
+    cfg = tmp_path / "data" / "config" / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "encoding.xml").write_text(EXISTING_ENCODING.replace("/old/transcodes", "/transcode"))
+    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+    svc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]["media"]
+    assert svc["read_only"] is True  # still read-only: only /tmp is a tmpfs
+    assert [m["target"] for m in svc["volumes"] if isinstance(m, dict)] == ["/tmp"]
+    xml = _encoding(tmp_path)
+    assert "<TranscodingTempPath />" in xml and "/transcode<" not in xml
+    assert "<EnableThrottling>false</EnableThrottling>" in xml  # not ours to change when off
+    # a fresh install with the tmpfs off writes no encoding.xml at all
+    t2 = tmp_path / "fresh"
+    t2.mkdir()
+    assert run_role(t2, ROLE, "main", media_vars(t2, media_transcode_tmpfs_size=0)).returncode == 0
+    assert not (t2 / "data" / "config" / "config" / "encoding.xml").exists()
+
+
+def test_a_size_of_zero_leaves_a_path_it_did_not_set_alone(tmp_path):
+    cfg = tmp_path / "data" / "config" / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "encoding.xml").write_text(EXISTING_ENCODING)
+    v = media_vars(tmp_path, media_transcode_tmpfs_size=0, media_mem_limit="4g")
+    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+    assert "<TranscodingTempPath>/old/transcodes</TranscodingTempPath>" in _encoding(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"media_transcode_tmpfs_size": 1},  # a page, not a transcode directory
+        {"media_transcode_tmpfs_size": GIB - 1},
+        {"media_transcode_tmpfs_size": (1 << 40) + 1},
+        {"media_transcode_tmpfs_size": -1},
+        {"media_transcode_tmpfs_size": "8g"},  # bytes, not a unit
+        {"media_transcode_tmpfs_size": True},
+        {"media_transcode_tmpfs_size": 8.5},
+        {"media_mem_limit": "8g"},  # the default tmpfs plus /tmp and headroom does not fit
+        {"media_mem_limit": "10g"},  # 8 GiB + 256 MiB + 2 GiB = 10.25 GiB
+        {"media_transcode_tmpfs_size": 4 * GIB, "media_mem_limit": "6g"},
+        {"media_transcode_tmpfs_size": 0, "media_mem_limit": "2g"},  # /tmp and headroom alone
+    ],
+)
+def test_main_refuses_a_tmpfs_the_memory_limit_cannot_hold(tmp_path, over):
+    r = run_role(tmp_path, ROLE, "main", media_vars(tmp_path, **over))
+    assert r.returncode != 0, r.stdout
+
+
+def test_a_memory_limit_that_covers_the_tmpfs_is_accepted(tmp_path):
+    v = media_vars(tmp_path, media_transcode_tmpfs_size=4 * GIB, media_mem_limit="7g")
+    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+
+
+def test_the_library_cannot_be_mounted_over_the_transcode_directory(tmp_path):
+    t = tmp_path / "t"
+    t.mkdir()
+    v = media_vars(t, media_library_path="/transcode")
+    r = run_role(t, ROLE, "main", {**v, "media_start": False})
+    assert r.returncode != 0, r.stdout
+
+
 @pytest.mark.parametrize(
     "over",
     [

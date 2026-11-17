@@ -11,7 +11,7 @@ library's real source; those live in the private overlay.
 |---|---|
 | Slot | `media` (provisional: no contract or suite yet), stateful, object-tree export |
 | Product | Jellyfin 10.11.11, `docker.io/jellyfin/jellyfin` pinned by tag and digest |
-| Host role | `server`: kind `vm`, baseline `base`, footprint 4 vCPU, 8 GB, 40 GB |
+| Host role | `server`: kind `vm`, baseline `base`, footprint 4 vCPU, 16 GB, 40 GB |
 | Role | `media` (role interface v1), a wrapper of the core `compose_app` |
 | Secrets | none: the accounts are the server's own |
 | Egress | `internet` (metadata and artwork lookups, plugin catalogue); grant it in the overlay |
@@ -35,6 +35,30 @@ library's real source; those live in the private overlay.
   names the data root only.
 - **CPU transcoding.** `media_hwaccel` is `none`, the only value accepted: no GPU dependency.
   Hardware transcoding later needs `compose_app` to pass devices through as well.
+- **Transcoding in RAM.** The server's transcode directory is a RAM-backed tmpfs, mounted at
+  `/transcode` (compose long syntax `type: tmpfs`, size in bytes, mode 1777) and named by the role
+  in `config/encoding.xml` as `TranscodingTempPath`, so a transcode writes memory instead of the
+  guest's disk. The role also turns on `EnableThrottling` (the encoder pauses once it is 60 s ahead
+  of the player) and `EnableSegmentDeletion` (segments more than 300 s behind are removed), so one
+  long stream holds about six minutes of output, not the whole file: at a heavy 20 Mbps that is
+  roughly 1 GiB per stream. `media_transcode_tmpfs_size` (bytes, default 8 GiB = `8589934592`; `0`
+  turns it off and the server transcodes into the cache volume as before; otherwise 1 GiB to 1 TiB)
+  sets the size. The file is edited in place (an element at a time, an existing server's settings kept)
+  and read by the server when the container starts; a change of the size recreates the container, so
+  the two always move together. After a `restore` run `install` again so the settings follow it.
+  Turning it off clears only a `TranscodingTempPath` that names `/transcode`.
+  - **RAM sizing rule.** tmpfs pages are charged to the container's memory cgroup (and so to the
+    module's slice and the guest's RAM): `media_mem_limit` must be at least the tmpfs size plus 256 MiB
+    (`/tmp`) plus 2 GiB for the server and the encoder (validation refuses less; default `12g` for the
+    default 8 GiB), and the guest needs that much memory free of everything else on it (the footprint
+    is 16 GB). Pages are used only as they are written, but a tmpfs that fills fails the writer: playback
+    stops with a transcode error, the host is not harmed. Size it for the concurrent transcodes you
+    expect (about 1 GiB each at 20 Mbps, less at typical bitrates), not for the library.
+- **Read-only root.** The container runs with `read_only: true`: the server writes only `/config`,
+  `/cache`, a 256 MiB tmpfs `/tmp` (the .NET runtime's pipes and sockets) and the transcode directory.
+  Checked against the pinned image with the same flags (`--read-only --cap-drop ALL`, user 61010, no
+  new privileges, tmpfs `/tmp` and `/transcode`): the server starts healthy and serves `/health`, and
+  `/tmp`, `/transcode`, `/config` and `/cache` are the only writable paths.
 - **Identity.** The server id is `data/device.txt` in the data directory. A client remembers a
   server by it and by its device tokens: a new id, or a lost device row, and a Fire Cube treats
   the server as a stranger and drops its login. Set `media_expected_server_id` and `health`
@@ -100,5 +124,5 @@ The overlay adds: the selection (`slots.media` provider `media`, an instance nam
 guest (resources and the library mount at `media_library_path`), the registry row exactly as bound
 (plus at most `standing`, `backup_job`, `scope`; its `public_hostname` is the site's), the grants
 (`egress.media.server: [internet]`, `public_routes`), group variables (`media_library_path`,
-`media_gid` of the mount's group, `media_published_url`, `media_expected_server_id` at a cutover)
+`media_mem_limit` and `media_transcode_tmpfs_size` when the guest's RAM differs from the 16 GB default, `media_gid` of the mount's group, `media_published_url`, `media_expected_server_id` at a cutover)
 and the firewall: the edge and the TV clients' zone to the port.
