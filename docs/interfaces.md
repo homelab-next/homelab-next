@@ -554,7 +554,7 @@ change until its ADR is accepted):
 | `platform/interface` | 1.0 | `schemas/platform/interface.schema.json` | draft |
 | `platform/lake_table` | 1.0 | `schemas/platform/lake_table.schema.json` | draft |
 | `platform/mcp_server` | 1.4 | `schemas/platform/mcp_server.schema.json` | stable |
-| `platform/model_roles` | 1.4 | `schemas/platform/model_roles.json` | stable |
+| `platform/model_roles` | 1.5 | `schemas/platform/model_roles.json` | stable |
 | `platform/model_serving` | 2.0 | `schemas/platform/model_serving.schema.json` | stable |
 | `platform/model_store` | 1.0 | `schemas/platform/model_store.schema.json` | stable |
 | `platform/module` | 1.0 | `schemas/platform/module.schema.json` | draft |

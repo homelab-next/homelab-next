@@ -23,6 +23,7 @@ It reads `gateway/gateway.json`, rendered by `hnx gen gateway render`
 | `GET /v1/models` | any key (telemetry: 403) | the role aliases the key may call (admin: all) |
 | `POST /v1/chat/completions` | any key (telemetry: 403) | chat, `stream: true` included |
 | `POST /v1/embeddings` | any key (telemetry: 403) | embeddings |
+| `POST /v1/systemone` | any key (telemetry: 403) | a decision model's noul questions (role kind `decision`, below) |
 | `GET /v1/usage?start=&end=[&tag=]` | admin, telemetry | usage records in a time range |
 
 Everything else is a 404. The code is `orchestrator/internal/gateway`, standard library only. It
@@ -150,10 +151,25 @@ with its paths and listen address, is the private overlay's (ADR-0026 decision 3
   at all (an Anthropic translation refusal, or a URL part for a local deployment) is skipped
   without being called; when no deployment was called, that refusal (400, usually
   `unsupported_parameter`) is the answer, recorded with `deployment` null.
+- **Decision roles (`kind: decision`).** A decision model (llama.cpp serving a decision model, the
+  lab's fast classifier) refuses `/v1/chat/completions` (501) and answers
+  `POST /v1/systemone {"model", "state", "questions": {"<id>": {"type": "noul", "instructions": "..."}}}`
+  with `{"answers": {"<id>": {"type": "noul", "noul": p}}, "usage": {"input_tokens", "output_tokens"}}`.
+  The gateway routes it like chat: the caller key and its role scope, the same TLP admission
+  (`X-HNX-TLP`; a decision role whose chain leaves the lab takes only what a chat role that leaves the lab
+  takes, a local-only role never leaves), the key and role limits (a call reserves its input only, there is no
+  generated text), fallbacks (decision roles only), `X-HNX-Tag`. `model` is the role alias and is replaced by the
+  backend's model id; the body is otherwise forwarded as given and the reply is returned unchanged (it names no
+  model). Usage is the reply's `usage.input_tokens` and `output_tokens` (estimated from the request when it
+  reports none); the usage record's `call_type` is `decision`. `questions` must be an object (else 400
+  `invalid_request`). A decision role refuses chat and embeddings, and a chat or embedding role refuses
+  `/v1/systemone`, with a 400 `wrong_model_kind`. A decision role cannot be served by an Anthropic
+  deployment, and LiteLLM (the legacy rendering) cannot route it: `hnx gen gateway render` leaves it out of
+  the LiteLLM files and writes it to `gateway/gateway.json` only.
 - **URL parts never reach a local backend.** A request body with a key named `url` or `*_url` at
   any depth (a part's `image_url.url`, an `input_file`'s `file_url`, a top-level `messages`
   object, an extra top-level field alike; `data:` URLs included), or with a part of type
-  `image_url`, `audio_url` or `video_url` anywhere, chat or embeddings, is not sent to a local
+  `image_url`, `audio_url` or `video_url` anywhere, chat, embeddings or decision, is not sent to a local
   OpenAI-compatible deployment, which would fetch it from inside the lab. No role can opt in yet (there is no field
   for it); cloud deployments are not affected.
 - **Writes to the caller** each have a deadline (`-write-timeout`): a non-streamed reply's whole

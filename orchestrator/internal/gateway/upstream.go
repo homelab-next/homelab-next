@@ -104,6 +104,8 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cl *call, d *De
 			" carries a URL, which this gateway does not send to a local deployment")
 	case cl.kind == "embedding":
 		path, body, err = "/v1/embeddings", withModel(cl.body, d.Model, false), nil
+	case cl.kind == "decision":
+		path, body, err = "/v1/systemone", withModel(cl.body, d.Model, false), nil
 	default:
 		path, body, err = "/v1/chat/completions", withModel(cl.body, d.Model, cl.stream), nil
 	}
@@ -174,6 +176,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cl *call, d *De
 	if d.Protocol == "anthropic" {
 		return s.relayAnthropicReply(w, data, cl)
 	}
+	if cl.kind == "decision" {
+		return relayDecisionReply(w, data, cl)
+	}
 	return relayOpenAIReply(w, data, cl)
 }
 
@@ -240,6 +245,31 @@ func relayOpenAIReply(w http.ResponseWriter, data []byte, cl *call) result {
 	}
 	cl.markServed(w)
 	writeParts(w, http.StatusOK, replaceValues(data, vals["model"], open, "model", mustJSON(cl.alias))...)
+	return result{answered: true, status: http.StatusOK, usage: u}
+}
+
+// relayDecisionReply returns a decision backend's reply unchanged (it names no model: there is
+// nothing to rewrite). The reply must be a JSON object with an answers object; usage is its
+// usage.input_tokens and usage.output_tokens, else estimated from the request's size.
+func relayDecisionReply(w http.ResponseWriter, data []byte, cl *call) result {
+	vals, _, ok := topLevel(data, "answers", "usage")
+	if !ok || !isJSONObject(last(data, vals["answers"])) {
+		return failed("the decision reply is not a JSON object with answers")
+	}
+	u := estimateUsage(cl, 0)
+	var rep struct {
+		In  *int `json:"input_tokens"`
+		Out *int `json:"output_tokens"`
+	}
+	if json.Unmarshal(last(data, vals["usage"]), &rep) == nil && rep.In != nil && *rep.In >= 0 {
+		u = tokenUsage{input: rep.In, output: rep.Out}
+		if rep.Out == nil || *rep.Out < 0 {
+			zero := 0
+			u.output = &zero
+		}
+	}
+	cl.markServed(w)
+	writeParts(w, http.StatusOK, data)
 	return result{answered: true, status: http.StatusOK, usage: u}
 }
 
