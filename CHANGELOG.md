@@ -6,6 +6,9 @@ has no section below.
 
 ## [Unreleased]
 
+### Fixed
+- node_exporter installs `prometheus-node-exporter` without recommends: they pulled `ipmitool` and `openipmi` onto every guest, and `openipmi` failed at every boot on a guest with no IPMI device, a standing failed unit that hides real ones.
+
 ### Breaking
 - Module `modules/trino/`: the lake maintenance timer is no longer armed by default. It is enabled and started only when `trino_maintenance_enabled` AND the new `trino_maintenance_acknowledged_restore` are both true (default false); an overlay that relied on the timer running must set the acknowledgement (after `tools/migrate/lake_verify.py` passes on the lake). Without it the units are installed and an installed timer is stopped and disabled; `trino_maintenance_enabled: false` now also stops and disables an already-installed timer.
 - Module `modules/prometheus/`: `prometheus_network_subnet` is a new REQUIRED variable (no default; an overlay that does not set it fails validation). It pins the container's compose network so the guest can admit it: set it to a free private network address (RFC 1918, prefix /16 to /29, host bits zero, not overlapping the guest's own network or address; judged by `compose_app`'s `network_subnet.yml`), and add to the metrics guest's `firewall_rules.inbound_allow` a rule admitting exactly that subnet to the node exporter port (`{name: metrics-self-exporter, proto: tcp, ports: "<port>", source: <subnet>}`), otherwise the guest's own host target stays down. The first apply recreates the compose network and container, and rewrites the generated scrape configuration once (the service's own job now scrapes inside its container, keeping its `instance` label), followed by one reload.
