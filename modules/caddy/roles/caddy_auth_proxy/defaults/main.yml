@@ -47,3 +47,7 @@ caddy_auth_proxy_docker_cli: docker
 caddy_auth_proxy_edge_address: "{{ caddy_bind | default(ansible_host) }}"
 caddy_auth_proxy_edge_port: "{{ caddy_port | default(443) }}"
 caddy_auth_proxy_edge_trust_bundle: "{{ caddy_acme_trust_bundle | default('/etc/ssl/certs/ca-certificates.crt') }}"
+# the edge's deployed sites file, read by health to find which sites forward auth fronts (the caddy
+# role's data root when both roles run on this guest); caddy_auth_proxy_sites stays every name the
+# proxy may return to (its whitelist), a superset of those
+caddy_auth_proxy_sites_file: "{{ caddy_data_root | default('/var/lib/hnx-modules/caddy') }}/config/sites.caddy"
