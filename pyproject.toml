@@ -161,7 +161,10 @@ suite_budgets = [
   # 5400 since the wave-2 modules (gateway #434, orchestration #437, llamacpp #433, nifi #438, stackstorm #440) and
   # their role suites: main measured 3821s on 3.12 (7a21c99b, 2026-11-16, red over 3700) with two of them in, and the
   # stackstorm pull request 4408s on 3.12 with three; 5400 is about 1.2x the slowest figure with two still to land
-  "tests/roles = 5400",
+  # 6800 since the rest of wave 2 (openwebui #453, media-automation #455, tts #456, gitea #457, documents #454, the media
+  # tmpfs #458) and their role suites: main measured about 4530s on 3.12 (2026-11-16 evening) and a loaded-runner rerun
+  # of #458 5585s, over 5400; 6800 is about 1.2x that worst figure with three of those still to land
+  "tests/roles = 6800",
   # 300 since the orchestration conformance harness's strict fault-injection test (stage 2.8)
   # builds the controller and runs the whole suite against it: main measured 180-186 s summed
   # over the shards (2026-11-09), and the pull request that added it 245.8 s, over 240
