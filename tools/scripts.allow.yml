@@ -20,6 +20,9 @@ fleet_unit_specs_exclude:
 
 # active scripts with no caller in the tree
 uncalled:
+  media-automation-config-import: >-
+    the operator runs it by hand at the media automation cutover (modules/media-automation/README.md,
+    "Migration"), once, on a stopped copy of the old stack's volumes; no unit or workflow calls it
   documents-migrate: >-
     the operator runs it by hand in the documents rehearsal and in the cutover window (modules/documents/README.md,
     "Migrating in"), once per target, from the workstation over ssh; no unit or workflow calls it

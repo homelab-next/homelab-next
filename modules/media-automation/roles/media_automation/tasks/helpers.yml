@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: Apache-2.0
+# The helper scripts of the old stack, carried as module files and run by systemd timers on the
+# guest (not as StackStorm actions): two of the three work on the library's inodes and file names
+# (hardlink index, renames), which only a host that has the library mounted can do; all three are
+# idempotent and fail closed (cleanup skips when the torrent client cannot be asked; the stalled-torrent
+# repair removes only what has not progressed for a full window). They log in with the torrent
+# client password from the secret store (a 0600 env file) and read each app's own API key from its
+# config.xml at run time. The timers are enabled on every run, not only when their units changed.
+- name: Create the helpers directory (root's, the scripts are code the units run)
+  ansible.builtin.file:
+    path: "{{ media_automation_helpers_dir }}"
+    state: directory
+    owner: "{{ media_automation_owner }}"
+    group: "{{ media_automation_group }}"
+    mode: "0750"
+
+- name: Create the libexec directory the scripts run from
+  ansible.builtin.file:
+    path: "{{ media_automation_libexec_dir }}"
+    state: directory
+    mode: "0755"
+
+# root-owned code the units run as the apps' user: the apps cannot change what runs
+- name: Install the helper scripts and the filename blacklist
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ media_automation_libexec_dir }}/{{ item.dest }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {src: cleanup-downloads.py, dest: hnx-media-cleanup-downloads, mode: "0755"}
+    - {src: stalled-torrent-repair.py, dest: hnx-media-stalled-repair, mode: "0755"}
+    - {src: rename_cleanup.py, dest: hnx-media-rename-cleanup, mode: "0755"}
+    - {src: qbittorrent-excluded-file-names.txt, dest: hnx-media-excluded-file-names.txt, mode: "0644"}
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Write the helper environment (the torrent client login; nothing else)
+  ansible.builtin.copy:
+    dest: "{{ media_automation_helpers_dir }}/helper.env"
+    content: |
+      QBIT_USER={{ media_automation_qbittorrent_user }}
+      QBIT_PASS={{ lookup('hnx_secret', media_automation_qbittorrent_login_ref) }}
+    owner: "{{ media_automation_owner }}"
+    group: "{{ media_automation_group }}"
+    mode: "0600"
+  no_log: true
+
+- name: Describe the three helpers
+  ansible.builtin.set_fact:
+    media_automation_helper_table:
+      - {id: cleanup-downloads, script: cleanup-downloads.py, what: remove completed downloads already hardlinked into the library, calendar: "*-*-* 04:30:00 UTC",
+         args: " --min-age-hours {{ media_automation_helper_min_age_hours | int }}", enabled: "{{ media_automation_helper_cleanup_enabled }}"}
+      - {id: stalled-repair, script: stalled-torrent-repair.py, what: remove and re-search torrents with no progress, calendar: "*-*-* *:17:00 UTC", args: "",
+         enabled: "{{ media_automation_helper_stalled_enabled }}"}
+      - {id: rename-cleanup, script: rename_cleanup.py, what: clean release-style file names in the library, calendar: "*-*-* 05:30:00 UTC", args: "",
+         enabled: "{{ media_automation_helper_rename_enabled }}"}
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ media_automation_last_run_dir }}"
+    last_run_group: "{{ media_automation_last_run_group }}"
+    last_run_writer: "{{ media_automation_last_run_writer }}"
+
+- name: Render the units
+  ansible.builtin.template:
+    src: "{{ item.0.id }}.{{ item.1 }}.j2"
+    dest: "{{ media_automation_unit_dir }}/hnx-media-automation-{{ item.0.id }}.{{ item.1 }}"
+    mode: "0644"
+  loop: "{{ media_automation_helper_table | selectattr('enabled') | list | product(['service', 'timer']) | list }}"
+  loop_control:
+    label: "{{ item.0.id }}.{{ item.1 }}"
+  register: media_automation_units
+
+- name: Reload systemd when a unit changed
+  ansible.builtin.command:
+    argv: ["{{ media_automation_systemctl_cli }}", daemon-reload]
+  changed_when: true
+  when: media_automation_units is changed
+
+- name: Ask whether each timer is enabled
+  ansible.builtin.command:
+    argv: ["{{ media_automation_systemctl_cli }}", is-enabled, "hnx-media-automation-{{ item.id }}.timer"]
+  loop: "{{ media_automation_helper_table | selectattr('enabled') | list }}"
+  loop_control:
+    label: "{{ item.id }}"
+  register: media_automation_timer_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Enable and start each timer that is not enabled (or whose units changed)
+  ansible.builtin.command:
+    argv: ["{{ media_automation_systemctl_cli }}", enable, --now, "hnx-media-automation-{{ item.item.id }}.timer"]
+  loop: "{{ media_automation_timer_enabled.results }}"
+  loop_control:
+    label: "{{ item.item.id }}"
+  changed_when: true
+  when: (item.stdout | default('') | trim) != 'enabled' or media_automation_units is changed

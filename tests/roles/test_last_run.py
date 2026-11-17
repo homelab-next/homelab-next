@@ -152,3 +152,24 @@ def test_record_file_names_are_injective_in_the_job_id(tmp_path):
     names = [os.path.basename(mod.record_path(str(tmp_path), j)) for j in jobs]
     assert len(set(names)) == len(jobs) and all("/" not in n for n in names)
     assert names[0] == "timer%3Alynis%2Fscan.json"
+
+
+def test_a_writer_line_with_the_root_prefix_is_read_as_the_writer(tmp_path):
+    """A timer whose service runs as an unprivileged User= runs the writer as root (``-+``, so a
+    writer problem still never fails the job): the check reads that form, not only a bare ``-``."""
+    role = tmp_path / "ansible" / "roles" / "r"
+    (role / "templates").mkdir(parents=True)
+    (role / "tasks").mkdir()
+    (role / "tasks" / "main.yml").write_text(
+        "- ansible.builtin.include_role:\n    name: last_run\n"
+    )
+    w = schedule.WRITER
+    a = "--dir /d --group root --job timer:r/u --unit %n --calendar hourly --delay 0"
+    svc = role / "templates" / "u.service.j2"
+    svc.write_text(f"[Service]\nExecStartPre=-+{w} start {a}\nExecStopPost=-+{w} finish {a}\n")
+    rel = "ansible/roles/r/templates/u.timer.j2"
+    got = schedule.record_problems(tmp_path, rel, "timer:r/u", role, ["hourly"], None)
+    assert got == []
+    svc.write_text(f"[Service]\nExecStartPre=+{w} start {a}\nExecStopPost=-+{w} finish {a}\n")
+    assert any("must start with -" in p for p in schedule.record_problems(
+        tmp_path, rel, "timer:r/u", role, ["hourly"], None))  # fmt: skip

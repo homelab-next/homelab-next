@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: The library is mounted (a mount point or marked), before the containers can start
+  ansible.builtin.include_tasks: library.yml
+  when: media_automation_start | bool
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Create the downloads tree inside the library (missing directories only)
+  ansible.builtin.include_tasks: downloads.yml
+  when: media_automation_start | bool
+
+# The three VPN credentials reach only gluetun's env_file (0600); nothing else holds them.
+- name: Read the VPN credentials
+  ansible.builtin.set_fact:
+    media_automation_secret_env:
+      gluetun:
+        WIREGUARD_PRIVATE_KEY: "{{ lookup('hnx_secret', media_automation_vpn_key_ref) }}"
+        WIREGUARD_PRESHARED_KEY: "{{ lookup('hnx_secret', media_automation_vpn_psk_ref) }}"
+        WIREGUARD_ADDRESSES: "{{ lookup('hnx_secret', media_automation_vpn_addresses_ref) }}"
+  no_log: true
+
+- name: Render and start the stack
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ media_automation_app.compose_app_name }}"
+    compose_app_dir: "{{ media_automation_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ media_automation_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ media_automation_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ media_automation_app.compose_app_owner }}"
+    compose_app_group: "{{ media_automation_app.compose_app_group }}"
+    compose_app_start: "{{ media_automation_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ media_automation_app.compose_app_validate_with_docker }}"
+    compose_app_bind_extra: "{{ media_automation_app.compose_app_bind_extra }}"
+    compose_app_spec: "{{ media_automation_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ media_automation_secret_env }}"
+    # the VPN client owns the tunnel: NET_ADMIN and the tun device, nothing else beyond the defaults
+    compose_app_allow_net_admin: true
+  no_log: true
+
+- name: Install the helper scripts and their timers
+  ansible.builtin.include_tasks: helpers.yml
+  when: media_automation_helpers_enabled | bool

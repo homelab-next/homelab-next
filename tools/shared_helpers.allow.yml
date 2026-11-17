@@ -33,6 +33,12 @@ allow:
   - path: tools/migrate/jellyfin.py
     rule: lake
     reason: the media server's importer reads and rewrites that server's own local SQLite files (users, devices, watch state, item paths) with the stdlib module; they are an application's config databases, not a lake, and nothing here queries the shared lake
+  - path: tools/migrate/media_automation.py
+    rule: lake
+    reason: the media automation importer reads and rewrites the library managers' and the request app's own local SQLite files (series, files, indexers, download clients, requests) with the stdlib module; they are applications' config databases, not a lake, and nothing here queries the shared lake
+  - path: modules/media-automation/roles/media_automation/files/stalled-torrent-repair.py
+    rule: state
+    reason: a standalone stdlib script installed on the media guest, which has no homelabnext package to import; its state file is the script's own memory of when each torrent last made progress (hash, progress, first-seen time), not checker state
   - path: modules/gitea/roles/gitea/files/hnx_gitea.py
     rule: lake
     reason: the forge role's helper reads the forge's own SQLite database (a dump's SQL loaded into memory, or the instance's database file opened read-only) to count rows and fingerprint accounts for the export and restore checks, with the stdlib module because it runs on a guest with no homelabnext package; it is an application's database, not the shared lake, and nothing here queries the lake

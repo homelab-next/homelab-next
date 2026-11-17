@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The downloads tree inside the library: created only where missing, owned by the apps' user. An
+# existing directory is never touched (the role does not chown the library: the ownership of what
+# is already there is the overlay's one-time decision, README).
+- name: Look at the downloads tree
+  ansible.builtin.stat:
+    path: "{{ media_automation_downloads_dir }}{{ item }}"
+  loop: "{{ [''] + (media_automation_downloads_tree | map('regex_replace', '^(.*)$', '/\\1') | list) }}"
+  register: media_automation_downloads_stats
+  check_mode: false
+
+- name: Create the downloads directories that are missing
+  ansible.builtin.file:
+    path: "{{ media_automation_downloads_dir ~ item.item }}"
+    state: directory
+    owner: "{{ media_automation_uid | int }}"
+    group: "{{ media_automation_gid | int }}"
+    mode: "0775"
+  loop: "{{ media_automation_downloads_stats.results | rejectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"

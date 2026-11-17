@@ -20,6 +20,12 @@ services:
 {% if svc.user is defined %}
     user: {{ q(svc.user) }}
 {% endif %}
+{% if svc.network_mode is defined %}
+    network_mode: {{ q(svc.network_mode) }}
+{% endif %}
+{% if svc.init is defined %}
+    init: {{ svc.init | bool | to_json }}
+{% endif %}
 {% if compose_app_cgroup_parent | length > 0 %}
     cgroup_parent: {{ q(compose_app_cgroup_parent) }}
 {% endif %}
