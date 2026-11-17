@@ -211,14 +211,18 @@ class OpenAICompat:
         model: str,
         questions: Mapping[str, str],
         fields: Sequence[tuple[str, str]] = (),
+        *,
+        state: str | None = None,
     ) -> dict[str, float]:
         """Ask a decision role noul questions (``{id: instructions}``): ``POST /v1/systemone``
         with the extra request header ``fields`` (as :meth:`chat_fields` sends them). Returns the
         probability each answer carries, by question id."""
-        body = {
+        body: dict[str, Any] = {
             "model": model,
             "questions": {q: {"type": "noul", "instructions": t} for q, t in questions.items()},
         }
+        if state is not None:
+            body["state"] = state
         doc = self._fields_json("/v1/systemone", body, fields)
         try:
             out: dict[str, float] = {}

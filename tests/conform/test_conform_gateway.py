@@ -621,6 +621,8 @@ def test_decide_fields_asks_a_decision_role_and_sends_the_fields():
         )
         assert got["a"] == 0.9 and 0.0 <= got["b"] <= 1.0 and set(got) == {"a", "b"}
         assert srv.seen == [("X-HNX-TLP", "clear")]
+        c.decide_fields("decider-m", {"a": "x"}, state="Question: q\nPassage: p")
+        assert srv.requests[-1]["body"]["state"] == "Question: q\nPassage: p"
         with pytest.raises(InferenceError) as exc:
             c.decide_fields("chat-m", {"a": "x"})
         assert (exc.value.status, exc.value.path) == (404, "/v1/systemone")
