@@ -1,0 +1,224 @@
+[
+ {
+  "id": "q01",
+  "kind": "decision",
+  "q": "Did we decide to adopt a dedicated context database for agent memory and context?",
+  "answers": [
+   "doc:docs/adr/0032-agent-context-is-authored-markdown-in-levels.md"
+  ]
+ },
+ {
+  "id": "q02",
+  "kind": "decision",
+  "q": "Are unlabelled records treated as open or as restricted?",
+  "answers": [
+   "doc:docs/adr/0033-data-carries-tlp-every-reader-has-a-ceiling.md"
+  ]
+ },
+ {
+  "id": "q03",
+  "kind": "decision",
+  "q": "Why can't two products both be primary for the same capability?",
+  "answers": [
+   "doc:docs/adr/0039-one-primary-per-capability.md"
+  ]
+ },
+ {
+  "id": "q04",
+  "kind": "decision",
+  "q": "Do agents hold the operator's personal GitHub token?",
+  "answers": [
+   "doc:docs/adr/0046-repository-governance-agents-are-not-the-operator.md"
+  ]
+ },
+ {
+  "id": "q05",
+  "kind": "decision",
+  "q": "Is the hypervisor a swappable layer?",
+  "answers": [
+   "doc:docs/adr/0012-hypervisor-is-not-modular.md"
+  ]
+ },
+ {
+  "id": "q06",
+  "kind": "decision",
+  "q": "Which identity provider does the platform use by default for single sign-on?",
+  "answers": [
+   "doc:docs/adr/0034-single-sign-on-oidc-idp-behind-a-neutral-contract.md"
+  ]
+ },
+ {
+  "id": "q07",
+  "kind": "decision",
+  "q": "Is a lease or reservation released when its worker dies?",
+  "answers": [
+   "doc:docs/adr/0029-holds-released-by-liveness.md"
+  ]
+ },
+ {
+  "id": "q08",
+  "kind": "decision",
+  "q": "Should detection rules be copied for every product or written once?",
+  "answers": [
+   "doc:docs/adr/0006-detections-as-code.md"
+  ]
+ },
+ {
+  "id": "q09",
+  "kind": "decision",
+  "q": "Can agents run their own scripts with credentials in a sandbox?",
+  "answers": [
+   "doc:docs/adr/0031-code-mode-through-the-broker.md"
+  ]
+ },
+ {
+  "id": "q10",
+  "kind": "decision",
+  "q": "How does the old lab get retired service by service?",
+  "answers": [
+   "doc:docs/adr/0043-the-cutover-is-a-ledger-per-service.md"
+  ]
+ },
+ {
+  "id": "q11",
+  "kind": "howto",
+  "q": "How do I swap one product for another behind a capability?",
+  "answers": [
+   "doc:docs/adr/0005-swap-procedure-and-conformance.md"
+  ]
+ },
+ {
+  "id": "q12",
+  "kind": "howto",
+  "q": "How are secrets rotated and who owns each one?",
+  "answers": [
+   "doc:docs/adr/0045-credentials-are-per-principal-and-short-lived.md"
+  ]
+ },
+ {
+  "id": "q13",
+  "kind": "howto",
+  "q": "How are backups proven to work?",
+  "answers": [
+   "doc:docs/adr/0042-restores-are-tested-and-the-lab-can-cold-start.md"
+  ]
+ },
+ {
+  "id": "q14",
+  "kind": "howto",
+  "q": "How should a hardcoded host address be avoided in a playbook?",
+  "answers": [
+   "doc:docs/adr/0002-registry-and-dns-aliases.md"
+  ]
+ },
+ {
+  "id": "q15",
+  "kind": "howto",
+  "q": "How do I stop an agent run from overspending?",
+  "answers": [
+   "doc:docs/adr/0047-agent-runs-are-traced-budgeted-and-evaluated.md"
+  ]
+ },
+ {
+  "id": "q16",
+  "kind": "howto",
+  "q": "How do record numbers get shown without storing them?",
+  "answers": [
+   "doc:docs/adr/0019-record-uids-computed-numbers.md"
+  ]
+ },
+ {
+  "id": "q17",
+  "kind": "howto",
+  "q": "How do we serve a model from the store pinned by hash?",
+  "answers": [
+   "doc:docs/adr/0023-model-serving-one-store-few-engines.md"
+  ]
+ },
+ {
+  "id": "q18",
+  "kind": "howto",
+  "q": "How is a client library kept from being copied privately?",
+  "answers": [
+   "doc:docs/adr/0003-shared-client-libraries.md"
+  ]
+ },
+ {
+  "id": "q19",
+  "kind": "symptom",
+  "q": "tlp_refused 403 from the chat endpoint",
+  "answers": [
+   "doc:docs/llm-gateway.md",
+   "doc:docs/gateway.md",
+   "doc:docs/adr/0047-agent-runs-are-traced-budgeted-and-evaluated.md"
+  ]
+ },
+ {
+  "id": "q20",
+  "kind": "symptom",
+  "q": "InvalidQuery scope entry is invalid wildcard",
+  "answers": [
+   "doc:docs/capabilities/context.md"
+  ]
+ },
+ {
+  "id": "q21",
+  "kind": "symptom",
+  "q": "a private copy of a client fails CI",
+  "answers": [
+   "doc:docs/adr/0003-shared-client-libraries.md"
+  ]
+ },
+ {
+  "id": "q22",
+  "kind": "symptom",
+  "q": "the registry refuses a second primary",
+  "answers": [
+   "doc:docs/adr/0039-one-primary-per-capability.md"
+  ]
+ },
+ {
+  "id": "q23",
+  "kind": "symptom",
+  "q": "summary_of outline digest stale authored page summary",
+  "answers": [
+   "doc:docs/adr/0032-agent-context-is-authored-markdown-in-levels.md"
+  ]
+ },
+ {
+  "id": "q24",
+  "kind": "none",
+  "q": "What is the recipe for sourdough bread starter?",
+  "answers": []
+ },
+ {
+  "id": "q25",
+  "kind": "none",
+  "q": "Which football club won the league in 2019?",
+  "answers": []
+ },
+ {
+  "id": "q26",
+  "kind": "none",
+  "q": "How do I configure a Kubernetes ingress with cert-manager and a wildcard certificate?",
+  "answers": []
+ },
+ {
+  "id": "q27",
+  "kind": "none",
+  "q": "What does the quarterly budget for office furniture look like?",
+  "answers": []
+ },
+ {
+  "id": "q28",
+  "kind": "none",
+  "q": "Explain the plot of the film about the submarine crew.",
+  "answers": []
+ },
+ {
+  "id": "q29",
+  "kind": "none",
+  "q": "How do we tune the espresso machine grinder?",
+  "answers": []
+ }
+]

@@ -917,3 +917,81 @@ def test_backup_names_the_data_root(tmp_path):
         for seeded in ROLE_VARS[f"{P}_seed_files"] + [".hnx-seed"]:
             assert not path.endswith(seeded), path
         assert path != f"{data}/conf" and "/tls" not in path, path
+
+
+# ----------------------------------------------------------------------------- readiness and the bus
+
+
+def _listener():
+    import socket
+
+    s = socket.socket()
+    s.bind((".".join(["127", "0", "0", "1"]), 0))
+    s.listen(8)
+    return s
+
+
+def _ready_run(tmp_path, events_url, query_sock):
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b"{}"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    host = ".".join(["127", "0", "0", "1"])
+    srvs = [HTTPServer((host, 0), H) for _ in range(2)]
+    for s in srvs:
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    d = tmp_path / "fakes"
+    d.mkdir(parents=True)
+    fake(d / "docker", 'import sys\nsys.stdout.write(\'{"ServerVersion": "29.0.0"}\')\n')
+    fake(d / "systemctl", "print('active')\n")
+    v = vs(
+        tmp_path, s3_url=f"http://{host}:{srvs[0].server_port}",
+        catalog_url=f"http://{host}:{srvs[1].server_port}",
+        query_url=f"tcp://{host}:{query_sock.getsockname()[1]}", events_url=events_url,
+        health_timeout=2,
+    )  # fmt: skip
+    v["docker_engine_cli"], v["docker_engine_systemctl_cli"] = (
+        str(d / "docker"), str(d / "systemctl"),
+    )  # fmt: skip
+    v["docker_engine_state_dir"] = str(tmp_path / "state")
+    try:
+        return run_role(tmp_path, ROLE, "readiness", v, env=secrets())
+    finally:
+        for s in srvs:
+            s.shutdown()
+
+
+def test_readiness_skips_the_bus_when_events_are_off(tmp_path):
+    q = _listener()
+    try:
+        r = _ready_run(tmp_path, "", q)
+    finally:
+        q.close()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "events are off" in r.stdout
+
+
+def test_readiness_still_waits_for_the_forwarder_when_events_are_on(tmp_path):
+    host = ".".join(["127", "0", "0", "1"])
+    q, up, down = _listener(), _listener(), _listener()
+    down_url = f"http://{host}:{down.getsockname()[1]}"
+    down.close()  # nothing listens there any more
+    try:
+        ok = _ready_run(tmp_path / "a", f"http://{host}:{up.getsockname()[1]}", q)
+        bad = _ready_run(tmp_path / "b", down_url, q)
+    finally:
+        q.close()
+        up.close()
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert "events are off" not in ok.stdout
+    assert bad.returncode != 0

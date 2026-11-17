@@ -62,6 +62,7 @@ nifi_catalog_url: ""
 nifi_query_id: lake-query
 nifi_query_url: ""
 nifi_events_id: events
+# events are off until nifi_events_url names an HTTP forwarder (none ships yet); then readiness waits for it
 nifi_events_url: ""
 # nifi_warehouse and nifi_region (required, no default): the lake's fixed warehouse (s3://<bucket>/,
 # the tables' metadata embeds its paths) and the object store's S3 region, the lake modules' own values
