@@ -2044,3 +2044,43 @@ def test_render_takes_the_root_its_role_table_stays_in(tmp_path, capsys):
     assert hnx(["gen", "gateway", "render", str(spec), str(out)]) == 1
     assert "outside the root" in capsys.readouterr().err
     assert hnx(["gen", "gateway", "render", str(spec), str(out), "--root", str(tmp_path)]) == 0
+
+
+# --- a decision role (POST /v1/systemone): the lab's own gateway only -----------------------------
+def _with_decider():
+    roles = copy.deepcopy(RICH_ROLES)
+    roles["roles"]["decider"] = {
+        "tier": "fast",
+        "kind": "decision",
+        "bindings": [{"backend": "svc:infer-b", "model_id": "example-decider"}],
+    }
+    return roles
+
+
+def test_a_decision_role_renders_in_the_neutral_config_and_not_in_the_proxy_files(tmp_path):
+    spec = rich(tmp_path, roles=_with_decider())
+    doc = neutral(spec)
+    assert list(SCHEMA.iter_errors(doc)) == []
+    assert doc["roles"]["decider"]["kind"] == "decision"
+    assert doc["roles"]["decider"]["deployments"][0]["protocol"] == "openai"
+    files = gw.render(spec)
+    lt = yaml.safe_load(files[PROXY_CONFIG])
+    assert "decider" not in {m["model_name"] for m in lt["model_list"]}
+    assert (
+        "mdl:decider: a decision role is served by the lab's own gateway only"
+        in files[PROXY_CONFIG]
+    )
+
+
+def test_a_decision_role_on_anthropic_is_refused(tmp_path):
+    roles = _with_decider()
+    roles["roles"]["cloud-reasoner"]["kind"] = "decision"
+    (p,) = _refused(tmp_path, roles=roles)
+    assert "decision role on an anthropic deployment" in p
+
+
+def test_a_decision_role_cannot_fall_back_to_a_chat_role(tmp_path):
+    roles = _with_decider()
+    roles["roles"]["decider"]["fallback"] = "mdl:small-local"
+    with pytest.raises(Exception, match="a fallback must be of its role's kind"):
+        rich(tmp_path, roles=roles)

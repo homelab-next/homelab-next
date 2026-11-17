@@ -609,3 +609,21 @@ def test_the_documented_fake_serves_every_conformance_deployment_but_the_dead_on
         if d["backend"] != "inference-down"  # nothing listens there, on purpose
     }
     assert want == set(DOCUMENTED_FAKE_MODELS), (sorted(want), DOCUMENTED_FAKE_MODELS)
+
+
+def test_decide_fields_asks_a_decision_role_and_sends_the_fields():
+    with HeaderRecorder(
+        models=["chat-m"], decision_models=["decider-m"], decision_rules={"yes": 0.9}
+    ) as srv:
+        c = OpenAICompat(srv.url)
+        got = c.decide_fields(
+            "decider-m", {"a": "is it yes?", "b": "no idea"}, [("X-HNX-TLP", "clear")]
+        )
+        assert got["a"] == 0.9 and 0.0 <= got["b"] <= 1.0 and set(got) == {"a", "b"}
+        assert srv.seen == [("X-HNX-TLP", "clear")]
+        with pytest.raises(InferenceError) as exc:
+            c.decide_fields("chat-m", {"a": "x"})
+        assert (exc.value.status, exc.value.path) == (404, "/v1/systemone")
+        with pytest.raises(InferenceError) as exc:
+            c.chat("decider-m", PROMPT_MSG)
+        assert exc.value.status == 501
