@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "Open WebUI, the chat front end: models only through the lab's own gateway with this app's key, OpenID Connect sign-in plus a break-glass local administrator, no other egress; a wrapper of the core open_webui role."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

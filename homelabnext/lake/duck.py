@@ -47,10 +47,12 @@ def run_duckdb(sql: str, params: Mapping[str, Any] | None, tables: Mapping[str, 
             con.register(name, to_naive_utc(tbl))
         try:
             cur = con.execute(to_dollar(sql), bound)
+            names = [d[0] for d in cur.description]
+            # duckdb >= 2.0 streams results: a late-row error surfaces at fetch, not execute.
+            rows = cur.fetchall()
         except duckdb.Error as e:
             raise LakeError(f"query failed: {e}") from e
-        names = [d[0] for d in cur.description]
-        return [dict(zip(names, r, strict=True)) for r in cur.fetchall()]
+        return [dict(zip(names, r, strict=True)) for r in rows]
     finally:
         con.close()
 

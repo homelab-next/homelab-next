@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+# Read only. The core role's health (the container healthy, /health answers), then what the
+# anonymous /api/config says about the deployment: an admin exists (while none does, the first
+# visitor who signs up becomes one: `onboarding` is present), sign-up is off, the password form is
+# on (the break-glass administrator) and exactly the one sign-in provider this module configures.
+- block:
+    - name: Map this module's settings onto the core role's
+      ansible.builtin.include_tasks: map.yml
+    - name: The container is healthy and Open WebUI answers (core role health)
+      ansible.builtin.include_role:
+        name: open_webui
+        tasks_from: health
+    - name: Read the public configuration
+      ansible.builtin.uri:
+        url: "http://{{ openwebui_bind }}:{{ openwebui_port | int }}/api/config"
+        return_content: true
+        status_code: 200
+        timeout: "{{ openwebui_health_timeout | int }}"
+      register: openwebui_config
+      changed_when: false
+    - name: It is a deployed instance with the policy this module sets
+      ansible.builtin.assert:
+        that:
+          - openwebui_config.json.onboarding is not defined
+          - openwebui_config.json.features.auth | bool
+          - not (openwebui_config.json.features.enable_signup | bool)
+          - openwebui_config.json.features.enable_login_form | bool
+          - openwebui_config.json.oauth.providers | list == ['oidc']
+        fail_msg: >-
+          openwebui: /api/config does not show the policy: onboarding present means no administrator
+          exists yet (the first visitor would become one), sign-up must be off, the password form on
+          (the break-glass administrator) and the one provider oidc; got
+          {{ openwebui_config.json | to_json }}
+    # The environment is authoritative at start only: an administrator's edit in the UI can take
+    # effect in the running process until the next restart. So the RUNNING connection is read back
+    # (as the break-glass administrator) and held to what was rendered: its base URL, and the two
+    # headers the gateway judges the app by. The keys the answer also carries are never kept.
+    - name: Sign in as the break-glass administrator
+      ansible.builtin.uri:
+        url: "http://{{ openwebui_bind }}:{{ openwebui_port | int }}/api/v1/auths/signin"
+        method: POST
+        body_format: json
+        body:
+          email: "{{ openwebui_admin_email }}"
+          password: "{{ lookup('hnx_secret', openwebui_admin_login_ref) }}"
+        return_content: true
+        status_code: 200
+        timeout: "{{ openwebui_health_timeout | int }}"
+      register: openwebui_signin
+      changed_when: false
+      no_log: true
+    - name: Read the running connection settings
+      ansible.builtin.uri:
+        url: "http://{{ openwebui_bind }}:{{ openwebui_port | int }}/openai/config"
+        headers:
+          Authorization: "Bearer {{ openwebui_signin.json.token }}"
+        return_content: true
+        status_code: 200
+        timeout: "{{ openwebui_health_timeout | int }}"
+      register: openwebui_running
+      changed_when: false
+      no_log: true
+    - name: The running connection is the rendered one
+      ansible.builtin.assert:
+        that:
+          - openwebui_running.json.OPENAI_API_BASE_URLS == [lookup('hnx_registry', openwebui_gateway_id, field='url') ~ '/v1']
+          - openwebui_running.json.ENABLE_OPENAI_API | bool
+          - (openwebui_running.json.OPENAI_API_CONFIGS.get('0', {}).get('headers', {})) == open_webui_gateway_headers
+        fail_msg: >-
+          openwebui: the running connection differs from the rendered one (an edit in the admin UI
+          takes effect until the next restart): its base URLs are
+          {{ openwebui_running.json.OPENAI_API_BASE_URLS | to_json }}, its headers
+          {{ openwebui_running.json.OPENAI_API_CONFIGS.get('0', {}).get('headers', {}) | to_json }},
+          not the gateway's registry URL and {{ open_webui_gateway_headers | to_json }}; restart the
+          container to restore the rendered settings, then ask who edited them
+  tags: [health]

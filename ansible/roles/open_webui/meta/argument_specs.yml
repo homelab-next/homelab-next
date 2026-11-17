@@ -15,6 +15,52 @@ argument_specs:
         type: str
         description: "secret:<name> of this app's gateway key (a key of the gateway spec)."
         default: secret:llm-gateway/key-chat-ui
+      open_webui_gateway_capabilities: &gwcaps
+        type: list
+        elements: str
+        description: "Registry capabilities the gateway id may resolve to (the lab's own gateway answers as inference)."
+        default: [llm-gateway]
+      open_webui_gateway_impls: &gwimpls
+        type: list
+        elements: str
+        description: "Registry impl (product) the gateway id must also be, when a capability has two kinds of provider; empty: not checked."
+        default: []
+      open_webui_gateway_tlp:
+        type: str
+        description: "TLP label sent as X-HNX-TLP on every gateway call (clear, green, amber, amber+strict, red); empty sends none."
+        default: ""
+      open_webui_gateway_tag_prefix:
+        type: str
+        description: "Prefix of the X-HNX-Tag usage tag (letters, digits and . _ : / -, up to 64); empty sends no tag unless per-user."
+        default: ""
+      open_webui_gateway_tag_per_user:
+        type: bool
+        description: "Append the signed-in user's id to the usage tag (prefix:user-id)."
+        default: false
+      open_webui_oidc_issuer_url:
+        type: str
+        description: "https://host/realms/<realm> of the OpenID Connect issuer; empty keeps local accounts only. Needs open_webui_public_url."
+        default: ""
+      open_webui_oidc_client_id:
+        type: str
+        description: "This app's client id at the issuer (required with an issuer)."
+        default: ""
+      open_webui_oidc_client_secret_ref:
+        type: str
+        description: "secret:<name> of the client's secret (required with an issuer)."
+        default: ""
+      open_webui_oidc_provider_name:
+        type: str
+        description: "The sign-in button's label."
+        default: SSO
+      open_webui_admin_email:
+        type: str
+        description: "Email of the break-glass local administrator, created at start only while no user exists; empty: none."
+        default: ""
+      open_webui_admin_password_ref:
+        type: str
+        description: "secret:<name> of the break-glass administrator's password (with open_webui_admin_email)."
+        default: ""
       open_webui_session_key_ref: &session
         type: str
         description: "secret:<name> of the session signing key (WEBUI_SECRET_KEY)."
