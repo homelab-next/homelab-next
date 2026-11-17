@@ -254,9 +254,8 @@ def test_the_gateway_key_is_needed_only_with_the_judge_on(tmp_path):
 class _Front:
     """/health and /ready as the service answers them."""
 
-    def __init__(self, ready=True, judge=False):
-        doc = {"ready": ready, "documents": 7 if ready else 0, "judge": judge,
-               "last_reindex": {"ok": ready}}  # fmt: skip
+    def __init__(self, ready=True):
+        doc = {"ready": ready}  # unauthenticated, /ready shows nothing else
         self.paths: list[str] = []
         outer = self
 
@@ -288,7 +287,8 @@ def _docker(tmp_path, check=None, rc=0):
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     ps = json.dumps({"Service": "context", "State": "running", "Health": "healthy"})
-    out = json.dumps(check if check is not None else {"ok": True, "judge": {"on": False}})
+    good = {"ok": True, "judge": {"on": False}, "documents": 7, "last_reindex_ok": True}
+    out = json.dumps(check if check is not None else good)
     log = tmp_path / "docker.log"
     return fake(
         bindir / "docker",
@@ -329,7 +329,22 @@ def test_health_asks_ready_and_runs_the_self_check_inside_the_container(tmp_path
         ({"ready": False}, None, 0, {}, "is not ready"),
         ({}, {"ok": False, "judge": {"on": False}, "reason": "x"}, 1, {}, "self-check failed"),
         # the judge is configured on, but the service answers without it
-        ({}, None, 0, {"context_gateway_id": "llm-gateway"}, "is not ready"),
+        ({}, None, 0, {"context_gateway_id": "llm-gateway"}, "self-check failed"),
+        # the canned query passes on an empty index or after a failed reindex: still unhealthy
+        (
+            {},
+            {"ok": True, "judge": {"on": False}, "documents": 0, "last_reindex_ok": True},
+            0,
+            {},
+            "self-check failed",
+        ),
+        (
+            {},
+            {"ok": True, "judge": {"on": False}, "documents": 7, "last_reindex_ok": False},
+            0,
+            {},
+            "self-check failed",
+        ),
     ],
 )
 def test_health_fails_when_the_index_or_the_self_check_does_not_hold(

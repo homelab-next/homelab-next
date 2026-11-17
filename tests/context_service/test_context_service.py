@@ -280,6 +280,7 @@ def test_the_credential_travels_in_gits_environment_never_its_arguments(tmp_path
              for i in range(int(env["GIT_CONFIG_COUNT"]))}  # fmt: skip
     assert pairs["http.extraHeader"] == f"Authorization: Bearer {token}"
     assert pairs["core.symlinks"] == "false" and env["GIT_TERMINAL_PROMPT"] == "0"
+    assert pairs["http.followRedirects"] == "false"  # the header never follows a redirect
     with pytest.raises(sources.SourceError, match="credential is not set"):
         sources.sync(src, tmp_path / "a" / "b" / "src", env={}, runner=runner)
 
@@ -335,7 +336,7 @@ def test_collect_labels_every_item_and_raises_to_its_strictest_marker(tmp_path):
     assert adr.skipped == 1  # the file whose name has a space; the symlink is never read
     honour = config.Source(**{**c.sources[0].__dict__, "honour_item_labels": True})
     labels = {d.id: str(lb) for d, lb in sources.collect(repo, honour).documents}
-    assert labels["doc:adr/docs/adr/0001-search.md"] == "clear"
+    assert labels["doc:adr/docs/adr/0001-search.md"] == "green"  # a marker never lowers
     lessons = {d.id: (d, str(lb)) for d, lb in sources.collect(repo, c.sources[1]).documents}
     assert sorted(lessons) == ["lesson:lessons/LL-001", "lesson:lessons/LL-002",
                                "lesson:lessons/LL-003"]  # fmt: skip
@@ -344,6 +345,46 @@ def test_collect_labels_every_item_and_raises_to_its_strictest_marker(tmp_path):
     assert "symptom: the dashboard is blank" in d.content and label == "green"
     assert lessons["lesson:lessons/LL-002"][1] == "red"  # the record's own tlp field
     assert lessons["lesson:lessons/LL-003"][0].status == "retired"
+
+
+@pytest.mark.parametrize("honour", [False, True])
+def test_a_records_own_field_never_hides_a_stricter_marker_in_its_content(tmp_path, honour):
+    """ADR-0033 decision 4: the strictest input wins.  A looser ``tlp`` field may lower a record
+    below its source (with honour_item_labels), never below a marker its text carries."""
+    repo = tmp_path / "r"
+    (repo / "dev").mkdir(parents=True)
+    (repo / "dev" / "l.yml").write_text(
+        "lessons:\n"
+        "- {id: LL-1, title: harmless, tlp: green, body: 'TLP:RED do not share'}\n"
+        "- {id: LL-2, title: plain, body: 'TLP:RED secret'}\n"
+        "- {id: LL-3, title: lowered, tlp: clear, body: nothing marked}\n"
+        "- {id: LL-4, title: lowered but marked, tlp: clear, body: 'TLP:AMBER only'}\n"
+    )
+    src = config.Source("s", "https://git.example.internal/r.git", "main", "lesson",
+                        tlp.Label.GREEN, ("dev/*.yml",), format="yaml-records",
+                        records_key="lessons", honour_item_labels=honour)  # fmt: skip
+    got = {d.id: str(lb) for d, lb in sources.collect(repo, src).documents}
+    assert got["lesson:s/LL-1"] == "red" and got["lesson:s/LL-2"] == "red"
+    assert got["lesson:s/LL-3"] == ("clear" if honour else "green")
+    assert got["lesson:s/LL-4"] == "amber"
+
+
+def test_a_file_too_large_to_be_a_document_is_never_read(tmp_path, monkeypatch):
+    repo = tmp_path / "r"
+    repo.mkdir()
+    (repo / "small.md").write_text("# small\n")
+    (repo / "big.md").write_text("# big\n" + "x" * 100)
+    monkeypatch.setattr(sources, "MAX_CONTENT_CHARS", 20)
+    read = []
+    orig = Path.read_text
+    monkeypatch.setattr(
+        Path, "read_text", lambda self, *a, **k: read.append(self.name) or orig(self, *a, **k)
+    )
+    src = config.Source("s", "https://git.example.internal/r.git", "main", "doc",
+                        tlp.Label.GREEN, ("*.md",))  # fmt: skip
+    got = sources.collect(repo, src)
+    assert [d.id for d, _ in got.documents] == ["doc:s/small.md"] and got.skipped == 1
+    assert "big.md" not in read
 
 
 def test_collect_refuses_vacuous_or_ambiguous_sources(tmp_path):
@@ -393,7 +434,8 @@ def test_reindex_indexes_every_source_and_reads_at_the_callers_ceiling(tmp_path)
         s.get("doc:adr/docs/adr/0002-secret.md", frozenset(ALL), tlp.Label.GREEN)
     hit, label = s.get("doc:adr/docs/adr/0002-secret.md", frozenset(ALL), tlp.Label.AMBER)
     assert label == tlp.Label.AMBER and "Restart the proxy" in hit.content
-    assert s.check() == {"ok": True, "judge": {"on": False}, "rank": 1}
+    assert s.check() == {"ok": True, "judge": {"on": False}, "rank": 1, "documents": 5,
+                         "last_reindex_ok": True}  # fmt: skip
     assert s.ready()["ready"] and s.ready()["documents"] == 5
 
 
@@ -445,6 +487,58 @@ def test_a_removed_document_is_gone_after_the_next_reindex(tmp_path):
     assert rep["ok"] and rep["removed"] == 1 and s.documents == 4
 
 
+@needs_git
+def test_a_failed_index_keeps_a_relabelled_document_dropped_fail_closed(tmp_path):
+    repo = make_repo(tmp_path)
+    fail = [False]
+    s = service(tmp_path, repo, fail=fail)
+    assert s.reindex()["ok"]
+    raw = cfg_raw(tmp_path, repo)
+    raw["sources"][1]["tlp"] = "amber"
+    s.cfg = config.parse(raw)
+    fail[0] = True
+    (repo / "docs" / "adr" / "0001-search.md").write_text("# Changed\n\nbread\n")
+    git(repo, "commit", "--quiet", "-am", "change")
+    rep = s.reindex()
+    assert not rep["ok"] and rep["relabel_dropped"] == 2
+    fail[0] = False
+    ids = {h.id for h in s.query(q("dashboard blank build"), tlp.Label.RED)[0]}
+    assert "lesson:lessons/LL-001" not in ids  # absent, never readable at its old label
+    assert "doc:adr/docs/adr/0002-secret.md" in {
+        h.id for h in s.query(q("proxy certificate restart"), tlp.Label.AMBER)[0]
+    }  # the rest as it was
+    assert s.reindex()["ok"]
+    hits = s.query(q("dashboard blank build"), tlp.Label.AMBER)[0]
+    assert "lesson:lessons/LL-001" in {h.id for h in hits}
+
+
+@needs_git
+@pytest.mark.parametrize("change", ["deleted", "raised"])
+def test_a_reindex_between_the_query_and_its_labels_never_leaks_or_fails(tmp_path, change):
+    """The store answers, then a concurrent reindex removes a hit or raises its label above the
+    reader's ceiling before the labels are read: the hit is dropped, never a 500 and never
+    content above the ceiling."""
+    repo = make_repo(tmp_path)
+    s = service(tmp_path, repo)
+    assert s.reindex()["ok"]
+    inner = s._store.query
+
+    def racing(query, **kw):
+        out = inner(query, **kw)
+        if out:
+            if change == "deleted":
+                s._store.delete(out[0].id)
+            else:
+                s._store._tlp[out[0].id] = tlp.Label.RED
+        return out
+
+    s._store.query = racing
+    first = "lesson:lessons/LL-001"
+    hits, labels = s.query(q("dashboard blank build"), tlp.Label.AMBER)
+    assert first not in {h.id for h in hits}
+    assert all(tlp.allows(tlp.Label.AMBER, lb) for lb in labels)
+
+
 def test_one_reindex_at_a_time_and_none_from_disk_before_a_fetch(tmp_path):
     s = service(tmp_path, tmp_path / "r")
     rep = s.reindex(fetch=False)
@@ -465,7 +559,7 @@ class _Judge:
 
 
 @needs_git
-def test_the_judge_gates_without_reordering_and_never_sees_above_its_ceiling(tmp_path):
+def test_the_judge_gates_without_reordering_at_the_requests_label(tmp_path):
     repo = make_repo(tmp_path)
     judge_cfg = {"url": "https://gw.example.internal", "key_env": "GW_KEY", "ceiling": "green"}
     yes = _Judge(0.9)
@@ -476,17 +570,36 @@ def test_the_judge_gates_without_reordering_and_never_sees_above_its_ceiling(tmp
     assert plain.reindex()["ok"]
     want = [h.id for h in plain.query(q("dashboard blank build"), tlp.Label.GREEN)[0]]
     got = [h.id for h in s.query(q("dashboard blank build"), tlp.Label.GREEN)[0]]
-    assert got == want and yes.calls
+    assert got == want and yes.calls and s.judged_at(tlp.Label.GREEN)
+    # the label the judge is given is the request's ceiling, not the (lower) passage's
+    assert {lb for _, lb in yes.calls} == {tlp.Label.GREEN}
     no = _Judge(0.01)
-    s._judged._judge = s._judge = no
+    s._judge = no
     assert s.query(q("dashboard blank build"), tlp.Label.GREEN)[0] == []  # abstains
-    # an amber passage is above the judge's green ceiling: never sent, the store's order kept
-    no.calls.clear()
-    hits, _ = s.query(q("proxy certificate restart"), tlp.Label.AMBER)
-    assert hits and all(lb == tlp.Label.GREEN for _, lb in no.calls)
     assert s.check()["ok"] is False  # the judge does not clear the canned item
     s._judge = yes
     assert s.check()["judge"] == {"on": True, "answers": True, "confidence": 0.9}
+
+
+@needs_git
+@pytest.mark.parametrize("on_error,abstains", [("fallback", False), ("abstain", True)])
+def test_a_request_above_the_judges_ceiling_is_never_sent(tmp_path, on_error, abstains):
+    """An amber read carries an amber question: above the judge's green ceiling, even for a
+    green passage.  The judge is not asked; on_error decides."""
+    repo = make_repo(tmp_path)
+    judge_cfg = {"url": "https://gw.example.internal", "key_env": "GW_KEY", "ceiling": "green",
+                 "on_error": on_error}  # fmt: skip
+    j = _Judge(0.9)
+    s = ContextService(config.parse(cfg_raw(tmp_path, repo, judge=judge_cfg)), env={},
+                       store_factory=store_factory(), judge=j)  # fmt: skip
+    assert s.reindex()["ok"]
+    hits, _ = s.query(q("dashboard blank build"), tlp.Label.AMBER)
+    assert j.calls == [] and not s.judged_at(tlp.Label.AMBER)
+    assert (hits == []) is abstains
+    raw = cfg_raw(tmp_path, repo, judge=judge_cfg)
+    raw["health"]["ceiling"] = "amber"
+    s.cfg = config.parse(raw)
+    assert "above the judge" in s.check()["reason"] and j.calls == []
 
 
 @needs_git
@@ -508,6 +621,43 @@ def test_the_gateway_judge_asks_the_decision_role_with_its_key(tmp_path):
         assert s.query(q("dashboard blank build"), tlp.Label.GREEN)[0]
         gw.decision_rules["Does this passage"] = 0.01
         assert s.query(q("dashboard blank build"), tlp.Label.GREEN)[0] == []
+
+
+class _RecordingGateway(FakeOpenAIServer):
+    """The fake gateway, recording the TLP label each decision call arrives with."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.labels: list[list[str]] = []
+
+    def gate(self, headers, path, model):
+        if path == "/v1/systemone":
+            self.labels.append(headers.get_all("X-HNX-TLP") or [])
+        return None
+
+
+@needs_git
+def test_the_gateway_receives_the_requests_ceiling_as_the_label(tmp_path):
+    """A green passage asked about by an amber reader: the gateway sees amber (the question is
+    the reader's), never green."""
+    repo = make_repo(tmp_path)
+    key = "k" * 24
+    with _RecordingGateway(decision_models=["fast-classifier"], api_keys=[key],
+                           decision_rules={"Does this passage": 0.9}) as gw:  # fmt: skip
+        judge_cfg = {"url": gw.url, "key_env": "GW_KEY", "allow_plaintext": True,
+                     "ceiling": "amber"}  # fmt: skip
+        cfg = config.parse(cfg_raw(tmp_path, repo, judge=judge_cfg, allow_plain_http=True))
+        s = ContextService(cfg, env={"GW_KEY": key}, store_factory=store_factory())
+        assert s.reindex()["ok"]
+        hits, labels = s.query(q("dashboard blank build"), tlp.Label.AMBER)
+        assert hits and labels[0] == tlp.Label.GREEN  # the passage itself is green
+        assert gw.labels and all(lb == ["amber"] for lb in gw.labels)
+        gw.labels.clear()
+        assert s.query(q("dashboard blank build"), tlp.Label.GREEN)[0]
+        assert gw.labels and all(lb == ["green"] for lb in gw.labels)
+        gw.labels.clear()
+        assert s.query(q("dashboard blank build"), tlp.Label.RED)[0]  # fallback, unjudged
+        assert gw.labels == []
 
 
 # ----------------------------------------------------------------------------- the routes
@@ -541,7 +691,14 @@ def test_routes_authenticate_and_hold_each_caller_to_its_scope(routes):
     assert _call(routes, "/v1/query", READER, method="GET")[0] == 405
     status, rep = _call(routes, "/v1/reindex", GREEN_READER)
     assert status == 200 and rep["ok"]
-    assert _call(routes, "/ready", method="GET")[0] == 200
+    assert _call(routes, "/ready", method="GET") == (200, {"ready": True})  # no counts
+    status, doc = _call(routes, "/ready", READER, method="GET")
+    assert status == 200 and doc["documents"] == 5 and doc["last_reindex"]["ok"]
+    # a caller may not reindex again straight away; the admin (the timer) may
+    assert _call(routes, "/v1/reindex", GREEN_READER)[0] == 429
+    assert _call(routes, "/v1/reindex", ADMIN)[0] == 200
+    routes.service.last_finished -= 61
+    assert _call(routes, "/v1/reindex", GREEN_READER)[0] == 200
     assert _call(routes, "/v1/check", ADMIN)[0] == 200
 
 
