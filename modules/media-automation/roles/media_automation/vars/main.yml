@@ -62,3 +62,6 @@ media_automation_container_ports:
   flaresolverr: 8191
   seerr: 5055
   tdarr: 8265
+# the shared last-run writer and record directory (role last_run, docs/role-interface.md section 8) the
+# helper units name (the record directory and its group are defaults)
+media_automation_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

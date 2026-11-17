@@ -22,7 +22,7 @@ from typing import ClassVar
 
 import pytest
 import yaml
-from rolerun import fake, run_role
+from rolerun import fake, last_run_vars, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / "modules" / "media-automation"
@@ -87,6 +87,7 @@ def mv(tmp_path: Path, **kw) -> dict:
         "media_automation_helpers_enabled": False,
         "media_automation_start": False,
         "media_automation_validate_with_docker": False,
+        **last_run_vars(tmp_path, "media_automation"),
     }
     v.update(kw)
     return v

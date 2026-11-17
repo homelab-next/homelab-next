@@ -123,7 +123,7 @@ the first deploy confirms the three units run (`systemctl start` each once).
 | unit | what | when |
 |---|---|---|
 | `cleanup-downloads` | removes completed downloads that are already hardlinked into the library and no longer loaded in the torrent client (and the filename blacklist, orphaned partfiles, empty directories); fails closed when the client cannot be asked | daily 04:30 |
-| `stalled-repair` | removes and re-searches a torrent with no progress for `media_automation_helper_stall_hours` (24) | hourly |
+| `stalled-repair` | removes and re-searches a torrent with no progress for `media_automation_helper_stall_hours` (24) | hourly (at :17 UTC) |
 | `rename-cleanup` | renames release-style file names to the managers' own naming, then rescans | daily 05:30 |
 
 Why timers and not StackStorm actions: two of the three work on the library's inodes and file names

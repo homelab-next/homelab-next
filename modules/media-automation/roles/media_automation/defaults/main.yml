@@ -101,6 +101,9 @@ media_automation_helper_min_age_hours: 6
 media_automation_libexec_dir: /usr/local/libexec/homelabnext
 # Where the helper units are installed.
 media_automation_unit_dir: /etc/systemd/system
+# Where the helper timers' last-run records go (role last_run, docs/role-interface.md section 8; the units run the writer as root) and the group that may read them.
+media_automation_last_run_dir: /var/lib/homelabnext/last-run
+media_automation_last_run_group: root
 # The systemctl command (a test fake).
 media_automation_systemctl_cli: systemctl
 # Seconds each health request may take.

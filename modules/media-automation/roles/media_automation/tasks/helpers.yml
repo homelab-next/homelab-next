@@ -48,12 +48,20 @@
 - name: Describe the three helpers
   ansible.builtin.set_fact:
     media_automation_helper_table:
-      - {id: cleanup-downloads, script: cleanup-downloads.py, what: remove completed downloads already hardlinked into the library, calendar: "*-*-* 04:30:00",
+      - {id: cleanup-downloads, script: cleanup-downloads.py, what: remove completed downloads already hardlinked into the library, calendar: "*-*-* 04:30:00 UTC",
          args: " --min-age-hours {{ media_automation_helper_min_age_hours | int }}", enabled: "{{ media_automation_helper_cleanup_enabled }}"}
-      - {id: stalled-repair, script: stalled-torrent-repair.py, what: remove and re-search torrents with no progress, calendar: "hourly", args: "",
+      - {id: stalled-repair, script: stalled-torrent-repair.py, what: remove and re-search torrents with no progress, calendar: "*-*-* *:17:00 UTC", args: "",
          enabled: "{{ media_automation_helper_stalled_enabled }}"}
-      - {id: rename-cleanup, script: rename_cleanup.py, what: clean release-style file names in the library, calendar: "*-*-* 05:30:00", args: "",
+      - {id: rename-cleanup, script: rename_cleanup.py, what: clean release-style file names in the library, calendar: "*-*-* 05:30:00 UTC", args: "",
          enabled: "{{ media_automation_helper_rename_enabled }}"}
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ media_automation_last_run_dir }}"
+    last_run_group: "{{ media_automation_last_run_group }}"
+    last_run_writer: "{{ media_automation_last_run_writer }}"
 
 - name: Render the units
   ansible.builtin.template:

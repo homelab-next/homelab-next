@@ -213,6 +213,14 @@ argument_specs:
         type: path
         description: Where the helper units are installed.
         default: /etc/systemd/system
+      media_automation_last_run_dir:
+        type: path
+        description: Where the helper timers' last-run records are written (role last_run; the writer runs as root).
+        default: /var/lib/homelabnext/last-run
+      media_automation_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
       media_automation_systemctl_cli:
         type: str
         description: The systemctl command (a test fake).
@@ -441,6 +449,14 @@ argument_specs:
         type: path
         description: Where the helper units are installed.
         default: /etc/systemd/system
+      media_automation_last_run_dir:
+        type: path
+        description: Where the helper timers' last-run records are written (role last_run; the writer runs as root).
+        default: /var/lib/homelabnext/last-run
+      media_automation_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
       media_automation_systemctl_cli:
         type: str
         description: The systemctl command (a test fake).
@@ -669,6 +685,14 @@ argument_specs:
         type: path
         description: Where the helper units are installed.
         default: /etc/systemd/system
+      media_automation_last_run_dir:
+        type: path
+        description: Where the helper timers' last-run records are written (role last_run; the writer runs as root).
+        default: /var/lib/homelabnext/last-run
+      media_automation_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
       media_automation_systemctl_cli:
         type: str
         description: The systemctl command (a test fake).
@@ -897,6 +921,14 @@ argument_specs:
         type: path
         description: Where the helper units are installed.
         default: /etc/systemd/system
+      media_automation_last_run_dir:
+        type: path
+        description: Where the helper timers' last-run records are written (role last_run; the writer runs as root).
+        default: /var/lib/homelabnext/last-run
+      media_automation_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
       media_automation_systemctl_cli:
         type: str
         description: The systemctl command (a test fake).
@@ -1125,6 +1157,14 @@ argument_specs:
         type: path
         description: Where the helper units are installed.
         default: /etc/systemd/system
+      media_automation_last_run_dir:
+        type: path
+        description: Where the helper timers' last-run records are written (role last_run; the writer runs as root).
+        default: /var/lib/homelabnext/last-run
+      media_automation_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
       media_automation_systemctl_cli:
         type: str
         description: The systemctl command (a test fake).
@@ -1353,6 +1393,14 @@ argument_specs:
         type: path
         description: Where the helper units are installed.
         default: /etc/systemd/system
+      media_automation_last_run_dir:
+        type: path
+        description: Where the helper timers' last-run records are written (role last_run; the writer runs as root).
+        default: /var/lib/homelabnext/last-run
+      media_automation_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
       media_automation_systemctl_cli:
         type: str
         description: The systemctl command (a test fake).
@@ -1585,6 +1633,14 @@ argument_specs:
         type: path
         description: Where the helper units are installed.
         default: /etc/systemd/system
+      media_automation_last_run_dir:
+        type: path
+        description: Where the helper timers' last-run records are written (role last_run; the writer runs as root).
+        default: /var/lib/homelabnext/last-run
+      media_automation_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
       media_automation_systemctl_cli:
         type: str
         description: The systemctl command (a test fake).
@@ -1813,6 +1869,14 @@ argument_specs:
         type: path
         description: Where the helper units are installed.
         default: /etc/systemd/system
+      media_automation_last_run_dir:
+        type: path
+        description: Where the helper timers' last-run records are written (role last_run; the writer runs as root).
+        default: /var/lib/homelabnext/last-run
+      media_automation_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
       media_automation_systemctl_cli:
         type: str
         description: The systemctl command (a test fake).

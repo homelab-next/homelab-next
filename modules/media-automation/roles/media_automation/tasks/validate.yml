@@ -54,6 +54,8 @@
       - media_automation_helper_stall_hours | int >= 1 and media_automation_helper_min_age_hours | int >= 1
       - media_automation_systemctl_cli is match('^[A-Za-z0-9_/.-]+\Z')
       - media_automation_unit_dir is match(media_automation_path_pattern)
+      - media_automation_last_run_dir is match(media_automation_path_pattern)
+      - media_automation_last_run_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
       - media_automation_libexec_dir is match(media_automation_path_pattern)
     fail_msg: >-
       media-automation: a registry id, every image pinned by tag and digest, the guest's IPv4 address

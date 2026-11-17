@@ -18,7 +18,11 @@ Environment=SONARR_URL=http://{{ media_automation_bind }}:{{ media_automation_so
 Environment=RADARR_URL=http://{{ media_automation_bind }}:{{ media_automation_radarr_port | int }}
 Environment=STALLED_TORRENT_STATE={{ media_automation_state_dir }}/stalled-torrents.json
 Environment=STALLED_TORRENT_HOURS={{ media_automation_helper_stall_hours | int }}
+# the job's last-run record (role last_run), written on start and on stop; "-+" = a writer problem never
+# fails the job, and the writer runs as root (outside this unit's User= and sandbox) into the root-owned record directory
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ media_automation_last_run_dir }} --group {{ media_automation_last_run_group }} --job timer:media_automation/stalled-repair --unit %n --calendar "*-*-* *:17:00 UTC" --delay 300
 ExecStart=/usr/local/libexec/homelabnext/hnx-media-stalled-repair
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ media_automation_last_run_dir }} --group {{ media_automation_last_run_group }} --job timer:media_automation/stalled-repair --unit %n --calendar "*-*-* *:17:00 UTC" --delay 300
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
