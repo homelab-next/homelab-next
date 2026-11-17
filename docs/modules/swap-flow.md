@@ -70,7 +70,7 @@ log are unchanged) until the ADR is accepted and the two are folded together. Th
 | `meaning_changes: [{field, before, after}]` | a feed move changed what a rule id meant |
 | `credentials_revoked: [secret:...]` gating `decommission-check` | the old provider's issued credentials go |
 | `legs: [{instance, order}]` | the DNS swap's two-leg cutover across instances |
-| `model_roles: [{slot: inference, instance, role, from, to, evaluation}]` | a model-role rebind is gated on the pinned evaluation of the new binding, its egress canary included |
+| `model_roles: [{slot: inference, instance, role, change, from, to, evaluation}]` | a model-role rebind, add or remove is gated on the pinned evaluation of the table after it, the new binding's egress canary included |
 
 `tests/schemas/test_module_swap.py` drives the swap above (the `samples` object store) through
 these rules end to end: plan, re-check, migration, cutover onto `sites/full.yml`, decommission.
@@ -90,7 +90,8 @@ and `meaning_changes` is recorded, never checked.
   `model_role_problems` checks the legs against `ModelEvidence`: the role table the swap starts
   from, the table after the rebind, the evaluation reports and the model store. Every role whose
   bindings differ between the two tables has exactly one leg (`mdl:x` and `x` are one role), no
-  unchanged role has one, and a role only one table has is refused. The instance is one the swap
+  unchanged role has one, and a role only one table has is refused unless its leg adds or removes
+  it (below). The instance is one the swap
   moves; the old binding is one of the starting table's, the new one is the later table's and
   differs from it, the role's other bindings are unchanged, and the new binding resolves to a store
   entry. `from` is best named by `pin`, since an outgoing model may have left the store. `evaluation.report` is the digest
@@ -105,6 +106,19 @@ and `meaning_changes` is recorded, never checked.
   cutover gate and `apply_selection_diff`) takes the evidence as `models=`. A swap that moves the
   `inference` slot without it is refused, legs or none, because only the two tables show which
   roles it rebinds; so is a record with legs and no evidence. A malformed leg is refused by name.
+
+  **Adding and removing a role.** A leg's optional `change` is `rebind` (the default, above),
+  `add` or `remove`; a rebind still names a role both tables have. An **add** covers a role only
+  the table after has (an overlay's first role included): `to`, no `from`; the new binding is in
+  the store, on the leg's instance and the role's only binding; the report for the table after
+  passes `pins check` live; and since every other field of the role (`kind`, `fallback`, `limits`,
+  `params`, `tlp_ceiling`, a binding's `leaves_lab`, `provider_terms`) arrives new, the record
+  names the role in `model_role_changes`, which the gate requires as for a changed role. A
+  **remove** covers a role only the table before has: `from`, no `to`, the role's one binding, on
+  the leg's instance; it pins the report for the table after; and the gate refuses it while a
+  configuration file or template in the tree (`*.yml`, `*.json`, `*.j2`; not docs, tests or
+  schema examples) names it: `mdl:<role>`, or the bare name as a `*role:`/`*model:` value or a
+  `capabilities.yml` item. An unmatched role, or a leg whose change does not fit it, is refused.
 
   The new binding's backend is the instance the leg moves: `svc:<instance>`, the service row the
   incoming provider's row is renamed to at bind time (see the naming table). The rule reads the
@@ -168,6 +182,12 @@ and `meaning_changes` is recorded, never checked.
   jobs (a job no rule requires gates nothing), and the change that adds an overlay's **first**
   `lab/model_roles.json` cannot pass the gate (there is no base table to hold it against, so it
   exits 2): merge that one change by an owner override, after which every later change is gated.
+  Commit that first table **empty** (`{"version": 1, "roles": {}}`); the first role then lands in
+  two changes: the vetting change (the store entry and the live report for the proposed table in
+  `lab/model-evals/<name>.json`, from `make models-eval REGISTRY=... MODEL_ROLES=<proposed>`),
+  then the role in `lab/model_roles.json` with a `lab/swaps/` record whose leg is `change: add`,
+  naming the role in `model_role_changes` (shape: `schemas/platform/examples/module_swap.inference-add.json`). A decision role is
+  evaluated by a decision suite and canary (`docs/compute-model.md`, "The egress canary").
 
   **Fields that are not the pin.** `ModelEvidence` compares roles by their pins (backend, model id,
   version, digest), which do not show a binding's `leaves_lab` (what `rules.cloud_roles` reads to
@@ -181,8 +201,8 @@ and `meaning_changes` is recorded, never checked.
   nothing for it, and a name whose role did not change is refused. A role with both a rebind and
   such a change needs its leg and its name. Names are not checked by `swap-check` (it sees no
   second table), only by the gate. Any role field counts (a `description` too), since the gate
-  cannot tell which fields a future rule reads. A role present in only one table is refused as
-  before. The module, site and migration rules are `swap-check`'s, which needs a site. A
+  cannot tell which fields a future rule reads. A role present in only one table needs its add or
+  remove leg, not a name here. The module, site and migration rules are `swap-check`'s, which needs a site. A
   rebind within one provider module has no record type of its own, so for now any change to the
   example role table goes through a swap record.
 
