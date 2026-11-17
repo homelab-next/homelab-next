@@ -1,0 +1,1054 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run Gitea (git over HTTPS and SSH, the container registry) as one compose_app container with TLS from
+      the lab CA and the application secrets and SSH host keys by reference.
+    options:
+      gitea_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. forge).
+        required: true
+      gitea_hostname:
+        type: str
+        description: The internal DNS name the certificate names; every clone URL, redirect and registry reference is built
+          from it.
+        required: true
+      gitea_image:
+        type: str
+        description: repository:<X.Y.Z>-rootless@sha256:<digest> of the pinned rootless image.
+        default: docker.io/gitea/gitea:28.4.0-rootless@sha256:15ab7fadb44981a2b781f40c712cad07066197f395100ea1c6326e14e5bb073a
+      gitea_bind:
+        type: str
+        description: The guest's own IPv4 address the two listeners are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      gitea_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 3443
+      gitea_ssh_port:
+        type: int
+        description: Host port of the git SSH listener; also the port clone URLs advertise.
+        default: 2222
+      gitea_dir:
+        type: path
+        description: The compose project directory (secrets/, tls/, sshkeys/ and bin/ under it).
+        default: /opt/compose/gitea
+      gitea_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      gitea_group:
+        type: str
+        description: Their group.
+        default: root
+      gitea_data_root:
+        type: path
+        description: 'The module''s data root: data/, conf/ and export/.'
+        default: /var/lib/hnx-modules/gitea
+      gitea_uid:
+        type: int
+        description: The container's user id; owns data/, conf/ and export/.
+        default: 1000
+      gitea_gid:
+        type: int
+        description: The container's group id; may enter tls/ and sshkeys/.
+        default: 1000
+      gitea_admin_user:
+        type: str
+        description: The administrator's user name (created on an empty database; on a restored one, the existing administrator
+          whose password the secret holds).
+        default: admin
+      gitea_admin_login_ref:
+        type: str
+        description: secret:<name> of the administrator's password.
+        default: secret:gitea/admin-password
+      gitea_admin_password_sync:
+        type: bool
+        description: true sets the administrator's password to the secret's value when it does not sign in.
+        default: false
+      gitea_app_key_ref:
+        type: str
+        description: secret:<name> of the application's SECRET_KEY (on a migration, the source's).
+        default: secret:gitea/secret-key
+      gitea_internal_auth_ref:
+        type: str
+        description: secret:<name> of the INTERNAL_TOKEN (on a migration, the source's).
+        default: secret:gitea/internal-token
+      gitea_signing_ref:
+        type: str
+        description: secret:<name> of the OAuth2 JWT_SECRET (on a migration, the source's).
+        default: secret:gitea/jwt-secret
+      gitea_tls_cert_ref:
+        type: str
+        description: secret:<name> of the server certificate chain (PEM).
+        default: secret:gitea/tls-cert
+      gitea_tls_key_ref:
+        type: str
+        description: secret:<name> of the certificate's private key (PEM).
+        default: secret:gitea/tls-key
+      gitea_ca_ref:
+        type: str
+        description: secret:<name> of the lab CA certificate (PEM).
+        default: secret:gitea/ca
+      gitea_ssh_host_key_refs:
+        type: dict
+        description: SSH host key type (ed25519, rsa, ecdsa) -> secret:<name> of its private key; every one listed is installed
+          and verified.
+        default:
+          ed25519: secret:gitea/ssh-host-key-ed
+          rsa: secret:gitea/ssh-host-key-rsa
+          ecdsa: secret:gitea/ssh-host-key-ecdsa
+      gitea_oidc_enabled:
+        type: bool
+        description: true creates an OpenID Connect sign-in source (local accounts stay).
+        default: false
+      gitea_oidc_name:
+        type: str
+        description: The source's name (shown on the sign-in page).
+        default: sso
+      gitea_oidc_issuer_url:
+        type: str
+        description: The identity provider's issuer URL (https).
+        default: ''
+      gitea_oidc_client_id:
+        type: str
+        description: The OpenID Connect client's id.
+        default: ''
+      gitea_oidc_cred_ref:
+        type: str
+        description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
+        default: secret:gitea/oidc-client-secret
+      gitea_registry_pull_user:
+        type: str
+        description: A registry pull account's name; set, health proves its token is accepted.
+        default: ''
+      gitea_pull_auth_ref:
+        type: str
+        description: secret:<name> of that account's token (scope read:package; read only when the account is named).
+        default: secret:gitea/registry-pull-token
+      gitea_mem_limit:
+        type: str
+        description: The container's memory limit, like 1g.
+        default: 1g
+      gitea_start:
+        type: bool
+        description: false renders and starts nothing (a dry deployment).
+        default: true
+      gitea_validate_with_docker:
+        type: bool
+        description: false skips docker compose config on the rendered file.
+        default: true
+      gitea_health_timeout:
+        type: int
+        description: Seconds one request of the hooks may take.
+        default: 15
+      gitea_ready_timeout:
+        type: int
+        description: Seconds to wait for the service after a start.
+        default: 300
+      gitea_restore_allow_empty:
+        type: bool
+        description: true lets a restore take an export that lists no account or repository.
+        default: false
+  readiness:
+    short_description: The container engine is ready and every credential resolves in its form.
+    options:
+      gitea_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. forge).
+        required: true
+      gitea_hostname:
+        type: str
+        description: The internal DNS name the certificate names; every clone URL, redirect and registry reference is built
+          from it.
+        required: true
+      gitea_image:
+        type: str
+        description: repository:<X.Y.Z>-rootless@sha256:<digest> of the pinned rootless image.
+        default: docker.io/gitea/gitea:28.4.0-rootless@sha256:15ab7fadb44981a2b781f40c712cad07066197f395100ea1c6326e14e5bb073a
+      gitea_bind:
+        type: str
+        description: The guest's own IPv4 address the two listeners are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      gitea_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 3443
+      gitea_ssh_port:
+        type: int
+        description: Host port of the git SSH listener; also the port clone URLs advertise.
+        default: 2222
+      gitea_dir:
+        type: path
+        description: The compose project directory (secrets/, tls/, sshkeys/ and bin/ under it).
+        default: /opt/compose/gitea
+      gitea_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      gitea_group:
+        type: str
+        description: Their group.
+        default: root
+      gitea_data_root:
+        type: path
+        description: 'The module''s data root: data/, conf/ and export/.'
+        default: /var/lib/hnx-modules/gitea
+      gitea_uid:
+        type: int
+        description: The container's user id; owns data/, conf/ and export/.
+        default: 1000
+      gitea_gid:
+        type: int
+        description: The container's group id; may enter tls/ and sshkeys/.
+        default: 1000
+      gitea_admin_user:
+        type: str
+        description: The administrator's user name (created on an empty database; on a restored one, the existing administrator
+          whose password the secret holds).
+        default: admin
+      gitea_admin_login_ref:
+        type: str
+        description: secret:<name> of the administrator's password.
+        default: secret:gitea/admin-password
+      gitea_admin_password_sync:
+        type: bool
+        description: true sets the administrator's password to the secret's value when it does not sign in.
+        default: false
+      gitea_app_key_ref:
+        type: str
+        description: secret:<name> of the application's SECRET_KEY (on a migration, the source's).
+        default: secret:gitea/secret-key
+      gitea_internal_auth_ref:
+        type: str
+        description: secret:<name> of the INTERNAL_TOKEN (on a migration, the source's).
+        default: secret:gitea/internal-token
+      gitea_signing_ref:
+        type: str
+        description: secret:<name> of the OAuth2 JWT_SECRET (on a migration, the source's).
+        default: secret:gitea/jwt-secret
+      gitea_tls_cert_ref:
+        type: str
+        description: secret:<name> of the server certificate chain (PEM).
+        default: secret:gitea/tls-cert
+      gitea_tls_key_ref:
+        type: str
+        description: secret:<name> of the certificate's private key (PEM).
+        default: secret:gitea/tls-key
+      gitea_ca_ref:
+        type: str
+        description: secret:<name> of the lab CA certificate (PEM).
+        default: secret:gitea/ca
+      gitea_ssh_host_key_refs:
+        type: dict
+        description: SSH host key type (ed25519, rsa, ecdsa) -> secret:<name> of its private key; every one listed is installed
+          and verified.
+        default:
+          ed25519: secret:gitea/ssh-host-key-ed
+          rsa: secret:gitea/ssh-host-key-rsa
+          ecdsa: secret:gitea/ssh-host-key-ecdsa
+      gitea_oidc_enabled:
+        type: bool
+        description: true creates an OpenID Connect sign-in source (local accounts stay).
+        default: false
+      gitea_oidc_name:
+        type: str
+        description: The source's name (shown on the sign-in page).
+        default: sso
+      gitea_oidc_issuer_url:
+        type: str
+        description: The identity provider's issuer URL (https).
+        default: ''
+      gitea_oidc_client_id:
+        type: str
+        description: The OpenID Connect client's id.
+        default: ''
+      gitea_oidc_cred_ref:
+        type: str
+        description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
+        default: secret:gitea/oidc-client-secret
+      gitea_registry_pull_user:
+        type: str
+        description: A registry pull account's name; set, health proves its token is accepted.
+        default: ''
+      gitea_pull_auth_ref:
+        type: str
+        description: secret:<name> of that account's token (scope read:package; read only when the account is named).
+        default: secret:gitea/registry-pull-token
+      gitea_mem_limit:
+        type: str
+        description: The container's memory limit, like 1g.
+        default: 1g
+      gitea_start:
+        type: bool
+        description: false renders and starts nothing (a dry deployment).
+        default: true
+      gitea_validate_with_docker:
+        type: bool
+        description: false skips docker compose config on the rendered file.
+        default: true
+      gitea_health_timeout:
+        type: int
+        description: Seconds one request of the hooks may take.
+        default: 15
+      gitea_ready_timeout:
+        type: int
+        description: Seconds to wait for the service after a start.
+        default: 300
+      gitea_restore_allow_empty:
+        type: bool
+        description: true lets a restore take an export that lists no account or repository.
+        default: false
+  health:
+    short_description: Read-only checks of the running service.
+    options:
+      gitea_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. forge).
+        required: true
+      gitea_hostname:
+        type: str
+        description: The internal DNS name the certificate names; every clone URL, redirect and registry reference is built
+          from it.
+        required: true
+      gitea_image:
+        type: str
+        description: repository:<X.Y.Z>-rootless@sha256:<digest> of the pinned rootless image.
+        default: docker.io/gitea/gitea:28.4.0-rootless@sha256:15ab7fadb44981a2b781f40c712cad07066197f395100ea1c6326e14e5bb073a
+      gitea_bind:
+        type: str
+        description: The guest's own IPv4 address the two listeners are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      gitea_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 3443
+      gitea_ssh_port:
+        type: int
+        description: Host port of the git SSH listener; also the port clone URLs advertise.
+        default: 2222
+      gitea_dir:
+        type: path
+        description: The compose project directory (secrets/, tls/, sshkeys/ and bin/ under it).
+        default: /opt/compose/gitea
+      gitea_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      gitea_group:
+        type: str
+        description: Their group.
+        default: root
+      gitea_data_root:
+        type: path
+        description: 'The module''s data root: data/, conf/ and export/.'
+        default: /var/lib/hnx-modules/gitea
+      gitea_uid:
+        type: int
+        description: The container's user id; owns data/, conf/ and export/.
+        default: 1000
+      gitea_gid:
+        type: int
+        description: The container's group id; may enter tls/ and sshkeys/.
+        default: 1000
+      gitea_admin_user:
+        type: str
+        description: The administrator's user name (created on an empty database; on a restored one, the existing administrator
+          whose password the secret holds).
+        default: admin
+      gitea_admin_login_ref:
+        type: str
+        description: secret:<name> of the administrator's password.
+        default: secret:gitea/admin-password
+      gitea_admin_password_sync:
+        type: bool
+        description: true sets the administrator's password to the secret's value when it does not sign in.
+        default: false
+      gitea_app_key_ref:
+        type: str
+        description: secret:<name> of the application's SECRET_KEY (on a migration, the source's).
+        default: secret:gitea/secret-key
+      gitea_internal_auth_ref:
+        type: str
+        description: secret:<name> of the INTERNAL_TOKEN (on a migration, the source's).
+        default: secret:gitea/internal-token
+      gitea_signing_ref:
+        type: str
+        description: secret:<name> of the OAuth2 JWT_SECRET (on a migration, the source's).
+        default: secret:gitea/jwt-secret
+      gitea_tls_cert_ref:
+        type: str
+        description: secret:<name> of the server certificate chain (PEM).
+        default: secret:gitea/tls-cert
+      gitea_tls_key_ref:
+        type: str
+        description: secret:<name> of the certificate's private key (PEM).
+        default: secret:gitea/tls-key
+      gitea_ca_ref:
+        type: str
+        description: secret:<name> of the lab CA certificate (PEM).
+        default: secret:gitea/ca
+      gitea_ssh_host_key_refs:
+        type: dict
+        description: SSH host key type (ed25519, rsa, ecdsa) -> secret:<name> of its private key; every one listed is installed
+          and verified.
+        default:
+          ed25519: secret:gitea/ssh-host-key-ed
+          rsa: secret:gitea/ssh-host-key-rsa
+          ecdsa: secret:gitea/ssh-host-key-ecdsa
+      gitea_oidc_enabled:
+        type: bool
+        description: true creates an OpenID Connect sign-in source (local accounts stay).
+        default: false
+      gitea_oidc_name:
+        type: str
+        description: The source's name (shown on the sign-in page).
+        default: sso
+      gitea_oidc_issuer_url:
+        type: str
+        description: The identity provider's issuer URL (https).
+        default: ''
+      gitea_oidc_client_id:
+        type: str
+        description: The OpenID Connect client's id.
+        default: ''
+      gitea_oidc_cred_ref:
+        type: str
+        description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
+        default: secret:gitea/oidc-client-secret
+      gitea_registry_pull_user:
+        type: str
+        description: A registry pull account's name; set, health proves its token is accepted.
+        default: ''
+      gitea_pull_auth_ref:
+        type: str
+        description: secret:<name> of that account's token (scope read:package; read only when the account is named).
+        default: secret:gitea/registry-pull-token
+      gitea_mem_limit:
+        type: str
+        description: The container's memory limit, like 1g.
+        default: 1g
+      gitea_start:
+        type: bool
+        description: false renders and starts nothing (a dry deployment).
+        default: true
+      gitea_validate_with_docker:
+        type: bool
+        description: false skips docker compose config on the rendered file.
+        default: true
+      gitea_health_timeout:
+        type: int
+        description: Seconds one request of the hooks may take.
+        default: 15
+      gitea_ready_timeout:
+        type: int
+        description: Seconds to wait for the service after a start.
+        default: 300
+      gitea_restore_allow_empty:
+        type: bool
+        description: true lets a restore take an export that lists no account or repository.
+        default: false
+  export:
+    short_description: Stop the service, dump the instance, record counts and per-repository refs digests, start it again.
+    options:
+      gitea_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. forge).
+        required: true
+      gitea_hostname:
+        type: str
+        description: The internal DNS name the certificate names; every clone URL, redirect and registry reference is built
+          from it.
+        required: true
+      gitea_image:
+        type: str
+        description: repository:<X.Y.Z>-rootless@sha256:<digest> of the pinned rootless image.
+        default: docker.io/gitea/gitea:28.4.0-rootless@sha256:15ab7fadb44981a2b781f40c712cad07066197f395100ea1c6326e14e5bb073a
+      gitea_bind:
+        type: str
+        description: The guest's own IPv4 address the two listeners are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      gitea_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 3443
+      gitea_ssh_port:
+        type: int
+        description: Host port of the git SSH listener; also the port clone URLs advertise.
+        default: 2222
+      gitea_dir:
+        type: path
+        description: The compose project directory (secrets/, tls/, sshkeys/ and bin/ under it).
+        default: /opt/compose/gitea
+      gitea_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      gitea_group:
+        type: str
+        description: Their group.
+        default: root
+      gitea_data_root:
+        type: path
+        description: 'The module''s data root: data/, conf/ and export/.'
+        default: /var/lib/hnx-modules/gitea
+      gitea_uid:
+        type: int
+        description: The container's user id; owns data/, conf/ and export/.
+        default: 1000
+      gitea_gid:
+        type: int
+        description: The container's group id; may enter tls/ and sshkeys/.
+        default: 1000
+      gitea_admin_user:
+        type: str
+        description: The administrator's user name (created on an empty database; on a restored one, the existing administrator
+          whose password the secret holds).
+        default: admin
+      gitea_admin_login_ref:
+        type: str
+        description: secret:<name> of the administrator's password.
+        default: secret:gitea/admin-password
+      gitea_admin_password_sync:
+        type: bool
+        description: true sets the administrator's password to the secret's value when it does not sign in.
+        default: false
+      gitea_app_key_ref:
+        type: str
+        description: secret:<name> of the application's SECRET_KEY (on a migration, the source's).
+        default: secret:gitea/secret-key
+      gitea_internal_auth_ref:
+        type: str
+        description: secret:<name> of the INTERNAL_TOKEN (on a migration, the source's).
+        default: secret:gitea/internal-token
+      gitea_signing_ref:
+        type: str
+        description: secret:<name> of the OAuth2 JWT_SECRET (on a migration, the source's).
+        default: secret:gitea/jwt-secret
+      gitea_tls_cert_ref:
+        type: str
+        description: secret:<name> of the server certificate chain (PEM).
+        default: secret:gitea/tls-cert
+      gitea_tls_key_ref:
+        type: str
+        description: secret:<name> of the certificate's private key (PEM).
+        default: secret:gitea/tls-key
+      gitea_ca_ref:
+        type: str
+        description: secret:<name> of the lab CA certificate (PEM).
+        default: secret:gitea/ca
+      gitea_ssh_host_key_refs:
+        type: dict
+        description: SSH host key type (ed25519, rsa, ecdsa) -> secret:<name> of its private key; every one listed is installed
+          and verified.
+        default:
+          ed25519: secret:gitea/ssh-host-key-ed
+          rsa: secret:gitea/ssh-host-key-rsa
+          ecdsa: secret:gitea/ssh-host-key-ecdsa
+      gitea_oidc_enabled:
+        type: bool
+        description: true creates an OpenID Connect sign-in source (local accounts stay).
+        default: false
+      gitea_oidc_name:
+        type: str
+        description: The source's name (shown on the sign-in page).
+        default: sso
+      gitea_oidc_issuer_url:
+        type: str
+        description: The identity provider's issuer URL (https).
+        default: ''
+      gitea_oidc_client_id:
+        type: str
+        description: The OpenID Connect client's id.
+        default: ''
+      gitea_oidc_cred_ref:
+        type: str
+        description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
+        default: secret:gitea/oidc-client-secret
+      gitea_registry_pull_user:
+        type: str
+        description: A registry pull account's name; set, health proves its token is accepted.
+        default: ''
+      gitea_pull_auth_ref:
+        type: str
+        description: secret:<name> of that account's token (scope read:package; read only when the account is named).
+        default: secret:gitea/registry-pull-token
+      gitea_mem_limit:
+        type: str
+        description: The container's memory limit, like 1g.
+        default: 1g
+      gitea_start:
+        type: bool
+        description: false renders and starts nothing (a dry deployment).
+        default: true
+      gitea_validate_with_docker:
+        type: bool
+        description: false skips docker compose config on the rendered file.
+        default: true
+      gitea_health_timeout:
+        type: int
+        description: Seconds one request of the hooks may take.
+        default: 15
+      gitea_ready_timeout:
+        type: int
+        description: Seconds to wait for the service after a start.
+        default: 300
+      gitea_restore_allow_empty:
+        type: bool
+        description: true lets a restore take an export that lists no account or repository.
+        default: false
+  backup:
+    short_description: The export, then compose_app's backup manifest.
+    options:
+      gitea_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. forge).
+        required: true
+      gitea_hostname:
+        type: str
+        description: The internal DNS name the certificate names; every clone URL, redirect and registry reference is built
+          from it.
+        required: true
+      gitea_image:
+        type: str
+        description: repository:<X.Y.Z>-rootless@sha256:<digest> of the pinned rootless image.
+        default: docker.io/gitea/gitea:28.4.0-rootless@sha256:15ab7fadb44981a2b781f40c712cad07066197f395100ea1c6326e14e5bb073a
+      gitea_bind:
+        type: str
+        description: The guest's own IPv4 address the two listeners are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      gitea_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 3443
+      gitea_ssh_port:
+        type: int
+        description: Host port of the git SSH listener; also the port clone URLs advertise.
+        default: 2222
+      gitea_dir:
+        type: path
+        description: The compose project directory (secrets/, tls/, sshkeys/ and bin/ under it).
+        default: /opt/compose/gitea
+      gitea_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      gitea_group:
+        type: str
+        description: Their group.
+        default: root
+      gitea_data_root:
+        type: path
+        description: 'The module''s data root: data/, conf/ and export/.'
+        default: /var/lib/hnx-modules/gitea
+      gitea_uid:
+        type: int
+        description: The container's user id; owns data/, conf/ and export/.
+        default: 1000
+      gitea_gid:
+        type: int
+        description: The container's group id; may enter tls/ and sshkeys/.
+        default: 1000
+      gitea_admin_user:
+        type: str
+        description: The administrator's user name (created on an empty database; on a restored one, the existing administrator
+          whose password the secret holds).
+        default: admin
+      gitea_admin_login_ref:
+        type: str
+        description: secret:<name> of the administrator's password.
+        default: secret:gitea/admin-password
+      gitea_admin_password_sync:
+        type: bool
+        description: true sets the administrator's password to the secret's value when it does not sign in.
+        default: false
+      gitea_app_key_ref:
+        type: str
+        description: secret:<name> of the application's SECRET_KEY (on a migration, the source's).
+        default: secret:gitea/secret-key
+      gitea_internal_auth_ref:
+        type: str
+        description: secret:<name> of the INTERNAL_TOKEN (on a migration, the source's).
+        default: secret:gitea/internal-token
+      gitea_signing_ref:
+        type: str
+        description: secret:<name> of the OAuth2 JWT_SECRET (on a migration, the source's).
+        default: secret:gitea/jwt-secret
+      gitea_tls_cert_ref:
+        type: str
+        description: secret:<name> of the server certificate chain (PEM).
+        default: secret:gitea/tls-cert
+      gitea_tls_key_ref:
+        type: str
+        description: secret:<name> of the certificate's private key (PEM).
+        default: secret:gitea/tls-key
+      gitea_ca_ref:
+        type: str
+        description: secret:<name> of the lab CA certificate (PEM).
+        default: secret:gitea/ca
+      gitea_ssh_host_key_refs:
+        type: dict
+        description: SSH host key type (ed25519, rsa, ecdsa) -> secret:<name> of its private key; every one listed is installed
+          and verified.
+        default:
+          ed25519: secret:gitea/ssh-host-key-ed
+          rsa: secret:gitea/ssh-host-key-rsa
+          ecdsa: secret:gitea/ssh-host-key-ecdsa
+      gitea_oidc_enabled:
+        type: bool
+        description: true creates an OpenID Connect sign-in source (local accounts stay).
+        default: false
+      gitea_oidc_name:
+        type: str
+        description: The source's name (shown on the sign-in page).
+        default: sso
+      gitea_oidc_issuer_url:
+        type: str
+        description: The identity provider's issuer URL (https).
+        default: ''
+      gitea_oidc_client_id:
+        type: str
+        description: The OpenID Connect client's id.
+        default: ''
+      gitea_oidc_cred_ref:
+        type: str
+        description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
+        default: secret:gitea/oidc-client-secret
+      gitea_registry_pull_user:
+        type: str
+        description: A registry pull account's name; set, health proves its token is accepted.
+        default: ''
+      gitea_pull_auth_ref:
+        type: str
+        description: secret:<name> of that account's token (scope read:package; read only when the account is named).
+        default: secret:gitea/registry-pull-token
+      gitea_mem_limit:
+        type: str
+        description: The container's memory limit, like 1g.
+        default: 1g
+      gitea_start:
+        type: bool
+        description: false renders and starts nothing (a dry deployment).
+        default: true
+      gitea_validate_with_docker:
+        type: bool
+        description: false skips docker compose config on the rendered file.
+        default: true
+      gitea_health_timeout:
+        type: int
+        description: Seconds one request of the hooks may take.
+        default: 15
+      gitea_ready_timeout:
+        type: int
+        description: Seconds to wait for the service after a start.
+        default: 300
+      gitea_restore_allow_empty:
+        type: bool
+        description: true lets a restore take an export that lists no account or repository.
+        default: false
+  restore:
+    short_description: Restore an export onto the stopped service, verify it, then start it.
+    options:
+      gitea_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. forge).
+        required: true
+      gitea_hostname:
+        type: str
+        description: The internal DNS name the certificate names; every clone URL, redirect and registry reference is built
+          from it.
+        required: true
+      gitea_image:
+        type: str
+        description: repository:<X.Y.Z>-rootless@sha256:<digest> of the pinned rootless image.
+        default: docker.io/gitea/gitea:28.4.0-rootless@sha256:15ab7fadb44981a2b781f40c712cad07066197f395100ea1c6326e14e5bb073a
+      gitea_bind:
+        type: str
+        description: The guest's own IPv4 address the two listeners are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      gitea_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 3443
+      gitea_ssh_port:
+        type: int
+        description: Host port of the git SSH listener; also the port clone URLs advertise.
+        default: 2222
+      gitea_dir:
+        type: path
+        description: The compose project directory (secrets/, tls/, sshkeys/ and bin/ under it).
+        default: /opt/compose/gitea
+      gitea_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      gitea_group:
+        type: str
+        description: Their group.
+        default: root
+      gitea_data_root:
+        type: path
+        description: 'The module''s data root: data/, conf/ and export/.'
+        default: /var/lib/hnx-modules/gitea
+      gitea_uid:
+        type: int
+        description: The container's user id; owns data/, conf/ and export/.
+        default: 1000
+      gitea_gid:
+        type: int
+        description: The container's group id; may enter tls/ and sshkeys/.
+        default: 1000
+      gitea_admin_user:
+        type: str
+        description: The administrator's user name (created on an empty database; on a restored one, the existing administrator
+          whose password the secret holds).
+        default: admin
+      gitea_admin_login_ref:
+        type: str
+        description: secret:<name> of the administrator's password.
+        default: secret:gitea/admin-password
+      gitea_admin_password_sync:
+        type: bool
+        description: true sets the administrator's password to the secret's value when it does not sign in.
+        default: false
+      gitea_app_key_ref:
+        type: str
+        description: secret:<name> of the application's SECRET_KEY (on a migration, the source's).
+        default: secret:gitea/secret-key
+      gitea_internal_auth_ref:
+        type: str
+        description: secret:<name> of the INTERNAL_TOKEN (on a migration, the source's).
+        default: secret:gitea/internal-token
+      gitea_signing_ref:
+        type: str
+        description: secret:<name> of the OAuth2 JWT_SECRET (on a migration, the source's).
+        default: secret:gitea/jwt-secret
+      gitea_tls_cert_ref:
+        type: str
+        description: secret:<name> of the server certificate chain (PEM).
+        default: secret:gitea/tls-cert
+      gitea_tls_key_ref:
+        type: str
+        description: secret:<name> of the certificate's private key (PEM).
+        default: secret:gitea/tls-key
+      gitea_ca_ref:
+        type: str
+        description: secret:<name> of the lab CA certificate (PEM).
+        default: secret:gitea/ca
+      gitea_ssh_host_key_refs:
+        type: dict
+        description: SSH host key type (ed25519, rsa, ecdsa) -> secret:<name> of its private key; every one listed is installed
+          and verified.
+        default:
+          ed25519: secret:gitea/ssh-host-key-ed
+          rsa: secret:gitea/ssh-host-key-rsa
+          ecdsa: secret:gitea/ssh-host-key-ecdsa
+      gitea_oidc_enabled:
+        type: bool
+        description: true creates an OpenID Connect sign-in source (local accounts stay).
+        default: false
+      gitea_oidc_name:
+        type: str
+        description: The source's name (shown on the sign-in page).
+        default: sso
+      gitea_oidc_issuer_url:
+        type: str
+        description: The identity provider's issuer URL (https).
+        default: ''
+      gitea_oidc_client_id:
+        type: str
+        description: The OpenID Connect client's id.
+        default: ''
+      gitea_oidc_cred_ref:
+        type: str
+        description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
+        default: secret:gitea/oidc-client-secret
+      gitea_registry_pull_user:
+        type: str
+        description: A registry pull account's name; set, health proves its token is accepted.
+        default: ''
+      gitea_pull_auth_ref:
+        type: str
+        description: secret:<name> of that account's token (scope read:package; read only when the account is named).
+        default: secret:gitea/registry-pull-token
+      gitea_mem_limit:
+        type: str
+        description: The container's memory limit, like 1g.
+        default: 1g
+      gitea_start:
+        type: bool
+        description: false renders and starts nothing (a dry deployment).
+        default: true
+      gitea_validate_with_docker:
+        type: bool
+        description: false skips docker compose config on the rendered file.
+        default: true
+      gitea_health_timeout:
+        type: int
+        description: Seconds one request of the hooks may take.
+        default: 15
+      gitea_ready_timeout:
+        type: int
+        description: Seconds to wait for the service after a start.
+        default: 300
+      gitea_restore_allow_empty:
+        type: bool
+        description: true lets a restore take an export that lists no account or repository.
+        default: false
+      gitea_restore_source:
+        type: path
+        description: The directory of an export (restore only; no default).
+        required: true
+  upgrade:
+    short_description: Validate and record a pinned image bump (never an older version).
+    options:
+      gitea_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. forge).
+        required: true
+      gitea_hostname:
+        type: str
+        description: The internal DNS name the certificate names; every clone URL, redirect and registry reference is built
+          from it.
+        required: true
+      gitea_image:
+        type: str
+        description: repository:<X.Y.Z>-rootless@sha256:<digest> of the pinned rootless image.
+        default: docker.io/gitea/gitea:28.4.0-rootless@sha256:15ab7fadb44981a2b781f40c712cad07066197f395100ea1c6326e14e5bb073a
+      gitea_bind:
+        type: str
+        description: The guest's own IPv4 address the two listeners are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      gitea_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 3443
+      gitea_ssh_port:
+        type: int
+        description: Host port of the git SSH listener; also the port clone URLs advertise.
+        default: 2222
+      gitea_dir:
+        type: path
+        description: The compose project directory (secrets/, tls/, sshkeys/ and bin/ under it).
+        default: /opt/compose/gitea
+      gitea_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      gitea_group:
+        type: str
+        description: Their group.
+        default: root
+      gitea_data_root:
+        type: path
+        description: 'The module''s data root: data/, conf/ and export/.'
+        default: /var/lib/hnx-modules/gitea
+      gitea_uid:
+        type: int
+        description: The container's user id; owns data/, conf/ and export/.
+        default: 1000
+      gitea_gid:
+        type: int
+        description: The container's group id; may enter tls/ and sshkeys/.
+        default: 1000
+      gitea_admin_user:
+        type: str
+        description: The administrator's user name (created on an empty database; on a restored one, the existing administrator
+          whose password the secret holds).
+        default: admin
+      gitea_admin_login_ref:
+        type: str
+        description: secret:<name> of the administrator's password.
+        default: secret:gitea/admin-password
+      gitea_admin_password_sync:
+        type: bool
+        description: true sets the administrator's password to the secret's value when it does not sign in.
+        default: false
+      gitea_app_key_ref:
+        type: str
+        description: secret:<name> of the application's SECRET_KEY (on a migration, the source's).
+        default: secret:gitea/secret-key
+      gitea_internal_auth_ref:
+        type: str
+        description: secret:<name> of the INTERNAL_TOKEN (on a migration, the source's).
+        default: secret:gitea/internal-token
+      gitea_signing_ref:
+        type: str
+        description: secret:<name> of the OAuth2 JWT_SECRET (on a migration, the source's).
+        default: secret:gitea/jwt-secret
+      gitea_tls_cert_ref:
+        type: str
+        description: secret:<name> of the server certificate chain (PEM).
+        default: secret:gitea/tls-cert
+      gitea_tls_key_ref:
+        type: str
+        description: secret:<name> of the certificate's private key (PEM).
+        default: secret:gitea/tls-key
+      gitea_ca_ref:
+        type: str
+        description: secret:<name> of the lab CA certificate (PEM).
+        default: secret:gitea/ca
+      gitea_ssh_host_key_refs:
+        type: dict
+        description: SSH host key type (ed25519, rsa, ecdsa) -> secret:<name> of its private key; every one listed is installed
+          and verified.
+        default:
+          ed25519: secret:gitea/ssh-host-key-ed
+          rsa: secret:gitea/ssh-host-key-rsa
+          ecdsa: secret:gitea/ssh-host-key-ecdsa
+      gitea_oidc_enabled:
+        type: bool
+        description: true creates an OpenID Connect sign-in source (local accounts stay).
+        default: false
+      gitea_oidc_name:
+        type: str
+        description: The source's name (shown on the sign-in page).
+        default: sso
+      gitea_oidc_issuer_url:
+        type: str
+        description: The identity provider's issuer URL (https).
+        default: ''
+      gitea_oidc_client_id:
+        type: str
+        description: The OpenID Connect client's id.
+        default: ''
+      gitea_oidc_cred_ref:
+        type: str
+        description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
+        default: secret:gitea/oidc-client-secret
+      gitea_registry_pull_user:
+        type: str
+        description: A registry pull account's name; set, health proves its token is accepted.
+        default: ''
+      gitea_pull_auth_ref:
+        type: str
+        description: secret:<name> of that account's token (scope read:package; read only when the account is named).
+        default: secret:gitea/registry-pull-token
+      gitea_mem_limit:
+        type: str
+        description: The container's memory limit, like 1g.
+        default: 1g
+      gitea_start:
+        type: bool
+        description: false renders and starts nothing (a dry deployment).
+        default: true
+      gitea_validate_with_docker:
+        type: bool
+        description: false skips docker compose config on the rendered file.
+        default: true
+      gitea_health_timeout:
+        type: int
+        description: Seconds one request of the hooks may take.
+        default: 15
+      gitea_ready_timeout:
+        type: int
+        description: Seconds to wait for the service after a start.
+        default: 300
+      gitea_restore_allow_empty:
+        type: bool
+        description: true lets a restore take an export that lists no account or repository.
+        default: false
+      gitea_target_image:
+        type: str
+        description: The image to upgrade to, pinned by tag and digest (upgrade only; no default).
+        required: true

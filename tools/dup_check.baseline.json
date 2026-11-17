@@ -6,19 +6,36 @@
   "min_lines": 5
  },
  "summary": {
-  "clones": 32,
-  "duplicated_lines": 376,
-  "total_lines": 178412,
-  "duplicated_percent": 0.21
+  "clones": 37,
+  "duplicated_lines": 540,
+  "total_lines": 194172,
+  "duplicated_percent": 0.28
  },
  "increases": [
   {
    "reason": "the LakeClient.write_batch signature, now with expect_source, repeated by every adapter and DualWriter as the protocol requires (it replaces the two shorter signature clones)",
    "from": 366,
    "to": 409
+  },
+  {
+   "reason": "tools/migrate/forge.py is the forge provider's migration tool, written on the shipped projects-migrate tool's ssh-pipe scaffold (guard_dir, Runner, _subprocess_runner, _Ctx, _wrap, _run and two small guards); extracting them into a shared module changes the other tool and the tests of both, which patch module-level names, so it is a follow-up and not part of the forge module's review fixes",
+   "from": 376,
+   "to": 540
   }
  ],
  "clones": {
+  "026cc6f3e6b07ced": {
+   "tokens": 64,
+   "lines": 7,
+   "count": 1,
+   "files": [
+    "tools/migrate/forge.py",
+    "tools/migrate/openproject.py"
+   ],
+   "fingerprints": [
+    "092244c05f"
+   ]
+  },
   "090a0ca506a53791": {
    "tokens": 79,
    "lines": 6,
@@ -44,6 +61,20 @@
    ],
    "fingerprints": [
     "04ab1ec395"
+   ]
+  },
+  "1091543d6631e00d": {
+   "tokens": 85,
+   "lines": 9,
+   "count": 1,
+   "files": [
+    "tools/migrate/forge.py",
+    "tools/migrate/openproject.py"
+   ],
+   "fingerprints": [
+    "01dc256d6c",
+    "03953a717e",
+    "03edda441e"
    ]
   },
   "2dea0564519e2e70": {
@@ -111,6 +142,19 @@
     "0b15f1f3a0",
     "0b44db0050",
     "0f5b4e88f2"
+   ]
+  },
+  "8124cde0d6953944": {
+   "tokens": 56,
+   "lines": 9,
+   "count": 1,
+   "files": [
+    "tools/migrate/forge.py",
+    "tools/migrate/openproject.py"
+   ],
+   "fingerprints": [
+    "0262b38e67",
+    "02bfd60430"
    ]
   },
   "857e36c63e2fe90a": {
@@ -275,6 +319,21 @@
     "0fff124342"
    ]
   },
+  "e2e69cf5c8a610d7": {
+   "tokens": 78,
+   "lines": 7,
+   "count": 1,
+   "files": [
+    "tools/migrate/forge.py",
+    "tools/migrate/openproject.py"
+   ],
+   "fingerprints": [
+    "016ce74100",
+    "022d393a77",
+    "0bbe163157",
+    "1318a0c33e"
+   ]
+  },
   "e436e0fb014ab108": {
    "tokens": 52,
    "lines": 5,
@@ -298,6 +357,45 @@
    "fingerprints": [
     "03cfb065e1",
     "060af653af"
+   ]
+  },
+  "f9006a1460db2aee": {
+   "tokens": 420,
+   "lines": 49,
+   "count": 1,
+   "files": [
+    "tools/migrate/forge.py",
+    "tools/migrate/openproject.py"
+   ],
+   "fingerprints": [
+    "000138cd41",
+    "00d4fa761a",
+    "02c9c04e4c",
+    "032b29296b",
+    "03c7f28e23",
+    "03f27d9b4f",
+    "049740d05c",
+    "04b9fb53ed",
+    "05ae013ce0",
+    "0641f0a00f",
+    "066cf7b6bd",
+    "06db2d1bce",
+    "08366dc207",
+    "091307b3bc",
+    "0a14c8ffe9",
+    "0b5398e8b3",
+    "0cf27b0639",
+    "0f00ff058b",
+    "125caab90d",
+    "141fc3c844",
+    "173cfcc167",
+    "1a7e2339c8",
+    "1a803980bd",
+    "1ed6534f76",
+    "1fbf3d5386",
+    "2274ba5ce2",
+    "2972ca24ef",
+    "3383d6057a"
    ]
   }
  }

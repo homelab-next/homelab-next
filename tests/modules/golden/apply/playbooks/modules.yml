@@ -25,7 +25,17 @@
   vars:
     hnx_limits_unit_dir: "/etc/systemd/system"
     hnx_limits_sbin_dir: "/usr/local/sbin"
+    hnx_limits_data_root: "/var/lib/hnx-modules"
+    hnx_limits_data_owner: root
+    hnx_limits_data_group: root
   tasks:
+    - name: "the module data parent (traversable by every module service user)"
+      ansible.builtin.file:
+        path: "{{ hnx_limits_data_root }}"
+        state: directory
+        owner: "{{ hnx_limits_data_owner }}"
+        group: "{{ hnx_limits_data_group }}"
+        mode: "0755"
     - name: "the role slices and the fleet units' slice drop-ins"
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/limits/core/{{ item }}"
@@ -77,7 +87,17 @@
   vars:
     hnx_limits_unit_dir: "/etc/systemd/system"
     hnx_limits_sbin_dir: "/usr/local/sbin"
+    hnx_limits_data_root: "/var/lib/hnx-modules"
+    hnx_limits_data_owner: root
+    hnx_limits_data_group: root
   tasks:
+    - name: "the module data parent (traversable by every module service user)"
+      ansible.builtin.file:
+        path: "{{ hnx_limits_data_root }}"
+        state: directory
+        owner: "{{ hnx_limits_data_owner }}"
+        group: "{{ hnx_limits_data_group }}"
+        mode: "0755"
     - name: "the role slices and the fleet units' slice drop-ins"
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/limits/data/{{ item }}"
