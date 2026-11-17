@@ -44,7 +44,7 @@ library's real source; those live in the private overlay.
   roughly 1 GiB per stream. `media_transcode_tmpfs_size` (bytes, default 8 GiB = `8589934592`; `0`
   turns it off and the server transcodes into the cache volume as before; otherwise 1 GiB to 1 TiB)
   sets the size. The file is edited in place (an element at a time, an existing server's settings kept)
-  and read by the server when the container starts; a change of the size recreates the container, so
+  and refused, untouched, when it is not well-formed or has no closing `</EncodingOptions>`; the server reads it when the container starts; a change of the size recreates the container, so
   the two always move together. After a `restore` run `install` again so the settings follow it.
   Turning it off clears only a `TranscodingTempPath` that names `/transcode`.
   - **RAM sizing rule.** tmpfs pages are charged to the container's memory cgroup (and so to the

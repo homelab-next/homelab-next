@@ -14,6 +14,7 @@ import os
 import pwd
 import shutil
 import tarfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -210,6 +211,51 @@ def test_an_existing_encoding_xml_is_edited_in_place_and_keeps_its_other_setting
     assert "<EncodingThreadCount>-1</EncodingThreadCount>" in xml
     assert "<HardwareAccelerationType>none</HardwareAccelerationType>" in xml
     assert xml.rstrip().endswith("</EncodingOptions>") and xml.count("<EncodingOptions") == 1
+
+
+def test_an_indented_closing_tag_is_found_and_the_edit_stays_inside_the_root(tmp_path):
+    cfg = tmp_path / "data" / "config" / "config"
+    cfg.mkdir(parents=True)
+    body = EXISTING_ENCODING.replace(
+        "  <TranscodingTempPath>/old/transcodes</TranscodingTempPath>\n", ""
+    )
+    (cfg / "encoding.xml").write_text(body.replace("</EncodingOptions>", "    </EncodingOptions>"))
+    assert run_role(tmp_path, ROLE, "main", media_vars(tmp_path)).returncode == 0
+    xml = _encoding(tmp_path)
+    assert xml.index("<TranscodingTempPath>/transcode<") < xml.index("</EncodingOptions>")
+    assert xml.rstrip().endswith("</EncodingOptions>") and xml.count("</EncodingOptions>") == 1
+    ET.fromstring(xml)  # still well-formed
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "why"),
+    [
+        (
+            "no closing tag",
+            EXISTING_ENCODING.replace("</EncodingOptions>\n", ""),
+            "not well-formed",
+        ),
+        (
+            "a self-closing root",
+            '<?xml version="1.0"?>\n<EncodingOptions />\n',
+            "no closing </EncodingOptions>",
+        ),
+        ("not xml at all", "this is not xml\n", "not well-formed"),
+        ("a truncated file", EXISTING_ENCODING[:200], "not well-formed"),
+        ("another root", "<Other>\n  <A>1</A>\n</Other>\n", "not EncodingOptions"),
+        ("an empty file", "", "not well-formed"),
+    ],
+)
+def test_a_malformed_encoding_xml_is_refused_and_left_alone(tmp_path, name, text, why):
+    cfg = tmp_path / "data" / "config" / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "encoding.xml").write_text(text)
+    r = run_role(tmp_path, ROLE, "main", media_vars(tmp_path))
+    assert r.returncode != 0, name
+    assert why in r.stdout + r.stderr, (name, r.stdout)
+    assert "left unchanged" in r.stdout + r.stderr
+    assert (cfg / "encoding.xml").read_text() == text, name
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()  # nothing was started
 
 
 def test_an_empty_transcoding_path_element_is_filled(tmp_path):
