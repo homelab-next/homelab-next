@@ -138,6 +138,15 @@ command-line arguments.
    (a write during the export is caught), and the source is not vacuous. `dump-manifest.json` records
    the counts, a digest of every document's checksums and `quiescent` (true only when nothing
    changed between the first read and the last).
+
+   **Documents that share a file.** The product allows two documents with the same original (same
+   checksum, each with its own notes, tags, owner and field values), and its importer puts no
+   constraint on the checksum: it writes every document under its id. The tool therefore identifies
+   a document by its **id** through dump, restore and verification, carries every one of them, and
+   lists each group that shares a checksum in `duplicate_checksums` (dump manifest and restore
+   report) so the operator sees them; nothing is merged or dropped. Whether to delete a duplicate is
+   the library owner's decision, on the source or the target, never the migration's. Corruption is
+   still caught per document: each file must hash to the checksum its own record carries.
 3. **Rehearse**: restore into the empty target (the staging directory is in the container's export
    volume, which is `export/` of the data root):
 
@@ -149,8 +158,8 @@ command-line arguments.
 
    It refuses a target that holds any document or account before it writes, imports, then reads the
    target: the product's exporter is run again **on the target** and its manifest compared with the
-   dump's, document by document (by checksum): tags, correspondent, document type, storage path,
-   custom-field values, notes, title, date and text must be equal by name, and every document must
+   dump's, document by document (by id): checksums, owner, tags, correspondent, document type, storage
+   path, custom-field values, notes, title, date and text must be equal by name, and every document must
    have a thumbnail; any difference fails and the target's re-export is kept for inspection. The
    sanity checker runs on the target too: a finding the source did not have fails, one it already had is
    reported. Imported mail rules and e-mail/webhook workflows are listed (`--disable-egress` switches them
@@ -170,6 +179,20 @@ command-line arguments.
 
 A rehearsal that passes proves the **tool and the target**; it does not prove the final data: the
 final copy is verified the same way, on its own.
+
+### When a dump stops
+
+- **`the export names auth.user <id>, which it does not hold`** (exit 2): a document, tag,
+  correspondent or other object is **owned by an account the product's exporter leaves out**. The
+  exporter never exports the internal `consumer` and `AnonymousUser` accounts (nor their settings and
+  permissions), so an object owned by one of them points at an account the export does not carry,
+  and the import could not satisfy it either. The tool stops rather than drop or reassign the owner
+  on its own. Fix it on the **source**, as the library's owner decides: find what that account owns,
+  and give it to a real account (the web UI's bulk edit "set owner", or in the application container
+  `python3 manage.py shell -c "from documents.models import Document; from django.contrib.auth.models import User; print(list(Document.global_objects.filter(owner__username__in=['consumer', 'AnonymousUser']).values_list('pk', flat=True)))"`
+  to list the documents first), or clear the owner, then dump again. Check tags, correspondents,
+  document types, storage paths and custom fields the same way if the id still appears.
+- **Documents that share a checksum** do not stop a dump: they are carried and listed (above).
 
 ## Restore drill
 
