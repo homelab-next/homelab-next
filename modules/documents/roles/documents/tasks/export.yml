@@ -5,6 +5,9 @@
 # exporter reads through the running application (no stop: the database is consistent to one read;
 # freeze the callers for a cutover copy, README "Migrating in"), into export/.library, which it
 # keeps between runs so the next one only copies what changed (-d removes what was deleted since).
+# The export is CHECKED before it is archived (records equal the database, every file present and
+# hashing to its checksum): one that is not whole fails the hook, so an upgrade or a remove that
+# exports first stops there instead of going on without a copy.
 # A snapshot: every run writes a new tar (the hook reports changed).
 - block:
     - name: Validate the inputs
@@ -19,6 +22,16 @@
                python3, manage.py, document_exporter, "{{ documents_container_export }}/.library",
                --no-progress-bar, --delete, --compare-checksums]
       changed_when: true
+    - name: The export is whole (its records equal the database's, every file is in it and hashes to its checksum)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ documents_dir }}/docker-compose.yml", exec, -T,
+               -e, "HNX_EXPORT={{ documents_container_export }}/.library", app,
+               python3, manage.py, shell, -c, "{{ documents_export_check_code }}"]
+      register: documents_export_check
+      changed_when: false
+      failed_when: >-
+        documents_export_check.rc != 0 or
+        (documents_export_check.stdout_lines | select('search', 'HNX-EXPORT-CHECK .*"ok": true') | list | length) != 1
     - name: Archive the export beside it
       ansible.builtin.command:
         argv: [tar, --create, --file, "{{ documents_data_root }}/export/.library.tar.tmp",

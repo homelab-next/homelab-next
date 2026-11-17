@@ -39,7 +39,11 @@ credentials:
   - secret: secret:documents/api-token
     identity: token
     holder: provider
-    purpose: the service account's API token; the role seeds it (an export carries none); the health hook and the agents that read and file documents use it
+    purpose: the ADMINISTRATOR's API token (it can delete the library); the role seeds it (an export carries none) for the health hook and operators; agents never get it
+  - secret: secret:documents/agent-token
+    identity: token
+    holder: provider
+    purpose: the agents' API token, on a non-admin account that can view and change documents but never delete (documents_agent_user); the role seeds it; the concierge and the research tools use this one
 identifiers:
   - {kind: secret-name, name: documents, on_remove: keep}
 requires:

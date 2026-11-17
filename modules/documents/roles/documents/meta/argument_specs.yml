@@ -99,6 +99,43 @@ argument_specs:
         type: str
         description: 'The secret: reference of the service account''s API token (40 hex characters).'
         default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: &id002
+        - view_document
+        - change_document
+        - view_note
+        - change_note
+        - view_tag
+        - change_tag
+        - view_correspondent
+        - change_correspondent
+        - view_documenttype
+        - change_documenttype
+        - view_storagepath
+        - change_storagepath
+        - view_customfield
+        - change_customfield
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
       documents_consumer_recursive:
         type: bool
         description: Read the inbox's subdirectories too.
@@ -118,7 +155,7 @@ argument_specs:
       documents_extra_env:
         type: dict
         description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
-        default: &id002 {}
+        default: &id003 {}
       documents_expected_min_documents:
         type: int
         description: 'Health fails when the library holds fewer documents than this (0: not checked);
@@ -151,8 +188,8 @@ argument_specs:
         default: 600
   health:
     short_description: Fail unless both containers are healthy, the sign-in page answers, an anonymous
-      read of the library is refused, and the service account's token reads at least the expected number
-      of documents with the database and broker OK.
+      read of the library is refused, and the administrator's and the agents' tokens read the library
+      (at least the expected number of documents) with the database and broker OK.
     options:
       documents_logical_id:
         type: str
@@ -248,6 +285,29 @@ argument_specs:
         type: str
         description: 'The secret: reference of the service account''s API token (40 hex characters).'
         default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: *id002
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
       documents_consumer_recursive:
         type: bool
         description: Read the inbox's subdirectories too.
@@ -267,7 +327,7 @@ argument_specs:
       documents_extra_env:
         type: dict
         description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
-        default: *id002
+        default: *id003
       documents_expected_min_documents:
         type: int
         description: 'Health fails when the library holds fewer documents than this (0: not checked);
@@ -396,6 +456,29 @@ argument_specs:
         type: str
         description: 'The secret: reference of the service account''s API token (40 hex characters).'
         default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: *id002
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
       documents_consumer_recursive:
         type: bool
         description: Read the inbox's subdirectories too.
@@ -415,7 +498,7 @@ argument_specs:
       documents_extra_env:
         type: dict
         description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
-        default: *id002
+        default: *id003
       documents_expected_min_documents:
         type: int
         description: 'Health fails when the library holds fewer documents than this (0: not checked);
@@ -543,6 +626,29 @@ argument_specs:
         type: str
         description: 'The secret: reference of the service account''s API token (40 hex characters).'
         default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: *id002
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
       documents_consumer_recursive:
         type: bool
         description: Read the inbox's subdirectories too.
@@ -562,7 +668,7 @@ argument_specs:
       documents_extra_env:
         type: dict
         description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
-        default: *id002
+        default: *id003
       documents_expected_min_documents:
         type: int
         description: 'Health fails when the library holds fewer documents than this (0: not checked);
@@ -691,6 +797,29 @@ argument_specs:
         type: str
         description: 'The secret: reference of the service account''s API token (40 hex characters).'
         default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: *id002
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
       documents_consumer_recursive:
         type: bool
         description: Read the inbox's subdirectories too.
@@ -710,7 +839,7 @@ argument_specs:
       documents_extra_env:
         type: dict
         description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
-        default: *id002
+        default: *id003
       documents_expected_min_documents:
         type: int
         description: 'Health fails when the library holds fewer documents than this (0: not checked);
@@ -843,6 +972,29 @@ argument_specs:
         type: str
         description: 'The secret: reference of the service account''s API token (40 hex characters).'
         default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: *id002
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
       documents_consumer_recursive:
         type: bool
         description: Read the inbox's subdirectories too.
@@ -862,7 +1014,7 @@ argument_specs:
       documents_extra_env:
         type: dict
         description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
-        default: *id002
+        default: *id003
       documents_expected_min_documents:
         type: int
         description: 'Health fails when the library holds fewer documents than this (0: not checked);
@@ -899,7 +1051,7 @@ argument_specs:
         required: true
   export:
     short_description: Write the exit copy (object-tree) of the whole library to <data root>/export with
-      the product's exporter.
+      the product's exporter, and fail unless the export is whole.
     options:
       documents_logical_id:
         type: str
@@ -995,6 +1147,29 @@ argument_specs:
         type: str
         description: 'The secret: reference of the service account''s API token (40 hex characters).'
         default: secret:documents/api-token
+      documents_agent_user:
+        type: str
+        description: 'The agents'' account (empty: none): not staff, no password, only documents_agent_permissions
+          and its own token.'
+        default: agent
+      documents_agent_login_ref:
+        type: str
+        description: 'The secret: reference of the agents'' API token (40 hex characters; not the administrator''s).'
+        default: secret:documents/agent-token
+      documents_agent_permissions:
+        type: list
+        description: 'The agents'' permissions: view_, change_ and (named on purpose) add_ of the document
+          models; delete_ is refused.'
+        default: *id002
+      documents_mail_fetch:
+        type: bool
+        description: 'Let the application poll mail accounts by itself (false: PAPERLESS_EMAIL_TASK_CRON=disable).'
+        default: false
+      documents_disable_imported_egress:
+        type: bool
+        description: After an import, switch off the mail rules and the workflows that send e-mail or
+          call a webhook.
+        default: true
       documents_consumer_recursive:
         type: bool
         description: Read the inbox's subdirectories too.
@@ -1014,7 +1189,7 @@ argument_specs:
       documents_extra_env:
         type: dict
         description: 'More PAPERLESS_* settings (name: value) that are neither the role''s own nor secrets.'
-        default: *id002
+        default: *id003
       documents_expected_min_documents:
         type: int
         description: 'Health fails when the library holds fewer documents than this (0: not checked);

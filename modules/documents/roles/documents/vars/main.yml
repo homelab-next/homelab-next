@@ -21,6 +21,8 @@ documents_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
 # the OCR languages the image ships (Tesseract codes); anything else needs root at start to install
 documents_ocr_available: [deu, eng, fra, ita, spa]
 documents_user_pattern: '^[A-Za-z0-9@.+_-]{1,150}\Z'
+documents_refs: "{{ [documents_signing_ref, documents_admin_login_ref, documents_api_login_ref] + ([documents_agent_login_ref] if documents_agent_user | length > 0 else []) }}"
+documents_agent_permission_pattern: '^(view|change|add)_[a-z]+\Z'
 documents_url_pattern: '^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?\Z'
 documents_extra_env_name_pattern: '^PAPERLESS_[A-Z0-9_]+\Z'
 documents_extra_env_value_pattern: "^[A-Za-z0-9 ._:/@+,=-]{0,256}\\Z"
@@ -32,6 +34,7 @@ documents_fixed_env_names:
   - PAPERLESS_URL
   - PAPERLESS_ADMIN_USER
   - PAPERLESS_CONSUMER_RECURSIVE
+  - PAPERLESS_EMAIL_TASK_CRON
   - PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS
   - PAPERLESS_TASK_WORKERS
   - PAPERLESS_THREADS_PER_WORKER
@@ -67,9 +70,114 @@ documents_state_code: |
 # checksum the export recorded (32 hex = md5, 64 = sha256)
 documents_verify_code: |
   import hashlib, json, os, sys
-  from django.contrib.auth.models import User
-  from documents.models import Correspondent, CustomField, Document, DocumentType, Note, Tag
+  from django.core import serializers
+  from documents.models import (Correspondent, CustomField, CustomFieldInstance, Document,
+      DocumentType, Note, StoragePath, Tag)
   root = os.environ["HNX_STAGING"]
+  records = json.load(open(os.path.join(root, "manifest.json")))
+  def of(model):
+      return [r for r in records if r["model"] == model]
+  def digest(path, want):
+      algo = {32: "md5", 64: "sha256"}.get(len(want or ""))
+      if algo is None or not os.path.isfile(path):
+          return None
+      h = hashlib.new(algo)
+      with open(path, "rb") as f:
+          for chunk in iter(lambda: f.read(1 << 20), b""):
+              h.update(chunk)
+      return h.hexdigest()
+  def fields_of(obj):
+      return json.loads(serializers.serialize("json", [obj]))[0]["fields"]
+  tables = {
+      "documents.tag": Tag, "documents.correspondent": Correspondent, "documents.documenttype": DocumentType,
+      "documents.storagepath": StoragePath, "documents.customfield": CustomField,
+      "documents.customfieldinstance": CustomFieldInstance, "documents.note": Note,
+  }
+  want = {label: len(of(label)) for label in ["documents.document", *tables]}
+  got = {"documents.document": Document.global_objects.count()}
+  got.update({label: getattr(M, "global_objects", M.objects).count() for label, M in tables.items()})
+  bad, related, thumbs = [], [], []
+  # the relationships: every tag, correspondent, type, storage path, field value and note as the export holds it
+  for label, M in tables.items():
+      manager = getattr(M, "global_objects", M.objects)
+      for r in of(label):
+          obj = manager.filter(pk=r["pk"]).first()
+          ours = {k: v for k, v in (fields_of(obj) if obj else {}).items() if k != "modified"}
+          theirs = {k: v for k, v in r["fields"].items() if k != "modified"}
+          if obj is None or ours != theirs:
+              related.append([label, r["pk"]])
+  for r in of("documents.document"):
+      d = Document.global_objects.filter(pk=r["pk"]).first()
+      if d is None or digest(d.source_path, r["fields"]["checksum"]) != r["fields"]["checksum"]:
+          bad.append(r["pk"])
+          continue
+      if r.get("__exported_archive_name__") and digest(d.archive_path, r["fields"].get("archive_checksum")) != r["fields"].get("archive_checksum"):
+          bad.append(r["pk"])
+      ours = fields_of(d)
+      for k in ("tags", "correspondent", "document_type", "storage_path", "title", "created", "owner"):
+          if ours.get(k) != r["fields"].get(k):
+              related.append(["documents.document", r["pk"], k])
+      if not os.path.isfile(d.thumbnail_path):
+          thumbs.append(r["pk"])
+  ok = want == got and want["documents.document"] > 0 and not bad and not related and not thumbs
+  print("HNX-VERIFY", json.dumps({"ok": ok, "want": want, "got": got, "bad": bad[:20], "related": related[:20], "no_thumbnail": thumbs[:20]}, sort_keys=True))
+  sys.exit(0 if ok else 1)
+documents_agent_code: |
+  import os
+  from django.contrib.auth import get_user_model
+  from django.contrib.auth.models import Permission
+  from rest_framework.authtoken.models import Token
+  User = get_user_model()
+  if not User.objects.filter(username=os.environ["HNX_API_USER"]).exists():
+      print("HNX-AGENT deferred")  # no administrator yet: the library is still to be imported
+  else:
+      name, want = os.environ["HNX_AGENT_USER"], os.environ["HNX_AGENT_TOKEN"]
+      codes = [c for c in os.environ["HNX_AGENT_PERMS"].split(",") if c]
+      user = User.objects.filter(username=name).first()
+      state = "unchanged"
+      if user is None:
+          user = User.objects.create_user(username=name)
+          user.set_unusable_password()
+          state = "created"
+      if user.is_staff or user.is_superuser or not user.is_active:
+          user.is_staff, user.is_superuser, user.is_active = False, False, True
+          state = "updated"
+      user.save()
+      perms = Permission.objects.filter(content_type__app_label="documents", codename__in=codes)
+      if set(perms.values_list("pk", flat=True)) != set(user.user_permissions.values_list("pk", flat=True)):
+          state = "updated" if state == "unchanged" else state
+      user.user_permissions.set(perms)
+      user.groups.clear()
+      have = Token.objects.filter(user=user).first()
+      if have is None or have.key != want:
+          Token.objects.filter(user=user).delete()
+          Token.objects.create(user=user, key=want)
+          state = "updated" if state == "unchanged" else state
+      print("HNX-AGENT " + state)
+documents_egress_code: |
+  import json
+  from documents.models import Workflow
+  from paperless_mail.models import MailAccount, MailRule
+  DISABLE = False
+  flows = Workflow.objects.filter(actions__email__isnull=False) | Workflow.objects.filter(actions__webhook__isnull=False)
+  flows = flows.distinct()
+  report = {
+      "mail_accounts": MailAccount.objects.count(),
+      "mail_rules": list(MailRule.objects.filter(enabled=True).values_list("name", flat=True)),
+      "workflows": list(flows.filter(enabled=True).values_list("name", flat=True)),
+  }
+  if DISABLE:
+      MailRule.objects.update(enabled=False)
+      flows.update(enabled=False)
+  report["disabled"] = DISABLE
+  print("HNX-EGRESS " + json.dumps(report, sort_keys=True))
+# run before an export is archived, inside the container: the exporter's own manifest is complete
+# (its records equal what the database holds) and every document's files are in it, with the checksums
+# it records
+documents_export_check_code: |
+  import hashlib, json, os, sys
+  from documents.models import Correspondent, CustomField, Document, DocumentType, Note, Tag
+  root = os.environ["HNX_EXPORT"]
   records = json.load(open(os.path.join(root, "manifest.json")))
   def of(model):
       return [r for r in records if r["model"] == model]
@@ -94,11 +202,13 @@ documents_verify_code: |
   }
   bad = []
   for r in of("documents.document"):
-      d = Document.global_objects.filter(pk=r["pk"]).first()
-      if d is None or digest(d.source_path, r["fields"]["checksum"]) != r["fields"]["checksum"]:
-          bad.append(r["pk"])
-      elif r.get("__exported_archive_name__") and digest(d.archive_path, r["fields"].get("archive_checksum")) != r["fields"].get("archive_checksum"):
+      f = r["fields"]
+      ok = digest(os.path.join(root, r["__exported_file_name__"]), f["checksum"]) == f["checksum"]
+      if r.get("__exported_archive_name__"):
+          ok = ok and digest(os.path.join(root, r["__exported_archive_name__"]), f.get("archive_checksum")) == f.get("archive_checksum")
+      ok = ok and os.path.isfile(os.path.join(root, r.get("__exported_thumbnail_name__") or "-"))
+      if not ok:
           bad.append(r["pk"])
   ok = want == got and want["documents"] > 0 and not bad
-  print("HNX-VERIFY", json.dumps({"ok": ok, "want": want, "got": got, "bad": bad[:20]}, sort_keys=True))
+  print("HNX-EXPORT-CHECK", json.dumps({"ok": ok, "want": want, "got": got, "bad": bad[:20]}, sort_keys=True))
   sys.exit(0 if ok else 1)

@@ -59,7 +59,8 @@
       PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS: "{{ documents_consumer_subdirs_as_tags | bool | to_json }}"
       PAPERLESS_TASK_WORKERS: "{{ documents_task_workers | int }}"
       PAPERLESS_THREADS_PER_WORKER: "{{ documents_threads_per_worker | int }}"
+    documents_env_mail: "{{ {} if documents_mail_fetch | bool else {'PAPERLESS_EMAIL_TASK_CRON': 'disable'} }}"
     documents_env_url: "{{ {'PAPERLESS_URL': documents_url} if documents_url | length > 0 else {} }}"
     documents_env_admin: "{{ {'PAPERLESS_ADMIN_USER': documents_admin_user} if documents_admin_bootstrap | bool else {} }}"
-    documents_env: "{{ documents_extra_env | combine(documents_env_base, documents_env_url, documents_env_admin) }}"
+    documents_env: "{{ documents_extra_env | combine(documents_env_base, documents_env_mail, documents_env_url, documents_env_admin) }}"
   tags: [health, backup, restore, export, upgrade]

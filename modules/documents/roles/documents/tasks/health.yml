@@ -43,6 +43,17 @@
       changed_when: false
       check_mode: false
       no_log: true
+    - name: The agents' token reads the library
+      ansible.builtin.uri:
+        url: "http://{{ documents_bind }}:{{ documents_port | int }}/api/documents/?page_size=1"
+        headers:
+          Authorization: "Token {{ lookup('hnx_secret', documents_agent_login_ref) }}"
+        status_code: 200
+        timeout: "{{ documents_health_timeout | int }}"
+      changed_when: false
+      check_mode: false
+      no_log: true
+      when: documents_agent_user | length > 0
     - name: The library holds as many documents as it is expected to
       ansible.builtin.assert:
         that:

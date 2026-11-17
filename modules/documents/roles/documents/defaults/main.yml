@@ -42,6 +42,35 @@ documents_api_user: admin
 documents_signing_ref: secret:documents/secret-key
 documents_admin_login_ref: secret:documents/admin-password
 documents_api_login_ref: secret:documents/api-token
+# the account agents (the concierge, the research tools) use, with its own token and ONLY these
+# permissions: it can read and change documents and their taxonomy, it cannot delete anything and is
+# neither staff nor administrator. The administrator's token (documents_api_login_ref) can delete the
+# whole library: keep it for operators and for the health hook, never hand it to an agent. Empty
+# documents_agent_user: no agent account (and no agent token is read). An agent that files new
+# documents needs add_document too (documents_agent_permissions); delete_* is always refused.
+documents_agent_user: agent
+documents_agent_login_ref: secret:documents/agent-token
+documents_agent_permissions:
+  - view_document
+  - change_document
+  - view_note
+  - change_note
+  - view_tag
+  - change_tag
+  - view_correspondent
+  - change_correspondent
+  - view_documenttype
+  - change_documenttype
+  - view_storagepath
+  - change_storagepath
+  - view_customfield
+  - change_customfield
+# false: PAPERLESS_EMAIL_TASK_CRON=disable, the application never polls a mail account by itself
+# (nothing in this module needs it; an imported mail account stays inert until the site turns it on)
+documents_mail_fetch: false
+# after an import, switch off the mail rules and the workflows that send e-mail or call a webhook
+# that came with the library (they are always listed in the run's output)
+documents_disable_imported_egress: true
 # the inbox (consume/): files dropped there are read, OCRed and filed
 documents_consumer_recursive: false
 documents_consumer_subdirs_as_tags: false

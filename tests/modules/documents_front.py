@@ -8,6 +8,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+AGENT_TOKEN = "cd" * 20  # the agents' token: reads the library, not the status
 TOKEN = "ab" * 20  # 40 lowercase hex characters, built from a short piece (no key-looking literal)
 
 
@@ -46,8 +47,10 @@ class Server:
                 elif self.path in ("/api/documents/?page_size=1", "/api/status/"):
                     if not token:
                         self._send(outer.anonymous, json.dumps({"detail": "denied"}))
-                    elif token != TOKEN:
+                    elif token not in (TOKEN, AGENT_TOKEN):
                         self._send(401, json.dumps({"detail": "Invalid token."}))
+                    elif self.path == "/api/status/" and token != TOKEN:
+                        self._send(403, json.dumps({"detail": "administrators only"}))
                     elif self.path == "/api/status/":
                         self._send(200, json.dumps({
                             "database": {"status": outer.database,

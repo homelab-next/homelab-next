@@ -16,8 +16,10 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import shlex
 import shutil
+import signal
 import sys
 import tarfile
 import tempfile
@@ -92,7 +94,17 @@ class Host:
         self.drop_on_import = False
         self.corrupt_on_import = False
         self.import_nothing = False
-        self.sanity_fails = False
+        self.sanity_issues: list[list] = []  # [document, level, message] the checker finds
+        self.size_bytes = 1000
+        self.free_kb = 10**9
+        self.stale: list[str] = []  # directories `find` says an earlier dump left
+        self.removed: list[str] = []
+        self.egress = {"mail_accounts": 0, "mail_rules": [], "workflows": []}
+        self.egress_disabled = False
+        self.imported: list[dict] | None = None  # the records an import wrote
+        self.drop_tag_on_import = False
+        self.lose_thumbnail_on_import = False
+        self.change_correspondent_on_import = False
         self.links: dict[str, str] = {}  # path -> what readlink -f says
         self.extra_member: tuple[str, bytes] | None = None
 
@@ -112,16 +124,43 @@ class Host:
     def state(self):
         return {"counts": self.counts(), "fingerprint": {"modified": f"2026-11-0{self.version % 9}", "max_id": max(self.docs, default=0)}}  # fmt: skip
 
+    def _imported_tree(self):
+        tree = {
+            mt.EXPORT_MANIFEST: json.dumps(self.imported).encode(),
+            mt.EXPORT_METADATA: b'{"version": "3.4.2"}',
+        }
+        for r in self.imported:
+            if r["model"] != "documents.document":
+                continue
+            orig, arch = self.disk[r["pk"]]
+            tree[r[mt.FILE_KEY]] = orig
+            if mt.THUMB_KEY in r:
+                tree[r[mt.THUMB_KEY]] = b"thumb"
+            if arch is not None:
+                tree[r[mt.ARCHIVE_KEY]] = arch
+        return tree
+
     def export_tree(self):
+        if self.imported is not None:
+            return self._imported_tree()
         records = []
         for pk, d in sorted(self.docs.items()):
-            rec = {"model": "documents.document", "pk": pk, "fields": {"checksum": d["checksum"], "archive_checksum": d["archive_checksum"]},
+            rel = {
+                "title": f"doc {pk}", "content": f"text {pk}", "created": "2026-01-01",
+                "tags": [1] if self.others["tags"] else [],
+                "correspondent": 1 if self.others["correspondents"] else None,
+                "document_type": None, "storage_path": None,
+            }  # fmt: skip
+            rec = {"model": "documents.document", "pk": pk, "fields": {"checksum": d["checksum"], "archive_checksum": d["archive_checksum"], **rel},
                    mt.FILE_KEY: f"{pk:07}.pdf", mt.THUMB_KEY: f"{pk:07}-thumbnail.webp"}  # fmt: skip
             if d["arch"]:
                 rec[mt.ARCHIVE_KEY] = f"{pk:07}-archive.pdf"
             records.append(rec)
         for key, n in self.others.items():
-            records += [{"model": LABELS[key], "pk": i, "fields": {}} for i in range(1, n + 1)]
+            records += [
+                {"model": LABELS[key], "pk": i, "fields": self._fields(key, i)}
+                for i in range(1, n + 1)
+            ]
         tree = {
             mt.EXPORT_MANIFEST: json.dumps(records).encode(),
             mt.EXPORT_METADATA: b'{"version": "3.4.2"}',
@@ -136,6 +175,14 @@ class Host:
         if self.extra_member:
             tree[self.extra_member[0]] = self.extra_member[1]
         return tree
+
+    @staticmethod
+    def _fields(key, i):
+        if key == "notes":
+            return {"document": 1, "note": f"note {i}", "created": "2026-01-01T00:00:00Z"}
+        if key == "custom_field_instances":
+            return {"document": 1, "field": 1, "value_text": f"value {i}"}
+        return {"name": f"{key} {i}"}
 
     # ---- the runner the tool is given
     def __call__(self, argv, *, stdin=None, stdout=None):
@@ -190,6 +237,16 @@ class Host:
                 code = c[c.index("-c") + 1]
                 if "Max(" in code:
                     return b"warning noise\nHNX-JSON " + json.dumps(self.state()).encode() + b"\n"
+                if "check_sanity" in code:
+                    return (
+                        b"HNX-JSON " + json.dumps({"issues": self.sanity_issues}).encode() + b"\n"
+                    )
+                if "getsize" in code:
+                    return b"HNX-JSON " + json.dumps({"bytes": self.size_bytes}).encode() + b"\n"
+                if "MailRule" in code:
+                    self.egress_disabled = "DISABLE = True" in code
+                    report = {**self.egress, "disabled": self.egress_disabled}
+                    return b"HNX-JSON " + json.dumps(report).encode() + b"\n"
                 return b"HNX-JSON " + json.dumps(self.files_report()).encode() + b"\n"
             if sub == "document_exporter":
                 path = c[3]
@@ -201,11 +258,11 @@ class Host:
                 return b""
             if sub == "document_importer":
                 return self.do_import(c[3])
-            if sub == "document_sanity_checker":
-                if self.sanity_fails:
-                    raise _Failure
-                return b"No issues detected\n"
             raise AssertionError(c)
+        if c[0] == "df":
+            return f"Filesystem 1024-blocks Used Available Capacity Mounted on\nx 100 1 {self.free_kb} 1% /\n".encode()  # fmt: skip
+        if c[0] == "find" and "-mindepth" in c:
+            return ("".join(p + "\n" for p in self.stale)).encode()
         if c[0] == "mkdir":
             path = c[-1]
             self.dirs.add(path)
@@ -216,6 +273,7 @@ class Host:
         if c[0] == "rm":
             assert c[1:3] == ["-rf", "--"]
             path = c[3]
+            self.removed.append(path)
             self.scratch.pop(path, None)
             self.staging.pop(path, None)
             self.dirs.discard(path)
@@ -248,6 +306,13 @@ class Host:
         docs = [r for r in records if r["model"] == "documents.document"]
         if self.drop_on_import:
             docs = docs[:-1]
+        if docs and self.drop_tag_on_import:
+            docs[0]["fields"]["tags"] = []
+        if docs and self.change_correspondent_on_import:
+            docs[0]["fields"]["correspondent"] = 2
+        if docs and self.lose_thumbnail_on_import:
+            del docs[0][mt.THUMB_KEY]
+        self.imported = [r for r in records if r["model"] != "documents.document" or r in docs]
         self.docs = {}
         for r in docs:
             f = r["fields"]
@@ -349,7 +414,7 @@ def test_dump_writes_a_private_tar_and_a_manifest_and_reads_only(private):
     # the scratch directory the tool made was removed; nothing else was deleted or written
     assert host.scratch == {} and not any(d.startswith(SCRATCH + "/") for d in host.dirs)
     verbs = {i[i.index("app-src") + 1] for i in host.log if "app-src" in i}
-    assert verbs <= {"python3", "mkdir", "tar", "readlink", "rm"}
+    assert verbs <= {"python3", "mkdir", "tar", "readlink", "rm", "find", "df"}
     rms = [i for i in host.log if "rm" in i]
     assert len(rms) == 1 and rms[0][-1].startswith(SCRATCH + "/")
     # the commands ran as the configured account, in the application's directory
@@ -506,7 +571,9 @@ def test_restore_imports_into_an_empty_target_and_proves_every_file(private):
     target = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
     report = mt.restore(dst_ep(), out, expect_counts=manifest["counts"], require_quiescent=True, _ctx=ctx_for(target))  # fmt: skip
     assert report["counts"] == manifest["counts"] and report["documents_verified"] == 3
-    assert report["digest"] == manifest["documents_digest"] and report["sanity_checker"] == "clean"
+    assert (
+        report["digest"] == manifest["documents_digest"] and report["sanity_known_from_source"] == 0
+    )
     assert len(target.disk) == 3
     # the staging directory was removed; the import ran after the files were staged
     assert target.staging == {}
@@ -514,11 +581,154 @@ def test_restore_imports_into_an_empty_target_and_proves_every_file(private):
     assert verbs.index("mkdir") < verbs.index("tar") < verbs.index("find")
 
 
-def test_restore_reports_a_sanity_checker_finding_without_failing(private):
+def _fresh_target():
+    return Host(documents=0, others=dict.fromkeys(OTHERS, 0))
+
+
+def test_restore_proves_every_documents_relationships_and_a_thumbnail_for_each(private):
+    source = Host(others={"correspondents": 2, "custom_fields": 1, "custom_field_instances": 2})
+    _, out, _ = made_dump(private, source)
+    assert len(mt.scan_export(out / "export.tar")["relations"]) == 3
+    report = mt.restore(dst_ep(), out, _ctx=ctx_for(_fresh_target()))
+    assert report["relationships_verified"] == 3
+    assert not (
+        out / "verify-target.tar"
+    ).exists()  # the re-export of the target is removed after it passed
+
+
+@pytest.mark.parametrize("flag, words", [
+    ("drop_tag_on_import", "tags differ"),
+    ("change_correspondent_on_import", "correspondent differ"),
+])  # fmt: skip
+def test_restore_fails_when_a_document_lost_a_tag_or_changed_correspondent(private, flag, words):
+    _, out, _ = made_dump(private, Host(others={"correspondents": 2}))
+    target = _fresh_target()
+    setattr(target, flag, True)
+    with pytest.raises(mt.VerifyMismatch, match=words):
+        mt.restore(dst_ep(), out, _ctx=ctx_for(target))
+    assert (out / "verify-target.tar").exists()  # kept for inspection
+
+
+def test_restore_fails_when_a_document_has_no_thumbnail_on_the_target(private):
     _, out, _ = made_dump(private)
-    target = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
-    target.sanity_fails = True
-    assert mt.restore(dst_ep(), out, _ctx=ctx_for(target))["sanity_checker"].startswith("reported")
+    target = _fresh_target()
+    target.lose_thumbnail_on_import = True
+    with pytest.raises(mt.VerifyMismatch, match="no thumbnail"):
+        mt.restore(dst_ep(), out, _ctx=ctx_for(target))
+
+
+def test_relations_are_by_name_so_a_moved_id_is_not_a_difference_but_a_changed_name_is():
+    def rec(model, pk, **f):
+        return {"model": model, "pk": pk, "fields": f}
+
+    def lib(tag_pk, tag_name):
+        return [
+            rec("documents.tag", tag_pk, name=tag_name),
+            rec("documents.document", 1, checksum="c" * 64, tags=[tag_pk], title="t", content="x"),
+        ]
+
+    assert mt._relations(lib(1, "tax")) == mt._relations(lib(7, "tax")) | {"c" * 64: {**mt._relations(lib(7, "tax"))["c" * 64], "pk": 1}}  # fmt: skip
+    a, b = mt._relations(lib(1, "tax")), mt._relations(lib(1, "legal"))
+    assert mt._relation_differences(a, b) == ["document 1: tags differ"]
+    assert mt._relation_differences(a, {}) == ["document 1 is missing on the target"]
+    with pytest.raises(mt.MigrateError, match="does not hold"):
+        mt._relations([rec("documents.document", 1, checksum="c" * 64, tags=[9])])
+
+
+def test_a_problem_the_source_already_had_is_reported_not_failed_a_new_one_fails(private):
+    known = [2, 40, "original is missing"]
+    source = Host()
+    source.sanity_issues = [known, [0, 20, "info is not a problem"]]
+    _, out, manifest = made_dump(private, source)
+    assert manifest["sanity"] == [known]  # info level is not kept
+    target = _fresh_target()
+    target.sanity_issues = [known]
+    assert mt.restore(dst_ep(), out, _ctx=ctx_for(target))["sanity_known_from_source"] == 1
+    shutil.rmtree(private / "dump")
+    shutil.rmtree(out, ignore_errors=True)
+    out2 = private / "dump2"
+    mt.dump(src_ep(), out2, _ctx=ctx_for(source))
+    worse = _fresh_target()
+    worse.sanity_issues = [known, [3, 40, "archive differs"]]
+    with pytest.raises(mt.VerifyMismatch, match=r"document 3 \(archive differs"):
+        mt.restore(dst_ep(), out2, _ctx=ctx_for(worse))
+
+
+def test_imported_mail_rules_and_workflows_are_reported_and_switched_off_on_request(private):
+    _, out, _ = made_dump(private)
+    target = _fresh_target()
+    target.egress = {"mail_accounts": 1, "mail_rules": ["inbox"], "workflows": ["notify"]}
+    report = mt.restore(dst_ep(), out, _ctx=ctx_for(target))
+    assert report["egress"]["mail_rules"] == ["inbox"] and report["egress"]["disabled"] is False
+    assert target.egress_disabled is False
+    shutil.rmtree(out)
+    _, out, _ = made_dump(private)
+    again = _fresh_target()
+    assert mt.restore(dst_ep(), out, disable_egress=True, _ctx=ctx_for(again))["egress"]["disabled"] is True  # fmt: skip
+    assert again.egress_disabled is True
+
+
+def test_the_dump_counts_what_could_reach_out_from_the_export(private):
+    class Mail(Host):
+        def export_tree(self):
+            t = super().export_tree()
+            records = json.loads(t[mt.EXPORT_MANIFEST])
+            records += [{"model": "paperless_mail.mailrule", "pk": 1, "fields": {}},
+                        {"model": "documents.workflowactionwebhook", "pk": 1, "fields": {}}]  # fmt: skip
+            t[mt.EXPORT_MANIFEST] = json.dumps(records).encode()
+            return t
+
+    _, _, manifest = made_dump(private, Mail())
+    assert manifest["egress"] == {"mail_accounts": 0, "mail_rules": 1, "email_actions": 0, "webhook_actions": 1}  # fmt: skip
+
+
+def test_an_older_dump_without_the_sources_sanity_findings_is_refused(private):
+    _, out, manifest = made_dump(private)
+    del manifest["sanity"]
+    (out / "dump-manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(mt.MigrateError, match="dump again"):
+        mt.restore(dst_ep(), out, _ctx=ctx_for(_fresh_target()))
+
+
+# ----------------------------------------------------------------------------- robustness
+
+
+def test_a_dump_sweeps_only_stale_scratch_directories_it_could_have_made(private):
+    host = Host()
+    mine = f"{SCRATCH}/aaaaaaaaaaaa"
+    host.stale = [mine, f"{SCRATCH}/not-ours", f"{SCRATCH}/AAAAAAAAAAAA", "/etc/aaaaaaaaaaaa", f"{SCRATCH}/x/bbbbbbbbbbbb"]  # fmt: skip
+    host.dirs.add(mine)
+    _, _, manifest = made_dump(private, host)
+    assert manifest["stale_swept"] == [mine]
+    removed = [r for r in host.removed if r != host.removed[-1]]
+    assert removed == [mine]  # the others were never touched
+
+
+def test_a_dump_refuses_when_the_container_or_this_host_lacks_the_room(private):
+    host = Host()
+    host.size_bytes, host.free_kb = 10 << 30, 1024  # 10 GiB to copy, 1 MiB free
+    with pytest.raises(mt.MigrateError, match="in the container has"):
+        mt.dump(src_ep(), private / "d", _ctx=ctx_for(host))
+    assert host.scratch == {} and not [c for c in host.log if "document_exporter" in c]
+    shutil.rmtree(private / "d")
+    big = Host()
+    big.size_bytes = 1 << 60
+    big.free_kb = 1 << 60
+    with pytest.raises(mt.MigrateError, match=r"has \d+ bytes free; the export needs"):
+        mt.dump(src_ep(), private / "d", _ctx=ctx_for(big))
+
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGHUP])
+def test_a_dump_cleans_up_its_scratch_directory_when_it_is_terminated(private, sig):
+    host = Host()
+    host.on_export = lambda: os.kill(os.getpid(), sig)
+    before = signal.getsignal(sig)
+    with pytest.raises(BaseException, match=sig.name) as e:
+        mt.dump(src_ep(), private / "d", _ctx=ctx_for(host))
+    assert not isinstance(e.value, Exception)  # it unwinds as a BaseException, never swallowed
+    assert host.scratch == {} and len(host.removed) == 1  # the one generated directory
+    assert not (private / "d" / "export.tar").exists()
+    assert signal.getsignal(sig) == before  # the handler is put back
 
 
 @pytest.mark.parametrize("held", ["documents", "users", "tags", "notes"])

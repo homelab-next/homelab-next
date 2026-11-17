@@ -129,6 +129,16 @@
               documents: the restore failed after the staging directory was made. {{ documents_data_root }}/export/.restoring
               and anything already imported are LEFT for inspection (the importer is not a merge: move
               {{ documents_data_root }} aside and deploy again empty before restoring again).
+    - name: Report, and by default switch off, what came in that can reach out by itself
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ documents_dir }}/docker-compose.yml", exec, -T, app,
+               python3, manage.py, shell, -c,
+               "{{ documents_egress_code | replace('DISABLE = False', 'DISABLE = ' ~ (documents_disable_imported_egress | bool | string)) }}"]
+      register: documents_egress
+      changed_when: documents_disable_imported_egress | bool
+    - name: Say which mail rules and workflows were found
+      ansible.builtin.debug:
+        msg: "{{ documents_egress.stdout_lines | select('match', '^HNX-EGRESS') | list }}"
     - name: Remove the staging directory (a fixed path inside the data root's export directory)
       ansible.builtin.file:
         path: "{{ documents_data_root }}/export/.restoring"

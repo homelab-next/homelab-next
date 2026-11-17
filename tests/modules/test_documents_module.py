@@ -130,12 +130,13 @@ def test_roles_holds_only_the_contributed_role():
     assert [c["file"] for c in manifest["contributes"]["roles"]] == ["roles/documents"]
 
 
-def test_the_manifest_names_its_three_secrets_and_no_egress_and_no_public_route():
+def test_the_manifest_names_its_four_secrets_and_no_egress_and_no_public_route():
     manifest = ld.load_yaml(MODULE / "module.yml")
     assert [c["secret"] for c in manifest["credentials"]] == [
         "secret:documents/secret-key",
         "secret:documents/admin-password",
         "secret:documents/api-token",
+        "secret:documents/agent-token",
     ]
     assert manifest["egress"] == "none"
     row = ld.load_yaml(MODULE / "registry" / "services.yml")["services"]["documents"]
@@ -145,11 +146,12 @@ def test_the_manifest_names_its_three_secrets_and_no_egress_and_no_public_route(
     assert "version" not in row  # a provider's row takes product.version
 
 
-def test_the_role_defaults_carry_the_same_three_references():
+def test_the_role_defaults_carry_the_same_four_references():
     d = ld.load_yaml(MODULE / "roles" / "documents" / "defaults" / "main.yml")
     refs = {
         d["documents_signing_ref"],
-        d["documents_admin_login_ref"],
+        d["documents_api_login_ref"],
+        d["documents_agent_login_ref"],
         d["documents_api_login_ref"],
     }
     manifest = ld.load_yaml(MODULE / "module.yml")

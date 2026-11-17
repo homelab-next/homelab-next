@@ -15,7 +15,7 @@ host, address, VM id or domain; those live in the private overlay.
 | Product | Paperless-ngx 3.4.2, `ghcr.io/paperless-ngx/paperless-ngx` pinned by tag and digest; Redis 7.2.16 as its broker (the pin the automation module also uses) |
 | Host role | `server`: kind `vm`, baseline `base`, footprint 2 vCPU, 3 GB, 20 GB |
 | Role | `documents` (role interface v1), a wrapper of the core `compose_app` |
-| Secrets | `secret:documents/secret-key`, `secret:documents/admin-password`, `secret:documents/api-token` |
+| Secrets | `secret:documents/secret-key`, `secret:documents/admin-password`, `secret:documents/api-token` (administrator), `secret:documents/agent-token` (agents) |
 | Egress | none: OCR is local, nothing is fetched |
 | Public route | **none**. The row declares no `public_hostname`; people reach the web UI and agents the API over the lab's network |
 
@@ -35,15 +35,28 @@ host, address, VM id or domain; those live in the private overlay.
   `documents_ocr_languages` is checked against the languages the image ships (`deu eng fra ita spa`).
 - **No public route.** `auth: own` (local accounts and API tokens), no `public_hostname`, no
   forward-auth. A site that wants a route adds the `public_hostname`, the grant and `documents_url`.
-- **API token.** The product's export carries accounts but **not** API tokens, so after an import
-  every consumer's token is gone. The role therefore owns one: `secret:documents/api-token`
-  (exactly 40 lowercase hex characters) is written into the product's token table for
-  `documents_api_user` (default `admin`, which must be an administrator) on every run, replacing a
-  different token. Consumers (the concierge, the research tools, the MCP server) get the same value
-  from the secret store and send `Authorization: Token <value>`. Generate it and the other two:
+- **API tokens: two, on purpose.** The product's export carries accounts but **not** API tokens,
+  so after an import every consumer's token is gone. The role therefore owns them, writing each into
+  the product's token table on every run (a different value is replaced):
+  - `secret:documents/api-token` belongs to the **administrator** (`documents_api_user`, default
+    `admin`). **Whoever holds it can delete the whole library**, and the export. It is for operators
+    and the health hook (`/api/status/` needs an administrator). **Do not hand it to an agent.**
+  - `secret:documents/agent-token` belongs to a **dedicated account** (`documents_agent_user`,
+    default `agent`): no password (it cannot sign in to the web UI), not staff, not an administrator,
+    no group, and exactly `documents_agent_permissions`: view and change of documents, notes, tags,
+    correspondents, document types, storage paths and custom fields. It **cannot delete**
+    (`delete_*` is refused by the role). **This is the token the concierge, the research tools and the
+    MCP server get**, sent as `Authorization: Token <value>`. An agent that files new documents also
+    needs `add_document` (and `add_tag` ... as it creates them): add them to
+    `documents_agent_permissions` deliberately. Documents owned by another account need object
+    permission as well: an imported library's documents keep their owner. Setting
+    `documents_agent_user: ""` removes the account (and its secret).
+  The agents' account is created only once the administrator exists, so an empty library about to
+  be imported has no account that would collide with the import; run the role again after it.
+  Generate the values:
 
   ```
-  python3 -c 'import secrets; print(secrets.token_hex(20))'      # secret:documents/api-token
+  python3 -c 'import secrets; print(secrets.token_hex(20))'      # secret:documents/api-token, and again for secret:documents/agent-token (they must differ)
   python3 -c 'import secrets; print(secrets.token_urlsafe(48))'  # secret:documents/secret-key (>= 50 chars of A-Za-z0-9._~+/=-)
   python3 -c 'import secrets; print(secrets.token_urlsafe(24))'  # secret:documents/admin-password (16-128 of A-Za-z0-9._~-)
   ```
@@ -53,6 +66,11 @@ host, address, VM id or domain; those live in the private overlay.
 - **The inbox.** `consume/` under the data root, mounted at the application's consumption directory;
   files dropped there are consumed. `documents_consumer_recursive` and
   `documents_consumer_subdirs_as_tags` are the two behaviours worth switching.
+- **No mail by itself.** `PAPERLESS_EMAIL_TASK_CRON=disable` (`documents_mail_fetch: false`): the
+  application never polls a mail account. After an import the role (and the tool with
+  `--disable-egress`) lists the imported mail rules and the workflows that send e-mail or call a
+  webhook and, by default (`documents_disable_imported_egress`), switches them off; the dump's
+  manifest counts them too.
 - **Nothing from the old gateway.** The previous instance pointed the product's AI features at a
   gateway of the old lab. They are off here; `documents_extra_env` sets any other `PAPERLESS_*`
   setting that is neither a secret nor one the role owns.
@@ -77,10 +95,10 @@ the containers read live in `secrets/app.env` (0600), never in `docker-compose.y
 |---|---|
 | `readiness` (also the module's preflight) | `docker_engine` readiness, valid inputs, every secret resolving in its form (a missing one is named, nothing is rendered) |
 | `health` | both containers running and healthy; the sign-in page answers 200; an **anonymous** read of `/api/documents/` is refused (401 or 403); with the API token the list answers and holds at least `documents_expected_min_documents`; `/api/status/` says the database is OK with no migration pending and the broker is OK |
-| `export` | the product's `document_exporter` into `export/.library`, archived to `export/library.tar` with `export/listing.jsonl` (key, size, sha256); the exporter keeps `.library` between runs so the next copy is incremental |
+| `export` | the product's `document_exporter` into `export/.library`; then **checked** (its records equal the database's, every file is in it and hashes to its checksum, a thumbnail for each document: a bad export fails the hook); archived to `export/library.tar` with `export/listing.jsonl` (key, size, sha256); the exporter keeps `.library` between runs so the next copy is incremental |
 | `backup` | the manifest naming the data root |
-| `restore` | checks the archive against its listing and refuses a member that leaves the directory, a link or special file, or an archive with no `manifest.json`; refuses a library that already holds a document or an account; extracts to `export/.restoring`, imports with `document_importer`, then compares the imported records with the database and hashes every document's files against the export's checksums; only then removes the staging directory and seeds the API token. A failure leaves the staging directory |
-| `upgrade` | refuses a target not pinned by tag and digest, from another repository, or **older** than the running version (the database is migrated forward on first start and cannot go back), then records the bump |
+| `restore` | checks the archive against its listing and refuses a member that leaves the directory, a link or special file, or an archive with no `manifest.json`; refuses a library that already holds a document or an account; extracts to `export/.restoring`, imports with `document_importer`, then compares every tag, correspondent, document type, storage path, custom field, field value and note with the export, each document's relationships (tags, correspondent, type, storage path, title, date) and a thumbnail for each, and hashes every document's files; only then lists (and by default switches off) imported mail rules and e-mail/webhook workflows, removes the staging directory and seeds the tokens. A failure leaves the staging directory |
+| `upgrade` | refuses a target not pinned by tag and digest, from another repository, or **older** than the running version (the database is migrated forward on first start and cannot go back), then records the bump. The upgrade playbook **exports and verifies the library first** (the `export` hook's check) and stops there if that fails: the new image is never started on a library without a verified copy |
 
 The exporter and importer are the product's own (`document_exporter`, `document_importer`): they
 carry documents, archive copies, thumbnails, tags, correspondents, document types, storage paths,
@@ -110,7 +128,11 @@ command-line arguments.
      --dir <private dir>/dump-1
    ```
 
-   The dump is refused unless every document's original and archive copy hashes to the checksum the
+   Before it exports, the dump checks the free space (the library's size, plus a margin) in the
+   container's scratch directory and on this host, sweeps scratch directories an earlier interrupted
+   dump left (generated 12-hex names only, directly under the scratch directory, idle ten minutes),
+   and removes its own scratch directory on SIGTERM and SIGHUP as well as on an error. It runs the
+   product's sanity checker on the source and records its findings. The dump is refused unless every document's original and archive copy hashes to the checksum the
    export's own manifest records (md5 or sha256, by length), every thumbnail is present, no member
    is a link or leaves the tree, the counts of the manifest equal the live database's at the end
    (a write during the export is caught), and the source is not vacuous. `dump-manifest.json` records
@@ -126,7 +148,13 @@ command-line arguments.
    ```
 
    It refuses a target that holds any document or account before it writes, imports, then reads the
-   target: the counts of documents, tags, correspondents, document types, custom fields, custom field
+   target: the product's exporter is run again **on the target** and its manifest compared with the
+   dump's, document by document (by checksum): tags, correspondent, document type, storage path,
+   custom-field values, notes, title, date and text must be equal by name, and every document must
+   have a thumbnail; any difference fails and the target's re-export is kept for inspection. The
+   sanity checker runs on the target too: a finding the source did not have fails, one it already had is
+   reported. Imported mail rules and e-mail/webhook workflows are listed (`--disable-egress` switches them
+   off). Then the counts of documents, tags, correspondents, document types, custom fields, custom field
    values, notes, storage paths and accounts equal the dump's, the checksum of **every file on disk**
    equals what the export recorded, and a run that checked nothing is an error. Then run the
    role again (`main`, `documents_expected_min_documents` = the count, `documents_admin_bootstrap`

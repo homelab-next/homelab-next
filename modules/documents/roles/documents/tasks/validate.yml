@@ -35,11 +35,17 @@
         documents_extra_env | dict2items | map(attribute='key') | select('search', '(?i)(pass|secret|token|api_?key|private_?key|credential|salt)') | list | length == 0
       - documents_extra_env | dict2items | map(attribute='value') | map('string') | reject('match', documents_extra_env_value_pattern) | list | length == 0
       - documents_expected_min_documents | int >= 0
+      - documents_mail_fetch is boolean and documents_disable_imported_egress is boolean
+      # the agents' account: empty (none), or a name that is not the administrator's, with only
+      # view, change and (named on purpose) add permissions: never delete
+      - documents_agent_user == '' or (documents_agent_user is match(documents_user_pattern) and documents_agent_user != documents_api_user and documents_agent_user != documents_admin_user)
+      - documents_agent_permissions is sequence and documents_agent_permissions is not string
+      - documents_agent_permissions | reject('match', documents_agent_permission_pattern) | list | length == 0
+      - documents_agent_permissions | unique | length == documents_agent_permissions | length
+      - documents_agent_user == '' or documents_agent_permissions | length > 0
       - >-
-        [documents_signing_ref, documents_admin_login_ref, documents_api_login_ref]
-        | reject('match', documents_ref_pattern) | list | length == 0
-      - >-
-        [documents_signing_ref, documents_admin_login_ref, documents_api_login_ref] | unique | length == 3
+        documents_refs | reject('match', documents_ref_pattern) | list | length == 0
+      - documents_refs | unique | length == documents_refs | length
       - >-
         [documents_mem_limit, documents_broker_mem_limit]
         | reject('match', '^[1-9][0-9]{0,5}[kmg]\Z') | list | length == 0
@@ -49,6 +55,6 @@
       container uids of 1000 or more, absolute
       canonical directories, a timezone, a non-empty list of OCR languages the image ships
       ({{ documents_ocr_available | join(', ') }}), an http(s) URL or empty, account names, three
-      distinct secret: references, extra PAPERLESS_ settings that are neither the role's own nor
+      distinct secret: references (a fourth for the agents' account), an agent account that is not the administrator with permissions that are view, change or add (never delete), extra PAPERLESS_ settings that are neither the role's own nor
       secrets, a minimum document count of 0 or more and memory limits like 512m
   tags: [health, backup, restore, export, upgrade]

@@ -59,11 +59,16 @@ import os
 import re
 import secrets
 import shlex
+import shutil
+import signal
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -97,6 +102,17 @@ COUNT_KEYS = tuple(MODEL_KEYS.values())
 #: what restore refuses to find in a target that is to receive an import
 TARGET_MUST_BE_EMPTY = COUNT_KEYS
 TAR_FILE, MANIFEST = "export.tar", "dump-manifest.json"
+VERIFY_TAR = "verify-target.tar"
+#: what can reach out of the application by itself once imported (mail fetch, e-mail and webhook
+#: workflow actions): counted from the export's manifest
+EGRESS_MODELS = {
+    "paperless_mail.mailaccount": "mail_accounts",
+    "paperless_mail.mailrule": "mail_rules",
+    "documents.workflowactionemail": "email_actions",
+    "documents.workflowactionwebhook": "webhook_actions",
+}
+#: a sanity finding below this level (info) is not a problem
+SANITY_LEVEL = 30
 EXPORT_MANIFEST, EXPORT_METADATA = "manifest.json", "metadata.json"
 FILE_KEY, THUMB_KEY, ARCHIVE_KEY = (
     "__exported_file_name__",
@@ -158,6 +174,50 @@ print("HNX-JSON " + json.dumps({
     "documents": len(lines), "bad": bad,
     "digest": hashlib.sha256("\\n".join(lines).encode()).hexdigest(),
 }, sort_keys=True))
+"""
+
+
+#: what the exporter will copy, in bytes (originals, archive copies, thumbnails)
+SIZE_CODE = """
+import json, os
+from documents.models import Document
+n = 0
+for d in Document.global_objects.all():
+    for p in (d.source_path, d.archive_path, d.thumbnail_path):
+        if p is not None and os.path.isfile(p):
+            n += os.path.getsize(p)
+print("HNX-JSON " + json.dumps({"bytes": n}))
+"""
+#: the product's own sanity checker, as data: (document id or 0, level, message)
+SANITY_CODE = """
+import json
+from documents.sanity_checker import check_sanity
+found = check_sanity()
+rows = sorted(
+    [pk or 0, int(m["level"]), str(m["message"])]
+    for pk, entries in found.iter_messages() for m in entries
+)
+print("HNX-JSON " + json.dumps({"issues": rows}))
+"""
+#: reports (and, when DISABLE is true, turns off) what can reach out by itself: mail rules, and the
+#: workflows that send e-mail or call a webhook
+EGRESS_CODE = """
+import json
+from documents.models import Workflow
+from paperless_mail.models import MailAccount, MailRule
+DISABLE = False
+flows = Workflow.objects.filter(actions__email__isnull=False) | Workflow.objects.filter(actions__webhook__isnull=False)
+flows = flows.distinct()
+report = {
+    "mail_accounts": MailAccount.objects.count(),
+    "mail_rules": list(MailRule.objects.filter(enabled=True).values_list("name", flat=True)),
+    "workflows": list(flows.filter(enabled=True).values_list("name", flat=True)),
+}
+if DISABLE:
+    MailRule.objects.update(enabled=False)
+    flows.update(enabled=False)
+report["disabled"] = DISABLE
+print("HNX-JSON " + json.dumps(report, sort_keys=True))
 """
 
 
@@ -373,6 +433,85 @@ def _member_name(name: str) -> str:
     return "/".join(x for x in p.parts if x != ".")
 
 
+def _relations(records: list[dict]) -> dict[str, dict]:
+    """Per document, keyed by its checksum, what makes the library worth having: its title, date and
+    text (digested), its tags, correspondent, document type and storage path *by name*, its custom
+    field values and its notes, all read out of the export's own manifest.  Names, not ids: two
+    exports of the same library are equal even if an id moved."""
+    named: dict[str, dict[int, dict]] = {}
+    per_doc: dict[int, dict[str, list]] = {}
+    for r in records:
+        model, pk, f = r.get("model"), r.get("pk"), r.get("fields") or {}
+        if model in (
+            "documents.tag", "documents.correspondent", "documents.documenttype",
+            "documents.storagepath", "documents.customfield",
+        ):  # fmt: skip
+            named.setdefault(model, {})[pk] = f
+        elif model in ("documents.customfieldinstance", "documents.note"):
+            per_doc.setdefault(f.get("document"), {}).setdefault(model, []).append(f)
+
+    def name(model: str, pk) -> str | None:
+        if pk is None:
+            return None
+        f = named.get(model, {}).get(pk)
+        if f is None:
+            raise MigrateError(f"the export names {model} {pk}, which it does not hold")
+        return json.dumps(
+            {k: f[k] for k in ("name", "path", "data_type") if k in f}, sort_keys=True
+        )
+
+    out: dict[str, dict] = {}
+    for r in records:
+        if r.get("model") != "documents.document":
+            continue
+        f = r["fields"]
+        mine = per_doc.get(r["pk"], {})
+        rel = {
+            "pk": r["pk"],
+            "title": f.get("title"),
+            "created": f.get("created"),
+            "content": hashlib.sha256((f.get("content") or "").encode()).hexdigest(),
+            "tags": sorted(name("documents.tag", t) for t in f.get("tags") or []),
+            "correspondent": name("documents.correspondent", f.get("correspondent")),
+            "document_type": name("documents.documenttype", f.get("document_type")),
+            "storage_path": name("documents.storagepath", f.get("storage_path")),
+            "fields": sorted(
+                json.dumps(
+                    [
+                        name("documents.customfield", i.get("field")),
+                        {k: v for k, v in i.items() if k.startswith("value")},
+                    ],
+                    sort_keys=True,
+                )
+                for i in mine.get("documents.customfieldinstance", [])
+            ),
+            "notes": sorted(
+                json.dumps([n.get("note"), n.get("created")])
+                for n in mine.get("documents.note", [])
+            ),
+        }
+        if f["checksum"] in out:
+            raise MigrateError(f"two documents carry the checksum {f['checksum']}")
+        out[f["checksum"]] = rel
+    return out
+
+
+def _relation_differences(want: Mapping[str, dict], got: Mapping[str, dict]) -> list[str]:
+    """Which documents (by id in ``want``) differ, and in what: a missing or extra document, or the
+    names of the attributes that differ."""
+    diff = []
+    for key in sorted(set(want) | set(got)):
+        a, b = want.get(key), got.get(key)
+        if a is None or b is None:
+            who = (a or b)["pk"]
+            diff.append(f"document {who} is {'missing' if b is None else 'extra'} on the target")
+            continue
+        apart = [k for k in a if k != "pk" and a[k] != b.get(k)]
+        if apart:
+            diff.append(f"document {a['pk']}: {', '.join(apart)} differ")
+    return diff
+
+
 def scan_export(path: str | os.PathLike) -> dict:
     """Read an export tar once and say what it holds, refusing what is not safe or not whole.
 
@@ -417,6 +556,10 @@ def scan_export(path: str | os.PathLike) -> dict:
     if not isinstance(records, list) or not all(isinstance(r, dict) for r in records):
         raise MigrateError(f"{path}: {EXPORT_MANIFEST} is not a list of records")
     counted = dict.fromkeys(COUNT_KEYS, 0)
+    egress = dict.fromkeys(EGRESS_MODELS.values(), 0)
+    for r in records:
+        if r.get("model") in EGRESS_MODELS:
+            egress[EGRESS_MODELS[r["model"]]] += 1
     rows: list[tuple[int, str, str]] = []
     archives = thumbnails = 0
     for r in records:
@@ -466,6 +609,8 @@ def scan_export(path: str | os.PathLike) -> dict:
         "thumbnails": thumbnails,
         "files": len(hashes),
         "version": version,
+        "relations": _relations(records),
+        "egress": egress,
     }
 
 
@@ -483,6 +628,98 @@ def _remove_dir(ctx: _Ctx, ep: Endpoint, path: str, parent: str) -> None:
     _run(ctx, ep, _exec(ep, ["rm", "-rf", "--", path]))
 
 
+class _Terminated(BaseException):
+    """SIGTERM or SIGHUP arrived: unwind (so the ``finally`` blocks run) instead of dying in place."""
+
+
+@contextmanager
+def _terminate_as_exception():
+    """Turn SIGTERM and SIGHUP into :class:`_Terminated` for the block (main thread only)."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def handler(signum, frame):
+        raise _Terminated(signal.Signals(signum).name)
+
+    old = {sig: signal.signal(sig, handler) for sig in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        yield
+    finally:
+        for sig, previous in old.items():
+            signal.signal(sig, previous)
+
+
+def _sweep_stale(ctx: _Ctx, ep: Endpoint) -> list[str]:
+    """Remove scratch directories an earlier, interrupted dump left (generated name, directly under
+    the scratch directory, untouched for ten minutes, the same guard as any other delete)."""
+    _run(ctx, ep, _exec(ep, ["mkdir", "-p", "-m", "700", "--", ep.scratch_dir]))
+    found = _run(ctx, ep, _exec(ep, ["find", ep.scratch_dir, "-mindepth", "1", "-maxdepth", "1", "-type", "d", "-mmin", "+10"]))  # fmt: skip
+    swept = []
+    for line in found.decode().splitlines():
+        try:
+            guard_dir(line, parent=ep.scratch_dir)
+        except MigrateError:
+            continue  # not ours: left alone
+        _remove_dir(ctx, ep, line, ep.scratch_dir)
+        swept.append(line)
+    return swept
+
+
+def _check_space(ctx: _Ctx, ep: Endpoint, out: Path) -> None:
+    """The exporter needs the library's size again in the container, and the tar the same on this
+    host: refuse before writing when either has less than that and a margin."""
+    need = _json_line(_run(ctx, ep, _manage(ep, "shell", "-c", SIZE_CODE)), "size")["bytes"]
+    margin = 64 << 20
+    df = _run(ctx, ep, _exec(ep, ["df", "-Pk", "--", ep.scratch_dir])).decode().splitlines()
+    try:
+        free = int(df[-1].split()[3]) * 1024
+    except (IndexError, ValueError) as e:
+        raise MigrateError(
+            f"cannot read the free space of {ep.scratch_dir} in the container"
+        ) from e
+    if free < need + margin:
+        raise MigrateError(
+            f"{ep.scratch_dir} in the container has {free} bytes free; the export needs about {need}"
+        )
+    here = shutil.disk_usage(out).free
+    if here < need + margin:
+        raise MigrateError(f"{out} has {here} bytes free; the export needs about {need}")
+
+
+def _export_tar(ctx: _Ctx, ep: Endpoint, out: Path, tar_path: Path) -> list[str]:
+    """Export the endpoint's library with the product's exporter into a scratch directory in its
+    container and stream it to ``tar_path``; the scratch directory is removed whatever happens
+    (an exception, SIGTERM or SIGHUP).  Returns the stale scratch directories it swept first."""
+    with _terminate_as_exception():
+        swept = _sweep_stale(ctx, ep)
+        _check_space(ctx, ep, out)
+        scratch = f"{ep.scratch_dir}/{secrets.token_hex(6)}"
+        guard_dir(scratch, parent=ep.scratch_dir)
+        try:
+            _run(ctx, ep, _exec(ep, ["mkdir", "-m", "700", "--", scratch]))
+            _run(ctx, ep, _manage(ep, "document_exporter", scratch, "--no-progress-bar"))
+            try:
+                fd = os.open(tar_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "wb") as f:
+                    _run(ctx, ep, _exec(ep, ["tar", "-C", scratch, "-cf", "-", "."]), stdout=f)
+            except BaseException:
+                tar_path.unlink(missing_ok=True)
+                raise
+        finally:
+            _remove_dir(ctx, ep, scratch, ep.scratch_dir)
+    return swept
+
+
+def _sanity(ctx: _Ctx, ep: Endpoint) -> list[tuple[int, int, str]]:
+    """The sanity checker's findings of warning level and above, as ``(document, level, message)``."""
+    doc = _json_line(_run(ctx, ep, _manage(ep, "shell", "-c", SANITY_CODE)), "sanity check")
+    rows = doc.get("issues")
+    if not isinstance(rows, list) or not all(isinstance(r, list) and len(r) == 3 for r in rows):
+        raise MigrateError(f"sanity check: not the expected answer: {doc!r}")
+    return [(int(p), int(lv), str(m)) for p, lv, m in rows if int(lv) >= SANITY_LEVEL]
+
+
 def dump(
     source: Endpoint,
     out_dir: str | os.PathLike,
@@ -493,29 +730,18 @@ def dump(
 ) -> dict:
     """Export ``source`` into a private, empty ``out_dir`` and return the dump manifest.
 
-    Nothing of the source's is written: its data is read (queries and the exporter) and a scratch
-    directory is made inside the container and removed afterwards.
+    Nothing of the source's is written: its data is read (queries, the sanity checker and the
+    exporter) and a scratch directory is made inside the container and removed afterwards, also
+    when the dump is interrupted by SIGTERM or SIGHUP; one an earlier interrupted dump left is
+    swept first.  The sanity checker's findings are recorded: a restore fails only on a problem the
+    source did not already have.
     """
     ctx = _ctx or _Ctx()
     out = _private_empty_dir(out_dir, scratch_dirs)
     before = _state(ctx, source)
-    scratch = f"{source.scratch_dir}/{secrets.token_hex(6)}"
-    guard_dir(scratch, parent=source.scratch_dir)
+    sanity = _sanity(ctx, source)
     tar_path = out / TAR_FILE
-    _run(ctx, source, _exec(source, ["mkdir", "-p", "-m", "700", "--", source.scratch_dir]))
-    _run(ctx, source, _exec(source, ["mkdir", "-m", "700", "--", scratch]))
-    try:
-        _run(ctx, source, _manage(source, "document_exporter", scratch, "--no-progress-bar"))
-        try:
-            with os.fdopen(
-                os.open(tar_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"
-            ) as f:
-                _run(ctx, source, _exec(source, ["tar", "-C", scratch, "-cf", "-", "."]), stdout=f)
-        except BaseException:
-            tar_path.unlink(missing_ok=True)
-            raise
-    finally:
-        _remove_dir(ctx, source, scratch, source.scratch_dir)
+    swept = _export_tar(ctx, source, out, tar_path)
     after = _state(ctx, source)
     scan = scan_export(tar_path)
     if scan["counts"] != after["counts"]:
@@ -527,7 +753,7 @@ def dump(
         )
     size, digest = _sha256(tar_path)
     manifest = {
-        "format": 1,
+        "format": 2,
         "files": {TAR_FILE: {"size": size, "sha256": digest}},
         "counts": after["counts"],
         "counts_before": before["counts"],
@@ -537,6 +763,9 @@ def dump(
         "thumbnails": scan["thumbnails"],
         "version": scan["version"],
         "quiescent": before == after,
+        "sanity": [list(r) for r in sanity],
+        "egress": scan["egress"],
+        "stale_swept": swept,
     }
     (out / MANIFEST).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return manifest
@@ -577,6 +806,10 @@ def _read_manifest(dump_dir: Path) -> dict:
     size, digest = _sha256(path)
     if (size, digest) != (want.get("size"), want.get("sha256")):
         raise VerifyMismatch(f"{path}: not what {MANIFEST} recorded (size or sha256 differ)")
+    if manifest.get("format") != 2 or not isinstance(manifest.get("sanity"), list):
+        raise MigrateError(
+            f"{dump_dir}: an older dump (no sanity findings of the source): dump again"
+        )
     c = manifest.get("counts")
     if not isinstance(c, dict) or set(c) != set(COUNT_KEYS):
         raise MigrateError(f"{dump_dir}: {MANIFEST} holds no usable counts")
@@ -589,6 +822,7 @@ def restore(
     *,
     expect_counts: Mapping[str, int] | None = None,
     require_quiescent: bool = False,
+    disable_egress: bool = False,
     _ctx: _Ctx | None = None,
 ) -> dict:
     """Import ``dump_dir`` into an empty ``target`` and verify it; return the report.
@@ -598,6 +832,12 @@ def restore(
     the state ``expect_counts`` names; a target that holds any document or account.  After the
     import the counts and the checksum of every file on disk must equal the dump's.  A failure
     leaves the staging directory (and a half-filled target) for inspection and says so.
+
+    Also proved from the target itself: its library re-exported by the product's exporter has the
+    same relationships per document and a thumbnail for every document, and the sanity checker finds
+    nothing the source's did not (the source's own findings are reported, not failed).  Mail rules
+    and e-mail or webhook workflows that came with the import are reported, and switched off with
+    ``disable_egress``.
     """
     ctx = _ctx or _Ctx()
     root = Path(dump_dir)
@@ -659,11 +899,36 @@ def restore(
             raise VerifyMismatch(
                 "the checksum of the files on the target differs from the export's"
             )
-        try:
-            _run(ctx, target, _manage(target, "document_sanity_checker", "--no-progress-bar"))
-            sanity = "clean"
-        except MigrateError as e:
-            sanity = f"reported: {e}"
+        # the relationships, read back out of the target by the product's own exporter: the same
+        # per-document names (tags, correspondent, type, storage path, field values, notes) as the
+        # dump's, and a thumbnail for every document
+        again = root / VERIFY_TAR
+        _export_tar(ctx, target, root, again)
+        back = scan_export(again)
+        if back["thumbnails"] != back["documents"]:
+            raise VerifyMismatch(
+                f"{back['documents'] - back['thumbnails']} documents have no thumbnail on the target"
+            )
+        if back["archives"] != scan["archives"]:
+            raise VerifyMismatch(
+                f"{back['archives']} archive copies on the target, {scan['archives']} in the dump"
+            )
+        apart = _relation_differences(scan["relations"], back["relations"])
+        if apart:
+            raise VerifyMismatch(
+                f"{len(apart)} documents differ in their relationships: " + "; ".join(apart[:20])
+            )
+        again.unlink()
+        # a problem the sanity checker finds on the target and did not find on the source
+        known = Counter(map(tuple, manifest["sanity"]))
+        found = Counter(_sanity(ctx, target))
+        fresh = found - known
+        if fresh:
+            raise VerifyMismatch(
+                "the sanity checker finds problems on the target that the source did not have: "
+                + "; ".join(f"document {p} ({m})" for (p, _, m) in list(fresh)[:20])
+            )
+        egress = _egress(ctx, target, disable=disable_egress)
     except BaseException as e:
         e.add_note(
             f"the staging directory {staging} (in the target container) and anything already "
@@ -677,8 +942,17 @@ def restore(
         "archives": scan["archives"],
         "thumbnails": scan["thumbnails"],
         "digest": scan["digest"],
-        "sanity_checker": sanity,
+        "relationships_verified": len(scan["relations"]),
+        "sanity_known_from_source": sum(known.values()),
+        "egress": egress,
     }
+
+
+def _egress(ctx: _Ctx, ep: Endpoint, *, disable: bool) -> dict:
+    """What can reach out of the application by itself, as found on the endpoint after an import:
+    reported, and turned off (mail rules, workflows that send e-mail or call a webhook) on request."""
+    code = EGRESS_CODE.replace("DISABLE = False", f"DISABLE = {disable!r}", 1)
+    return _json_line(_run(ctx, ep, _manage(ep, "shell", "-c", code)), "egress")
 
 
 def _names(ep: Endpoint) -> list[str]:
@@ -762,6 +1036,8 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--allow-empty", action="store_true", help="dump: accept a source with no documents"
     )
+    ap.add_argument("--disable-egress", action="store_true",
+                    help="restore: switch off imported mail rules and e-mail/webhook workflows")  # fmt: skip
     ap.add_argument("--require-quiescent", action="store_true",
                     help="restore: refuse a dump taken while the source changed")  # fmt: skip
     return ap
@@ -785,7 +1061,11 @@ def _command(a: argparse.Namespace) -> dict:
     if a.command == "dump":
         return dump(ep, a.dir, allow_empty=a.allow_empty)
     return restore(
-        ep, a.dir, expect_counts=_expect(a.expect_counts), require_quiescent=a.require_quiescent
+        ep,
+        a.dir,
+        expect_counts=_expect(a.expect_counts),
+        require_quiescent=a.require_quiescent,
+        disable_egress=a.disable_egress,
     )
 
 

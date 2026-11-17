@@ -26,7 +26,7 @@ import pytest
 import yaml
 from rolerun import fake, run_role
 
-from tests.modules.documents_front import TOKEN, Server
+from tests.modules.documents_front import AGENT_TOKEN, TOKEN, Server
 
 LOOPBACK = socket.gethostbyname("localhost")  # the stand-in listens here; resolved, never a literal
 
@@ -48,6 +48,7 @@ SECRETS = {
     "HNX_SECRET_DOCUMENTS_SECRET_KEY": SIGNING,
     "HNX_SECRET_DOCUMENTS_ADMIN_PASSWORD": ADMIN,
     "HNX_SECRET_DOCUMENTS_API_TOKEN": TOKEN,
+    "HNX_SECRET_DOCUMENTS_AGENT_TOKEN": AGENT_TOKEN,
 }
 
 
@@ -194,6 +195,16 @@ def test_the_containers_join_the_role_slice_the_module_play_names(tmp_path):
         {"documents_admin_login_ref": "secret:documents/secret-key"},  # three distinct references
         {"documents_signing_ref": "not-a-reference"},
         {"documents_mem_limit": "lots"},
+        {
+            "documents_agent_permissions": ["view_document", "delete_document"]
+        },  # delete is never granted
+        {"documents_agent_permissions": ["view_document", "view_document"]},
+        {"documents_agent_permissions": "view_document"},
+        {"documents_agent_permissions": []},
+        {"documents_agent_user": "admin"},  # the agents are not the administrator
+        {"documents_agent_user": "bad user"},
+        {"documents_agent_login_ref": "secret:documents/api-token"},  # four distinct references
+        {"documents_extra_env": {"PAPERLESS_EMAIL_TASK_CRON": "* * * * *"}},  # the role's own
     ],
 )
 def test_main_refuses_bad_inputs(tmp_path, over):
@@ -211,6 +222,7 @@ def test_main_refuses_bad_inputs(tmp_path, over):
         ("HNX_SECRET_DOCUMENTS_SECRET_KEY", "secret:documents/secret-key"),
         ("HNX_SECRET_DOCUMENTS_ADMIN_PASSWORD", "secret:documents/admin-password"),
         ("HNX_SECRET_DOCUMENTS_API_TOKEN", "secret:documents/api-token"),
+        ("HNX_SECRET_DOCUMENTS_AGENT_TOKEN", "secret:documents/agent-token"),
     ],
 )
 def test_a_reference_with_no_value_is_named_and_nothing_is_written(tmp_path, missing, ref):
@@ -280,6 +292,17 @@ elif "exec" in a:
             ("token-in-env" if os.environ.get("HNX_API_TOKEN") == {TOKEN!r} else "no-token") + " "
             + os.environ.get("HNX_API_USER", "") + "\\n")
         sys.stdout.write("noise\\nHNX-TOKEN " + read("token", "created").strip() + "\\n")
+    elif "HNX-AGENT" in code:
+        open({str(tmp_path / "agent-env.log")!r}, "a").write(
+            ("token-in-env" if os.environ.get("HNX_AGENT_TOKEN") == {AGENT_TOKEN!r} else "no-token") + " "
+            + os.environ.get("HNX_AGENT_USER", "") + " " + os.environ.get("HNX_AGENT_PERMS", "") + "\\n")
+        sys.stdout.write("HNX-AGENT " + read("agent", "created").strip() + "\\n")
+    elif "HNX-EGRESS" in code:
+        open({str(tmp_path / "egress.log")!r}, "a").write("DISABLE = True" if "DISABLE = True" in code else "DISABLE = False")
+        sys.stdout.write('HNX-EGRESS {{"mail_rules": ["inbox"]}}\\n')
+    elif "HNX-EXPORT-CHECK" in code:
+        sys.stdout.write('HNX-EXPORT-CHECK {{"ok": ' + ("false" if os.path.exists({str(tmp_path / "export-check.fails")!r}) else "true") + '}}\\n')
+        sys.exit(1 if os.path.exists({str(tmp_path / "export-check.fails")!r}) else 0)
     elif "HNX-STATE" in code:
         sys.stdout.write("HNX-STATE " + read("state", "0 0").strip() + "\\n")
     elif "HNX-VERIFY" in code:
@@ -329,6 +352,7 @@ def test_an_unchanged_token_is_not_a_change_and_a_missing_account_is_said_not_fa
     with Server() as front:
         env = {**SECRETS, **_docker(tmp_path)}
         (tmp_path / "token").write_text("unchanged")
+        (tmp_path / "agent").write_text("unchanged")
         v = _live(tmp_path, front)
         assert run_role(tmp_path, ROLE, "main", v, env=env).returncode == 0
         again = run_role(tmp_path, ROLE, "main", v, env=env)
@@ -373,9 +397,11 @@ def test_health_passes_and_only_reads(tmp_path):
         "/accounts/login/",
         "/api/documents/?page_size=1",
         "/api/documents/?page_size=1",
+        "/api/documents/?page_size=1",
         "/api/status/",
     ]
-    assert tokens == [TOKEN, TOKEN]  # only the two authenticated reads carry it
+    # only the authenticated reads carry a token: the administrator's, the agents', the administrator's
+    assert tokens == [TOKEN, AGENT_TOKEN, TOKEN]
 
 
 def test_health_fails_when_the_library_is_open_to_anonymous_readers(tmp_path):
@@ -585,3 +611,105 @@ def test_upgrade_records_a_newer_pinned_target_and_refuses_the_rest(tmp_path):
     ):
         r = run_role(tmp_path, ROLE, "upgrade", {**v, "documents_target_image": bad}, env=SECRETS)
         assert r.returncode != 0, bad
+
+
+# ----------------------------------------------------------------------------- the agents' account, mail, export check
+
+
+def test_the_agents_account_is_seeded_with_view_and_change_only_through_the_environment(tmp_path):
+    with Server() as front:
+        env = {**SECRETS, **_docker(tmp_path)}
+        r = run_role(tmp_path, ROLE, "main", _live(tmp_path, front), env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+    calls = _calls(tmp_path)
+    seeding = [c for c in calls if "HNX-AGENT" in c]
+    assert len(seeding) == 1 and "-e HNX_AGENT_TOKEN -e HNX_AGENT_PERMS" in seeding[0]
+    assert AGENT_TOKEN not in "\n".join(calls) and TOKEN not in "\n".join(calls)
+    line = (tmp_path / "agent-env.log").read_text().split()
+    assert line[0] == "token-in-env" and line[1] == "agent"
+    granted = line[2].split(",")
+    assert "view_document" in granted and "change_document" in granted
+    assert not [
+        p for p in granted if p.startswith(("delete_", "add_"))
+    ]  # read and change, nothing else
+    code = (ROOT / "modules/documents/roles/documents/vars/main.yml").read_text()
+    assert (
+        "set_unusable_password()" in code and "user.groups.clear()" in code
+    )  # no web sign-in, no group
+
+
+def test_the_agents_account_waits_for_the_administrator_and_a_site_may_have_none(tmp_path):
+    with Server() as front:
+        env = {**SECRETS, **_docker(tmp_path)}
+        (tmp_path / "agent").write_text("deferred")
+        r = run_role(
+            tmp_path, ROLE, "main", _live(tmp_path, front, documents_admin_bootstrap=False), env=env
+        )
+        assert r.returncode == 0 and "was not created" in r.stdout, r.stdout
+    other = tmp_path / "none"
+    other.mkdir()
+    env = {k: v for k, v in SECRETS.items() if "AGENT" not in k}
+    with Server() as front:
+        r = run_role(
+            other,
+            ROLE,
+            "main",
+            _live(other, front, documents_agent_user=""),
+            env={**env, **_docker(other)},
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+    assert not [c for c in _calls(other) if "HNX-AGENT" in c]
+
+
+def test_the_application_never_polls_mail_unless_the_site_says_so(tmp_path):
+    assert run_role(tmp_path, ROLE, "main", dv(tmp_path), env=SECRETS).returncode == 0
+    assert (
+        compose(tmp_path)["services"]["app"]["environment"]["PAPERLESS_EMAIL_TASK_CRON"]
+        == "disable"
+    )
+    other = tmp_path / "on"
+    other.mkdir()
+    assert (
+        run_role(other, ROLE, "main", dv(other, documents_mail_fetch=True), env=SECRETS).returncode
+        == 0
+    )
+    assert "PAPERLESS_EMAIL_TASK_CRON" not in compose(other)["services"]["app"]["environment"]
+
+
+def test_a_restore_reports_and_by_default_switches_off_what_could_reach_out(tmp_path):
+    src = _archive(tmp_path)
+    r = _restore(tmp_path, src)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (tmp_path / "egress.log").read_text() == "DISABLE = True"
+    assert "HNX-EGRESS" in r.stdout and "inbox" in r.stdout  # listed in the run's output
+    calls = _calls(tmp_path)
+    assert next(i for i, c in enumerate(calls) if "HNX-EGRESS" in c) > next(
+        i for i, c in enumerate(calls) if "HNX-VERIFY" in c
+    )
+    other = tmp_path / "keep"
+    other.mkdir()
+    r = _restore(other, _archive(other), documents_disable_imported_egress=False)
+    assert r.returncode == 0 and (other / "egress.log").read_text() == "DISABLE = False"
+
+
+def test_the_export_is_checked_before_it_is_archived_and_a_bad_one_fails_the_hook(tmp_path):
+    env = {**SECRETS, **_docker(tmp_path)}
+    exp = _export(tmp_path, env, dv(tmp_path))
+    calls = _calls(tmp_path)
+    assert next(i for i, c in enumerate(calls) if "document_exporter" in c) < next(
+        i for i, c in enumerate(calls) if "HNX-EXPORT-CHECK" in c
+    )
+    (exp / "library.tar").unlink()
+    (tmp_path / "export-check.fails").write_text("")
+    bad = run_role(tmp_path, ROLE, "export", dv(tmp_path), env=env)
+    assert bad.returncode != 0
+    assert not (
+        exp / "library.tar"
+    ).exists()  # nothing was archived from an export that is not whole
+
+
+def test_the_restore_verification_compares_relationships_and_thumbnails():
+    code = (ROOT / "modules/documents/roles/documents/vars/main.yml").read_text()
+    for needle in ('"tags", "correspondent", "document_type", "storage_path"', "documents.customfieldinstance",
+                   "documents.note", "thumbnail_path"):  # fmt: skip
+        assert needle in code
