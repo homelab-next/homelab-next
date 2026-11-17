@@ -28,6 +28,12 @@ HEALTH = (ROLE / "tasks" / "health.yml").read_text()
 VARS = yaml.safe_load((ROLE / "vars" / "main.yml").read_text())
 SCRIPT = next(v for k, v in VARS.items() if k.endswith("_probe_script"))
 SITE = "hub.example.internal"
+ISSUER = "sso.example.internal"
+GONE = "gone.example.internal"  # served by the edge, but with a 404
+PROTECTED_SITES = (
+    f"{SITE} {{\n\timport hnx_forward_auth admins\n\treverse_proxy x\n}}\n"
+    f"{ISSUER} {{\n\treverse_proxy y\n}}\n"
+)
 
 
 def test_health_signs_in_through_the_front_door_not_straight_to_the_proxy():
@@ -78,7 +84,7 @@ def edge(tmp_path):
             "-subj",
             f"/CN={SITE}",
             "-addext",
-            f"subjectAltName=DNS:{SITE}",
+            f"subjectAltName=DNS:{SITE},DNS:{GONE}",
         ],
         check=True,
         capture_output=True,
@@ -95,6 +101,10 @@ def edge(tmp_path):
                 "client_id=auth-proxy&code_challenge_method=S256&redirect_uri="
                 + quote(f"https://{host}/oauth2/callback", safe="")
             )
+            if self.headers.get("Host") == GONE:
+                self.send_response(404)
+                self.end_headers()
+                return
             self.send_response(302)
             self.send_header("Location", loc)
             self.end_headers()
@@ -112,8 +122,15 @@ def edge(tmp_path):
     srv.shutdown()
 
 
-def probe(port, bundle, names):
-    spec = {"address": "localhost", "port": port, "bundle": bundle, "names": names, "timeout": 5}
+def probe(port, bundle, names, sites=None):
+    spec = {
+        "sites": sites if sites is not None else PROTECTED_SITES,
+        "address": "localhost",
+        "port": port,
+        "bundle": bundle,
+        "names": names,
+        "timeout": 5,
+    }
     r = subprocess.run(
         [sys.executable, "-I", "-c", SCRIPT, json.dumps(spec)],
         capture_output=True,
@@ -135,6 +152,28 @@ def test_the_probe_asks_the_site_by_name_on_the_edge_address_and_reads_the_redir
 @pytest.mark.requires_tool("openssl")
 def test_the_probe_refuses_a_certificate_that_does_not_verify_by_the_site_name(edge):
     port, bundle, _ = edge
-    out = probe(port, bundle, ["other.example.internal"])
+    other = "other.example.internal"
+    sites = f"{other} {{\n\timport hnx_forward_auth admins\n}}\n"
+    out = probe(port, bundle, [other], sites=sites)
     assert out["other.example.internal"]["status"] == 0
     assert "SSLCertVerificationError" in out["other.example.internal"]["error"]
+
+
+def test_only_the_forward_auth_sites_are_probed_never_the_issuers_own(edge):
+    port, bundle, seen = edge
+    out = probe(port, bundle, [ISSUER, SITE])
+    assert list(out) == [SITE]
+    assert [h for _, h in seen] == [SITE]  # the issuer was never asked
+
+
+def test_a_protected_site_that_answers_404_still_fails_the_assertion(edge):
+    port, bundle, _ = edge
+    sites = PROTECTED_SITES + f"{GONE} {{\n\timport hnx_forward_auth admins\n}}\n"
+    out = probe(port, bundle, [SITE, GONE], sites=sites)
+    assert out[SITE]["status"] == 302
+    assert out[GONE]["status"] == 404  # health asserts every status is 302, so this fails it
+
+
+def test_health_asserts_a_non_empty_set_of_302s_and_reads_the_deployed_sites():
+    assert "_sites_file" in HEALTH and "_sites_deployed" in HEALTH
+    assert "length > 0" in HEALTH

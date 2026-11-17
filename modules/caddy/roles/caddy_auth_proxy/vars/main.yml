@@ -50,14 +50,27 @@ caddy_auth_proxy_trusted_cidr_pattern: '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]
 caddy_auth_proxy_network: caddy-auth-proxy_default
 # what an unresolved "auto" renders while nothing is started: IPv6 loopback only, never every address
 caddy_auth_proxy_placeholder_trusted: ["::1/128"]
-# The health hook's sign-in probe: for each site, GET /oauth2/start?rd=%2F on the edge's address
+# The health hook's sign-in probe: for each site FRONTED BY FORWARD AUTH (a site block of the deployed
+# sites file that imports hnx_forward_auth, within spec["names"]; the issuer's own site and any
+# other unprotected one are never asked to sign in), GET /oauth2/start?rd=%2F on the edge's address
 # with the site as the TLS name and Host (the certificate verified against the bundle), no
 # redirect followed; prints {site: {status, location}} as JSON. Errors are reported per site.
 caddy_auth_proxy_probe_script: |
-  import json, socket, ssl, sys
+  import json, re, socket, ssl, sys
   spec = json.loads(sys.argv[1])
+  sites, cur = {}, None
+  for line in spec["sites"].splitlines():
+      m = re.match(r"^([a-z0-9][a-z0-9.-]*) \{$", line)
+      if m:
+          cur = m.group(1)
+          sites[cur] = []
+      elif line == "}":
+          cur = None
+      elif cur:
+          sites[cur].append(line.strip())
+  protected = [n for n in spec["names"] if any(x.startswith("import hnx_forward_auth ") for x in sites.get(n, []))]
   out = {}
-  for name in spec["names"]:
+  for name in protected:
       try:
           ctx = ssl.create_default_context(cafile=spec["bundle"])
           with socket.create_connection((spec["address"], spec["port"]), timeout=spec["timeout"]) as raw:
