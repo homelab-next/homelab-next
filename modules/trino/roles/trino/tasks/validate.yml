@@ -52,6 +52,45 @@
       - trino_expire_timeout | int >= 10 and trino_expire_timeout | int <= 86400
       - trino_orphan_timeout | int >= 10 and trino_orphan_timeout | int <= 86400
       - trino_maintenance_user is match(trino_user_pattern)
+      - trino_preflight_timeout | int >= 10 and trino_preflight_timeout | int <= 86400
+      - trino_maintenance_acknowledged_restore is boolean
+      - trino_maintenance_schemas is sequence and trino_maintenance_schemas | length >= 1
+      - trino_maintenance_skip is sequence
+      - (trino_maintenance_schemas + trino_maintenance_skip) | reject('match', trino_glob_pattern) | list | length == 0
+      - trino_maintenance_overrides is mapping
+      - trino_maintenance_overrides.keys() | list | reject('match', '^[A-Za-z0-9_]{1,128}\\Z') | list | length == 0
+      - >-
+        trino_maintenance_overrides.values() | list | select('mapping') | list | length
+        == trino_maintenance_overrides | length
+      - >-
+        trino_maintenance_overrides.values() | map('list') | flatten
+        | reject('in', trino_override_keys) | list | length == 0
+      - >-
+        trino_maintenance_overrides.values() | map(attribute='expire', default='7d') | map('string') | list
+        | reject('match', trino_duration_pattern) | list | length == 0
+      - >-
+        trino_maintenance_overrides.values() | map(attribute='orphan_retention', default='3d') | map('string') | list
+        | reject('match', trino_duration_pattern) | list | length == 0
+      - >-
+        trino_maintenance_overrides.values() | map(attribute='expire', default=trino_expire_min_retention) | map('string') | list
+        | select('match', trino_duration_pattern) | map('regex_replace', 'd$', '') | map('int')
+        | select('lt', trino_expire_min_retention[:-1] | int) | list | length == 0
+      - >-
+        trino_maintenance_overrides.values() | map(attribute='orphan_retention', default=trino_orphan_min_retention) | map('string') | list
+        | select('match', trino_duration_pattern) | map('regex_replace', 'd$', '') | map('int')
+        | select('lt', trino_orphan_min_retention[:-1] | int) | list | length == 0
+      - >-
+        trino_maintenance_overrides.values() | map(attribute='retain_last', default=1) | map('string') | list
+        | reject('match', '^[0-9]{1,4}\\Z') | list | length == 0
+      - >-
+        trino_maintenance_overrides.values() | map(attribute='retain_last', default=1) | map('int') | list
+        | reject('ge', 1) | list | length == 0
+      - >-
+        trino_maintenance_overrides.values() | map(attribute='retain_last', default=1) | map('int') | list
+        | reject('le', 1000) | list | length == 0
+      - >-
+        trino_maintenance_overrides.values() | map(attribute='orphan', default=true) | list
+        | reject('boolean') | list | length == 0
       - trino_maintenance_schedule is match('^[-A-Za-z0-9:*,./ ]{3,80}\Z')
       - trino_last_run_dir is match(trino_path_pattern)
       - trino_last_run_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')

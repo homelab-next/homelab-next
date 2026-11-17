@@ -31,9 +31,10 @@ ARCHIVE = "cape.ioc\t116045\t4344198482287195337\ncti.nrd\t28680210\t82449500333
 
 
 class _Engine(http.server.ThreadingHTTPServer):
-    def __init__(self, counts, summaries=None):
+    def __init__(self, counts, summaries=None, broken_history=()):
         super().__init__(("localhost", 0), _Handler)
         self.counts, self.summaries, self.statements, self.auth = counts, summaries or {}, [], []
+        self.broken_history = set(broken_history)  # tables whose $all_manifests cannot be read
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -44,6 +45,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         sql = self.rfile.read(int(self.headers["Content-Length"])).decode()
         self.server.statements.append(sql)
         self.server.auth.append(self.headers.get("Authorization", ""))
+        h = re.search(r'"(\w+)"\."(\w+)\$all_manifests"', sql)
+        if h:
+            name = f"{h.group(1)}.{h.group(2)}"
+            if name in self.server.broken_history:
+                body = {"error": {"message": f"Failed to open input stream for file: s3://b/{h.group(2)}/metadata/snap-1.avro",
+                                  "errorName": "GENERIC_INTERNAL_ERROR"}}  # fmt: skip
+            else:
+                body = {"columns": [{"name": "n"}], "data": [[7]]}
+            raw = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         m = re.search(
             r'"(\w+)"\."(\w+)(\$snapshots)?" (?:FOR VERSION AS OF CAST\((\d+) AS BIGINT\)|WHERE snapshot_id = (\d+))',
             sql,
@@ -84,8 +99,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 def engine():
     started = []
 
-    def start(counts, summaries=None):
-        s = _Engine(counts, summaries)
+    def start(counts, summaries=None, broken_history=()):
+        s = _Engine(counts, summaries, broken_history)
         threading.Thread(target=s.serve_forever, daemon=True).start()
         started.append(s)
         return s
@@ -151,7 +166,7 @@ def test_the_four_column_shape_and_a_header_are_read(tmp_path, monkeypatch, engi
 def test_only_limits_the_run_and_an_unknown_name_is_a_usage_error(tmp_path, monkeypatch, engine):
     e = engine(GOOD)
     assert _run(tmp_path, monkeypatch, e, ARCHIVE, "--only", "cti.nrd") == 0
-    assert len(e.statements) == 1
+    assert len([x for x in e.statements if "$all_manifests" not in x]) == 1
     assert _run(tmp_path, monkeypatch, e, ARCHIVE, "--only", "cti.missing") == 2
 
 
@@ -207,3 +222,46 @@ def test_the_archive_reference_of_the_old_lake_parses_as_thirty_seven_unique_tab
     parsed = lv.parse_reference(rows)
     assert len(parsed) == 37 and len({p.name for p in parsed}) == 37
     assert parsed[0].snapshot_id == 4000000000000000000 and parsed[3].rows == 21
+
+
+def test_every_tables_whole_history_is_read_through_all_manifests(
+    tmp_path, monkeypatch, engine, capsys
+):
+    e = engine(GOOD)
+    assert _run(tmp_path, monkeypatch, e) == 0
+    reads = [x for x in e.statements if "$all_manifests" in x]
+    assert reads == [
+        'SELECT count(*) AS n FROM iceberg."cape"."ioc$all_manifests"',
+        'SELECT count(*) AS n FROM iceberg."cti"."nrd$all_manifests"',
+    ]
+
+
+def test_a_table_with_dangling_history_fails_naming_the_table_though_its_current_snapshot_counts(
+    tmp_path, monkeypatch, engine, capsys
+):
+    e = engine(GOOD, broken_history=["cti.nrd"])
+    assert _run(tmp_path, monkeypatch, e) == 1
+    out = capsys.readouterr().out
+    assert "HISTORY" in out and "cti.nrd" in out and "snap-1.avro" in out
+    assert "cape.ioc" in out and out.count("HISTORY") == 1  # the readable table is ok
+    assert "1 of 2 table(s) equal the reference" in out and "NOT EQUAL" in out
+
+
+def test_the_all_history_failure_is_in_the_json_and_an_error_count_keeps_its_status(
+    tmp_path, monkeypatch, engine, capsys
+):
+    e = engine({("cape.ioc", 4344198482287195337): 116045}, broken_history=["cape.ioc", "cti.nrd"])
+    assert _run(tmp_path, monkeypatch, e, ARCHIVE, "--json") == 1
+    doc = json.loads(capsys.readouterr().out)
+    by = {t["name"]: t for t in doc["tables"]}
+    assert by["cape.ioc"]["status"] == "HISTORY" and "snap-1.avro" in by["cape.ioc"]["history"]
+    assert (
+        by["cti.nrd"]["status"] == "ERROR" and by["cti.nrd"]["history"]
+    )  # the count error stays the status
+    assert doc["ok"] is False
+
+
+def test_no_all_history_skips_the_check(tmp_path, monkeypatch, engine):
+    e = engine(GOOD, broken_history=["cti.nrd"])
+    assert _run(tmp_path, monkeypatch, e, ARCHIVE, "--no-all-history") == 0
+    assert not any("$all_manifests" in x for x in e.statements)

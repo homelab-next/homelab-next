@@ -68,6 +68,21 @@ trino_validate_with_docker: true
 trino_health_timeout: 10
 # --- the maintenance timer (the lake's snapshot and orphan-file hygiene) ---
 trino_maintenance_enabled: true
+# The timer is ARMED (enabled and started) only when trino_maintenance_enabled AND this is true. The
+# first maintenance run on a lake restored or migrated from another one is the dangerous one (a
+# current-only data copy under a full-history catalog: expire/orphan statements hang or delete), and the
+# role cannot see how the lake got here, so arming is an explicit operator act: set this true only after
+# `lake_verify.py --all-history` passed (or the lake was never restored), and after the allow/skip lists
+# below say what may be touched. Until then the units are installed and the timer is stopped and disabled.
+trino_maintenance_acknowledged_restore: false
+# which tables are touched: schema or schema.table globs ([A-Za-z0-9_*?]); deny (skip) wins
+trino_maintenance_schemas: ["*"]
+trino_maintenance_skip: []
+# per-schema values laid over the defaults below: {schema: {expire: 90d, retain_last: 50,
+# orphan_retention: 7d, orphan: false}}; every key optional, `orphan: false` skips remove_orphan_files
+trino_maintenance_overrides: {}
+# seconds the read-only history preflight ($snapshots, $all_manifests) may take per query
+trino_preflight_timeout: 300
 trino_maintenance_user: maintenance
 trino_maintenance_ref: secret:trino/maintenance-password
 # snapshots older than this are expired, always keeping the last trino_retain_last; orphan files

@@ -45,6 +45,10 @@
   when: trino_start | bool and trino_restart_owed | bool
   changed_when: true
 
-- name: Install the lake's maintenance timer
+- name: Install the lake's maintenance timer (armed only when acknowledged; otherwise stopped and disabled)
   ansible.builtin.include_tasks: maintenance.yml
   when: trino_maintenance_enabled | bool
+
+- name: Maintenance is off - stop and disable a timer an earlier run installed
+  ansible.builtin.include_tasks: disarm.yml
+  when: not (trino_maintenance_enabled | bool)

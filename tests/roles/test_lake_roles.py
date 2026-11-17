@@ -20,11 +20,13 @@ import json
 import os
 import pwd
 import re
+import signal
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -401,7 +403,9 @@ def trino_vars(tmp: Path, **kw) -> dict:
         bindir / "systemctl",
         "import os, sys\n"
         f"flag = {str(flag)!r}\n"
+        f"open({str(tmp / 'systemctl.log')!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
         "if sys.argv[1:2] == ['enable']:\n    open(flag, 'w').close()\n"
+        "if sys.argv[1:2] == ['disable'] and os.path.exists(flag):\n    os.remove(flag)\n"
         "if sys.argv[1:2] in (['is-enabled'], ['is-active']):\n"
         "    ok = os.path.exists(flag)\n    print('enabled' if sys.argv[1] == 'is-enabled' and ok else 'active' if ok else 'inactive')\n"
         "    sys.exit(0 if ok else 3)\n",
@@ -421,6 +425,7 @@ def trino_vars(tmp: Path, **kw) -> dict:
         "trino_access_unrestricted": True,
         "trino_start": False,
         "trino_validate_with_docker": False,
+        "trino_maintenance_acknowledged_restore": True,
         "trino_maintenance_script": str(tmp / "libexec" / "hnx-lake-maintenance"),
         "trino_maintenance_state_dir": str(tmp / "state"),
         "trino_maintenance_env_file": str(tmp / "etc-hnx" / "maintenance.env"),
@@ -658,10 +663,12 @@ class _Engine(http.server.ThreadingHTTPServer):
     """A stand-in for the engine's statement protocol: tables listed, each statement logged, and
     the statements named in ``fail`` answered with a query error."""
 
-    def __init__(self, tables, fail=(), list_fails=False):
+    def __init__(self, tables, fail=(), list_fails=False, hang=()):
         super().__init__(("localhost", 0), _EngineHandler)
         self.tables, self.fail, self.list_fails = tables, set(fail), list_fails
+        self.hang = set(hang)  # statements containing one of these never finish (nextUri forever)
         self.statements: list[str] = []
+        self.deletes: list[str] = []
         self.users: list[str] = []
 
 
@@ -669,12 +676,38 @@ class _EngineHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def _json(self, body):
+        raw = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_GET(self):  # polling a hung query: never done
+        self._json(
+            {"id": "q_hung_1", "nextUri": f"http://localhost:{self.server.server_port}{self.path}"}
+        )
+
+    def do_DELETE(self):
+        self.server.deletes.append(self.path)
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_POST(self):
         sql = self.rfile.read(int(self.headers["Content-Length"])).decode()
         self.server.statements.append(sql)
         self.server.users.append(self.headers.get("X-Trino-User", ""))
         body: dict
-        if "information_schema.tables" in sql:
+        if "kill_query" in sql:
+            body = {"id": "kill", "columns": [], "data": []}
+        elif any(h in sql for h in self.server.hang):
+            body = {
+                "id": "q_hung_1",
+                "nextUri": f"http://localhost:{self.server.server_port}/v1/statement/q_hung_1/1",
+            }
+        elif "information_schema.tables" in sql:
             body = {"error": {"message": "engine down"}} if self.server.list_fails else {
                 "columns": [{"name": "table_schema"}, {"name": "table_name"}],
                 "data": [list(t) for t in self.server.tables]}  # fmt: skip
@@ -724,18 +757,34 @@ def maintenance(tmp_path):
     text = script.read_text()
     engine_pins = []
 
-    def run(engine, notify, *args):
+    def prepare(engine, notify, cfg_over):
         cfg_line = next(line for line in text.splitlines() if line.startswith("CONFIG = "))
         cfg = json.loads(cfg_line[len("CONFIG = ") :])
         cfg["url"] = f"http://localhost:{engine.server_port}"
         cfg["notify_url"] = f"http://localhost:{notify.server_port}"
+        cfg.update(cfg_over)
         patched = tmp_path / "run-maintenance.py"
         patched.write_text(text.replace(cfg_line, "CONFIG = " + json.dumps(cfg)))
         engine_pins.append(cfg)
-        return subprocess.run([sys.executable, str(patched), *args], capture_output=True, text=True,
-                              env={**os.environ, "HNX_LAKE_MAINT_PASSWORD": MAINT_PW,
-                                   "HNX_LAKE_MAINT_NOTIFY_TOKEN": NOTIFY_TOKEN})  # fmt: skip
+        return patched
 
+    child_env = {**os.environ, "HNX_LAKE_MAINT_PASSWORD": MAINT_PW,
+                 "HNX_LAKE_MAINT_NOTIFY_TOKEN": NOTIFY_TOKEN}  # fmt: skip
+
+    def run(engine, notify, *args, cfg=None):
+        patched = prepare(engine, notify, cfg or {})
+        return subprocess.run([sys.executable, str(patched), *args], capture_output=True, text=True,
+                              env=child_env)  # fmt: skip
+
+    def start(engine, notify, *args, cfg=None):
+        patched = prepare(engine, notify, cfg or {})
+        return subprocess.Popen([sys.executable, str(patched), *args], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, env=child_env)  # fmt: skip
+
+    run.start = start
+    run.config = lambda: json.loads(
+        next(ln for ln in text.splitlines() if ln.startswith("CONFIG = "))[len("CONFIG = ") :]
+    )
     run.state = tmp_path / "state" / "state.json"
     return run
 
@@ -830,3 +879,227 @@ def test_no_rendered_file_names_the_workstation_or_wsl():
             if f.is_file():
                 text = f.read_text()
                 assert not re.search(r"192\.168\.20\.150|wsl", text, re.I), f
+
+
+# ----------------------------------------------------------------------------- the maintenance guards (RCA 2026-11-17)
+
+
+def _with(engine, notify, fn):
+    try:
+        return fn()
+    finally:
+        engine.shutdown(), notify.shutdown()
+
+
+def test_maintenance_cancels_the_query_on_the_engine_at_the_deadline(maintenance):
+    engine = _serve(_Engine([("cti", "nrd")], hang=["expire_snapshots"]))
+    notify = _serve(_Notify())
+    r = _with(engine, notify, lambda: maintenance(engine, notify, cfg={"expire_timeout": 1}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    # the engine was told to stop the query (the protocol's DELETE), then asked to kill it by id
+    assert engine.deletes == ["/v1/statement/q_hung_1/1"]
+    assert any("kill_query(query_id => 'q_hung_1'" in s for s in engine.statements)
+    assert "no result within 1 s" in notify.messages[0]["body"]
+    # and the next step was not started behind it: orphan removal never ran after the failed expire
+    assert not any("remove_orphan_files" in s for s in engine.statements)
+
+
+def test_maintenance_cancels_the_running_query_and_alerts_on_sigterm(maintenance):
+    engine = _serve(_Engine([("cti", "a"), ("cti", "b")], hang=["expire_snapshots"]))
+    notify = _serve(_Notify())
+    proc = maintenance.start(engine, notify)
+    try:
+        for _ in range(100):
+            if any("expire_snapshots" in s for s in engine.statements):
+                break
+            time.sleep(0.1)
+        else:
+            pytest.fail("the expire statement never reached the engine")
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=30)
+    finally:
+        proc.kill()
+        engine.shutdown(), notify.shutdown()
+    assert proc.returncode == 143, out + err
+    assert engine.deletes, "the in-flight query was not cancelled"
+    assert any("kill_query" in s for s in engine.statements)
+    state = json.loads(maintenance.state.read_text())
+    assert state["terminated"] is True and state["unfinished"] == ["cti.a", "cti.b"]
+    assert len(notify.messages) == 1
+    assert "cti.a" in notify.messages[0]["body"] and "cti.b" in notify.messages[0]["body"]
+
+
+def test_maintenance_skips_a_table_with_unreadable_history_and_marks_the_run_degraded(maintenance):
+    engine = _serve(
+        _Engine([("cti", "dangling"), ("cti", "fine")], fail=['"dangling$all_manifests"'])
+    )
+    notify = _serve(_Notify())
+    r = _with(engine, notify, lambda: maintenance(engine, notify))
+    assert r.returncode == 3, r.stdout + r.stderr  # degraded, not a clean run
+    assert "cti.dangling: skipped: unreadable history" in r.stderr
+    alters = [s for s in engine.statements if s.startswith("ALTER")]
+    assert alters and all('"fine"' in s for s in alters)  # nothing was done to the unreadable table
+    assert any('"dangling$snapshots"' in s for s in engine.statements)
+    assert any('"fine$all_manifests"' in s for s in engine.statements)
+    state = json.loads(maintenance.state.read_text())
+    assert state["degraded"] is True and "cti.dangling:preflight" in state["failed"]
+    assert len(notify.messages) == 1 and "cti.dangling:preflight" in notify.messages[0]["body"]
+    assert "unreadable history" in notify.messages[0]["body"]
+
+
+def test_maintenance_never_removes_orphans_after_an_expire_that_did_not_succeed(maintenance):
+    engine = _serve(_Engine([("cti", "a"), ("cti", "b")], fail=['"a" EXECUTE expire_snapshots']))
+    notify = _serve(_Notify())
+    r = _with(engine, notify, lambda: maintenance(engine, notify))
+    assert r.returncode == 1
+    orphans = [s for s in engine.statements if "remove_orphan_files" in s]
+    assert orphans == [
+        'ALTER TABLE iceberg."cti"."b" EXECUTE remove_orphan_files(retention_threshold => \'3d\')'
+    ]
+    state = json.loads(maintenance.state.read_text())
+    assert state["skipped"]["cti.a:remove_orphan_files"].startswith(
+        "expire_snapshots did not succeed"
+    )
+
+
+def test_maintenance_allow_and_deny_globs_pick_the_tables_and_deny_wins(maintenance):
+    tables = [
+        ("cti", "a"),
+        ("cti", "secret_tbl"),
+        ("rba", "x"),
+        ("cape", "ioc"),
+        ("honeypot", "events"),
+    ]
+    engine, notify = _serve(_Engine(tables)), _serve(_Notify())
+    cfg = {"allow": ["cti", "cape.*", "honeypot.events", "rba"], "skip": ["rba", "cti.secret_*"]}
+    r = _with(engine, notify, lambda: maintenance(engine, notify, cfg=cfg))
+    assert r.returncode == 0, r.stdout + r.stderr
+    touched = {
+        s.split('"')[1] + "." + s.split('"')[3] for s in engine.statements if s.startswith("ALTER")
+    }
+    assert touched == {"cti.a", "cape.ioc", "honeypot.events"}
+
+
+def test_maintenance_per_schema_overrides_set_retention_and_can_turn_orphans_off(maintenance):
+    engine, notify = _serve(_Engine([("cti", "a"), ("rba", "x")])), _serve(_Notify())
+    cfg = {"overrides": {"cti": {"expire": "90d", "retain_last": 50, "orphan_retention": "9d"},
+                         "rba": {"orphan": False}}}  # fmt: skip
+    r = _with(engine, notify, lambda: maintenance(engine, notify, cfg=cfg))
+    assert r.returncode == 0, r.stdout + r.stderr
+    alters = [s for s in engine.statements if s.startswith("ALTER")]
+    assert alters == [
+        'ALTER TABLE iceberg."cti"."a" EXECUTE expire_snapshots(retention_threshold => \'90d\', retain_last => 50, clean_expired_metadata => true)',
+        'ALTER TABLE iceberg."cti"."a" EXECUTE remove_orphan_files(retention_threshold => \'9d\')',
+        'ALTER TABLE iceberg."rba"."x" EXECUTE expire_snapshots(retention_threshold => \'7d\', retain_last => 10, clean_expired_metadata => true)',
+    ]  # fmt: skip
+
+
+def test_the_rendered_config_carries_the_allow_skip_and_override_lists(tmp_path):
+    v = trino_vars(
+        tmp_path,
+        trino_maintenance_schemas=["cti", "cape.*"],
+        trino_maintenance_skip=["rba"],
+        trino_maintenance_overrides={"cti": {"expire": "90d", "retain_last": 50}},
+        trino_preflight_timeout=42,
+    )
+    r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    line = next(
+        ln for ln in (tmp_path / "libexec" / "hnx-lake-maintenance").read_text().splitlines()
+        if ln.startswith("CONFIG = ")
+    )  # fmt: skip
+    cfg = json.loads(line[len("CONFIG = ") :])
+    assert cfg["allow"] == ["cti", "cape.*"] and cfg["skip"] == ["rba"]
+    assert cfg["overrides"] == {"cti": {"expire": "90d", "retain_last": 50}}
+    assert cfg["preflight_timeout"] == 42
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"trino_maintenance_schemas": []},
+        {"trino_maintenance_schemas": ["cti; DROP"]},
+        {"trino_maintenance_skip": ["a.b.c"]},
+        {"trino_maintenance_skip": ["bad name"]},
+        {"trino_maintenance_overrides": {"cti": {"expire": "2d"}}},  # under the engine's floor
+        {"trino_maintenance_overrides": {"cti": {"orphan_retention": "1d"}}},
+        {"trino_maintenance_overrides": {"cti": {"retain_last": 0}}},
+        {"trino_maintenance_overrides": {"cti": {"retain_last": 5000}}},
+        {"trino_maintenance_overrides": {"cti": {"orphan": "maybe"}}},
+        {"trino_maintenance_overrides": {"cti": {"bogus": 1}}},
+        {"trino_maintenance_overrides": {"bad schema": {"expire": "30d"}}},
+        {"trino_maintenance_overrides": {"cti": "30d"}},
+        {"trino_maintenance_overrides": ["cti"]},
+        {"trino_preflight_timeout": 1},
+    ],
+)
+def test_trino_refuses_unsafe_maintenance_lists_and_overrides(tmp_path, over):
+    r = run_role(tmp_path, TRINO, "main", trino_vars(tmp_path, **over), env=TRINO_SECRETS)
+    assert r.returncode != 0
+    assert not (tmp_path / "units" / "hnx-lake-maintenance.timer").exists()
+
+
+def test_trino_is_not_armed_on_a_lake_nobody_acknowledged_and_arms_once_acknowledged(tmp_path):
+    log = tmp_path / "systemctl.log"
+    v = trino_vars(tmp_path, trino_maintenance_acknowledged_restore=False)
+    r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    # installed (so it can be armed later) but never enabled or started
+    assert (tmp_path / "units" / "hnx-lake-maintenance.timer").exists()
+    assert not (tmp_path / "timer-enabled").exists()
+    assert not any(ln.startswith("enable") for ln in log.read_text().splitlines())
+    v["trino_maintenance_acknowledged_restore"] = True
+    again = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "enable --now hnx-lake-maintenance.timer" in log.read_text()
+    assert (tmp_path / "timer-enabled").exists()
+
+
+def test_trino_default_is_not_armed_until_the_operator_acknowledges(tmp_path):
+    v = trino_vars(tmp_path)
+    del v["trino_maintenance_acknowledged_restore"]
+    r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (tmp_path / "timer-enabled").exists()
+
+
+def test_trino_disarms_an_installed_timer_when_it_loses_its_acknowledgement(tmp_path):
+    v = trino_vars(tmp_path)
+    assert run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS).returncode == 0
+    assert (tmp_path / "timer-enabled").exists()
+    v["trino_maintenance_acknowledged_restore"] = False
+    r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    log = (tmp_path / "systemctl.log").read_text()
+    assert "disable --now hnx-lake-maintenance.timer" in log
+    assert "stop hnx-lake-maintenance.service" in log
+    assert not (tmp_path / "timer-enabled").exists()
+
+
+def test_trino_with_maintenance_disabled_stops_and_disables_an_installed_timer(tmp_path):
+    v = trino_vars(tmp_path)
+    assert run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS).returncode == 0
+    assert (tmp_path / "timer-enabled").exists()
+    off = trino_vars(tmp_path, trino_maintenance_enabled=False, trino_notify_url="")
+    env = {k: x for k, x in TRINO_SECRETS.items() if "MAINTENANCE" not in k and "NOTIFY" not in k}
+    r = run_role(tmp_path, TRINO, "main", off, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    log = (tmp_path / "systemctl.log").read_text()
+    assert "disable --now hnx-lake-maintenance.timer" in log
+    assert not (tmp_path / "timer-enabled").exists()
+    # and a host that never had the timer is left alone: no systemctl call at all
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    r2 = run_role(
+        fresh,
+        TRINO,
+        "main",
+        trino_vars(fresh, trino_maintenance_enabled=False, trino_notify_url=""),
+        env=env,
+    )
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    assert (
+        "disable" not in (fresh / "systemctl.log").read_text()
+        if (fresh / "systemctl.log").exists()
+        else True
+    )
