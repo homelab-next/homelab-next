@@ -1098,6 +1098,12 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
     model_list: list[dict[str, Any]] = []
     notes: list[str] = []
     for rname, role in sorted(spec.table.roles.items()):
+        if role.kind == "decision":
+            # LiteLLM cannot route POST /v1/systemone: a decision role exists only in the lab's own gateway
+            notes.append(
+                f"mdl:{rname}: a decision role is served by the lab's own gateway only; not rendered here"
+            )
+            continue
         lim = role.limits
         n = len(role.bindings)  # the proxy limits each deployment: each gets 1/n of the role's
         for i, b in enumerate(role.bindings):
@@ -1140,7 +1146,7 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
     fallbacks = [
         {rname: _fallback_targets(spec, rname)}
         for rname in sorted(spec.table.roles)
-        if _fallback_targets(spec, rname)
+        if spec.table.roles[rname].kind != "decision" and _fallback_targets(spec, rname)
     ]
     router: dict[str, Any] = {
         "routing_strategy": "simple-shuffle",
@@ -1166,7 +1172,10 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
         {
             "key_alias": k.name,
             "key_env": secret_env_name(k.secret),
-            "models": sorted(_allowed(spec, k)),
+            # an empty list reads as ALL models in LiteLLM: a key that reaches only decision
+            # roles (which it cannot route) is given the no-model guard instead
+            "models": sorted(r for r in _allowed(spec, k) if spec.table.roles[r].kind != "decision")
+            or [NO_MODELS],
             "metadata": {
                 "owner": k.owner or k.name,
                 "data_tier": k.data_tier,
@@ -1235,6 +1244,11 @@ def neutral_refusals(spec: Spec) -> list[str]:
                 problems.append(
                     f"{where}: an embedding role on an anthropic deployment (the Messages API "
                     "has no embeddings)"
+                )
+            elif role.kind == "decision" and _protocol(be) == "anthropic":
+                problems.append(
+                    f"{where}: a decision role on an anthropic deployment (the Messages API "
+                    "has no decision endpoint)"
                 )
         lim = role.limits
         if lim.get("max_cost") and lim.get("cost_per_1k_tokens") is None:

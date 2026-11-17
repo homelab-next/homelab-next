@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from homelabnext import tlp
-from homelabnext.conform.adapters.openai_compat import ChatResult
+from homelabnext.conform.adapters.openai_compat import InferenceError
 from homelabnext.context import (
     ContextStore,
     Document,
@@ -31,6 +31,7 @@ from homelabnext.context.judge import (
     Verdict,
     pair_key,
 )
+from homelabnext.context.model import Hit
 from homelabnext.context_semantic import SemanticContextStore, default_tlp_of
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -88,9 +89,16 @@ class _Client:
     def __init__(self, reply):
         self.reply, self.calls = reply, []
 
-    def chat_fields(self, model, messages, fields, *, max_tokens=64):
-        self.calls.append((model, messages, list(fields)))
-        return ChatResult(self.reply, "stop", model)
+    def decide_fields(self, model, questions, fields=(), *, state=None):
+        self.calls.append((model, dict(questions), list(fields), state))
+        if isinstance(self.reply, Exception):
+            raise self.reply
+        if isinstance(self.reply, list):  # one scripted reply per call
+            r = self.reply.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+        return self.reply
 
 
 def test_judge_reranks_and_abstains():
@@ -99,13 +107,13 @@ def test_judge_reranks_and_abstains():
     base = [h.id for h in s.query(q)]
     assert set(base) == {"d:a", "d:b", "d:c"}
     rec = {pair_key("proxy", h.content): (h.id == "d:c", 0.9) for h in s.query(q)}
-    got = JudgedStore(s, RecordedJudge(rec)).query(q)
+    got = JudgedStore(s, RecordedJudge(rec), mode="rerank").query(q)
     assert [h.id for h in got] == ["d:c"]
     assert [h.score for h in got] == sorted((h.score for h in got), reverse=True)
     none = dict.fromkeys(rec, (False, 0.9))
-    assert JudgedStore(s, RecordedJudge(none)).query(q) == []
+    assert JudgedStore(s, RecordedJudge(none), mode="rerank").query(q) == []
     low = dict.fromkeys(rec, (True, 0.2))
-    assert JudgedStore(s, RecordedJudge(low), threshold=0.5).query(q) == []
+    assert JudgedStore(s, RecordedJudge(low), threshold=0.5, mode="rerank").query(q) == []
 
 
 def test_judge_never_invents_a_verdict():
@@ -114,22 +122,176 @@ def test_judge_never_invents_a_verdict():
         RecordedJudge({}).judge("anything", h, tlp.Label.RED)
 
 
-def test_gateway_judge_sends_tlp_and_tag_and_parses():
+def test_gateway_judge_asks_a_noul_question_with_tlp_and_tag():
     h = _store().get("d:a", frozenset({"d:"}))
-    client = _Client('{"answers": "yes", "confidence": 0.8}')
+    client = _Client({"q": 0.8})
     v = GatewayJudge(client, tag="hnx-eval-test").judge("proxy?", h, tlp.Label.AMBER)
     assert v == Verdict(True, 0.8)
-    model, messages, fields = client.calls[0]
+    model, questions, fields, state = client.calls[0]
     assert model == "fast-classifier" and ("X-HNX-TLP", "amber") in fields
     assert ("X-HNX-Tag", "hnx-eval-test") in fields
-    assert "restart the proxy" in messages[1]["content"]
-    for bad in (
-        "nope",
-        '{"answers": "maybe", "confidence": 0.5}',
-        '{"answers": "yes", "confidence": 3}',
-    ):
+    assert questions == {"q": "Does this passage answer the question?"}
+    assert state.startswith("Question: proxy?\nPassage: ") and "restart the proxy" in state
+
+
+def test_gateway_judge_threshold_decides_yes():
+    h = _store().get("d:a", frozenset({"d:"}))
+    assert GatewayJudge(_Client({"q": 0.05}), tag="t").judge("q", h, tlp.Label.CLEAR) == Verdict(
+        False, 0.05
+    )
+    assert GatewayJudge(_Client({"q": 0.12}), tag="t").judge("q", h, tlp.Label.CLEAR).answers
+    assert (
+        GatewayJudge(_Client({"q": 0.4}), tag="t", threshold=0.3)
+        .judge("q", h, tlp.Label.CLEAR)
+        .answers
+    )
+    with pytest.raises(ValueError):
+        GatewayJudge(_Client({}), tag="t", threshold=1.5)
+
+
+def test_gateway_judge_failures_are_judge_errors_and_the_store_falls_back():
+    h = _store().get("d:a", frozenset({"d:"}))
+    for bad in ({}, RuntimeError("down")):
         with pytest.raises(JudgeError):
             GatewayJudge(_Client(bad), tag="t").judge("q", h, tlp.Label.CLEAR)
+    s = _store()
+    q = _q({"d:"}, text="proxy", budget=5)
+    base = [h.id for h in s.query(q)]
+    broken = JudgedStore(s, GatewayJudge(_Client(RuntimeError("down")), tag="t"))
+    assert [h.id for h in broken.query(q)] == base
+    assert (
+        JudgedStore(
+            s, GatewayJudge(_Client(RuntimeError("down")), tag="t"), on_error="abstain"
+        ).query(q)
+        == []
+    )
+
+
+def _long_hit(n=5000):
+    h = _store().get("d:a", frozenset({"d:"}))
+    return Hit(h.id, h.kind, h.title, h.path, h.score, h.snippet, "x" * n, h.digest)
+
+
+def test_gateway_judge_truncates_the_passage_by_chars_or_by_a_token_estimate():
+    c = _Client({"q": 0.5})
+    GatewayJudge(c, tag="t").judge("q", _long_hit(), tlp.Label.CLEAR)
+    assert len(c.calls[0][3]) == len("Question: q\nPassage: ") + 1400
+    c = _Client({"q": 0.5})
+    GatewayJudge(c, tag="t", count_tokens=lambda t: len(t) // 4, max_tokens=100).judge(
+        "q", _long_hit(), tlp.Label.CLEAR
+    )
+    assert len(c.calls[0][3]) - len("Question: q\nPassage: ") <= 400
+
+
+@pytest.mark.parametrize("status", [500, 502])
+def test_gateway_judge_shrinks_and_retries_once_on_http_500_or_502(status):
+    err = InferenceError(f"HTTP {status}", status, "batch", "/v1/systemone")
+    c = _Client([err, {"q": 0.5}])
+    assert GatewayJudge(c, tag="t").judge("q", _long_hit(), tlp.Label.CLEAR).answers
+    first, second = (len(call[3]) for call in c.calls)
+    assert second < first and second - len("Question: q\nPassage: ") == int(1400 * 0.6)
+    twice = _Client([err, err, {"q": 0.5}])
+    with pytest.raises(JudgeError):
+        GatewayJudge(twice, tag="t").judge("q", _long_hit(), tlp.Label.CLEAR)
+    assert len(twice.calls) == 2
+    other = _Client([InferenceError("HTTP 403", 403, "no", "/v1/systemone")])
+    with pytest.raises(JudgeError):
+        GatewayJudge(other, tag="t").judge("q", _long_hit(), tlp.Label.CLEAR)
+    assert len(other.calls) == 1
+
+
+class _Scripted:
+    """A judge with a probability per document id; records the calls and the peak concurrency."""
+
+    def __init__(self, probs, delay=0.0):
+        import threading
+
+        self.probs, self.delay, self.calls = probs, delay, []
+        self._lock, self._live, self.peak = threading.Lock(), 0, 0
+
+    def judge(self, question, hit, label):
+        import time
+
+        with self._lock:
+            self.calls.append(hit.id)
+            self._live += 1
+            self.peak = max(self.peak, self._live)
+        time.sleep(self.delay)
+        with self._lock:
+            self._live -= 1
+        p = self.probs[hit.id]
+        return Verdict(p >= 0.1, p)
+
+
+def test_the_gate_keeps_the_stores_ranking_and_abstains_below_the_threshold():
+    s = _store()
+    q = _q({"d:"}, text="proxy", budget=5)
+    base = s.query(q)
+    ids = [h.id for h in base]
+    # the judge likes the last hit best: the gate does not reorder
+    probs = dict(zip(ids, [0.2, 0.3, 0.9], strict=False))
+    got = JudgedStore(s, _Scripted(probs)).query(q)
+    assert got == base
+    low = dict.fromkeys(ids, 0.05)
+    assert JudgedStore(s, _Scripted(low)).query(q) == []
+    assert JudgedStore(s, _Scripted(probs), threshold=0.95).query(q) == []
+
+
+def test_a_sibling_failure_after_a_passage_cleared_cannot_flip_the_gate():
+    import threading
+    import time
+
+    s = _store()
+    q = _q({"d:"}, text="proxy", budget=5)
+    base = s.query(q)
+    ids = [h.id for h in base]
+    cleared = threading.Event()
+
+    class _Race:
+        def judge(self, question, hit, label):
+            if hit.id == ids[0]:
+                cleared.set()
+                return Verdict(True, 0.9)
+            cleared.wait(5)
+            time.sleep(0.3)  # the clear has been seen and the gate stopped
+            raise JudgeError("the slow sibling failed")
+
+    for on_error in ("abstain", "fallback"):
+        got = JudgedStore(s, _Race(), workers=2, top_k=2, on_error=on_error).query(q)
+        assert got == base
+
+    # with no passage cleared the same failure still follows the policy
+    class _Fail:
+        def judge(self, question, hit, label):
+            raise JudgeError("down")
+
+    assert JudgedStore(s, _Fail(), on_error="abstain").query(q) == []
+
+
+def test_rerank_is_opt_in_and_orders_by_confidence():
+    s = _store()
+    q = _q({"d:"}, text="proxy", budget=5)
+    ids = [h.id for h in s.query(q)]
+    probs = dict(zip(ids, [0.2, 0.3, 0.9], strict=False))
+    got = JudgedStore(s, _Scripted(probs), mode="rerank").query(q)
+    assert [h.id for h in got] == [ids[2], ids[1], ids[0]]
+    with pytest.raises(ValueError):
+        JudgedStore(s, _Scripted(probs), mode="best")
+
+
+def test_the_gate_stops_at_the_first_passage_that_clears_and_bounds_concurrency():
+    s = _store()
+    q = _q({"d:"}, text="proxy", budget=5)
+    ids = [h.id for h in s.query(q)]
+    first = _Scripted(dict.fromkeys(ids, 0.9))
+    JudgedStore(s, first, workers=1, top_k=3).query(q)
+    assert len(first.calls) == 1  # one worker: the first clears, the rest never start
+    slow = _Scripted(dict.fromkeys(ids, 0.01), delay=0.05)
+    assert JudgedStore(s, slow, workers=2, top_k=3).query(q) == []
+    assert sorted(slow.calls) == sorted(ids) and slow.peak == 2
+    one = _Scripted(dict.fromkeys(ids, 0.01), delay=0.02)
+    JudgedStore(s, one, workers=1, top_k=3).query(q)
+    assert one.peak == 1
 
 
 # -- the eval harness --------------------------------------------------------------------------
