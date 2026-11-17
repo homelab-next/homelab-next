@@ -156,8 +156,8 @@ argument_specs:
         default: events
       nifi_events_url: &id035
         type: str
-        description: 'scheme://host:port of the events forwarder, overriding the registry (empty: resolve
-          it).'
+        description: 'scheme://host:port of the events HTTP forwarder. Empty (the default): events are
+          off and readiness does not wait for the bus. Non-empty: events are on and readiness waits for it.'
         default: ''
       nifi_warehouse: &id036
         type: str
