@@ -34,5 +34,5 @@ trino_mem_limit_gb: "{{ (trino_mem_limit[:-1] | int) / (1 if trino_mem_limit.end
 trino_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
 # the timer runs only when maintenance is on AND the operator has acknowledged the lake's state
 trino_maintenance_armed: "{{ (trino_maintenance_enabled | bool) and (trino_maintenance_acknowledged_restore | bool) }}"
-trino_glob_pattern: '^[A-Za-z0-9_*?]{1,128}(\.[A-Za-z0-9_*?]{1,128})?\Z'
+trino_glob_pattern: '^[a-z0-9_*?]{1,128}(\.[a-z0-9_*?]{1,128})?\Z'
 trino_override_keys: [expire, retain_last, orphan_retention, orphan]

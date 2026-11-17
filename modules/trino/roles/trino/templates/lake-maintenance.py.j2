@@ -35,9 +35,15 @@ Guards (RCA of the 2026-11-17 first run on a restored lake):
     copied) is logged "skipped: unreadable history", NOT touched, and the run is DEGRADED (alert, exit 3).
   * remove_orphan_files never runs on a table whose expire_snapshots did not succeed in this run: that
     expiry may still be committing, and orphan removal concurrent with a commit can delete a live file.
+  * the preflight reads each snapshot's manifest LIST ($all_manifests), not every manifest file: a missing
+    manifest file still reaches expire_snapshots, which then fails or hangs and is cancelled, and orphan
+    removal is skipped behind it (fails closed).
   * a query that outlives its deadline, or the run being stopped (SIGTERM), is CANCELLED on the engine
     (DELETE of its nextUri, then system.runtime.kill_query), never merely abandoned: an abandoned query
-    keeps running server-side and blocks the next table's statement.
+    keeps running server-side and blocks the next table's statement. After the cancel the script POLLS
+    system.runtime.queries (bounded by ``cancel_wait``) until the query is no longer running; if it still is,
+    the whole run STOPS (no further table is touched), is marked degraded and alerts. Whether a cancel also
+    stops Iceberg's post-commit file cleanup is not proven here: the first armed run must be attended.
 
 Why both, and why retain_last is always spelled out. expire_snapshots drops snapshot METADATA and the
 files only those snapshots used; it never removes a file no snapshot references (LL-052), so orphans
@@ -73,6 +79,7 @@ CONFIG = {{ trino_maintenance_config | to_json }}
 STATE = os.path.join(CONFIG["state_dir"], "state.json")
 NAME = re.compile(r"[A-Za-z0-9_]{1,128}\Z")
 _SECRETS = []
+STILL_RUNNING = []  # queries a SIGTERM cancel could not confirm gone
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -114,9 +121,26 @@ def _headers():
             "X-Trino-Source": "hnx-lake-maintenance"}
 
 
+_LIVE = ("QUEUED", "WAITING_FOR_RESOURCES", "DISPATCHING", "PLANNING", "STARTING", "RUNNING", "FINISHING")
+
+
+class StillRunning(Exception):
+    """A cancelled query is still live on the engine after the bounded wait: the run must stop."""
+
+
+def _gone(opener, query_id):
+    """True when the engine no longer lists the query as live (absent or in a terminal state)."""
+    rows = run_sql(opener, f"SELECT state FROM system.runtime.queries WHERE query_id = '{query_id}'", 30,
+                   cancel=False)
+    return not rows or str(rows[0][0]) not in _LIVE
+
+
 def cancel_query(opener, headers, query_id, next_uri):
-    """Best effort, never raises: stop the query ON THE ENGINE. First DELETE of its nextUri (the
-    protocol's cancel), then system.runtime.kill_query by id (in case the DELETE was not honoured)."""
+    """Stop the query ON THE ENGINE and confirm it. First DELETE of its nextUri (the protocol's cancel),
+    then system.runtime.kill_query by id (in case the DELETE was not honoured), then poll
+    system.runtime.queries until the query is not live (bounded by CONFIG cancel_wait). Never raises
+    (except Terminated); returns True when the query is confirmed gone, False when it is still live or
+    its state could not be read."""
     if next_uri:
         try:
             with opener.open(urllib.request.Request(next_uri, headers=headers, method="DELETE"),
@@ -124,12 +148,23 @@ def cancel_query(opener, headers, query_id, next_uri):
                 resp.read()
         except Exception:  # the engine may already have ended it
             pass
-    if query_id and NAME.match(query_id.replace("-", "_")):
+    if not (query_id and NAME.match(query_id)):
+        return False  # cannot name it, cannot confirm it
+    try:
+        run_sql(opener, f"CALL system.runtime.kill_query(query_id => '{query_id}', "
+                        "message => 'cancelled by hnx-lake-maintenance')", 30, cancel=False)
+    except EngineError:
+        pass
+    limit = time.monotonic() + float(CONFIG.get("cancel_wait", 45))
+    while True:
         try:
-            run_sql(opener, f"CALL system.runtime.kill_query(query_id => '{query_id}', "
-                            "message => 'cancelled by hnx-lake-maintenance')", 30, cancel=False)
-        except (EngineError, Terminated):
+            if _gone(opener, query_id):
+                return True
+        except EngineError:
             pass
+        if time.monotonic() >= limit:
+            return False
+        time.sleep(float(CONFIG.get("cancel_poll", 2)))
 
 
 def run_sql(opener, sql, timeout, cancel=True):
@@ -163,9 +198,13 @@ def run_sql(opener, sql, timeout, cancel=True):
                 raise EngineError(f"no result within {timeout} s (query cancelled)")
             time.sleep(0.2)
             req = urllib.request.Request(nxt, headers=headers, method="GET")
-    except (EngineError, Terminated, OSError, ValueError):
-        if cancel and nxt:
-            cancel_query(opener, headers, query_id, nxt)
+    except (EngineError, Terminated, OSError, ValueError) as exc:
+        if cancel and nxt and not cancel_query(opener, headers, query_id, nxt):
+            if isinstance(exc, Terminated):
+                STILL_RUNNING.append(query_id or "unknown")
+                raise
+            raise StillRunning(f"query {query_id or 'unknown'} still running on the engine "
+                               f"{CONFIG.get('cancel_wait', 45)} s after cancel") from None
         raise
 
 
@@ -300,6 +339,18 @@ def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _stopped(state, failed, skipped, unfinished, total, code, what):
+    """End the run early (SIGTERM, or a cancelled query still live): record, alert once, exit."""
+    failed["run:terminated" if code == 143 else "run:aborted"] = (
+        what + ("; unfinished: " + ", ".join(unfinished) if unfinished else ""))[:300]
+    print(what + "; unfinished: " + ", ".join(unfinished), file=sys.stderr)
+    state.update({"time": _now(), "tables": total, "failed": failed, "skipped": skipped, "degraded": True,
+                  "terminated": code == 143, "unfinished": unfinished})
+    state["alerted"] = report(failed, total, state)
+    save_state(state)
+    return code
+
+
 def main(argv):
     if "--test-notify" in argv:
         text = f"lake maintenance channel test from {os.uname().nodename}"
@@ -318,9 +369,13 @@ def main(argv):
         state["alerted"] = report(failed, 0, state)
         save_state(state)
         return 2
+    except StillRunning as exc:
+        return _stopped(state, failed, skipped, [], 0, 1, f"the table listing was cancelled and {exc}")
     except Terminated:
-        return 143
-    todo = []
+        what = "terminated while listing the tables"
+        if STILL_RUNNING:
+            what += "; query still running after cancel: " + ", ".join(STILL_RUNNING)
+        return _stopped(state, failed, skipped, [], 0, 143, what)
     for schema, table in found:
         if not (NAME.match(schema) and NAME.match(table)):
             failed[f"{schema}.{table}"] = "name not safe to put in a statement; skipped"
@@ -363,15 +418,15 @@ def main(argv):
                     if step == "expire_snapshots":
                         expired = False
             done.append(name)
+    except StillRunning as exc:
+        unfinished = [f"{s}.{t}" for s, t in todo if f"{s}.{t}" not in done]
+        return _stopped(state, failed, skipped, unfinished, len(found), 1, f"run stopped: {exc}")
     except Terminated:
         unfinished = [f"{s}.{t}" for s, t in todo if f"{s}.{t}" not in done]
-        failed["run:terminated"] = "stopped before finishing: " + ", ".join(unfinished)[:200]
-        print("terminated; unfinished: " + ", ".join(unfinished), file=sys.stderr)
-        state.update({"time": _now(), "tables": len(found), "failed": failed, "skipped": skipped,
-                      "degraded": True, "terminated": True, "unfinished": unfinished})
-        state["alerted"] = report(failed, len(found), state)
-        save_state(state)
-        return 143
+        what = "stopped (SIGTERM) before finishing"
+        if STILL_RUNNING:
+            what += "; query still running after cancel: " + ", ".join(STILL_RUNNING)
+        return _stopped(state, failed, skipped, unfinished, len(found), 143, what)
     if dry:
         return 0
     degraded = any(k.endswith(":preflight") for k in failed)

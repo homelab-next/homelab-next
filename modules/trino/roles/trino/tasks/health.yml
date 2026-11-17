@@ -105,13 +105,9 @@
           (last finished {{ trino_ended or 'never' }}): its timer is not running, or its unit cannot
           write the record (ReadWritePaths); snapshots and orphan files are not being cleaned
       when: trino_maintenance_armed | bool
-    - name: The timer is not armed (not acknowledged) and so must not be running
-      ansible.builtin.command:
-        argv: ["{{ trino_systemctl_cli }}", is-active, hnx-lake-maintenance.timer]
-      register: trino_unarmed_active
-      changed_when: false
-      failed_when: trino_unarmed_active.stdout | default('') | trim == 'active'
-      when: trino_maintenance_enabled | bool and not (trino_maintenance_armed | bool)
+    - name: An unarmed timer (not acknowledged, or maintenance off) is neither running nor enabled
+      ansible.builtin.include_tasks: unarmed_check.yml
+      when: not (trino_maintenance_armed | bool)
     - name: Read the last maintenance run's state
       ansible.builtin.slurp:
         src: "{{ trino_maintenance_state_dir }}/state.json"

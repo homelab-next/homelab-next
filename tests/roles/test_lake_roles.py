@@ -404,11 +404,16 @@ def trino_vars(tmp: Path, **kw) -> dict:
         "import os, sys\n"
         f"flag = {str(flag)!r}\n"
         f"open({str(tmp / 'systemctl.log')!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
-        "if sys.argv[1:2] == ['enable']:\n    open(flag, 'w').close()\n"
-        "if sys.argv[1:2] == ['disable'] and os.path.exists(flag):\n    os.remove(flag)\n"
-        "if sys.argv[1:2] in (['is-enabled'], ['is-active']):\n"
-        "    ok = os.path.exists(flag)\n    print('enabled' if sys.argv[1] == 'is-enabled' and ok else 'active' if ok else 'inactive')\n"
-        "    sys.exit(0 if ok else 3)\n",
+        f"active = {str(tmp / 'timer-active')!r}\n"
+        "def touch(f):\n    open(f, 'w').close()\n"
+        "def rm(f):\n    os.path.exists(f) and os.remove(f)\n"
+        "if sys.argv[1:2] == ['enable']:\n    touch(flag)\n    '--now' in sys.argv and touch(active)\n"
+        "if sys.argv[1:2] == ['disable']:\n    rm(flag)\n    '--now' in sys.argv and rm(active)\n"
+        "if sys.argv[1:3] == ['stop', 'hnx-lake-maintenance.timer']:\n    rm(active)\n"
+        "if sys.argv[1:2] == ['is-enabled']:\n"
+        "    ok = os.path.exists(flag)\n    print('enabled' if ok else 'disabled')\n    sys.exit(0 if ok else 1)\n"
+        "if sys.argv[1:2] == ['is-active']:\n"
+        "    ok = os.path.exists(active)\n    print('active' if ok else 'inactive')\n    sys.exit(0 if ok else 3)\n",
     )
     v = {
         "trino_logical_id": "lake-query",
@@ -487,7 +492,7 @@ def test_trino_main_installs_the_maintenance_timer_with_the_lake_retention_value
     r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
     assert r.returncode == 0, r.stdout + r.stderr
     timer = (tmp_path / "units" / "hnx-lake-maintenance.timer").read_text()
-    assert "OnCalendar=*-*-* 03:30:00 UTC" in timer and "Persistent=true" in timer
+    assert "OnCalendar=*-*-* 03:30:00 UTC" in timer and "Persistent=false" in timer
     assert "OnBootSec" not in timer and "OnUnitActiveSec" not in timer  # LL-041
     service = (tmp_path / "units" / "hnx-lake-maintenance.service").read_text()
     assert "ExecStart=/usr/local/libexec/homelabnext/hnx-lake-maintenance" in service
@@ -663,12 +668,14 @@ class _Engine(http.server.ThreadingHTTPServer):
     """A stand-in for the engine's statement protocol: tables listed, each statement logged, and
     the statements named in ``fail`` answered with a query error."""
 
-    def __init__(self, tables, fail=(), list_fails=False, hang=()):
+    def __init__(self, tables, fail=(), list_fails=False, hang=(), stuck=False):
         super().__init__(("localhost", 0), _EngineHandler)
         self.tables, self.fail, self.list_fails = tables, set(fail), list_fails
         self.hang = set(hang)  # statements containing one of these never finish (nextUri forever)
         self.statements: list[str] = []
         self.deletes: list[str] = []
+        self.stuck = stuck  # a cancel and kill_query do not stop the hung query
+        self.killed: set[str] = set()
         self.users: list[str] = []
 
 
@@ -691,6 +698,8 @@ class _EngineHandler(http.server.BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         self.server.deletes.append(self.path)
+        if not self.server.stuck:
+            self.server.killed.add(self.path.split("/")[3])
         self.send_response(204)
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -701,7 +710,13 @@ class _EngineHandler(http.server.BaseHTTPRequestHandler):
         self.server.users.append(self.headers.get("X-Trino-User", ""))
         body: dict
         if "kill_query" in sql:
+            if not self.server.stuck:
+                self.server.killed.add(sql.split("query_id => '")[1].split("'")[0])
             body = {"id": "kill", "columns": [], "data": []}
+        elif "system.runtime.queries" in sql:
+            qid = sql.split("query_id = '")[1].split("'")[0]
+            state = "FAILED" if qid in self.server.killed else "RUNNING"
+            body = {"id": "poll", "columns": [{"name": "state"}], "data": [[state]]}
         elif any(h in sql for h in self.server.hang):
             body = {
                 "id": "q_hung_1",
@@ -894,7 +909,11 @@ def _with(engine, notify, fn):
 def test_maintenance_cancels_the_query_on_the_engine_at_the_deadline(maintenance):
     engine = _serve(_Engine([("cti", "nrd")], hang=["expire_snapshots"]))
     notify = _serve(_Notify())
-    r = _with(engine, notify, lambda: maintenance(engine, notify, cfg={"expire_timeout": 1}))
+    r = _with(
+        engine,
+        notify,
+        lambda: maintenance(engine, notify, cfg={"expire_timeout": 1, "cancel_poll": 0.1}),
+    )
     assert r.returncode == 1, r.stdout + r.stderr
     # the engine was told to stop the query (the protocol's DELETE), then asked to kill it by id
     assert engine.deletes == ["/v1/statement/q_hung_1/1"]
@@ -1020,6 +1039,11 @@ def test_the_rendered_config_carries_the_allow_skip_and_override_lists(tmp_path)
         {"trino_maintenance_schemas": []},
         {"trino_maintenance_schemas": ["cti; DROP"]},
         {"trino_maintenance_skip": ["a.b.c"]},
+        {"trino_maintenance_skip": ["RBA"]},  # upper case would silently match nothing
+        {"trino_maintenance_schemas": ["CTI"]},
+        {"trino_maintenance_overrides": {"CTI": {"expire": "30d"}}},
+        {"trino_cancel_confirm_timeout": 1},
+        {"trino_maintenance_catch_up": "sometimes"},
         {"trino_maintenance_skip": ["bad name"]},
         {"trino_maintenance_overrides": {"cti": {"expire": "2d"}}},  # under the engine's floor
         {"trino_maintenance_overrides": {"cti": {"orphan_retention": "1d"}}},
@@ -1103,3 +1127,106 @@ def test_trino_with_maintenance_disabled_stops_and_disables_an_installed_timer(t
         if (fresh / "systemctl.log").exists()
         else True
     )
+
+
+# ----------------------------------------------------------------------------- review follow-ups (PR 466)
+
+FAST_CANCEL = {"cancel_wait": 1, "cancel_poll": 0.1}
+
+
+def test_a_cancelled_query_is_confirmed_gone_in_the_engines_query_list_before_the_run_goes_on(
+    maintenance,
+):
+    engine = _serve(_Engine([("cti", "a"), ("cti", "b")], hang=['"a" EXECUTE expire_snapshots']))
+    notify = _serve(_Notify())
+    cfg = {"expire_timeout": 1, **FAST_CANCEL}
+    r = _with(engine, notify, lambda: maintenance(engine, notify, cfg=cfg))
+    assert r.returncode == 1, r.stdout + r.stderr  # a's expire failed; the run went on to b
+    polls = [x for x in engine.statements if "system.runtime.queries" in x]
+    assert polls and "query_id = 'q_hung_1'" in polls[0]
+    assert any('"b" EXECUTE expire_snapshots' in x for x in engine.statements)
+    assert "run:aborted" not in json.loads(maintenance.state.read_text())["failed"]
+
+
+def test_a_cancelled_query_still_running_stops_the_whole_run_degraded_with_one_alert(maintenance):
+    engine = _serve(
+        _Engine([("cti", "a"), ("cti", "b"), ("cti", "c")], hang=['"a" EXECUTE expire_snapshots'], stuck=True)
+    )  # fmt: skip
+    notify = _serve(_Notify())
+    cfg = {"expire_timeout": 1, **FAST_CANCEL}
+    r = _with(engine, notify, lambda: maintenance(engine, notify, cfg=cfg))
+    assert r.returncode == 1, r.stdout + r.stderr
+    # no table after the stuck one is touched: no preflight, no procedure for b or c
+    assert not any('"b"' in x or '"c"' in x for x in engine.statements)
+    assert not any("remove_orphan_files" in x for x in engine.statements)
+    state = json.loads(maintenance.state.read_text())
+    assert state["degraded"] is True
+    assert "still running" in state["failed"]["run:aborted"]
+    assert "cti.b" in state["failed"]["run:aborted"] and "cti.c" in state["failed"]["run:aborted"]
+    assert len(notify.messages) == 1 and "run:aborted" in notify.messages[0]["body"]
+
+
+def test_sigterm_while_listing_the_tables_writes_state_and_alerts(maintenance):
+    engine = _serve(_Engine([("cti", "a")], hang=["information_schema.tables"]))
+    notify = _serve(_Notify())
+    proc = maintenance.start(engine, notify, cfg=FAST_CANCEL)
+    try:
+        for _ in range(100):
+            if any("information_schema.tables" in x for x in engine.statements):
+                break
+            time.sleep(0.1)
+        else:
+            pytest.fail("the listing never reached the engine")
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=30)
+    finally:
+        proc.kill()
+        engine.shutdown(), notify.shutdown()
+    assert proc.returncode == 143, out + err
+    state = json.loads(maintenance.state.read_text())
+    assert state["terminated"] is True and "listing" in state["failed"]["run:terminated"]
+    assert len(notify.messages) == 1
+    assert engine.deletes  # the listing query was cancelled too
+
+
+def test_trino_timer_does_not_catch_up_a_missed_run_unless_asked(tmp_path):
+    assert (
+        run_role(tmp_path, TRINO, "main", trino_vars(tmp_path), env=TRINO_SECRETS).returncode == 0
+    )
+    unit = tmp_path / "units" / "hnx-lake-maintenance.timer"
+    assert "Persistent=false" in unit.read_text()  # arming never starts a run by itself
+    on = trino_vars(tmp_path, trino_maintenance_catch_up=True)
+    assert run_role(tmp_path, TRINO, "main", on, env=TRINO_SECRETS).returncode == 0
+    assert "Persistent=true" in unit.read_text()
+
+
+def _health_gate(tmp_path, enabled_flag, active_flag, **over):
+    if enabled_flag:
+        (tmp_path / "timer-enabled").touch()
+    if active_flag:
+        (tmp_path / "timer-active").touch()
+    v = trino_vars(tmp_path, **over)
+    return run_role(tmp_path, TRINO, "unarmed_check", v, env=TRINO_SECRETS)
+
+
+@pytest.mark.parametrize(
+    "enabled, active, over, ok",
+    [
+        (False, False, {"trino_maintenance_acknowledged_restore": False}, True),
+        (True, False, {"trino_maintenance_acknowledged_restore": False}, False),  # re-arms at boot
+        (False, True, {"trino_maintenance_acknowledged_restore": False}, False),
+        (True, True, {"trino_maintenance_enabled": False}, False),
+        (True, False, {"trino_maintenance_enabled": False}, False),  # enabled=false too
+        (False, False, {"trino_maintenance_enabled": False}, True),
+    ],
+)
+def test_health_fails_an_unarmed_timer_that_is_enabled_or_running(
+    tmp_path, enabled, active, over, ok
+):
+    r = _health_gate(tmp_path, enabled, active, **over)
+    assert (r.returncode == 0) is ok, r.stdout + r.stderr
+
+
+def test_health_never_asks_about_an_unarmed_timer_when_it_is_armed(tmp_path):
+    src = (Path(TRINO) / "tasks" / "health.yml").read_text()
+    assert "unarmed_check.yml" in src and "not (trino_maintenance_armed | bool)" in src

@@ -178,16 +178,24 @@ argument_specs:
         type: int
         description: Seconds each read-only history preflight query ($snapshots, $all_manifests) may take per table.
         default: 300
+      trino_cancel_confirm_timeout:
+        type: int
+        description: Seconds to wait, after cancelling a query, for system.runtime.queries to show it no longer live (5..60); still live means the run stops.
+        default: 45
+      trino_maintenance_catch_up:
+        type: bool
+        description: Timer Persistent=; true fires a missed run the moment the timer is started (arming). Default false.
+        default: false
       trino_maintenance_acknowledged_restore:
         type: bool
         description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
-          restored or migrated one, or lake_verify --all-history passed). The timer is armed only when
+          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
           trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
         default: false
       trino_maintenance_schemas:
         type: list
         elements: str
-        description: Allow list of schema or schema.table globs ([A-Za-z0-9_*?]) the maintenance touches.
+        description: Allow list of schema or schema.table globs (lower case only, [a-z0-9_*?]) the maintenance touches.
         default: ['*']
       trino_maintenance_skip:
         type: list
@@ -510,16 +518,24 @@ argument_specs:
         type: int
         description: Seconds each read-only history preflight query ($snapshots, $all_manifests) may take per table.
         default: 300
+      trino_cancel_confirm_timeout:
+        type: int
+        description: Seconds to wait, after cancelling a query, for system.runtime.queries to show it no longer live (5..60); still live means the run stops.
+        default: 45
+      trino_maintenance_catch_up:
+        type: bool
+        description: Timer Persistent=; true fires a missed run the moment the timer is started (arming). Default false.
+        default: false
       trino_maintenance_acknowledged_restore:
         type: bool
         description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
-          restored or migrated one, or lake_verify --all-history passed). The timer is armed only when
+          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
           trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
         default: false
       trino_maintenance_schemas:
         type: list
         elements: str
-        description: Allow list of schema or schema.table globs ([A-Za-z0-9_*?]) the maintenance touches.
+        description: Allow list of schema or schema.table globs (lower case only, [a-z0-9_*?]) the maintenance touches.
         default: ['*']
       trino_maintenance_skip:
         type: list
@@ -768,16 +784,24 @@ argument_specs:
         type: int
         description: Seconds each read-only history preflight query ($snapshots, $all_manifests) may take per table.
         default: 300
+      trino_cancel_confirm_timeout:
+        type: int
+        description: Seconds to wait, after cancelling a query, for system.runtime.queries to show it no longer live (5..60); still live means the run stops.
+        default: 45
+      trino_maintenance_catch_up:
+        type: bool
+        description: Timer Persistent=; true fires a missed run the moment the timer is started (arming). Default false.
+        default: false
       trino_maintenance_acknowledged_restore:
         type: bool
         description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
-          restored or migrated one, or lake_verify --all-history passed). The timer is armed only when
+          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
           trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
         default: false
       trino_maintenance_schemas:
         type: list
         elements: str
-        description: Allow list of schema or schema.table globs ([A-Za-z0-9_*?]) the maintenance touches.
+        description: Allow list of schema or schema.table globs (lower case only, [a-z0-9_*?]) the maintenance touches.
         default: ['*']
       trino_maintenance_skip:
         type: list
@@ -1026,16 +1050,24 @@ argument_specs:
         type: int
         description: Seconds each read-only history preflight query ($snapshots, $all_manifests) may take per table.
         default: 300
+      trino_cancel_confirm_timeout:
+        type: int
+        description: Seconds to wait, after cancelling a query, for system.runtime.queries to show it no longer live (5..60); still live means the run stops.
+        default: 45
+      trino_maintenance_catch_up:
+        type: bool
+        description: Timer Persistent=; true fires a missed run the moment the timer is started (arming). Default false.
+        default: false
       trino_maintenance_acknowledged_restore:
         type: bool
         description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
-          restored or migrated one, or lake_verify --all-history passed). The timer is armed only when
+          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
           trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
         default: false
       trino_maintenance_schemas:
         type: list
         elements: str
-        description: Allow list of schema or schema.table globs ([A-Za-z0-9_*?]) the maintenance touches.
+        description: Allow list of schema or schema.table globs (lower case only, [a-z0-9_*?]) the maintenance touches.
         default: ['*']
       trino_maintenance_skip:
         type: list
@@ -1284,16 +1316,24 @@ argument_specs:
         type: int
         description: Seconds each read-only history preflight query ($snapshots, $all_manifests) may take per table.
         default: 300
+      trino_cancel_confirm_timeout:
+        type: int
+        description: Seconds to wait, after cancelling a query, for system.runtime.queries to show it no longer live (5..60); still live means the run stops.
+        default: 45
+      trino_maintenance_catch_up:
+        type: bool
+        description: Timer Persistent=; true fires a missed run the moment the timer is started (arming). Default false.
+        default: false
       trino_maintenance_acknowledged_restore:
         type: bool
         description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
-          restored or migrated one, or lake_verify --all-history passed). The timer is armed only when
+          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
           trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
         default: false
       trino_maintenance_schemas:
         type: list
         elements: str
-        description: Allow list of schema or schema.table globs ([A-Za-z0-9_*?]) the maintenance touches.
+        description: Allow list of schema or schema.table globs (lower case only, [a-z0-9_*?]) the maintenance touches.
         default: ['*']
       trino_maintenance_skip:
         type: list
@@ -1546,16 +1586,24 @@ argument_specs:
         type: int
         description: Seconds each read-only history preflight query ($snapshots, $all_manifests) may take per table.
         default: 300
+      trino_cancel_confirm_timeout:
+        type: int
+        description: Seconds to wait, after cancelling a query, for system.runtime.queries to show it no longer live (5..60); still live means the run stops.
+        default: 45
+      trino_maintenance_catch_up:
+        type: bool
+        description: Timer Persistent=; true fires a missed run the moment the timer is started (arming). Default false.
+        default: false
       trino_maintenance_acknowledged_restore:
         type: bool
         description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
-          restored or migrated one, or lake_verify --all-history passed). The timer is armed only when
+          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
           trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
         default: false
       trino_maintenance_schemas:
         type: list
         elements: str
-        description: Allow list of schema or schema.table globs ([A-Za-z0-9_*?]) the maintenance touches.
+        description: Allow list of schema or schema.table globs (lower case only, [a-z0-9_*?]) the maintenance touches.
         default: ['*']
       trino_maintenance_skip:
         type: list

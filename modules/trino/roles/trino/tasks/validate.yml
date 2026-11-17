@@ -53,12 +53,14 @@
       - trino_orphan_timeout | int >= 10 and trino_orphan_timeout | int <= 86400
       - trino_maintenance_user is match(trino_user_pattern)
       - trino_preflight_timeout | int >= 10 and trino_preflight_timeout | int <= 86400
+      - trino_cancel_confirm_timeout | int >= 5 and trino_cancel_confirm_timeout | int <= 60
+      - trino_maintenance_catch_up is boolean
       - trino_maintenance_acknowledged_restore is boolean
       - trino_maintenance_schemas is sequence and trino_maintenance_schemas | length >= 1
       - trino_maintenance_skip is sequence
       - (trino_maintenance_schemas + trino_maintenance_skip) | reject('match', trino_glob_pattern) | list | length == 0
       - trino_maintenance_overrides is mapping
-      - trino_maintenance_overrides.keys() | list | reject('match', '^[A-Za-z0-9_]{1,128}\\Z') | list | length == 0
+      - trino_maintenance_overrides.keys() | list | reject('match', '^[a-z0-9_]{1,128}\\Z') | list | length == 0
       - >-
         trino_maintenance_overrides.values() | list | select('mapping') | list | length
         == trino_maintenance_overrides | length

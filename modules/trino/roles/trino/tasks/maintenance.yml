@@ -17,6 +17,7 @@
       orphan: "{{ trino_orphan_retention }}"
       expire_timeout: "{{ trino_expire_timeout | int }}"
       orphan_timeout: "{{ trino_orphan_timeout | int }}"
+      cancel_wait: "{{ trino_cancel_confirm_timeout | int }}"
       preflight_timeout: "{{ trino_preflight_timeout | int }}"
       allow: "{{ trino_maintenance_schemas }}"
       skip: "{{ trino_maintenance_skip }}"

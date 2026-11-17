@@ -7,7 +7,7 @@
 #   owner: maintainers
 #   trigger: [manual]
 #   inputs: a reference TSV (one row per table - the schema, table, snapshot id and row count the source answered); the query engine's URL, a sign-in and its CA
-#   outputs: one line per table (ok, MISMATCH, ERROR, HISTORY) and a summary, or the same as JSON
+#   outputs: one line per table (ok, MISMATCH, ERROR, HISTORY), with --all-catalog-tables a separate section for catalog tables the reference does not list, and a summary, or the same as JSON
 #   exit:
 #     "0": every table's count at its snapshot equals the reference, every table's whole snapshot history is readable (and the table count is the expected one)
 #     "1": a count differs, a snapshot cannot be read, a table's history ($all_manifests) is unreadable, a reference table is missing, or the table count is not the expected one
@@ -40,6 +40,13 @@ the ``$snapshots`` metadata table) and notes a disagreement with the reference: 
 metadata are independent readings of the same snapshot (LL-014: verify with the table's own
 metadata where a convenient reader can disagree). The summary counts data records and ignores
 delete files, so it is a note, not a failure.
+
+**All-catalog mode (``--all-catalog-tables``).** The checks above cover only the tables the reference
+TSV lists. With this flag the tool also lists the catalog's own base tables (``information_schema.tables``,
+without the engine's system schemas) and runs the history check on every one the reference does not
+list (for example registrations of tables that were dropped on purpose and never copied). They are
+reported in their own section, ``catalog tables not in the reference``; one whose history is unreadable
+(or the listing itself failing) makes the run fail, a readable one is only counted.
 
 **All-history check (on by default, ``--no-all-history`` to skip).** The count above reads only the
 current snapshot, so a copy that holds the current snapshot but whose catalog still lists thousands of
@@ -210,7 +217,54 @@ def verify(
     return results
 
 
-def render(results: Sequence[Result], expect_tables: int | None) -> tuple[str, bool]:
+def listing_sql(catalog: str) -> str:
+    return (
+        f"SELECT table_schema, table_name FROM {catalog}.information_schema.tables "
+        "WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('information_schema', 'system') "
+        "ORDER BY table_schema, table_name"
+    )
+
+
+def verify_extras(
+    engine: TrinoHTTP, catalog: str, reference: Sequence[Expected]
+) -> tuple[list[Result], int]:
+    """History-check every catalog base table the reference does not list. Returns the failures (a
+    listing that fails is one ERROR row) and the number of extras that read cleanly."""
+    known = {e.name for e in reference}
+    try:
+        rows = engine.execute(listing_sql(catalog)).rows
+        found = [(str(r["table_schema"]), str(r["table_name"])) for r in rows]
+    except (LakeError, KeyError, ValueError) as exc:
+        detail = " ".join(str(exc).split())[:300]
+        return [Result("<catalog listing>", "ERROR", 0, 0, detail=detail)], 0
+    bad: list[Result] = []
+    clean = 0
+    for schema, table in found:
+        if f"{schema}.{table}" in known:
+            continue
+        if not (_NAME.match(schema) and _NAME.match(table)):
+            bad.append(
+                Result(f"{schema}.{table}", "ERROR", 0, 0, detail="not a plain schema.table name")
+            )
+            continue
+        e = Expected(schema, table, 0, 0)
+        why = check_history(engine, catalog, e)
+        if why:
+            bad.append(
+                Result(
+                    e.name, "HISTORY", 0, 0, detail=f"all-history unreadable: {why}", history=why
+                )
+            )
+        else:
+            clean += 1
+    return bad, clean
+
+
+def render(
+    results: Sequence[Result],
+    expect_tables: int | None,
+    extras: tuple[list[Result], int] | None = None,
+) -> tuple[str, bool]:
     lines = []
     for r in results:
         got = "-" if r.got is None else str(r.got)
@@ -225,6 +279,13 @@ def render(results: Sequence[Result], expect_tables: int | None) -> tuple[str, b
     if expect_tables is not None and len(results) != expect_tables:
         ok = False
         tail += f"; the reference lists {len(results)} table(s), {expect_tables} expected"
+    if extras is not None:
+        bad_extras, clean = extras
+        lines.append("catalog tables not in the reference:")
+        lines += [f"{r.status:8} {r.name:40} {r.detail}" for r in bad_extras]
+        lines.append(f"  {clean} readable, {len(bad_extras)} failing")
+        if bad_extras:
+            ok = False
     lines.append(tail + ("" if ok else "  -> NOT EQUAL"))
     return "\n".join(lines), ok
 
@@ -270,6 +331,11 @@ def _args(argv: Sequence[str] | None) -> argparse.Namespace:
         action="store_true",
         help="skip the check that every table's whole snapshot history ($all_manifests) reads",
     )
+    p.add_argument(
+        "--all-catalog-tables",
+        action="store_true",
+        help="also history-check every catalog table the reference does not list (reported separately)",
+    )
     p.add_argument("--timeout", type=float, default=900.0, help="seconds one count may take")
     p.add_argument("--json", action="store_true")
     return p.parse_args(argv)
@@ -288,6 +354,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, UnicodeDecodeError, ReferenceError) as exc:
         print(f"lake_verify: {a.expected}: {exc}", file=sys.stderr)
         return 2
+    full_reference = list(expected)
     if a.only:
         want = set(a.only)
         unknown = want - {e.name for e in expected}
@@ -325,11 +392,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"lake_verify: {exc}", file=sys.stderr)
         return 2
     results = verify(engine, a.catalog, expected, a.cross_check, not a.no_all_history)
-    text, ok = render(results, a.expect_tables)
+    extras = None
+    if a.all_catalog_tables:
+        # the reference as read, before --only narrowed it: a table the reference lists is not an extra
+        extras = verify_extras(engine, a.catalog, full_reference)
+    text, ok = render(results, a.expect_tables, extras)
     if a.json:
         print(
             json.dumps(
-                {"ok": ok, "tables": [r.__dict__ for r in results]}, indent=2, sort_keys=True
+                {
+                    "ok": ok,
+                    "tables": [r.__dict__ for r in results],
+                    **(
+                        {
+                            "extras": {
+                                "failing": [r.__dict__ for r in extras[0]],
+                                "readable": extras[1],
+                            }
+                        }
+                        if extras is not None
+                        else {}
+                    ),
+                },
+                indent=2,
+                sort_keys=True,
             )
         )
     else:
