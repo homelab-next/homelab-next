@@ -35,11 +35,20 @@ import argparse
 import json
 import sys
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from homelabnext.registry import load as load_registry
-from homelabnext.registry.models import GatewayResolver, ModelResolver, RoleTable
+from homelabnext.registry.models import (
+    GatewayResolver,
+    ModelResolver,
+    NonPrimaryBinding,
+    ResolvedModel,
+    RoleTable,
+    normalize_role,
+)
+from homelabnext.registry.resolver import ResolutionError
 
 from .runner import client_completer, client_decider, run_decision_suite, run_suite
 from .tasks import load_suite
@@ -238,6 +247,40 @@ def _canary(args: argparse.Namespace) -> int:
     return 0 if all(r["summary"]["ok"] for r in reports) else 1
 
 
+class EvaluationResolver(ModelResolver):
+    """A :class:`ModelResolver` for EVALUATION runs: ``resolve`` also reaches a role binding that
+    names an ``eval`` row (by its row name, never through its capability), so ``hnx golden pins
+    report`` can run the golden suites against the lab's own backend that the gateway fronts,
+    exactly as the egress canary already does (:func:`_binding_completer`).  Each binding goes
+    through :meth:`ModelResolver.resolve_binding` with ``allow_eval=True``, which reaches an
+    ``eval`` row only (never ``retiring`` or ``legacy``) and resolves a primary as always.
+
+    It is built only by :func:`_live`.  The serving path, the gateway render and ``hnx golden
+    run`` keep :class:`ModelResolver`, whose ``resolve`` raises :class:`NonPrimaryBinding` on a
+    non-primary binding (ADR-0039 decision 3); it is not in the report's ``code`` inputs, so
+    adding it leaves the committed reports current."""
+
+    def resolve(self, role: str) -> ResolvedModel:
+        asked = normalize_role(role)
+        trail: list[str] = []
+        cur: str | None = asked
+        while cur is not None:
+            r = self.table.get(cur)
+            for b in r.bindings:
+                try:
+                    got = self.resolve_binding(cur, b, allow_eval=True)
+                except NonPrimaryBinding:
+                    raise  # a retiring or legacy row: never rerouted to the next binding
+                except ResolutionError as exc:
+                    trail.append(f"{cur}: svc:{b.backend} unresolved ({str(exc)[:80]})")
+                    continue
+                return replace(got, asked=asked, trail=tuple(trail))
+            if r.fallback:
+                trail.append(f"{cur}: no binding resolved, falling back to mdl:{r.fallback}")
+            cur = r.fallback
+        raise ResolutionError(f"mdl:{asked}", "no binding or fallback resolved", trail)
+
+
 def _binding_completer(
     resolver: ModelResolver,
     client_kwargs: Mapping[str, Any] | None = None,
@@ -314,7 +357,7 @@ def _live(
 
     from .pins import _replay_roles
 
-    resolver = ModelResolver(load_registry(registry), table)
+    resolver = EvaluationResolver(load_registry(registry), table)
     spec = load_spec(EXAMPLES / "decision_spec.yml")
     chat_roles = _replay_roles(table)  # the cascade's roles the table has as chat roles
     tiers = {}

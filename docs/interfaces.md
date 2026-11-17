@@ -461,7 +461,8 @@ measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (h
   them is a binding. Inputs are read without following a symbolic link on a relative path. At run
   time `ModelResolver` raises `NonPrimaryBinding` instead of falling back past such a binding, and
   `resolve_binding(..., allow_eval=True)` (the literal `True`), passed only by the egress canary
-  runner, resolves an `eval` row by its row name. `make check` runs it over the examples, every
+  runner and by `hnx golden pins report`'s `EvaluationResolver` (evaluating a role whose binding is
+  an `eval` row, never serving it), resolves an `eval` row by its row name. `make check` runs it over the examples, every
   pack and the example gateway specs (`bindings-check`); the overlay's `checks.yml` runs it over
   `lab/` (its gateway spec too, when present) and the packs the pinned commit's deploy manifest
   pins.
