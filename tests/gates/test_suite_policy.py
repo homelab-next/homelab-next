@@ -702,7 +702,7 @@ def test_shards_run_every_test_once_end_to_end(tmp_path):
     assert all(ran), [len(r) for r in ran]
     rc, out = _merge(reports, "--groups", "{}.{}".format(*sys.version_info[:2]))
     assert rc == 0, out
-    assert "3 shards" in out and "  a\n" in out
+    assert "3 shards" in out and "  a  (+ " in out
     rc, out = _merge(reports, "--groups", "3.11,3.12,3.13,3.14")
     assert rc == 1 and "expected" in out
 
@@ -788,3 +788,147 @@ def test_a_test_dropped_after_the_split_is_not_reported_as_run(tmp_path):
     assert [p.returncode for p in procs] == [0, 0], [p.stdout for p in procs]
     rc, out = _merge(reports)
     assert rc == 1 and "shard 1/2 ran 2 of the 3 tests it kept" in out, out
+
+
+HEAVY_FIXTURE = (
+    "import time\nimport pytest\n\n"
+    '@pytest.fixture(scope="module")\ndef heavy():\n    time.sleep(0.4)\n\n'
+    "@pytest.fixture\ndef light():\n    time.sleep(0.01)\n\n"
+    + "".join(f"def test_{k}(heavy, light):\n    time.sleep(0.02)\n\n" for k in range(12))
+)
+
+
+def _suite_totals(out: str, suite: str) -> float:
+    return float(re.search(rf"^\s+([\d.]+)s / +\d+s  {suite}\b", out, re.M)[1])
+
+
+def test_the_shard_count_does_not_inflate_a_suites_summed_time(tmp_path):
+    """A module fixture built once per shard stays out of the budgeted figure at any shard count,
+    so the same suite measures the same (give or take noise) in 1 shard and in 3."""
+    totals = {}
+    for n in (1, 3):
+        base = tmp_path / str(n)
+        base.mkdir()
+        procs, reports = _shards(base, n, "--suite-times", heavy__test_heavy=HEAVY_FIXTURE)
+        assert all(p.returncode == 0 for p in procs), [p.stdout for p in procs]
+        rc, out = _merge(reports)
+        assert rc == 0, out
+        assert "shared fixture setup" in out
+        totals[n] = _suite_totals(out, "heavy")
+        data = [json.loads(f.read_text()) for f in reports.glob("*.json")]
+        shared = sum(d["shared"].get("heavy", 0.0) for d in data)
+        assert shared >= 0.4 * len([d for d in data if d["selected"]]) * 0.9  # one per shard
+        assert all(d["shared"].get("heavy", 0.0) <= d["times"].get("heavy", 0.0) for d in data)
+    # without the split the 3-shard sum would be about 2 x 0.4s = 0.8s above the 1-shard sum
+    assert abs(totals[3] - totals[1]) < 0.6, totals
+
+
+def test_a_genuinely_slower_suite_still_goes_over_its_budget(tmp_path):
+    slow = HEAVY_FIXTURE.replace("time.sleep(0.02)", "time.sleep(0.1)")
+    _procs, reports = _shards(tmp_path, 3, ini_budgets="heavy = 0.8", heavy__test_heavy=slow)
+    rc, out = _merge(reports)
+    assert rc == 1 and "heavy: " in out and "over all shards > budget 0.8s" in out, out
+    assert "fixtures" not in out  # the fixture was not what pushed it over
+
+
+def test_a_heavy_shared_fixture_has_a_per_shard_budget_of_its_own(tmp_path):
+    _project(tmp_path, heavy__test_heavy=HEAVY_FIXTURE)
+    ini = tmp_path / "pytest.ini"
+    ini.write_text(ini.read_text() + "suite_shared_budget_default = 0.1\n")
+    proc = _pytest(tmp_path)
+    assert proc.returncode == 1, proc.stdout
+    assert "heavy (shared fixture setup):" in proc.stdout and "> budget 0s" in proc.stdout
+    ok = _pytest(tmp_path, env={"HNX_SUITE_BUDGET_SCALE": "100"})
+    assert ok.returncode == 0, ok.stdout
+
+
+def _report(shard, times, shared, limit=15.0):
+    return shard_report.report(
+        group="3.12", index=shard, count=2, collected=["t::a", "t::b"],
+        selected=[["t::a"], ["t::b"]][shard - 1], ran=[["t::a"], ["t::b"]][shard - 1],
+        times=times, shared=shared, shared_budget=limit,
+        budgets={"s": 20.0}, default_budget=60.0, exitstatus=0,
+    )  # fmt: skip
+
+
+def test_the_merge_sums_work_and_checks_shared_setup_per_shard(capsys):
+    ok = [_report(1, {"s": 15.0}, {"s": 10.0}), _report(2, {"s": 15.0}, {"s": 10.0})]
+    assert shard_report.merge(ok) == []  # 30s raw, 10s of work, under 20s
+    assert "(+ 20.0s shared fixture setup" in capsys.readouterr().out
+    slow = [_report(1, {"s": 25.0}, {"s": 1.0}), _report(2, {"s": 5.0}, {"s": 1.0})]
+    assert any("s: 28.0s over all shards" in p for p in shard_report.merge(slow))
+    heavy = [_report(1, {"s": 40.0}, {"s": 35.0}), _report(2, {"s": 5.0}, {"s": 1.0})]
+    problems = shard_report.merge(heavy)
+    assert len(problems) == 1 and "shard 1/2 spent 35.0s" in problems[0], problems
+    old = [{**_report(i, {"s": 5.0}, {}), "shared": None, "phases": None} for i in (1, 2)]
+    for r in old:
+        r.pop("shared_budget")
+    assert shard_report.merge(old) == []  # reports from before the split still merge
+
+
+def test_a_suite_can_have_its_own_shared_setup_budget(tmp_path):
+    _project(tmp_path, heavy__test_heavy=HEAVY_FIXTURE)
+    ini = tmp_path / "pytest.ini"
+    ini.write_text(
+        ini.read_text()
+        + "suite_shared_budget_default = 0.1\nsuite_shared_budgets =\n    heavy = 5\n"
+    )
+    assert _pytest(tmp_path).returncode == 0  # 0.4 s is over the default but under heavy's own
+    ini.write_text(ini.read_text().replace("heavy = 5", "heavy = 0.2"))
+    proc = _pytest(tmp_path)
+    assert proc.returncode == 1 and "heavy (shared fixture setup):" in proc.stdout, proc.stdout
+
+
+def test_this_repos_shared_setup_budgets_are_per_suite():
+    default, per = shard_report.load_shared_limits(Path(ROOT) / "pyproject.toml")
+    assert default == 15.0 and per["tests/roles"] == 30.0  # measured 18.8 s on twelve shards
+
+
+def test_the_merge_rejects_shared_setup_the_suite_time_cannot_hold():
+    bad = [_report(1, {"s": 5.0}, {"s": 9.0}), _report(2, {"s": 5.0}, {"s": 1.0})]
+    problems = shard_report.merge(bad)
+    assert any("shard 1/2 reports 9.0s of shared fixture setup in 5.0s" in p for p in problems)
+    nan = [_report(1, {"s": 5.0}, {"s": float("nan")}), _report(2, {"s": 5.0}, {"s": 1.0})]
+    assert any("reports nan" in p for p in shard_report.merge(nan))
+
+
+def test_the_merge_rejects_shared_setup_reported_without_its_budget():
+    r1 = _report(1, {"s": 5.0}, {"s": 1.0})
+    r1.pop("shared_budget")
+    problems = shard_report.merge([r1, _report(2, {"s": 5.0}, {"s": 1.0})])
+    assert any("shard 1/2 reports shared fixture setup but no shared_budget" in p for p in problems)
+
+
+def test_the_merge_enforces_the_configured_shared_limit_not_the_reports_own():
+    pinned = (15.0, {"s": 30.0})
+    # a shard that reports a generous limit of its own is held to the configuration
+    loose = [{**_report(1, {"s": 21.0}, {"s": 20.0}, limit=99.0)}, _report(2, {"s": 1.0}, {})]
+    assert shard_report.merge(loose) == []  # no pinned limits: the report's own are taken
+    assert shard_report.merge(loose, shared_limits=pinned) == []  # s has 30 s
+    assert any(
+        "spent 20.0s" in p and "> 15.0s per shard" in p
+        for p in shard_report.merge(loose, shared_limits=(15.0, {}))
+    )
+    other = [_report(1, {"t": 21.0}, {"t": 20.0}, limit=99.0), _report(2, {"t": 1.0}, {})]
+    assert any("per shard" in p for p in shard_report.merge(other, shared_limits=pinned))
+
+
+def test_the_merge_command_reads_the_shared_limits_from_the_pyproject(tmp_path):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    for i in (1, 2):
+        r = _report(i, {"s": 21.0 if i == 1 else 1.0}, {"s": 20.0 if i == 1 else 0.0}, limit=99.0)
+        (reports / f"{i}.json").write_text(json.dumps(r))
+    cfg = tmp_path / "cfg.toml"
+
+    def run(text):
+        cfg.write_text(text)
+        return _merge(reports, "--pyproject", cfg)
+
+    head = "[tool.pytest.ini_options]\nsuite_shared_budget_default = {}\n"
+    assert run(head.format(15))[0] == 1  # 20 s over 15, whatever the report says
+    assert "> 15.0s per shard" in run(head.format(15))[1]
+    assert run(head.format(25) + 'suite_shared_budgets = ["s = 10"]\n')[0] == 1
+    assert run(head.format(10) + 'suite_shared_budgets = ["s = 30"]\n')[0] == 0
+    assert _merge(reports, "--pyproject", tmp_path / "missing.toml")[0] == 2
+    assert run("[tool.pytest.ini_options]\n")[0] == 2  # no default configured

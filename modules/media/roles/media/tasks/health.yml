@@ -1,7 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-# Healthy means: the container runs and is healthy, /health says Healthy, the public system info
-# answers (with the server id, which must be the expected one when the site sets it), and Quick
-# Connect is enabled (a TV app signs in with it). Read-only: it signs in as no one.
+# Healthy means the server STARTED and serves its libraries, not only that something answers on its
+# port: a server that cannot open its database (one a newer version migrated: a downgrade) still
+# binds the port, and /health may still say Healthy. So: the container runs and is healthy; its log
+# since it last started holds none of the startup failures (media_startup_failure_patterns); /health
+# says Healthy; the public system info answers with the server id (the expected one when the site
+# sets it) and, when a started server is expected (an expected id or a library minimum), reports its
+# first-run setup complete (a server still starting, or failed, says it is not); Quick Connect is
+# enabled; and, when media_health_min_libraries is above 0, an administrator's API key lists at
+# least that many libraries. Read-only.
 - block:
     - name: Validate the inputs
       ansible.builtin.include_tasks: validate.yml
@@ -17,6 +23,31 @@
         compose_app_name: media
         compose_app_dir: "{{ media_app.compose_app_dir }}"
         compose_app_spec: "{{ media_app.compose_app_spec }}"
+    - name: Read the server's log since the container started
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -I
+          - -c
+          - "{{ media_startup_log_script }}"
+          - "{{ media_dir }}/docker-compose.yml"
+          - media
+          - "{{ media_startup_failure_patterns | to_json }}"
+      register: media_startup_log
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        media_startup_log.rc != 0
+        or not ((media_startup_log.stdout | default('') | trim).startswith('{'))
+    - name: The server started (no startup failure in its log)
+      ansible.builtin.assert:
+        that: (media_startup_log.stdout | from_json).hits | length == 0
+        fail_msg: >-
+          media: the server did not start: its log since {{ (media_startup_log.stdout | from_json).started }}
+          says: {{ (media_startup_log.stdout | from_json).hits | join(' | ') }}.
+          A "no such column" or "no such table" means its database came from a newer server (a
+          downgrade): pin the module to the source's version or newer and import again
+          (tools/migrate/jellyfin.py refuses such a source).
     - name: The server answers /health
       ansible.builtin.uri:
         url: "http://{{ media_bind }}:{{ media_port | int }}/health"
@@ -45,6 +76,17 @@
           {{ media_info.json.Id | default('(none)') }}, expected
           {{ media_expected_server_id | default('(not set)', true) }}). A different id makes every
           TV client treat this as a new server; restore the config (data/device.txt) and start again.
+    # a server still starting, or one whose start failed, answers the public info from its startup
+    # page with the first-run setup NOT complete; an established (imported or restored) server says
+    # it is complete only once it really runs
+    - name: The server runs its configured setup (not the startup page)
+      ansible.builtin.assert:
+        that: media_info.json.StartupWizardCompleted | default(false) is sameas true
+        fail_msg: >-
+          media: the server reports its first-run setup not complete
+          (StartupWizardCompleted={{ media_info.json.StartupWizardCompleted | default('(absent)') }}): it
+          is still starting, its start failed, or the config is not the one expected. Read its log.
+      when: media_expected_server_id != '' or media_health_min_libraries | int > 0
     - name: Quick Connect is enabled
       ansible.builtin.uri:
         url: "http://{{ media_bind }}:{{ media_port | int }}/QuickConnect/Enabled"
@@ -59,4 +101,30 @@
         that: (media_qc.content | default('') | trim | lower) == 'true'
         fail_msg: "media: Quick Connect is off (Dashboard, General, Quick Connect); TV apps sign in with it"
       when: media_quick_connect | bool
+    - name: List the libraries as an administrator
+      ansible.builtin.uri:
+        url: "http://{{ media_bind }}:{{ media_port | int }}/Library/VirtualFolders"
+        headers:
+          Authorization: 'MediaBrowser Token="{{ lookup(''hnx_secret'', media_api_login_ref) }}"'
+        status_code: [200, 401, 403]
+        return_content: true
+        timeout: "{{ media_health_timeout | int }}"
+      register: media_folders
+      changed_when: false
+      no_log: true
+      when: media_health_min_libraries | int > 0
+    - name: The server serves at least the expected libraries
+      ansible.builtin.assert:
+        that:
+          - media_folders.status == 200
+          - media_folders.json is defined
+          - media_folders.json is sequence and media_folders.json is not string and media_folders.json is not mapping
+          - media_folders.json | length >= media_health_min_libraries | int
+        fail_msg: >-
+          media: {{ ('the API key was refused (HTTP ' ~ media_folders.status ~ '): it must be an administrator key.')
+          if media_folders.status != 200 else '' }}
+          the server lists {{ media_folders.json | default([]) | length }} libraries, fewer
+          than the {{ media_health_min_libraries }} expected (or an answer that is not a list): its
+          library definitions (root/) did not load, or the API key is not an administrator's.
+      when: media_health_min_libraries | int > 0
   tags: [health]

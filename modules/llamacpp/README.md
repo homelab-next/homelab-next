@@ -123,11 +123,14 @@ Set `llamacpp_mode: decision` (default `generate`) for such a model. The role th
 - leaves `/health`, `/v1/models` (with `meta.n_ctx`) and `/metrics` as they are.
 
 **Chat completions are refused by design in this mode**, so a client (and the model gateway)
-must call `/v1/systemone`. The platform's model roles know the kinds `chat`, `completion` and
-`embedding` only (`homelabnext/registry/models.py`, `KINDS`), so the registry row stays
-`capability: inference` and the role table cannot yet declare a decision role: a consumer of a
-decision instance addresses the server's `/v1/systemone` itself, not a gateway role. The
-inference conformance suite (chat, streaming, determinism) does not apply to a decision instance.
+must call `/v1/systemone`. The role table declares such a model as a role of `kind: decision`
+(`platform/model_roles` 1.5), which the lab gateway routes on `POST /v1/systemone`
+(`docs/gateway.md`); the registry row stays `capability: inference`. The pinned evaluation
+evaluates a decision role through `/v1/systemone` too: a decision golden suite (`kind: decision`,
+probability bands; the seed is `homelabnext/golden/examples/decision_smoke.yml`) and a decision
+egress canary (`docs/compute-model.md`, "The egress canary"), so `make models-eval` can produce
+the live report that lands the role (an `add` leg, `docs/modules/swap-flow.md`). The inference
+conformance suite (chat, streaming, determinism) does not apply to a decision instance.
 
 ## Health and readiness
 

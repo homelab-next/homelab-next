@@ -26,7 +26,10 @@ unless the caller says otherwise, and never the record's.  ``--report`` files (`
 are a local convenience; CI never passes one.
 
 :func:`gate` is the CI check: when the role table differs from the base's, a swap record added or
-changed under :data:`SWAPS` must cover it, its legs holding against that evidence.
+changed under :data:`SWAPS` must cover it, its legs holding against that evidence: a rebind leg
+for a role both tables have, an add leg for a role only the table after has (an overlay's first
+role included) and a remove leg for one only the table before has, each with the report for the
+table after.
 
 Whatever cannot be read is :class:`EvidenceError`, never a missing table read as "no change".
 
@@ -92,7 +95,10 @@ EVALS = "examples/model-evals"
 #: the most reports read from EVALS: more is refused, never truncated
 MAX_EVALS = 64
 #: the golden suites a report is checked with (homelabnext.golden.pins.DEFAULT_SUITES)
-SUITES = ("homelabnext/golden/examples/classifier_smoke.yml",)
+SUITES = (
+    "homelabnext/golden/examples/classifier_smoke.yml",
+    "homelabnext/golden/examples/decision_smoke.yml",
+)
 #: where a change keeps the swap record that covers its role-table change (swap-gate)
 SWAPS = "examples/swaps"
 
@@ -398,7 +404,13 @@ def _trust_changes(old: Any, new: Any) -> dict[str, list[str]]:
     """Role -> the non-pin fields that differ between the two tables' raw documents, for each role
     both have.  ``RoleTable.pins`` holds backend, model id, version and digest only, so a change
     to ``leaves_lab`` (which ``rules.cloud_roles`` reads to require ``grants.cloud_models``),
-    ``fallback`` (which it follows) or any other field is invisible to it."""
+    ``fallback`` (which it follows) or any other field is invisible to it.
+
+    A role only the table after has (an ``add`` leg's) brings every one of its fields new, so it
+    is a trust change too: its role keys but ``bindings`` (``kind``, ``fallback``, ``limits``,
+    ``params``, ``tlp_ceiling``, ...) and every key its binding carries beside the pin
+    (``leaves_lab``, ``provider_terms``, ...), or ``(new role)`` when it has none; a record must
+    name it in ``model_role_changes`` as it would an existing role's change."""
     before = old.get("roles") if isinstance(old, dict) else None
     after = new.get("roles") if isinstance(new, dict) else None
     if not isinstance(before, dict) or not isinstance(after, dict):
@@ -420,6 +432,82 @@ def _trust_changes(old: Any, new: Any) -> dict[str, list[str]]:
             fields = [f for f in fields if f != "bindings[]"] + [f"bindings[].{k}" for k in keys]
         if fields:
             out[name] = fields
+    for name in sorted(set(after) - set(before)):
+        out[name] = added_role_fields(after[name])
+    return out
+
+
+def added_role_fields(role: Any) -> list[str]:
+    """The trust fields an added role brings (see :func:`_trust_changes`); never empty."""
+    view = _trust_view(role)
+    fields = sorted(k for k in view if k != "bindings[]")
+    extras = sorted({k for e in map(json.loads, view.get("bindings[]", [])) for k in e["extras"]})
+    return fields + [f"bindings[].{k}" for k in extras] or ["(new role)"]
+
+
+#: where a role's consumers are declared: configuration files and the templates that render them
+#: (module manifests, the site, gateway specs and keys, decision specs, agent profiles, golden
+#: suites, conformance targets, ``capabilities.yml``, ``*.j2``), never prose, code or test fixtures
+_CONSUMER_SUFFIXES = (".yml", ".yaml", ".json", ".j2", ".jinja", ".jinja2")
+_NOT_CONSUMERS = ("docs/", "tests/", "schemas/", "CHANGELOG")
+_NOT_CONSUMER_PARTS = ("negative", "_frozen", "node_modules")
+#: the file that lists capability names, a role alias among them, one per list item
+_CAPABILITIES = "capabilities.yml"
+
+
+def _consumer_patterns(name: str, capabilities: bool) -> list[re.Pattern[str]]:
+    """How a configuration file names role ``name``: ``mdl:<name>`` anywhere; the bare name as
+    the value of a key ending in ``role`` or ``model`` (``role: x``, ``throttle_model: x``,
+    ``"role": "x"``: a golden suite's role, a conformance target's model); and, in
+    ``capabilities.yml``, as a list item."""
+    n = re.escape(name)
+    pats = [
+        re.compile(rf"(?<![\w-])mdl:{n}(?![\w-])"),
+        re.compile(rf"""(?im)["']?\w*(?:role|model)["']?\s*:\s*["']?{n}["']?\s*(?:[,}}#]|$)"""),
+    ]
+    if capabilities:
+        pats.append(re.compile(rf"""(?m)^\s*-\s*["']?{n}["']?\s*(?:#.*)?$"""))
+    return pats
+
+
+def removed_role_consumers(
+    root: Path, removed: Sequence[str], layout: Layout, roles: str | None = None
+) -> list[str]:
+    """A problem for every configuration file or template in the working tree that still names a
+    removed role (:func:`_consumer_patterns`): a module's ``requires.model_roles``, a gateway
+    key's roles, a decision spec's tier, an agent profile, the site, a golden suite's ``role``, a
+    conformance target's ``model``, ``capabilities.yml``, a ``*.j2`` template.  The role table, the
+    store, the reports and the swap records are the evidence, not consumers; prose (docs), code,
+    tests and schema examples are not scanned, nor are the installed package's own files when the
+    tree is an overlay.  A removal leaves no dangling reference, or the gate names each one."""
+    if not removed:
+        return []
+    own = {roles or layout.roles, layout.store, *layout.reports}
+    dirs = (layout.evals + "/", layout.swaps + "/")
+    out = []
+    r = _git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+    if r.returncode:
+        raise EvidenceError("git ls-files failed: cannot look for the removed roles' consumers")
+    for rel in sorted({x for x in r.stdout.decode("utf-8", "replace").split("\0") if x}):
+        parts = PurePosixPath(rel).parts
+        if (
+            not rel.endswith(_CONSUMER_SUFFIXES)
+            or rel in own
+            or rel.startswith(dirs + _NOT_CONSUMERS)
+            or any(p in _NOT_CONSUMER_PARTS for p in parts)
+        ):
+            continue
+        data = ld.read_tree_file(root, rel)
+        if isinstance(data, str) or data is None:
+            continue  # a link, a special file or one over the cap: not a configuration file
+        text = data.decode("utf-8", "replace")
+        caps = PurePosixPath(rel).name == _CAPABILITIES
+        out += [
+            f"mdl:{name} is removed, but {rel} still names it: remove that consumer in the same "
+            "change, or keep the role"
+            for name in removed
+            if any(p.search(text) for p in _consumer_patterns(name, caps))
+        ]
     return out
 
 
@@ -469,8 +557,9 @@ def gate(
             return [
                 f"{roles} changes since {sha[:12]} (roles: {', '.join(changed) or 'none rebound'}{detail})"
                 f" and no swap record under {layout.swaps}/ in this change covers it: commit the record"
-                " whose model_roles legs rebind them, after the store entry and the live report"
-                f" are on the base ({layout.store}, {layout.evals}/)"
+                " whose model_roles legs rebind them (change: add for a role only the table after"
+                " has, remove for one only the table before has), after the store entry and the"
+                f" live report are on the base ({layout.store}, {layout.evals}/)"
             ], "uncovered"
         schema = ld._schema("platform", "module_swap.schema.json")
         budget = ld.Budget()
@@ -498,6 +587,8 @@ def gate(
                         f"{rel}: model_role_changes names {alias}, whose fields other than its pin"
                         f" did not change since {sha[:12]}"
                     )
+        removed = sorted(set(ev.before.roles) - set(ev.after.roles))
+        problems += removed_role_consumers(root, removed, layout, roles)
         problems += [
             f"mdl:{r} changes {', '.join(f)} since {sha[:12]} and no record in this change names"
             f" it in model_role_changes (a pin-only record covers nothing for it)"

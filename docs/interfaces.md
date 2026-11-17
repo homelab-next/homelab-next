@@ -499,7 +499,7 @@ change until its ADR is accepted):
 | schema (`$id` name) | version | file | status |
 |---|---|---|---|
 | `agent/context_manifest` | 1.3 | `schemas/agent/context_manifest.schema.json` | stable |
-| `agent/golden_task` | 1.1 | `schemas/agent/golden_task.schema.json` | stable |
+| `agent/golden_task` | 1.2 | `schemas/agent/golden_task.schema.json` | stable |
 | `agent/handoff` | 1.0 | `schemas/agent/handoff.schema.json` | stable |
 | `agent/injection_corpus` | 1.0 | `schemas/agent/injection_corpus.schema.json` | stable |
 | `agent/pregate_output` | 1.0 | `schemas/agent/pregate_output.schema.json` | stable |

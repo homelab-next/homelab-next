@@ -812,13 +812,51 @@ are joined and scanned together, and they must parse as one completed call. Each
 
 A server that ignores the prefill therefore fails the task; it does not pass it by accident.
 
+**Decision bindings.** A role of `kind: decision` (a decision model: it answers noul questions on
+`POST /v1/systemone` and refuses chat with 501) has no turn protocol and no text a tool call could
+ride in, so its bindings are not chatted with. `run_decision_canary` poses each task's luring
+content (the canary's system text, the task's system text, its prompt and any prefill) as the
+**state** of one noul question, `samples` times, through the same `ModelClient`
+(`ModelClient.decide`). A sample fails when the call fails (an error) or when the reply is not
+exactly one probability in [0, 1] for that question (`protocol`), and each sample also sends one
+minimal chat completion (`ModelClient.chat_probe`) that the binding must refuse, judged by
+`canary.chat_refusal`: only a 501 (a decision model) or a 400 with `error.code`
+`wrong_model_kind` (the gateway) is a refusal, an answer is `chat-answered`, and any other
+status (401, 403, 404, 413, 429, another 400, a 5xx) is an error, since it proves nothing about a
+chat channel. `ModelClient` itself refuses `chat`,
+`complete` and `embed` on a decision role before sending anything. The report has the canary's
+format, tasks and counts, so the pins check validates it the same way. It proves only that the
+binding answers those prompts as a decision model, with nothing that could carry an action; the
+network guard stays the control. `make models-canary` and `hnx golden canary` pick the decider
+by the role's kind.
+
 The pinned evaluation (G-11, `hnx golden pins check`, `make models-check`) runs the canary for
 **every binding** of every role in the role table. Each entry records:
 
 - the pin it ran against;
 - the role's sampling params;
+- its `kind`: `chat`, or `decision` for a decision role's binding (asked as above). An entry
+  whose kind is not its role's fails the check;
 - whether it ran `live` or against the `fake`. The factory that produced the entry sets this,
   not a model name.
+
+**Golden suites by kind.** A golden suite is `kind: chat` (the default) or `kind: decision`
+(`schemas/agent/golden_task` 1.2): a decision suite's task asks one noul question (`question`)
+about its `prompt` (the state) and scores the answer with `probability`, a band of `min` and/or
+`max` in [0, 1] held as data; `hnx golden run` sends it to `POST /v1/systemone` through the same
+client. The shipped `decision_smoke.yml` is a generic seed (clearly-yes and clearly-no states).
+A suite runs only where it **applies**: the table has its role, of its kind (a chat suite on any
+role but a decision one, a decision suite on a decision role); the K-12 replay covers the
+cascade's roles the table has as chat roles. Every role must be evaluated by an applicable suite
+or the replay, a decision role by a decision suite; the report must hold exactly the applicable
+suites' runs, each of its suite's kind, and no canary entry for a role the table lacks; the role
+kinds (`inputs.kinds`) and the code that decides a verdict (`inputs.code`: the golden runner, its
+scorers, the suite loader and the model client) are pinned inputs.
+A suite or cascade role the table does not have is not run and is no problem here (`hnx decide
+lint` holds every tracked spec's model tiers to the repository's table, rule `model-roles`), so an overlay that
+keeps a subset of the example roles, or serves `fast-classifier` as a decision model, is
+evaluated by the suites that fit it. A live run (`make models-eval`) leaves a cascade tier whose
+role the table lacks, or holds as a decision role, simulated.
 
 The canary's version, suite, code (a digest of `canary.py`), the metadata address list and every
 role's params are pinned inputs, so changing any of them makes the stored report stale. The check
@@ -862,7 +900,8 @@ What it does not do:
   A name built by command substitution in a host position (`dig $(cat f).attacker.example`)
   still names its static suffix.
 - A module swap's model-role leg (`model_roles`, `docs/modules.md`, "Swap record 1.2") pins the
-  report for the rebound table. Every role whose binding the swap changes needs a leg, and the leg
+  report for the table after it. Every role whose binding the swap changes needs a leg (a role
+  only the table after has an `add` leg, one only the table before has a `remove` leg), and the leg
   holds only when the report passes this check, live by the checker's default policy, and the new
   binding is on the instance the leg moves. `hnx modules swap-check` reads that evidence from the
   repository, and everything that vouches for the new model from the base commit: the role table

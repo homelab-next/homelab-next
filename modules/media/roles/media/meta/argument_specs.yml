@@ -10,7 +10,7 @@ argument_specs:
       media_image:
         type: str
         description: repository:tag@sha256:<digest> of the Jellyfin image.
-        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+        default: docker.io/jellyfin/jellyfin:12.1@sha256:78d3ea1207d1322471fcac39a614f004f2ccf7e878f95ab2977d752f07e4dd7e
       media_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -77,8 +77,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -91,6 +100,17 @@ argument_specs:
         type: int
         description: Seconds each health request may take.
         default: 10
+      media_health_min_libraries:
+        type: int
+        description: >-
+          When above 0, health signs in with the API key (media_api_login_ref) and requires at least this many
+          libraries (virtual folders), and requires the server to report its first-run setup complete. Set it at a
+          cutover to the source's library count. 0 = not checked.
+        default: 0
+      media_api_login_ref:
+        type: str
+        description: The secret reference of an administrator's API key; read by health only when media_health_min_libraries is above 0.
+        default: secret:media/api-token
   health:
     short_description: Fail unless the container is healthy, /health says Healthy, the system info answers (the expected server id) and Quick Connect is on.
     options:
@@ -101,7 +121,7 @@ argument_specs:
       media_image:
         type: str
         description: repository:tag@sha256:<digest> of the Jellyfin image.
-        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+        default: docker.io/jellyfin/jellyfin:12.1@sha256:78d3ea1207d1322471fcac39a614f004f2ccf7e878f95ab2977d752f07e4dd7e
       media_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -168,8 +188,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -182,6 +211,17 @@ argument_specs:
         type: int
         description: Seconds each health request may take.
         default: 10
+      media_health_min_libraries:
+        type: int
+        description: >-
+          When above 0, health signs in with the API key (media_api_login_ref) and requires at least this many
+          libraries (virtual folders), and requires the server to report its first-run setup complete. Set it at a
+          cutover to the source's library count. 0 = not checked.
+        default: 0
+      media_api_login_ref:
+        type: str
+        description: The secret reference of an administrator's API key; read by health only when media_health_min_libraries is above 0.
+        default: secret:media/api-token
   readiness:
     short_description: Fail unless the container engine is ready and the inputs are valid.
     options:
@@ -192,7 +232,7 @@ argument_specs:
       media_image:
         type: str
         description: repository:tag@sha256:<digest> of the Jellyfin image.
-        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+        default: docker.io/jellyfin/jellyfin:12.1@sha256:78d3ea1207d1322471fcac39a614f004f2ccf7e878f95ab2977d752f07e4dd7e
       media_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -259,8 +299,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -273,6 +322,17 @@ argument_specs:
         type: int
         description: Seconds each health request may take.
         default: 10
+      media_health_min_libraries:
+        type: int
+        description: >-
+          When above 0, health signs in with the API key (media_api_login_ref) and requires at least this many
+          libraries (virtual folders), and requires the server to report its first-run setup complete. Set it at a
+          cutover to the source's library count. 0 = not checked.
+        default: 0
+      media_api_login_ref:
+        type: str
+        description: The secret reference of an administrator's API key; read by health only when media_health_min_libraries is above 0.
+        default: secret:media/api-token
   backup:
     short_description: Name the data root (not the library, not the cache) for the backup.
     options:
@@ -283,7 +343,7 @@ argument_specs:
       media_image:
         type: str
         description: repository:tag@sha256:<digest> of the Jellyfin image.
-        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+        default: docker.io/jellyfin/jellyfin:12.1@sha256:78d3ea1207d1322471fcac39a614f004f2ccf7e878f95ab2977d752f07e4dd7e
       media_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -350,8 +410,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -364,6 +433,17 @@ argument_specs:
         type: int
         description: Seconds each health request may take.
         default: 10
+      media_health_min_libraries:
+        type: int
+        description: >-
+          When above 0, health signs in with the API key (media_api_login_ref) and requires at least this many
+          libraries (virtual folders), and requires the server to report its first-run setup complete. Set it at a
+          cutover to the source's library count. 0 = not checked.
+        default: 0
+      media_api_login_ref:
+        type: str
+        description: The secret reference of an administrator's API key; read by health only when media_health_min_libraries is above 0.
+        default: secret:media/api-token
   restore:
     short_description: Check an export (listing, sha256, members) and restore the config directory from it, the server stopped meanwhile.
     options:
@@ -374,7 +454,7 @@ argument_specs:
       media_image:
         type: str
         description: repository:tag@sha256:<digest> of the Jellyfin image.
-        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+        default: docker.io/jellyfin/jellyfin:12.1@sha256:78d3ea1207d1322471fcac39a614f004f2ccf7e878f95ab2977d752f07e4dd7e
       media_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -441,8 +521,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -455,6 +544,17 @@ argument_specs:
         type: int
         description: Seconds each health request may take.
         default: 10
+      media_health_min_libraries:
+        type: int
+        description: >-
+          When above 0, health signs in with the API key (media_api_login_ref) and requires at least this many
+          libraries (virtual folders), and requires the server to report its first-run setup complete. Set it at a
+          cutover to the source's library count. 0 = not checked.
+        default: 0
+      media_api_login_ref:
+        type: str
+        description: The secret reference of an administrator's API key; read by health only when media_health_min_libraries is above 0.
+        default: secret:media/api-token
       media_restore_source:
         type: path
         description: Directory holding an export (media-config.tar.gz and listing.jsonl).
@@ -469,7 +569,7 @@ argument_specs:
       media_image:
         type: str
         description: repository:tag@sha256:<digest> of the Jellyfin image.
-        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+        default: docker.io/jellyfin/jellyfin:12.1@sha256:78d3ea1207d1322471fcac39a614f004f2ccf7e878f95ab2977d752f07e4dd7e
       media_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -536,8 +636,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -550,6 +659,17 @@ argument_specs:
         type: int
         description: Seconds each health request may take.
         default: 10
+      media_health_min_libraries:
+        type: int
+        description: >-
+          When above 0, health signs in with the API key (media_api_login_ref) and requires at least this many
+          libraries (virtual folders), and requires the server to report its first-run setup complete. Set it at a
+          cutover to the source's library count. 0 = not checked.
+        default: 0
+      media_api_login_ref:
+        type: str
+        description: The secret reference of an administrator's API key; read by health only when media_health_min_libraries is above 0.
+        default: secret:media/api-token
       media_target_image:
         type: str
         description: repository:tag@sha256:<digest> to move to.
@@ -564,7 +684,7 @@ argument_specs:
       media_image:
         type: str
         description: repository:tag@sha256:<digest> of the Jellyfin image.
-        default: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
+        default: docker.io/jellyfin/jellyfin:12.1@sha256:78d3ea1207d1322471fcac39a614f004f2ccf7e878f95ab2977d752f07e4dd7e
       media_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -631,8 +751,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -645,3 +774,14 @@ argument_specs:
         type: int
         description: Seconds each health request may take.
         default: 10
+      media_health_min_libraries:
+        type: int
+        description: >-
+          When above 0, health signs in with the API key (media_api_login_ref) and requires at least this many
+          libraries (virtual folders), and requires the server to report its first-run setup complete. Set it at a
+          cutover to the source's library count. 0 = not checked.
+        default: 0
+      media_api_login_ref:
+        type: str
+        description: The secret reference of an administrator's API key; read by health only when media_health_min_libraries is above 0.
+        default: secret:media/api-token
