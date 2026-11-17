@@ -12,7 +12,8 @@ kind: provider
 title: Media server on Jellyfin
 description: Fills the media slot with Jellyfin, a self-hosted media server, run as one compose_app
   container with local accounts, Quick Connect on, a read-only library mount and root, and CPU transcoding into a RAM-backed tmpfs;
-  its config and data (server id, users, devices, watch state) move with tools/migrate/jellyfin.py.
+  its config and data (server id, users, devices, watch state) move with tools/migrate/jellyfin.py,
+  which refuses a source a newer server migrated; health proves the server started.
 owner: operator
 author: agent:claude
 status: draft
@@ -20,13 +21,18 @@ version: 0.1.0
 origin: {kind: in-tree}
 product:
   name: jellyfin
-  version: 10.11.11
+  version: "12.1"
 licence:
   kind: open-source
   spdx: GPL-2.0-only
-# No credentials: the server's accounts are its own, made in its first-run wizard or brought by the
-# import (tools/migrate/jellyfin.py). Nothing here is read from the secret store.
-credentials: []
+# The server's accounts are its own, made in its first-run wizard or brought by the import
+# (tools/migrate/jellyfin.py). The one secret is an administrator's API key that health signs in
+# with to count the libraries, read only when media_health_min_libraries is above 0.
+credentials:
+  - secret: secret:media/api-token
+    identity: token
+    holder: provider
+    purpose: an administrator's API key (made in the server's dashboard, or carried over by the import) that health lists the libraries with; read only when media_health_min_libraries is above 0
 identifiers:
   - {kind: secret-name, name: media, on_remove: keep}
 requires:

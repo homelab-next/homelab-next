@@ -2,7 +2,7 @@
 """The media provider module, ``modules/media`` (modules/media/README.md).
 
 * The public tree loads clean and the module's ``roles/`` holds only its one contributed role.
-* The manifest says what the README says: local accounts and no secrets, internet egress that the
+* The manifest says what the README says: local accounts and one optional secret (health's API key), internet egress that the
   site must grant, a pinned image whose version is the product's, a read-only library at a
   configurable path, CPU transcoding.
 * A fictional overlay that places it on a guest (and grants its egress and public route) passes
@@ -137,7 +137,12 @@ def test_roles_holds_only_the_contributed_role():
 
 def test_the_manifest_keeps_local_accounts_and_declares_its_egress():
     manifest = ld.load_yaml(MODULE / "module.yml")
-    assert manifest["credentials"] == []  # the accounts are the server's own: nothing in the store
+    # the accounts are the server's own; the one secret is the API key health counts libraries with,
+    # and it is the one the role reads
+    assert [c["secret"] for c in manifest["credentials"]] == ["secret:media/api-token"]
+    defaults = ld.load_yaml(MODULE / "roles" / "media" / "defaults" / "main.yml")
+    assert defaults["media_api_login_ref"] == "secret:media/api-token"
+    assert defaults["media_health_min_libraries"] == 0  # read only when a site sets a minimum
     assert manifest["egress"][0]["to"] == ["internet"]
     row = ld.load_yaml(MODULE / "registry" / "services.yml")["services"]["media"]
     assert row["auth"] == "own" and row["port"] == 8096 and row["health"]["path"] == "/health"
