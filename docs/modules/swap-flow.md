@@ -183,15 +183,12 @@ and `meaning_changes` is recorded, never checked.
   jobs (a job no rule requires gates nothing), and the change that adds an overlay's **first**
   `lab/model_roles.json` cannot pass the gate (there is no base table to hold it against, so it
   exits 2): merge that one change by an owner override, after which every later change is gated.
-  Commit that first table **empty** (`{"version": 1, "roles": {}}`); the first role then lands
-  like any other in two changes: the vetting change (the store entry in
-  `lab/model-serving/model_store.json` and the live report for the proposed table in
-  `lab/model-evals/<name>.json`, from `make models-eval REGISTRY=... MODEL_ROLES=<proposed table>`),
-  then the change that writes the role into `lab/model_roles.json` with a record under
-  `lab/swaps/` whose leg is `change: add` (the shape is
-  `schemas/platform/examples/module_swap.inference-add.json`). A decision role is evaluated by
-  a decision golden suite and a decision canary (`docs/compute-model.md`, "The egress canary"), so
-  that live report can pass.
+  Commit that first table **empty** (`{"version": 1, "roles": {}}`); the first role then lands in
+  two changes: the vetting change (the store entry and the live report for the proposed table in
+  `lab/model-evals/<name>.json`, from `make models-eval REGISTRY=... MODEL_ROLES=<proposed>`),
+  then the role in `lab/model_roles.json` with a `lab/swaps/` record whose leg is `change: add`
+  (shape: `schemas/platform/examples/module_swap.inference-add.json`). A decision role is
+  evaluated by a decision suite and canary (`docs/compute-model.md`, "The egress canary").
 
   **Fields that are not the pin.** `ModelEvidence` compares roles by their pins (backend, model id,
   version, digest), which do not show a binding's `leaves_lab` (what `rules.cloud_roles` reads to
