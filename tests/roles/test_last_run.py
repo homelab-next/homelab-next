@@ -160,7 +160,9 @@ def test_a_writer_line_with_the_root_prefix_is_read_as_the_writer(tmp_path):
     role = tmp_path / "ansible" / "roles" / "r"
     (role / "templates").mkdir(parents=True)
     (role / "tasks").mkdir()
-    (role / "tasks" / "main.yml").write_text("- ansible.builtin.include_role:\n    name: last_run\n")
+    (role / "tasks" / "main.yml").write_text(
+        "- ansible.builtin.include_role:\n    name: last_run\n"
+    )
     w = schedule.WRITER
     a = "--dir /d --group root --job timer:r/u --unit %n --calendar hourly --delay 0"
     svc = role / "templates" / "u.service.j2"
