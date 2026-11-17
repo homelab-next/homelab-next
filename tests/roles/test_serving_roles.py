@@ -108,6 +108,10 @@ def store_vars(tmp_path: Path, store: dict, **kw) -> dict:
         "model_store_owner": USER,
         "model_store_group": GROUP,
         "model_store_exports_group": GROUP,
+        # the test runs unprivileged as an account that exists; account creation has its own tests
+        "model_store_manage_accounts": False,
+        # the fake CLI below stands in for the managed install
+        "model_store_hf_install": False,
         "model_store_export_dir": str(tmp_path / "export"),
     }
     v.update(kw)
@@ -257,6 +261,9 @@ def test_model_store_accepts_the_pinned_example_manifest(first):
         {"model_store_root": "relative/models"},
         {"model_store_root": "/srv/../etc"},
         {"model_store_owner": "Bad Name"},
+        {"model_store_gid": "0"},
+        {"model_store_uid": "abc"},
+        {"model_store_exports_gid": "-5"},
         {"model_store_hf_endpoint": "http://mirror.example.internal"},
         {"model_store_hf_token_ref": "hf_plain-token-fake"},
         {"model_store_fetch_ids": ["not-an-entry"]},
@@ -1440,3 +1447,112 @@ def test_open_webui_upgrade_backup_export_hooks(first):
     assert run_role(tmp_path, "open_webui", "backup", v).returncode == 0
     (tmp_path / "app" / "data" / "webui.db").write_text("fake")
     assert run_role(tmp_path, "open_webui", "export", v).returncode == 0
+
+
+def _accounts_tasks() -> list[dict]:
+    import yaml
+
+    p = Path(__file__).resolve().parents[2] / "ansible/roles/model_store/tasks/accounts.yml"
+    return yaml.safe_load(p.read_text())
+
+
+def test_model_store_creates_its_groups_then_its_owner_when_absent():
+    """A fresh guest has none of the accounts the tree is chowned to: groups first (system), then
+    the owner (system, primary group model_store_group, nologin, no home)."""
+    group_task, user_task = _accounts_tasks()
+    assert list(group_task).count("ansible.builtin.group") == 1
+    g = group_task["ansible.builtin.group"]
+    assert g["system"] is True and g["state"] == "present"
+    names = [i["name"] for i in group_task["loop"]]
+    assert names == ["{{ model_store_group }}", "{{ model_store_exports_group }}"]
+    u = user_task["ansible.builtin.user"]
+    assert u["system"] is True and u["create_home"] is False
+    assert u["shell"] == "/usr/sbin/nologin"
+    assert u["group"] == "{{ model_store_group }}"
+    # ids are optional: omitted unless the site fixed one
+    assert "omit" in g["gid"] and "omit" in u["uid"]
+
+
+def test_model_store_main_creates_accounts_before_the_directories_and_can_opt_out():
+    import yaml
+
+    root = Path(__file__).resolve().parents[2] / "ansible/roles/model_store"
+    tasks = yaml.safe_load((root / "tasks/main.yml").read_text())
+    names = [t["name"] for t in tasks]
+    acc = next(t for t in tasks if t.get("ansible.builtin.include_tasks") == "accounts.yml")
+    assert acc["when"] == "model_store_manage_accounts | bool"
+    assert names.index(acc["name"]) < names.index(
+        "Create the store directories (engines read through the group, never write)"
+    )
+    defaults = yaml.safe_load((root / "defaults/main.yml").read_text())
+    assert defaults["model_store_manage_accounts"] is True
+    assert [
+        defaults[k] for k in ("model_store_uid", "model_store_gid", "model_store_exports_gid")
+    ] == ["", "", ""]
+
+
+def test_model_store_account_tasks_run_in_check_mode_with_and_without_fixed_ids(tmp_path):
+    for kw in (
+        {},
+        {"model_store_uid": "1500", "model_store_gid": "1501", "model_store_exports_gid": "1502"},
+    ):
+        store = manifest()
+        v = store_vars(
+            tmp_path, store, model_store_manage_accounts=True, model_store_fetch=False, **kw
+        )
+        r = run_role(tmp_path, "model_store", "accounts", v, check=True)
+        assert r.returncode == 0, r.stdout + r.stderr
+
+
+def _role_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "ansible/roles/model_store"
+
+
+def test_model_store_hf_requirements_are_pinned_and_every_line_is_hashed():
+    """pip --require-hashes refuses an unhashed or unpinned line; hold the file to that too."""
+    import re
+
+    text = (_role_dir() / "files/hf_requirements.txt").read_text()
+    entries = re.split(r"\n(?=[A-Za-z0-9])", text.strip())
+    names = {}
+    for e in entries:
+        if e.startswith("#"):
+            continue
+        m = re.match(r"([A-Za-z0-9_.-]+)==([^\s;]+)", e)
+        assert m, e[:60]
+        assert re.search(r"--hash=sha256:[0-9a-f]{64}", e), m.group(1)
+        names[m.group(1).lower().replace("_", "-")] = m.group(2)
+    version = __import__("yaml").safe_load((_role_dir() / "vars/main.yml").read_text())[
+        "model_store_hf_version"
+    ]
+    assert names["huggingface-hub"] == version
+
+
+def test_model_store_installs_the_cli_by_hash_into_a_venv_and_defaults_to_it():
+    import yaml
+
+    root = _role_dir()
+    tasks = yaml.safe_load((root / "tasks/install_cli.yml").read_text())
+    pip = next(t for t in tasks if "ansible.builtin.pip" in t)["ansible.builtin.pip"]
+    assert "--require-hashes" in pip["extra_args"]
+    assert pip["virtualenv"] == "{{ model_store_hf_venv }}"
+    assert any(t.get("ansible.builtin.package", {}).get("name") == "python3-venv" for t in tasks)
+    main = yaml.safe_load((root / "tasks/main.yml").read_text())
+    inst = next(t for t in main if t.get("ansible.builtin.include_tasks") == "install_cli.yml")
+    assert "model_store_hf_install" in inst["when"]
+    d = yaml.safe_load((root / "defaults/main.yml").read_text())
+    assert d["model_store_hf_install"] is True
+    assert "/bin/hf" in d["model_store_hf_cli"] and "model_store_hf_venv" in d["model_store_hf_cli"]
+
+
+@pytest.mark.parametrize("reported,ok", [("2.4.0", True), ("2.3.9", False)])
+@first_run(lambda tmp, reported, ok: {"role": "model_store", "tasks_from": "readiness",
+    "extra_vars": {"model_store_hf_install": True, "model_store_fetch": True,
+                   "model_store_hf_venv": str(tmp / "venv"),
+                   "model_store_hf_cli": fake(tmp / "hf", f"print({reported!r})\n")}})  # fmt: skip
+def test_model_store_readiness_reports_the_cli_version_and_refuses_another_than_pinned(
+    first, reported, ok
+):
+    r, _ = first
+    assert (r.returncode == 0) is ok, r.stdout
+    assert (f"hf CLI {reported}" in r.stdout) if ok else ("not the pinned 2.4.0" in r.stdout)

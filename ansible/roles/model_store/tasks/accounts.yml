@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The accounts the tree is chowned to, created when absent (a fresh guest has none of them: the
+# chown would fail "failed to look up user"). Groups first: the owner's primary group is one of them.
+# An id is set only when the site fixed one (a consumer that needs a number, not a name); an
+# existing account is never renumbered or reshaped beyond what is stated here.
+- name: Create the store's group and the trainers' group
+  ansible.builtin.group:
+    name: "{{ item.name }}"
+    gid: "{{ item.gid if item.gid | string != '' else omit }}"
+    system: true
+    state: present
+  loop:
+    - {name: "{{ model_store_group }}", gid: "{{ model_store_gid }}"}
+    - {name: "{{ model_store_exports_group }}", gid: "{{ model_store_exports_gid }}"}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create the account that owns the tree (no login, no home)
+  ansible.builtin.user:
+    name: "{{ model_store_owner }}"
+    uid: "{{ model_store_uid if model_store_uid | string != '' else omit }}"
+    group: "{{ model_store_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+    state: present

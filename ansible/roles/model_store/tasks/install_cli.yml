@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# The hf CLI, installed from the hashed requirements file shipped in this role: pip refuses any
+# archive whose sha256 is not listed (--require-hashes), so the CLI that downloads the weights is
+# itself pinned bytes. Without it a fresh guest fails the first fetch with rc 2 and no stderr.
+- name: The venv module is present
+  ansible.builtin.package:
+    name: python3-venv
+    state: present
+
+- name: Create the directory of the CLI's virtualenv
+  ansible.builtin.file:
+    path: "{{ model_store_hf_venv | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Place the hashed requirements
+  ansible.builtin.copy:
+    src: hf_requirements.txt
+    dest: "{{ model_store_hf_venv | dirname }}/hf_requirements.txt"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install huggingface_hub {{ model_store_hf_version }} by hash into the virtualenv
+  ansible.builtin.pip:
+    requirements: "{{ model_store_hf_venv | dirname }}/hf_requirements.txt"
+    virtualenv: "{{ model_store_hf_venv }}"
+    virtualenv_command: python3 -m venv
+    extra_args: "--require-hashes --no-deps --only-binary=:all:"
