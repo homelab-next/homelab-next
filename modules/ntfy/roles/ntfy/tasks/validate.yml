@@ -47,6 +47,12 @@
   when: ntfy_deadman_beats | length > 0
   tags: [health, backup, restore, export, upgrade]
   block:
+    - name: The schedule is one the watch knows (its interval is derived from it)
+      ansible.builtin.assert:
+        that: ntfy_deadman_schedule in ntfy_deadman_schedules
+        fail_msg: >-
+          ntfy: each dead-man beat needs a schedule the watch knows: ntfy_deadman_schedule is one of
+          {{ ntfy_deadman_schedules.keys() | list }}
     - name: Name the cache duration in seconds and the topics the publisher may not write
       ansible.builtin.set_fact:
         ntfy_cache_seconds: "{{ (ntfy_cache_duration[:-1] | int) * ntfy_cache_unit_seconds[ntfy_cache_duration[-1]] }}"
@@ -66,10 +72,8 @@
           - ntfy_deadman_unwritable == []
           - ntfy_deadman_alert_topic is match('^[-_A-Za-z0-9]{1,64}\\Z')
           - ntfy_deadman_alert_topic not in (ntfy_deadman_beats | map(attribute='topic', default='') | list)
-          - ntfy_deadman_interval_minutes | int in ntfy_deadman_intervals
         fail_msg: >-
           ntfy: each dead-man beat needs a unique slug name, a unique topic ([-_A-Za-z0-9], at most 64)
           the publisher may write ({{ ntfy_deadman_unwritable }} may not be) and a max_age_minutes of
           at least twice the watch interval ({{ ntfy_deadman_interval_minutes }} min) and at most half the
-          cache duration ({{ ntfy_cache_duration }}); the alert topic is another topic; the interval
-          is one of {{ ntfy_deadman_intervals }} minutes
+          cache duration ({{ ntfy_cache_duration }}); the alert topic is another topic

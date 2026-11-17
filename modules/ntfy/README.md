@@ -80,7 +80,7 @@ monitor on the thing being monitored cannot see its own death. This module is th
   module does, `prometheus_heartbeat_topic`, only while its metrics service answers AND its
   always-firing `Watchdog` rule fires).
 - **The watch** (`ntfy_deadman_beats`, default none) is a timer on **this** host
-  (`hnx-ntfy-deadman.timer`, every `ntfy_deadman_interval_minutes`, calendar based) that reads the
+  (`hnx-ntfy-deadman.timer`, every `ntfy_deadman_schedule`, default five minutes, a calendar) that reads the
   newest message time of each beat's topic from the message cache (read-only; no account needed to
   read) and pages through this service (to `ntfy_deadman_alert_topic`, the publisher token) when
   the newest is older than the beat's `max_age_minutes`, or when none was ever seen (counted from

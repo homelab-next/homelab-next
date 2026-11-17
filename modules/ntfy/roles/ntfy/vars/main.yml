@@ -190,7 +190,14 @@ ntfy_deadman_script: /usr/local/libexec/homelabnext/ntfy-deadman-watch
 ntfy_deadman_state_dir: /var/lib/homelabnext/ntfy-deadman
 ntfy_deadman_auth_file: /etc/homelabnext/ntfy-deadman.auth
 ntfy_deadman_cache_file: "{{ ntfy_data_root }}/db/cache.db"
-ntfy_deadman_schedule: "*-*-* *:0/{{ ntfy_deadman_interval_minutes | int }}:00 UTC"
-ntfy_deadman_intervals: [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30]
+ntfy_deadman_schedules:
+  "*-*-* *:*:00 UTC": 1
+  "*-*-* *:0/2:00 UTC": 2
+  "*-*-* *:0/3:00 UTC": 3
+  "*-*-* *:0/5:00 UTC": 5
+  "*-*-* *:0/10:00 UTC": 10
+  "*-*-* *:0/15:00 UTC": 15
+  "*-*-* *:0/30:00 UTC": 30
+ntfy_deadman_interval_minutes: "{{ ntfy_deadman_schedules[ntfy_deadman_schedule] }}"
 ntfy_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
 ntfy_cache_unit_seconds: {s: 1, m: 60, h: 3600, d: 86400}

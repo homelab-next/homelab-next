@@ -554,6 +554,12 @@ BAD = {
 }
 
 
+def test_a_schedule_the_watch_does_not_know_is_refused(tmp_path):
+    v = dvars(tmp_path, ntfy_deadman_schedule="*-*-* *:0/7:00 UTC")
+    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert r.returncode != 0 and "each dead-man beat needs" in r.stdout + r.stderr
+
+
 @pytest.mark.parametrize("beats", list(BAD.values()), ids=list(BAD))
 def test_a_bad_beat_is_refused_before_anything_is_written(tmp_path, beats):
     r = run_role(tmp_path, ROLE, "main", dvars(tmp_path, ntfy_deadman_beats=beats), env=SECRETS)

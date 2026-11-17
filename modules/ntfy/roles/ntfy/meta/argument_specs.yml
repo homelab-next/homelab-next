@@ -101,10 +101,10 @@ argument_specs:
         type: str
         description: "The topic the watch pages to."
         default: homelabnext-alerts
-      ntfy_deadman_interval_minutes: &dm_interval
-        type: int
-        description: "Minutes between the watch's runs (a divisor of 60, at most 30)."
-        default: 5
+      ntfy_deadman_schedule: &dm_schedule
+        type: str
+        description: "The watch's timer, an OnCalendar ending in UTC: every minute, or every 2, 3, 5, 10, 15 or 30 minutes (*-*-* *:0/N:00 UTC). The minutes between runs are derived from it."
+        default: "*-*-* *:0/5:00 UTC"
       ntfy_systemctl_cli: &systemctl
         type: str
         description: "The systemctl command."
@@ -140,7 +140,7 @@ argument_specs:
       ntfy_scratch_prefix: *scratch
       ntfy_health_timeout: *htimeout
       ntfy_deadman_beats: *dm_beats
-      ntfy_deadman_interval_minutes: *dm_interval
+      ntfy_deadman_schedule: *dm_schedule
       ntfy_last_run_dir: *lrdir
   readiness:
     short_description: Fail unless the container engine is ready and every credential resolves in its expected form.

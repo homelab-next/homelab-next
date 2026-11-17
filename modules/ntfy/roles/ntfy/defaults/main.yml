@@ -45,8 +45,10 @@ ntfy_health_timeout: 10
 # role's health are what notice that).
 ntfy_deadman_beats: []
 ntfy_deadman_alert_topic: homelabnext-alerts
-# minutes between the watch's runs: a divisor of 60 up to 30 (a calendar, not a boot-relative timer: LL-041)
-ntfy_deadman_interval_minutes: 5
+# the watch's timer: an OnCalendar ending in UTC (LL-041: a calendar, not a boot-relative timer), one
+# of ntfy_deadman_schedules (vars/main.yml); the minutes between its runs
+# (ntfy_deadman_interval_minutes) are derived from it, so the limits can never disagree with the timer
+ntfy_deadman_schedule: "*-*-* *:0/5:00 UTC"
 ntfy_systemctl_cli: systemctl
 ntfy_unit_dir: /etc/systemd/system
 # the shared last-run record directory (role last_run) and the group that may read it
