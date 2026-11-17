@@ -2,7 +2,8 @@
 """The HTTP surface of the ``context`` service (standard library only).
 
 Unauthenticated, and holding no content: ``GET /health`` (the process answers) and ``GET /ready``
-(indexed, how many documents, the last reindex's outcome; 503 until the first index).
+(``{ready}`` alone; 503 until the first index; with any caller's valid token also how many
+documents, whether the judge is on and the last reindex's outcome).
 
 Bearer-authenticated (``Authorization: Bearer <token>``; each caller is the sha256 of its token
 and a set of scopes; the admin caller's token comes from the environment):
@@ -13,13 +14,16 @@ and a set of scopes; the admin caller's token comes from the environment):
 * ``POST /v1/get`` (scope ``query``): ``{id, allowed, ceiling?}`` -> one hit, or 404 exactly as for
   an id that does not exist.
 * ``POST /v1/reindex`` (scope ``reindex``): fetch, collect and index now; 200 with the run's report,
-  500 with it when the run failed (the index unchanged), 409 while another runs.  The hook an
-  automation rule calls, and the timer's.
+  500 with it when the run failed (the index unchanged, but for documents whose label changed in
+  that run, which stay dropped: :mod:`.service`), 409 while another runs, 429 for a caller asking
+  sooner than ``reindex_min_interval_s`` after the last run finished (the admin, the timer's
+  caller, is not limited).  The hook an automation rule calls, and the timer's.
 * ``POST /v1/check`` (the admin's ``health`` scope): the canned query finds its item and the judge,
   when on, clears it; 200 or 503 with the reason.
 
 A missing or unknown token is 401, a scope the caller lacks 403; a malformed query 400 (the
-message never echoes the text), a body over the limit 413.
+message never echoes the text), a body over the limit 413.  A connection idle for
+:data:`SOCKET_TIMEOUT_S` is closed (the body is read before authentication).
 """
 
 from __future__ import annotations
@@ -47,6 +51,8 @@ class ApiError(Exception):
 
 
 ADMIN_SCOPES = frozenset({"reindex", "health"})
+#: seconds a connection may sit idle (reading the request or its body) before it is closed
+SOCKET_TIMEOUT_S = 30
 
 
 class Routes:
@@ -131,7 +137,12 @@ class Routes:
             return 200, {"status": "ok"}
         if method == "GET" and path == "/ready":
             r = self.service.ready()
-            return (200 if r["ready"] else 503), r
+            status = 200 if r["ready"] else 503
+            try:
+                self.caller(auth)
+            except ApiError:
+                return status, {"ready": r["ready"]}  # no counts without a token
+            return status, r
         routes = {"/v1/query": "query", "/v1/get": "query", "/v1/reindex": "reindex",
                   "/v1/check": "health"}  # fmt: skip
         if path not in routes:
@@ -142,6 +153,14 @@ class Routes:
         self._need(caller, routes[path])
         body = body or {}
         if path == "/v1/reindex":
+            last = self.service.last_finished
+            wait = self.service.cfg.reindex_min_interval_s
+            if (
+                caller.name != "admin"
+                and last is not None
+                and self.service.monotonic() - last < wait
+            ):
+                raise ApiError(429, f"a reindex finished less than {wait:g} s ago")
             try:
                 report = self.service.reindex()
             except ReindexBusy as exc:
@@ -170,7 +189,7 @@ class Routes:
         return 200, {
             "hits": [self._hit(h, lb) for h, lb in zip(hits, labels, strict=True)],
             "ceiling": str(ceiling),
-            "judged": self.service.judge_on,
+            "judged": self.service.judged_at(ceiling),
         }
 
 
@@ -180,6 +199,7 @@ def make_server(routes: Routes, bind: str, port: int) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         server_version = "hnx-context"
         sys_version = ""
+        timeout = SOCKET_TIMEOUT_S
 
         def log_message(self, fmt: str, *args: Any) -> None:  # no query text in the logs
             return

@@ -124,6 +124,7 @@ class Config:
     git: str = "git"
     git_timeout: float = 600.0
     max_body_bytes: int = 65536
+    reindex_min_interval_s: float = 60.0  # a caller's reindex sooner than this after the last: 429
 
 
 def _need(raw: Mapping[str, Any], key: str, where: str) -> Any:
@@ -363,6 +364,9 @@ def parse(raw: Any) -> Config:
         git=_str(raw.get("git", "git"), "git"),
         git_timeout=_num(raw.get("git_timeout", 600.0), "git_timeout", 5.0, 7200.0),
         max_body_bytes=_int(raw.get("max_body_bytes", 65536), "max_body_bytes", 1024, 1 << 22),
+        reindex_min_interval_s=_num(
+            raw.get("reindex_min_interval_s", 60.0), "reindex_min_interval_s", 0.0, 86400.0
+        ),
     )
 
 

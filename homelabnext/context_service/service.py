@@ -9,12 +9,25 @@ the configured sources, read at each caller's TLP ceiling, optionally gated by a
 * **Reindex** fetches every source, collects its documents, and then, under the store's lock,
   indexes them (only changed documents are embedded again), removes what no source holds any more,
   and first drops any document whose *label* changed with its content unchanged (the store would
-  keep the old label otherwise).  Fetching and reading happen before the lock: a failure anywhere
-  leaves the index exactly as it was.  The run's record is written to ``<data>/state/last-reindex.json``.
+  keep the old label otherwise).  Fetching and reading happen before the lock, so a failed fetch or
+  a malformed source leaves the index exactly as it was.  A failure of the indexing itself (the
+  embedder) also leaves it as it was **except** that the documents whose label changed in that run
+  stay dropped until the next successful run: the failure is closed (such a document is absent,
+  never readable at its old label), and the run's report counts them (``relabel_dropped``).  The
+  run's record is written to ``<data>/state/last-reindex.json``.
+* **Every hit is checked again under the store's lock** before it is answered: its label is read
+  in the same critical section and a hit that a concurrent reindex removed or raised above the
+  reader's ceiling is dropped (never a 500, never content above the ceiling).
 * **The judge** (optional; on when the configuration names one) is the abstention gate of
   :class:`~homelabnext.context.judge.JudgedStore` around the locked store: the store's order is kept,
-  and a query abstains when no top passage clears the threshold.  It never sends a passage above its
-  own ceiling.  The gate runs outside the lock (a judged query takes seconds).
+  and a query abstains when no top passage clears the threshold.  The gateway request carries the
+  caller's question as well as the passage, and the question is unlabelled data at the caller's
+  tier, so the label sent (``X-HNX-TLP``) is the request's **effective ceiling** (the strictest of
+  the passage's label and the ceiling, which is the ceiling: every passage is at or below it).  A
+  request whose effective ceiling is above the judge's ceiling is never sent: the judge's
+  ``on_error`` policy decides (``fallback``: the store's own ranking, unjudged; ``abstain``:
+  nothing); a caller that wants the gate lowers ``ceiling`` on its request, declaring its question
+  to be at that tier.  The gate runs outside the lock (a judged query takes seconds).
 """
 
 from __future__ import annotations
@@ -29,7 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext import tlp as _tlp
-from homelabnext.context import Hit, Query
+from homelabnext.context import Hit, NotFound, Query
 from homelabnext.context.judge import GatewayJudge, Judge, JudgedStore, JudgeError
 from homelabnext.context.model import Document
 from homelabnext.state import atomic_write_text
@@ -120,6 +133,7 @@ class ContextService:
         judge: Judge | None = None,
         runner: Callable[..., Any] | None = None,
         clock: Callable[[], str] = _now,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.cfg = cfg
         self._env = dict(os.environ if env is None else env)
@@ -129,24 +143,15 @@ class ContextService:
         self._store = (store_factory or make_store(cfg))(lambda d: self._labels[d.id])
         self._locked = _Locked(self._store, self._lock)
         self._judge = judge if judge is not None else make_judge(cfg, self._env)
-        self._judged = (
-            None
-            if self._judge is None
-            else JudgedStore(
-                self._locked,
-                self._judge,
-                top_k=cfg.judge.top_k,
-                threshold=cfg.judge.threshold,
-                judge_ceiling=cfg.judge.ceiling,
-                on_error=cfg.judge.on_error,
-                workers=cfg.judge.workers,
-            )
-        )
         self._runner = runner
         self._clock = clock
+        self.monotonic = monotonic
         self._ids: set[str] = set()
         self.last: dict[str, Any] | None = None
         self.indexed_once = False
+        #: time.monotonic() when the last reindex finished (the routes' rate limit reads it)
+        self.last_finished: float | None = None
+        self._relabel_dropped = 0
 
     # -- state --------------------------------------------------------------------------------
     @property
@@ -176,6 +181,7 @@ class ContextService:
         try:
             run = self._reindex(fetch)
         finally:
+            self.last_finished = self.monotonic()
             self._reindexing.release()
         self.last = run.report
         try:
@@ -188,6 +194,7 @@ class ContextService:
         started = self._clock()
         report: dict[str, Any] = {"started_at": started, "fetched": fetch, "sources": {}}
         collected: list[tuple[Document, _tlp.Label]] = []
+        self._relabel_dropped = 0
         try:
             for s in self.cfg.sources:
                 if fetch:
@@ -219,6 +226,7 @@ class ContextService:
             return _Run(False, report)
         except Exception as exc:  # the store's own failure (the embedder): the index is unchanged
             report.update(ok=False, error=f"indexing failed ({type(exc).__name__})")
+            report["relabel_dropped"] = self._relabel_dropped
             report["finished_at"] = self._clock()
             return _Run(False, report)
         report.update(ok=True, documents=len(collected), finished_at=self._clock(), **changes)
@@ -236,6 +244,7 @@ class ContextService:
             for i in sorted(relabel):
                 self._store.delete(i)
                 self._ids.discard(i)
+            self._relabel_dropped = len(relabel)
             self._labels = dict(new_labels)
             rep = self._store.index(docs)
             gone = sorted(self._ids - set(new_labels))
@@ -258,15 +267,42 @@ class ContextService:
             return caller.ceiling
         return min(caller.ceiling, _tlp.parse(asked))
 
+    def judged_at(self, ceiling: _tlp.Label) -> bool:
+        """Whether a query read at ``ceiling`` is put to the judge: the judge is on and the
+        request's label (its effective ceiling) is within the judge's ceiling."""
+        return self._judge is not None and _tlp.allows(self.cfg.judge.ceiling, ceiling)
+
     def query(self, q: Query, ceiling: _tlp.Label) -> tuple[list[Hit], list[_tlp.Label]]:
-        if self._judged is not None:
-            hits = self._judged.query(q, ceiling=ceiling)
+        """Hits at ``ceiling`` with their labels, each re-checked under the lock."""
+        if self._judge is not None:
+            j = self.cfg.judge
+            gate = JudgedStore(
+                self._locked,
+                self._judge,
+                top_k=j.top_k,
+                threshold=j.threshold,
+                # the label of what the gateway receives: the passage AND the caller's question
+                tlp_of=lambda _doc_id: ceiling,
+                judge_ceiling=j.ceiling,
+                on_error=j.on_error,
+                workers=j.workers,
+            )
+            hits = gate.query(q, ceiling=ceiling)
         else:
             hits = self._locked.query(q, ceiling=ceiling)
-        labels = []
-        for h in hits:
-            labels.append(self._locked.tlp(h.id))
-        return hits, labels
+        out: list[Hit] = []
+        labels: list[_tlp.Label] = []
+        with self._lock:
+            for h in hits:
+                try:
+                    label = self._store.tlp(h.id)
+                except NotFound:
+                    continue  # removed by a reindex since the store answered
+                if not _tlp.allows(ceiling, label):
+                    continue  # raised above the reader's ceiling since the store answered
+                out.append(h)
+                labels.append(label)
+        return out, labels
 
     def get(
         self, doc_id: str, allowed: frozenset[str], ceiling: _tlp.Label
@@ -277,9 +313,15 @@ class ContextService:
 
     def check(self) -> dict[str, Any]:
         """The canned query finds its known item; with the judge on, the judge answers that the
-        item answers it.  ``ok`` is false otherwise, with the reason."""
+        item answers it.  ``ok`` is false otherwise, with the reason.  Also the index's size and
+        the last reindex's outcome (``/ready`` shows them to an authenticated caller only)."""
         h = self.cfg.health
-        out: dict[str, Any] = {"ok": False, "judge": {"on": self.judge_on}}
+        out: dict[str, Any] = {
+            "ok": False,
+            "judge": {"on": self.judge_on},
+            "documents": self.documents,
+            "last_reindex_ok": bool((self.last or {}).get("ok")),
+        }
         if not self.indexed_once:
             out["reason"] = "not indexed yet"
             return out
@@ -294,9 +336,10 @@ class ContextService:
         out["rank"] = ids.index(h.expect) + 1
         if self._judge is not None:
             hit = hits[ids.index(h.expect)]
-            label = self._locked.tlp(hit.id)
+            # what is sent: the canned question (at the health query's ceiling) and the passage
+            label = _tlp.strictest([self._locked.tlp(hit.id), h.ceiling])
             if not _tlp.allows(self.cfg.judge.ceiling, label):
-                out["reason"] = "the canned item is above the judge's ceiling"
+                out["reason"] = "the canned query's ceiling is above the judge's ceiling"
                 return out
             try:
                 v = self._judge.judge(h.text, hit, label)
