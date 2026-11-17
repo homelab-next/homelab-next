@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The context retrieval service: a compose_app container built from this repository, a semantic index over the site's git sources, every item labelled with its TLP and every read at the caller's ceiling, an optional judge through the gateway's decision role, and a reindex timer."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

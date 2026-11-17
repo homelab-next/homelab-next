@@ -1,0 +1,18 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (module context, role context); local changes are overwritten.
+[Unit]
+Description=Context index: fetch every source and index what changed
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# the job's last-run record (role last_run), written on start and again on stop, whatever the
+# outcome; a writer problem never changes the job's own result (the - prefix)
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ context_last_run_dir }} --group {{ context_last_run_group }} --job timer:context/reindex --unit %n --calendar "{{ context_reindex_schedule }}" --delay 300
+ExecStart={{ context_docker_cli }} compose -f {{ context_dir }}/docker-compose.yml exec -T context python -m homelabnext.context_service reindex {{ context_reindex_timeout_s | int }}
+TimeoutStartSec={{ context_reindex_timeout_s | int + 60 }}
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ context_last_run_dir }} --group {{ context_last_run_group }} --job timer:context/reindex --unit %n --calendar "{{ context_reindex_schedule }}" --delay 300
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true

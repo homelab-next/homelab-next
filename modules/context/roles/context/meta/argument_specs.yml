@@ -1,0 +1,1230 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: 'Run the context retrieval service as a compose_app container: a semantic index
+      over the site''s git sources, every item labelled with its TLP, every read at the caller''s ceiling,
+      an optional judge, and a reindex timer.'
+    options:
+      context_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. context).
+        required: true
+      context_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (modules/context/image/Dockerfile);
+          no default: there is no published image to pin.'
+        required: true
+      context_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: the daemon must have it.'
+        default: ''
+      context_build_repositories:
+        type: list
+        description: 'The repositories context_image may name: the image built from this repository; any
+          other is refused.'
+        elements: str
+        default:
+        - localhost/hnx-context
+      context_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      context_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8094
+      context_dir:
+        type: path
+        description: The compose project directory (docker-compose.yml, config.json, the secret env file).
+        default: /opt/compose/context
+      context_data_root:
+        type: path
+        description: 'The module''s data root: the git checkouts, the last reindex''s record and the libraries''
+          scratch, all derived (rebuilt by a reindex).'
+        default: /var/lib/hnx-modules/context
+      context_owner:
+        type: str
+        description: Owner of the compose project and the units.
+        default: root
+      context_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns the data root.
+        default: 61013
+      context_gid:
+        type: int
+        description: The container's group id.
+        default: 61013
+      context_sources:
+        type: list
+        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        elements: dict
+        default: []
+      context_callers:
+        type: list
+        description: 'The callers: {name, secret, ceiling, scopes} with scopes from query and reindex;
+          only each token''s sha256 reaches the service.'
+        elements: dict
+        default: []
+      context_admin_ref:
+        type: str
+        description: The admin token's secret (the timer's reindex and the health hook's self-check; never
+          query).
+        default: secret:context/admin-token
+      context_health_query:
+        type: dict
+        description: 'The canned query: {text, expect: the id of a known document, ceiling}; required
+          (no lab value has a default).'
+        default: {}
+      context_gateway_id:
+        type: str
+        description: 'The gateway''s registry id; empty: the judge is off (plain ranking).'
+        default: ''
+      context_gateway_key_ref:
+        type: str
+        description: The secret of the key this service presents to the gateway (read only when context_gateway_id
+          is set).
+        default: secret:context/gateway-key
+      context_judge_role:
+        type: str
+        description: The gateway's decision role the judge asks (kind decision).
+        default: fast-classifier
+      context_judge_threshold:
+        type: float
+        description: Abstain when no top passage reaches this probability (the eval's 0.10).
+        default: 0.1
+      context_judge_workers:
+        type: int
+        description: Concurrent judge calls (the decision server's parallel slots).
+        default: 2
+      context_judge_top_k:
+        type: int
+        description: How many top passages the judge may be asked about.
+        default: 5
+      context_judge_ceiling:
+        type: str
+        description: The most restrictive TLP label a passage sent to the gateway may carry.
+        default: amber
+      context_judge_on_error:
+        type: str
+        description: 'A judge failure: fallback (the store''s own ranking) or abstain.'
+        default: fallback
+      context_allow_plain_http:
+        type: bool
+        description: 'Allow a gateway or a source over plain http (LAN only): the key or credential then
+          travels in clear.'
+        default: false
+      context_dense_weight:
+        type: float
+        description: The semantic adapter's weight of the dense score in [0, 1].
+        default: 0.5
+      context_min_similarity:
+        type: float
+        description: The cosine a document needs to be a hit without a shared word.
+        default: 0.36
+      context_min_score:
+        type: float
+        description: The fused score a hit needs (0 keeps every hit).
+        default: 0.0
+      context_reindex_schedule:
+        type: str
+        description: The reindex timer's OnCalendar.
+        default: '*-*-* *:20:00 UTC'
+      context_reindex_timeout_s:
+        type: int
+        description: Seconds one reindex (fetch and index) may take.
+        default: 1800
+      context_last_run_dir:
+        type: path
+        description: The last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      context_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      context_unit_dir:
+        type: path
+        description: Where the reindex units are written.
+        default: /etc/systemd/system
+      context_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      context_docker_cli:
+        type: path
+        description: 'The docker command (absolute: the timer''s unit runs it).'
+        default: /usr/bin/docker
+      context_mem_limit:
+        type: str
+        description: The container's memory limit, like 3g.
+        default: 3g
+      context_start:
+        type: bool
+        description: 'Start (and wait for) the service and the timer (false: render only).'
+        default: true
+      context_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      context_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      context_check_timeout_s:
+        type: int
+        description: Seconds the self-check (the canned query and, with the judge on, one decision call)
+          may take.
+        default: 120
+  health:
+    short_description: Fail unless the container is healthy, /ready holds documents after a successful
+      reindex, the self-check finds its canned item (and the judge, when on, clears it) and the timer
+      is enabled.
+    options:
+      context_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. context).
+        required: true
+      context_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (modules/context/image/Dockerfile);
+          no default: there is no published image to pin.'
+        required: true
+      context_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: the daemon must have it.'
+        default: ''
+      context_build_repositories:
+        type: list
+        description: 'The repositories context_image may name: the image built from this repository; any
+          other is refused.'
+        elements: str
+        default:
+        - localhost/hnx-context
+      context_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      context_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8094
+      context_dir:
+        type: path
+        description: The compose project directory (docker-compose.yml, config.json, the secret env file).
+        default: /opt/compose/context
+      context_data_root:
+        type: path
+        description: 'The module''s data root: the git checkouts, the last reindex''s record and the libraries''
+          scratch, all derived (rebuilt by a reindex).'
+        default: /var/lib/hnx-modules/context
+      context_owner:
+        type: str
+        description: Owner of the compose project and the units.
+        default: root
+      context_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns the data root.
+        default: 61013
+      context_gid:
+        type: int
+        description: The container's group id.
+        default: 61013
+      context_sources:
+        type: list
+        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        elements: dict
+        default: []
+      context_callers:
+        type: list
+        description: 'The callers: {name, secret, ceiling, scopes} with scopes from query and reindex;
+          only each token''s sha256 reaches the service.'
+        elements: dict
+        default: []
+      context_admin_ref:
+        type: str
+        description: The admin token's secret (the timer's reindex and the health hook's self-check; never
+          query).
+        default: secret:context/admin-token
+      context_health_query:
+        type: dict
+        description: 'The canned query: {text, expect: the id of a known document, ceiling}; required
+          (no lab value has a default).'
+        default: {}
+      context_gateway_id:
+        type: str
+        description: 'The gateway''s registry id; empty: the judge is off (plain ranking).'
+        default: ''
+      context_gateway_key_ref:
+        type: str
+        description: The secret of the key this service presents to the gateway (read only when context_gateway_id
+          is set).
+        default: secret:context/gateway-key
+      context_judge_role:
+        type: str
+        description: The gateway's decision role the judge asks (kind decision).
+        default: fast-classifier
+      context_judge_threshold:
+        type: float
+        description: Abstain when no top passage reaches this probability (the eval's 0.10).
+        default: 0.1
+      context_judge_workers:
+        type: int
+        description: Concurrent judge calls (the decision server's parallel slots).
+        default: 2
+      context_judge_top_k:
+        type: int
+        description: How many top passages the judge may be asked about.
+        default: 5
+      context_judge_ceiling:
+        type: str
+        description: The most restrictive TLP label a passage sent to the gateway may carry.
+        default: amber
+      context_judge_on_error:
+        type: str
+        description: 'A judge failure: fallback (the store''s own ranking) or abstain.'
+        default: fallback
+      context_allow_plain_http:
+        type: bool
+        description: 'Allow a gateway or a source over plain http (LAN only): the key or credential then
+          travels in clear.'
+        default: false
+      context_dense_weight:
+        type: float
+        description: The semantic adapter's weight of the dense score in [0, 1].
+        default: 0.5
+      context_min_similarity:
+        type: float
+        description: The cosine a document needs to be a hit without a shared word.
+        default: 0.36
+      context_min_score:
+        type: float
+        description: The fused score a hit needs (0 keeps every hit).
+        default: 0.0
+      context_reindex_schedule:
+        type: str
+        description: The reindex timer's OnCalendar.
+        default: '*-*-* *:20:00 UTC'
+      context_reindex_timeout_s:
+        type: int
+        description: Seconds one reindex (fetch and index) may take.
+        default: 1800
+      context_last_run_dir:
+        type: path
+        description: The last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      context_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      context_unit_dir:
+        type: path
+        description: Where the reindex units are written.
+        default: /etc/systemd/system
+      context_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      context_docker_cli:
+        type: path
+        description: 'The docker command (absolute: the timer''s unit runs it).'
+        default: /usr/bin/docker
+      context_mem_limit:
+        type: str
+        description: The container's memory limit, like 3g.
+        default: 3g
+      context_start:
+        type: bool
+        description: 'Start (and wait for) the service and the timer (false: render only).'
+        default: true
+      context_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      context_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      context_check_timeout_s:
+        type: int
+        description: Seconds the self-check (the canned query and, with the judge on, one decision call)
+          may take.
+        default: 120
+  readiness:
+    short_description: Fail unless the container engine is ready, every credential resolves in its form
+      and the gateway (when the judge is on) is in the registry.
+    options:
+      context_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. context).
+        required: true
+      context_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (modules/context/image/Dockerfile);
+          no default: there is no published image to pin.'
+        required: true
+      context_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: the daemon must have it.'
+        default: ''
+      context_build_repositories:
+        type: list
+        description: 'The repositories context_image may name: the image built from this repository; any
+          other is refused.'
+        elements: str
+        default:
+        - localhost/hnx-context
+      context_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      context_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8094
+      context_dir:
+        type: path
+        description: The compose project directory (docker-compose.yml, config.json, the secret env file).
+        default: /opt/compose/context
+      context_data_root:
+        type: path
+        description: 'The module''s data root: the git checkouts, the last reindex''s record and the libraries''
+          scratch, all derived (rebuilt by a reindex).'
+        default: /var/lib/hnx-modules/context
+      context_owner:
+        type: str
+        description: Owner of the compose project and the units.
+        default: root
+      context_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns the data root.
+        default: 61013
+      context_gid:
+        type: int
+        description: The container's group id.
+        default: 61013
+      context_sources:
+        type: list
+        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        elements: dict
+        default: []
+      context_callers:
+        type: list
+        description: 'The callers: {name, secret, ceiling, scopes} with scopes from query and reindex;
+          only each token''s sha256 reaches the service.'
+        elements: dict
+        default: []
+      context_admin_ref:
+        type: str
+        description: The admin token's secret (the timer's reindex and the health hook's self-check; never
+          query).
+        default: secret:context/admin-token
+      context_health_query:
+        type: dict
+        description: 'The canned query: {text, expect: the id of a known document, ceiling}; required
+          (no lab value has a default).'
+        default: {}
+      context_gateway_id:
+        type: str
+        description: 'The gateway''s registry id; empty: the judge is off (plain ranking).'
+        default: ''
+      context_gateway_key_ref:
+        type: str
+        description: The secret of the key this service presents to the gateway (read only when context_gateway_id
+          is set).
+        default: secret:context/gateway-key
+      context_judge_role:
+        type: str
+        description: The gateway's decision role the judge asks (kind decision).
+        default: fast-classifier
+      context_judge_threshold:
+        type: float
+        description: Abstain when no top passage reaches this probability (the eval's 0.10).
+        default: 0.1
+      context_judge_workers:
+        type: int
+        description: Concurrent judge calls (the decision server's parallel slots).
+        default: 2
+      context_judge_top_k:
+        type: int
+        description: How many top passages the judge may be asked about.
+        default: 5
+      context_judge_ceiling:
+        type: str
+        description: The most restrictive TLP label a passage sent to the gateway may carry.
+        default: amber
+      context_judge_on_error:
+        type: str
+        description: 'A judge failure: fallback (the store''s own ranking) or abstain.'
+        default: fallback
+      context_allow_plain_http:
+        type: bool
+        description: 'Allow a gateway or a source over plain http (LAN only): the key or credential then
+          travels in clear.'
+        default: false
+      context_dense_weight:
+        type: float
+        description: The semantic adapter's weight of the dense score in [0, 1].
+        default: 0.5
+      context_min_similarity:
+        type: float
+        description: The cosine a document needs to be a hit without a shared word.
+        default: 0.36
+      context_min_score:
+        type: float
+        description: The fused score a hit needs (0 keeps every hit).
+        default: 0.0
+      context_reindex_schedule:
+        type: str
+        description: The reindex timer's OnCalendar.
+        default: '*-*-* *:20:00 UTC'
+      context_reindex_timeout_s:
+        type: int
+        description: Seconds one reindex (fetch and index) may take.
+        default: 1800
+      context_last_run_dir:
+        type: path
+        description: The last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      context_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      context_unit_dir:
+        type: path
+        description: Where the reindex units are written.
+        default: /etc/systemd/system
+      context_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      context_docker_cli:
+        type: path
+        description: 'The docker command (absolute: the timer''s unit runs it).'
+        default: /usr/bin/docker
+      context_mem_limit:
+        type: str
+        description: The container's memory limit, like 3g.
+        default: 3g
+      context_start:
+        type: bool
+        description: 'Start (and wait for) the service and the timer (false: render only).'
+        default: true
+      context_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      context_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      context_check_timeout_s:
+        type: int
+        description: Seconds the self-check (the canned query and, with the judge on, one decision call)
+          may take.
+        default: 120
+  backup:
+    short_description: 'Write a backup manifest naming no path: the index and the checkouts are derived
+      from the sources.'
+    options:
+      context_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. context).
+        required: true
+      context_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (modules/context/image/Dockerfile);
+          no default: there is no published image to pin.'
+        required: true
+      context_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: the daemon must have it.'
+        default: ''
+      context_build_repositories:
+        type: list
+        description: 'The repositories context_image may name: the image built from this repository; any
+          other is refused.'
+        elements: str
+        default:
+        - localhost/hnx-context
+      context_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      context_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8094
+      context_dir:
+        type: path
+        description: The compose project directory (docker-compose.yml, config.json, the secret env file).
+        default: /opt/compose/context
+      context_data_root:
+        type: path
+        description: 'The module''s data root: the git checkouts, the last reindex''s record and the libraries''
+          scratch, all derived (rebuilt by a reindex).'
+        default: /var/lib/hnx-modules/context
+      context_owner:
+        type: str
+        description: Owner of the compose project and the units.
+        default: root
+      context_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns the data root.
+        default: 61013
+      context_gid:
+        type: int
+        description: The container's group id.
+        default: 61013
+      context_sources:
+        type: list
+        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        elements: dict
+        default: []
+      context_callers:
+        type: list
+        description: 'The callers: {name, secret, ceiling, scopes} with scopes from query and reindex;
+          only each token''s sha256 reaches the service.'
+        elements: dict
+        default: []
+      context_admin_ref:
+        type: str
+        description: The admin token's secret (the timer's reindex and the health hook's self-check; never
+          query).
+        default: secret:context/admin-token
+      context_health_query:
+        type: dict
+        description: 'The canned query: {text, expect: the id of a known document, ceiling}; required
+          (no lab value has a default).'
+        default: {}
+      context_gateway_id:
+        type: str
+        description: 'The gateway''s registry id; empty: the judge is off (plain ranking).'
+        default: ''
+      context_gateway_key_ref:
+        type: str
+        description: The secret of the key this service presents to the gateway (read only when context_gateway_id
+          is set).
+        default: secret:context/gateway-key
+      context_judge_role:
+        type: str
+        description: The gateway's decision role the judge asks (kind decision).
+        default: fast-classifier
+      context_judge_threshold:
+        type: float
+        description: Abstain when no top passage reaches this probability (the eval's 0.10).
+        default: 0.1
+      context_judge_workers:
+        type: int
+        description: Concurrent judge calls (the decision server's parallel slots).
+        default: 2
+      context_judge_top_k:
+        type: int
+        description: How many top passages the judge may be asked about.
+        default: 5
+      context_judge_ceiling:
+        type: str
+        description: The most restrictive TLP label a passage sent to the gateway may carry.
+        default: amber
+      context_judge_on_error:
+        type: str
+        description: 'A judge failure: fallback (the store''s own ranking) or abstain.'
+        default: fallback
+      context_allow_plain_http:
+        type: bool
+        description: 'Allow a gateway or a source over plain http (LAN only): the key or credential then
+          travels in clear.'
+        default: false
+      context_dense_weight:
+        type: float
+        description: The semantic adapter's weight of the dense score in [0, 1].
+        default: 0.5
+      context_min_similarity:
+        type: float
+        description: The cosine a document needs to be a hit without a shared word.
+        default: 0.36
+      context_min_score:
+        type: float
+        description: The fused score a hit needs (0 keeps every hit).
+        default: 0.0
+      context_reindex_schedule:
+        type: str
+        description: The reindex timer's OnCalendar.
+        default: '*-*-* *:20:00 UTC'
+      context_reindex_timeout_s:
+        type: int
+        description: Seconds one reindex (fetch and index) may take.
+        default: 1800
+      context_last_run_dir:
+        type: path
+        description: The last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      context_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      context_unit_dir:
+        type: path
+        description: Where the reindex units are written.
+        default: /etc/systemd/system
+      context_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      context_docker_cli:
+        type: path
+        description: 'The docker command (absolute: the timer''s unit runs it).'
+        default: /usr/bin/docker
+      context_mem_limit:
+        type: str
+        description: The container's memory limit, like 3g.
+        default: 3g
+      context_start:
+        type: bool
+        description: 'Start (and wait for) the service and the timer (false: render only).'
+        default: true
+      context_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      context_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      context_check_timeout_s:
+        type: int
+        description: Seconds the self-check (the canned query and, with the judge on, one decision call)
+          may take.
+        default: 120
+  restore:
+    short_description: 'Nothing to restore: the index is rebuilt from the sources at every start.'
+    options:
+      context_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. context).
+        required: true
+      context_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (modules/context/image/Dockerfile);
+          no default: there is no published image to pin.'
+        required: true
+      context_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: the daemon must have it.'
+        default: ''
+      context_build_repositories:
+        type: list
+        description: 'The repositories context_image may name: the image built from this repository; any
+          other is refused.'
+        elements: str
+        default:
+        - localhost/hnx-context
+      context_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      context_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8094
+      context_dir:
+        type: path
+        description: The compose project directory (docker-compose.yml, config.json, the secret env file).
+        default: /opt/compose/context
+      context_data_root:
+        type: path
+        description: 'The module''s data root: the git checkouts, the last reindex''s record and the libraries''
+          scratch, all derived (rebuilt by a reindex).'
+        default: /var/lib/hnx-modules/context
+      context_owner:
+        type: str
+        description: Owner of the compose project and the units.
+        default: root
+      context_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns the data root.
+        default: 61013
+      context_gid:
+        type: int
+        description: The container's group id.
+        default: 61013
+      context_sources:
+        type: list
+        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        elements: dict
+        default: []
+      context_callers:
+        type: list
+        description: 'The callers: {name, secret, ceiling, scopes} with scopes from query and reindex;
+          only each token''s sha256 reaches the service.'
+        elements: dict
+        default: []
+      context_admin_ref:
+        type: str
+        description: The admin token's secret (the timer's reindex and the health hook's self-check; never
+          query).
+        default: secret:context/admin-token
+      context_health_query:
+        type: dict
+        description: 'The canned query: {text, expect: the id of a known document, ceiling}; required
+          (no lab value has a default).'
+        default: {}
+      context_gateway_id:
+        type: str
+        description: 'The gateway''s registry id; empty: the judge is off (plain ranking).'
+        default: ''
+      context_gateway_key_ref:
+        type: str
+        description: The secret of the key this service presents to the gateway (read only when context_gateway_id
+          is set).
+        default: secret:context/gateway-key
+      context_judge_role:
+        type: str
+        description: The gateway's decision role the judge asks (kind decision).
+        default: fast-classifier
+      context_judge_threshold:
+        type: float
+        description: Abstain when no top passage reaches this probability (the eval's 0.10).
+        default: 0.1
+      context_judge_workers:
+        type: int
+        description: Concurrent judge calls (the decision server's parallel slots).
+        default: 2
+      context_judge_top_k:
+        type: int
+        description: How many top passages the judge may be asked about.
+        default: 5
+      context_judge_ceiling:
+        type: str
+        description: The most restrictive TLP label a passage sent to the gateway may carry.
+        default: amber
+      context_judge_on_error:
+        type: str
+        description: 'A judge failure: fallback (the store''s own ranking) or abstain.'
+        default: fallback
+      context_allow_plain_http:
+        type: bool
+        description: 'Allow a gateway or a source over plain http (LAN only): the key or credential then
+          travels in clear.'
+        default: false
+      context_dense_weight:
+        type: float
+        description: The semantic adapter's weight of the dense score in [0, 1].
+        default: 0.5
+      context_min_similarity:
+        type: float
+        description: The cosine a document needs to be a hit without a shared word.
+        default: 0.36
+      context_min_score:
+        type: float
+        description: The fused score a hit needs (0 keeps every hit).
+        default: 0.0
+      context_reindex_schedule:
+        type: str
+        description: The reindex timer's OnCalendar.
+        default: '*-*-* *:20:00 UTC'
+      context_reindex_timeout_s:
+        type: int
+        description: Seconds one reindex (fetch and index) may take.
+        default: 1800
+      context_last_run_dir:
+        type: path
+        description: The last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      context_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      context_unit_dir:
+        type: path
+        description: Where the reindex units are written.
+        default: /etc/systemd/system
+      context_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      context_docker_cli:
+        type: path
+        description: 'The docker command (absolute: the timer''s unit runs it).'
+        default: /usr/bin/docker
+      context_mem_limit:
+        type: str
+        description: The container's memory limit, like 3g.
+        default: 3g
+      context_start:
+        type: bool
+        description: 'Start (and wait for) the service and the timer (false: render only).'
+        default: true
+      context_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      context_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      context_check_timeout_s:
+        type: int
+        description: Seconds the self-check (the canned query and, with the judge on, one decision call)
+          may take.
+        default: 120
+  export:
+    short_description: 'Nothing to export: the slot is stateless and the sources are the data.'
+    options:
+      context_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. context).
+        required: true
+      context_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (modules/context/image/Dockerfile);
+          no default: there is no published image to pin.'
+        required: true
+      context_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: the daemon must have it.'
+        default: ''
+      context_build_repositories:
+        type: list
+        description: 'The repositories context_image may name: the image built from this repository; any
+          other is refused.'
+        elements: str
+        default:
+        - localhost/hnx-context
+      context_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      context_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8094
+      context_dir:
+        type: path
+        description: The compose project directory (docker-compose.yml, config.json, the secret env file).
+        default: /opt/compose/context
+      context_data_root:
+        type: path
+        description: 'The module''s data root: the git checkouts, the last reindex''s record and the libraries''
+          scratch, all derived (rebuilt by a reindex).'
+        default: /var/lib/hnx-modules/context
+      context_owner:
+        type: str
+        description: Owner of the compose project and the units.
+        default: root
+      context_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns the data root.
+        default: 61013
+      context_gid:
+        type: int
+        description: The container's group id.
+        default: 61013
+      context_sources:
+        type: list
+        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        elements: dict
+        default: []
+      context_callers:
+        type: list
+        description: 'The callers: {name, secret, ceiling, scopes} with scopes from query and reindex;
+          only each token''s sha256 reaches the service.'
+        elements: dict
+        default: []
+      context_admin_ref:
+        type: str
+        description: The admin token's secret (the timer's reindex and the health hook's self-check; never
+          query).
+        default: secret:context/admin-token
+      context_health_query:
+        type: dict
+        description: 'The canned query: {text, expect: the id of a known document, ceiling}; required
+          (no lab value has a default).'
+        default: {}
+      context_gateway_id:
+        type: str
+        description: 'The gateway''s registry id; empty: the judge is off (plain ranking).'
+        default: ''
+      context_gateway_key_ref:
+        type: str
+        description: The secret of the key this service presents to the gateway (read only when context_gateway_id
+          is set).
+        default: secret:context/gateway-key
+      context_judge_role:
+        type: str
+        description: The gateway's decision role the judge asks (kind decision).
+        default: fast-classifier
+      context_judge_threshold:
+        type: float
+        description: Abstain when no top passage reaches this probability (the eval's 0.10).
+        default: 0.1
+      context_judge_workers:
+        type: int
+        description: Concurrent judge calls (the decision server's parallel slots).
+        default: 2
+      context_judge_top_k:
+        type: int
+        description: How many top passages the judge may be asked about.
+        default: 5
+      context_judge_ceiling:
+        type: str
+        description: The most restrictive TLP label a passage sent to the gateway may carry.
+        default: amber
+      context_judge_on_error:
+        type: str
+        description: 'A judge failure: fallback (the store''s own ranking) or abstain.'
+        default: fallback
+      context_allow_plain_http:
+        type: bool
+        description: 'Allow a gateway or a source over plain http (LAN only): the key or credential then
+          travels in clear.'
+        default: false
+      context_dense_weight:
+        type: float
+        description: The semantic adapter's weight of the dense score in [0, 1].
+        default: 0.5
+      context_min_similarity:
+        type: float
+        description: The cosine a document needs to be a hit without a shared word.
+        default: 0.36
+      context_min_score:
+        type: float
+        description: The fused score a hit needs (0 keeps every hit).
+        default: 0.0
+      context_reindex_schedule:
+        type: str
+        description: The reindex timer's OnCalendar.
+        default: '*-*-* *:20:00 UTC'
+      context_reindex_timeout_s:
+        type: int
+        description: Seconds one reindex (fetch and index) may take.
+        default: 1800
+      context_last_run_dir:
+        type: path
+        description: The last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      context_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      context_unit_dir:
+        type: path
+        description: Where the reindex units are written.
+        default: /etc/systemd/system
+      context_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      context_docker_cli:
+        type: path
+        description: 'The docker command (absolute: the timer''s unit runs it).'
+        default: /usr/bin/docker
+      context_mem_limit:
+        type: str
+        description: The container's memory limit, like 3g.
+        default: 3g
+      context_start:
+        type: bool
+        description: 'Start (and wait for) the service and the timer (false: render only).'
+        default: true
+      context_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      context_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      context_check_timeout_s:
+        type: int
+        description: Seconds the self-check (the canned query and, with the judge on, one decision call)
+          may take.
+        default: 120
+  upgrade:
+    short_description: Validate a new image of the same repository and record it as pending.
+    options:
+      context_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. context).
+        required: true
+      context_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (modules/context/image/Dockerfile);
+          no default: there is no published image to pin.'
+        required: true
+      context_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: the daemon must have it.'
+        default: ''
+      context_build_repositories:
+        type: list
+        description: 'The repositories context_image may name: the image built from this repository; any
+          other is refused.'
+        elements: str
+        default:
+        - localhost/hnx-context
+      context_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      context_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8094
+      context_dir:
+        type: path
+        description: The compose project directory (docker-compose.yml, config.json, the secret env file).
+        default: /opt/compose/context
+      context_data_root:
+        type: path
+        description: 'The module''s data root: the git checkouts, the last reindex''s record and the libraries''
+          scratch, all derived (rebuilt by a reindex).'
+        default: /var/lib/hnx-modules/context
+      context_owner:
+        type: str
+        description: Owner of the compose project and the units.
+        default: root
+      context_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns the data root.
+        default: 61013
+      context_gid:
+        type: int
+        description: The container's group id.
+        default: 61013
+      context_sources:
+        type: list
+        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        elements: dict
+        default: []
+      context_callers:
+        type: list
+        description: 'The callers: {name, secret, ceiling, scopes} with scopes from query and reindex;
+          only each token''s sha256 reaches the service.'
+        elements: dict
+        default: []
+      context_admin_ref:
+        type: str
+        description: The admin token's secret (the timer's reindex and the health hook's self-check; never
+          query).
+        default: secret:context/admin-token
+      context_health_query:
+        type: dict
+        description: 'The canned query: {text, expect: the id of a known document, ceiling}; required
+          (no lab value has a default).'
+        default: {}
+      context_gateway_id:
+        type: str
+        description: 'The gateway''s registry id; empty: the judge is off (plain ranking).'
+        default: ''
+      context_gateway_key_ref:
+        type: str
+        description: The secret of the key this service presents to the gateway (read only when context_gateway_id
+          is set).
+        default: secret:context/gateway-key
+      context_judge_role:
+        type: str
+        description: The gateway's decision role the judge asks (kind decision).
+        default: fast-classifier
+      context_judge_threshold:
+        type: float
+        description: Abstain when no top passage reaches this probability (the eval's 0.10).
+        default: 0.1
+      context_judge_workers:
+        type: int
+        description: Concurrent judge calls (the decision server's parallel slots).
+        default: 2
+      context_judge_top_k:
+        type: int
+        description: How many top passages the judge may be asked about.
+        default: 5
+      context_judge_ceiling:
+        type: str
+        description: The most restrictive TLP label a passage sent to the gateway may carry.
+        default: amber
+      context_judge_on_error:
+        type: str
+        description: 'A judge failure: fallback (the store''s own ranking) or abstain.'
+        default: fallback
+      context_allow_plain_http:
+        type: bool
+        description: 'Allow a gateway or a source over plain http (LAN only): the key or credential then
+          travels in clear.'
+        default: false
+      context_dense_weight:
+        type: float
+        description: The semantic adapter's weight of the dense score in [0, 1].
+        default: 0.5
+      context_min_similarity:
+        type: float
+        description: The cosine a document needs to be a hit without a shared word.
+        default: 0.36
+      context_min_score:
+        type: float
+        description: The fused score a hit needs (0 keeps every hit).
+        default: 0.0
+      context_reindex_schedule:
+        type: str
+        description: The reindex timer's OnCalendar.
+        default: '*-*-* *:20:00 UTC'
+      context_reindex_timeout_s:
+        type: int
+        description: Seconds one reindex (fetch and index) may take.
+        default: 1800
+      context_last_run_dir:
+        type: path
+        description: The last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      context_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      context_unit_dir:
+        type: path
+        description: Where the reindex units are written.
+        default: /etc/systemd/system
+      context_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      context_docker_cli:
+        type: path
+        description: 'The docker command (absolute: the timer''s unit runs it).'
+        default: /usr/bin/docker
+      context_mem_limit:
+        type: str
+        description: The container's memory limit, like 3g.
+        default: 3g
+      context_start:
+        type: bool
+        description: 'Start (and wait for) the service and the timer (false: render only).'
+        default: true
+      context_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      context_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      context_check_timeout_s:
+        type: int
+        description: Seconds the self-check (the canned query and, with the judge on, one decision call)
+          may take.
+        default: 120
+      context_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the build to move to (same repository).
+        required: true

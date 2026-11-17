@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The service's dependencies: the container engine (docker_engine, applied to the guest before this
+# module), every credential in the secret store, and, with the judge on, the gateway's registry row.
+# The sources themselves are fetched by the service; a source that cannot be reached shows in the
+# first reindex's record and in /ready.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every credential resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: The gateway is in the registry (the judge is on)
+      ansible.builtin.assert:
+        that:
+          - lookup('hnx_registry', context_gateway_id, field='url') | length > 0
+        fail_msg: "context: the gateway {{ context_gateway_id }} is not in the registry"
+      when: context_gateway_id != ''
+  tags: [readiness]

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+context_repository: "{{ context_image.split('@')[0].rsplit(':', 1)[0] }}"
+context_tag: "{{ context_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+context_digest: "{{ context_image.split('@')[1] | default('') }}"
+context_container_port: 8094
+context_container_config: /etc/hnx-context/config.json
+context_container_data: /data
+# the model is in the image (fetched and verified at build; checked again at every start)
+context_container_model: /opt/hnx-context/model
+context_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
+context_reindex_unit: hnx-context-reindex
+context_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+context_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+context_slug_pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+# a secret-store reference in the module's own namespace (context/, checked beside it)
+context_store_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]{0,134}\Z'
+context_bearer_pattern: '^[A-Za-z0-9._~+/=-]{32,256}\Z'
+context_tlp_labels: [clear, green, amber, amber+strict, red]
+context_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+# a URL host that is a number (decimal or 0x IPv4) or localhost, which the dotted pattern does not see
+context_numeric_host_pattern: '(?i)^((0x[0-9a-f]+|[0-9]+)|localhost|.*\.localhost)\Z'

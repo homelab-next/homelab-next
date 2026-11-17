@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy; /health answers; /ready says the index holds
+# documents and the last reindex succeeded; and the service's self-check passes: the canned query
+# (context_health_query) finds its known item and, with the judge on, the gateway's decision role
+# answers that it does (POST /v1/check with the admin token, run inside the container). The reindex
+# timer is enabled. Nothing is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: context
+        compose_app_dir: "{{ context_app.compose_app_dir }}"
+        compose_app_spec: "{{ context_app.compose_app_spec }}"
+    - name: The service answers /health
+      ansible.builtin.uri:
+        url: "http://{{ context_bind }}:{{ context_port | int }}/health"
+        status_code: 200
+        timeout: "{{ context_health_timeout | int }}"
+      changed_when: false
+    - name: The index is ready (/ready)
+      ansible.builtin.uri:
+        url: "http://{{ context_bind }}:{{ context_port | int }}/ready"
+        status_code: [200, 503]
+        return_content: true
+        timeout: "{{ context_health_timeout | int }}"
+      register: context_ready
+      changed_when: false
+    - name: It holds documents and its last reindex succeeded
+      ansible.builtin.assert:
+        that:
+          - context_ready.status == 200
+          - context_ready.json.ready | default(false)
+          - context_ready.json.documents | default(0) | int > 0
+          - context_ready.json.last_reindex.ok | default(false)
+          - context_ready.json.judge | default(false) == (context_gateway_id != '')
+        fail_msg: "context: /ready is not ready: {{ context_ready.content | default('') | truncate(600) }}"
+    - name: The self-check (the canned query finds its item; the judge, when on, clears it)
+      ansible.builtin.command:
+        argv:
+          - "{{ context_docker_cli }}"
+          - compose
+          - -f
+          - "{{ context_dir }}/docker-compose.yml"
+          - exec
+          - -T
+          - context
+          - python
+          - -m
+          - homelabnext.context_service
+          - check
+          - "{{ context_check_timeout_s | int }}"
+      register: context_check
+      changed_when: false
+      failed_when: false
+    - name: The self-check passed
+      ansible.builtin.assert:
+        that:
+          - context_check.rc == 0
+          - (context_check.stdout | from_json).ok
+          - (context_check.stdout | from_json).judge.on == (context_gateway_id != '')
+        fail_msg: "context: the self-check failed (exit {{ context_check.rc }}): {{ context_check.stdout | default('') | truncate(400) }}"
+    - name: The reindex timer is enabled
+      ansible.builtin.command:
+        argv: ["{{ context_systemctl_cli }}", is-enabled, "{{ context_reindex_unit }}.timer"]
+      register: context_timer_enabled
+      changed_when: false
+      failed_when: context_timer_enabled.stdout | trim != 'enabled'
+  tags: [health]
