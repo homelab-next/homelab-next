@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-# Healthy means: the container runs and is healthy; /health answers; /ready says the index holds
-# documents and the last reindex succeeded; and the service's self-check passes: the canned query
+# Healthy means: the container runs and is healthy; /health answers; /ready says ready (unauthenticated,
+# it shows nothing else); and the service's self-check passes: the index holds documents, the last
+# reindex succeeded, the canned query
 # (context_health_query) finds its known item and, with the judge on, the gateway's decision role
 # answers that it does (POST /v1/check with the admin token, run inside the container). The reindex
 # timer is enabled. Nothing is written.
@@ -31,16 +32,13 @@
         timeout: "{{ context_health_timeout | int }}"
       register: context_ready
       changed_when: false
-    - name: It holds documents and its last reindex succeeded
+    - name: It is ready
       ansible.builtin.assert:
         that:
           - context_ready.status == 200
           - context_ready.json.ready | default(false)
-          - context_ready.json.documents | default(0) | int > 0
-          - context_ready.json.last_reindex.ok | default(false)
-          - context_ready.json.judge | default(false) == (context_gateway_id != '')
         fail_msg: "context: /ready is not ready: {{ context_ready.content | default('') | truncate(600) }}"
-    - name: The self-check (the canned query finds its item; the judge, when on, clears it)
+    - name: The self-check (documents, the last reindex, the canned query, the judge when on)
       ansible.builtin.command:
         argv:
           - "{{ context_docker_cli }}"
@@ -63,6 +61,8 @@
         that:
           - context_check.rc == 0
           - (context_check.stdout | from_json).ok
+          - (context_check.stdout | from_json).documents | default(0) | int > 0
+          - (context_check.stdout | from_json).last_reindex_ok | default(false)
           - (context_check.stdout | from_json).judge.on == (context_gateway_id != '')
         fail_msg: "context: the self-check failed (exit {{ context_check.rc }}): {{ context_check.stdout | default('') | truncate(400) }}"
     - name: The reindex timer is enabled

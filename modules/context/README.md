@@ -8,11 +8,18 @@ semantic adapter (`homelabnext/context_semantic.py`, the `semantic` feature) run
 
 * the **index** is built from configured **git sources** (each a repository, a ref and path globs),
   fetched read-only by the service at every reindex;
-* **every item carries a TLP label** (ADR-0033): its source's declared label, raised to the
-  strictest marker or `tlp` field the item carries; and **every read is made at the caller's ceiling**
-  (a caller is a token with a ceiling): an item above it is exactly as absent as one that does not exist;
+* **every item carries a TLP label** (ADR-0033): the strictest of its base (the source's declared
+  label, or the item's own `tlp` field read against it) and every TLP marker in its content; a
+  marker only ever raises it. **Every read is made at the caller's ceiling** (a caller is a token
+  with a ceiling): an item above it is exactly as absent as one that does not exist, and every hit is
+  re-checked under the store's lock, so a concurrent reindex can never put one above it;
 * an optional **judge** (the gateway's `decision` role) is an **abstention gate**: the index's order is
-  kept, and a query returns nothing when no top passage answers it.
+  kept, and a query returns nothing when no top passage answers it. The gateway receives the
+  caller's question with the passage, so the request is labelled (`X-HNX-TLP`) at the request's
+  **effective ceiling**, not the passage's label. A request whose ceiling is above
+  `context_judge_ceiling` is never sent: `context_judge_on_error` decides (`fallback`, the default:
+  the index's own ranking, answered with `judged: false`; `abstain`: nothing). A caller that wants the
+  gate lowers `ceiling` on its request, declaring its question to be at that tier.
 
 No public route, no data of its own: the index, the checkouts and the last reindex's record are all
 derived from the sources and rebuilt by a reindex (at every start, and on the timer).
@@ -72,16 +79,16 @@ timer / automation --> POST /v1/reindex --> git fetch each source (sibling dir, 
 | Route | Auth | What |
 |---|---|---|
 | `GET /health` | none | the process answers (no content) |
-| `GET /ready` | none | 200 once an index succeeded and holds documents; counts and the last reindex's outcome only |
+| `GET /ready` | none | 200 once an index succeeded and holds documents, `{ready}` alone; with any caller's token also the document count, the judge flag and the last reindex's outcome (never content) |
 | `POST /v1/query` | scope `query` | `{text, allowed, seeds?, kinds?, budget?, include_inactive?, ceiling?}` -> `{hits: [{id, kind, title, path, score, snippet, content, digest, tlp}], ceiling, judged}` |
 | `POST /v1/get` | scope `query` | `{id, allowed, ceiling?}` -> `{hit}`; 404 exactly as for an id that does not exist |
-| `POST /v1/reindex` | scope `reindex` | fetch and index now: 200 with the run's report, 500 when it failed (the index unchanged), 409 while one runs |
+| `POST /v1/reindex` | scope `reindex` | fetch and index now: 200 with the run's report; 500 when it failed (the index unchanged, except that documents whose label changed in that run stay dropped until the next good run: fail closed, counted as `relabel_dropped`); 409 while one runs; 429 within `reindex_min_interval_s` (60 s) of the last run's end (not for the admin, the timer's caller) |
 | `POST /v1/check` | admin | the canned query finds its item; the judge, when on, clears it |
 
 `allowed` is the contract's scope (exact ids, or namespaces ending in `:` or `/`), stated by the caller.
 The **ceiling** is the caller's: a request's `ceiling` may only lower it. 401 for a missing or unknown
 token, 403 for a missing scope, 400 for a malformed query (the message never echoes the text), 413 for a
-body over 64 KiB. The automation hook is `POST /v1/reindex` with a caller that has the `reindex` scope
+body over 64 KiB; a connection idle for 30 s is closed. The automation hook is `POST /v1/reindex` with a caller that has the `reindex` scope
 (the rules that call it live with the automation pack, not here).
 
 Document ids: `<kind>:<source>/<path>` for a file, `<kind>:<source>/<record id>` for a register record.
@@ -99,12 +106,13 @@ Document ids: `<kind>:<source>/<path>` for a file, `<kind>:<source>/<record id>`
 | `tlp` | the declared label of everything the source holds |
 | `paths` | globs, relative to the repository root |
 | `format` | `files` (one document per file; title the first `# ` heading) or `yaml-records` (one per record of a YAML list: `records_key`, `id_field` (`id`), `title_field` (`title`); a record's `status` is the contract's lifecycle status, so a `retired` one is inactive) |
-| `honour_item_labels` | keep an item's own *looser* label (ADR-0033 decision 3: a human-approve choice); a stricter one is always kept |
+| `honour_item_labels` | keep a record's own *looser* `tlp` field (ADR-0033 decision 3: a human-approve choice); a stricter one is always kept, and no field ever lowers a record below a TLP marker in its content |
 | `credential`, `credential_scheme` | a secret reference such as `secret:context/sources/registers` holding a token (`bearer`) or `user:password` (`basic`); sent as git's `http.extraHeader` through its environment, never in an argument |
 
 A source whose globs match nothing, a register that is not a list, or two items with one id fail the
-reindex (never a silently empty index); a file whose name holds a space, an empty file or a symlink is
-skipped and counted. A fetch goes to a sibling directory and is renamed into place only when it
+reindex (never a silently empty index); a file whose name holds a space, an empty file, a symlink or a
+file too large to be a document (checked by its size before it is read) is skipped and counted. With
+a credential set, git follows no redirect (the header never travels to another host). A fetch goes to a sibling directory and is renamed into place only when it
 succeeded; removal refuses anything not strictly inside the sources directory.
 
 ## What the overlay sets
@@ -122,6 +130,9 @@ succeeded; removal refuses anything not strictly inside the sources directory.
 * **Secrets**: `secret:context/admin-token`; one token per caller; `secret:context/gateway-key` (a
   gateway key whose role list includes the decision role) when the judge is on; one credential per
   private source.
+* **Firewall**: the row is `tls: none`, so bearer tokens and labelled content cross the LAN in clear;
+  the guest firewall must admit port 8094 from the readers' guests (the agents, the automation
+  host) and the metrics scraper only.
 * **Footprint**: 2 vCPU, 3 GiB (the container's `context_mem_limit` is 3g; the model and torch take about
   1 GiB), 20 GB disk (the image is about 2.1 GB; the checkouts are shallow).
 
