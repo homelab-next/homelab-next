@@ -150,9 +150,9 @@ def test_the_role_defaults_carry_the_same_four_references():
     d = ld.load_yaml(MODULE / "roles" / "documents" / "defaults" / "main.yml")
     refs = {
         d["documents_signing_ref"],
+        d["documents_admin_login_ref"],
         d["documents_api_login_ref"],
         d["documents_agent_login_ref"],
-        d["documents_api_login_ref"],
     }
     manifest = ld.load_yaml(MODULE / "module.yml")
     assert refs == {c["secret"] for c in manifest["credentials"]}
