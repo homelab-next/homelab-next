@@ -21,11 +21,14 @@ instead of the nearest wrong thing.  ``min_score`` is a corpus-dependent knob: c
 one corpus and check it on another before trusting it.
 
 **TLP** (ADR-0033).  Every indexed document is given a label at ``index`` time
-(``tlp_of(document)``; the default reads a ``tlp:`` line in the first lines of the content and
-treats anything else as ``red``, so an unlabelled item hides rather than leaks).  A query is
-answered for a reader ``ceiling`` (the constructor's, or ``query(q, ceiling=...)``): a document
-above it is exactly as absent as one outside ``allowed``, from hits, from ``get`` and from the
-BM25 statistics.
+(``tlp_of(document)``; the default is :func:`default_tlp_of`: the strictest of every TLP marker in
+the title and content, ``red`` when there is none, so an unlabelled item hides rather than
+leaks).  A query is answered for the reader ``ceiling`` given at construction (required: there is
+no default): a document above it is exactly as absent as one outside ``allowed``, from hits, from
+``get`` and from the BM25 statistics.  A call may *lower* the ceiling (``query(q,
+ceiling=...)``) but never raise it; a higher ceiling is a different store, built by a trusted
+caller.  ``index`` is all-or-nothing: vectors and labels are computed first and the batch is
+committed only if both succeed, so a document never exists without its label.
 
 Needs the optional extra ``context-semantic`` (txtai, which brings torch); importing this module
 without it works, constructing the store raises :class:`SemanticUnavailable`.
@@ -39,6 +42,7 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from pathlib import Path
+from typing import Protocol
 
 from homelabnext import tlp as _tlp
 from homelabnext.context import ContextStore
@@ -52,10 +56,12 @@ _READING: ContextVar[_tlp.Label | None] = ContextVar("context_reader_ceiling", d
 _WORD = re.compile(r"\w+")
 _MIN_DOCS_FOR_STOP = 20
 _STOP_SHARE = 0.5
-_TLP_LINE = re.compile(r"^\s*(?:#\s*)?tlp\s*:\s*(\S+)\s*$", re.IGNORECASE | re.MULTILINE)
-_HEAD_CHARS = 2000
 #: the longest text embedded per document (the model reads ~256 word pieces anyway)
 EMBED_CHARS = 2000
+
+
+class Embedder(Protocol):
+    def batchtransform(self, texts: Sequence[str]) -> Sequence[Sequence[float]]: ...
 
 
 class SemanticUnavailable(RuntimeError):
@@ -63,9 +69,18 @@ class SemanticUnavailable(RuntimeError):
 
 
 def default_tlp_of(doc: Document) -> _tlp.Label:
-    """The label a document carries: a ``tlp: <label>`` line near its top, else ``red``."""
-    m = _TLP_LINE.search(doc.content[:_HEAD_CHARS])
-    return _tlp.read(m.group(1)) if m else _tlp.Label.RED
+    """The label a document carries: the strictest TLP marker anywhere in its title or content.
+
+    The marker grammar is the platform's (:func:`homelabnext.tlp.markers`: ``TLP:RED``,
+    ``[TLP=AMBER]``, ``tlp: clear``, ...), read over the whole text, so ``tlp: clear`` followed
+    later by ``tlp: red`` is ``red``.  No marker is ``red`` (unlabelled).  A document that only
+    *quotes* a marker (for example a page about TLP showing ``tlp: clear``) cannot be told from
+    one that carries it, so it takes that label: authors who need otherwise pass their own
+    ``tlp_of`` (a source's declared label); the conservative default is for the strictest marker,
+    never the first.
+    """
+    found = _tlp.markers([doc.title, doc.content])
+    return _tlp.strictest(found) if found else _tlp.Label.RED
 
 
 class SemanticContextStore(ContextStore):
@@ -73,44 +88,63 @@ class SemanticContextStore(ContextStore):
 
     def __init__(
         self,
-        model_dir: str | Path,
+        model_dir: str | Path | None = None,
         *,
-        ceiling: str | _tlp.Label = "red",
+        ceiling: str | _tlp.Label,
         tlp_of: Callable[[Document], _tlp.Label] = default_tlp_of,
         dense_weight: float = 0.5,
         min_similarity: float = 0.36,
         min_score: float = 0.0,
+        embedder: Embedder | None = None,
+        sparse_factory: Callable[[], object] | None = None,
     ) -> None:
+        """``ceiling`` is the reader's TLP ceiling and has no default.  ``embedder`` and
+        ``sparse_factory`` are test seams (an object with ``batchtransform(texts)`` and a factory
+        of objects with ``index(rows)`` / ``search(query, limit)``); production leaves both out
+        and gets txtai's embeddings, from the verified ``model_dir``, and its BM25."""
         super().__init__()
-        try:
-            from txtai import Embeddings
-        except ImportError as exc:  # pragma: no cover - exercised only without the extra
-            raise SemanticUnavailable(
-                "install the 'context-semantic' extra (txtai) to use the semantic adapter"
-            ) from exc
         if not 0.0 <= dense_weight <= 1.0:
             raise ValueError("dense_weight must be in [0, 1]")
-        self._model_dir = check_dir(model_dir)  # verified by sha256 before anything loads
-        self._emb = Embeddings(path=str(self._model_dir))
-        self._ceiling = ceiling if isinstance(ceiling, _tlp.Label) else _tlp.parse(ceiling)
+        if embedder is None:
+            if model_dir is None:
+                raise ValueError("model_dir is required without an embedder")
+            self._model_dir = check_dir(model_dir)  # verified by sha256 before anything loads
+            # the model is never fetched here: provisioning is semantic_model.fetch
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            try:
+                from txtai import Embeddings
+            except ImportError as exc:  # pragma: no cover - exercised only without the extra
+                raise SemanticUnavailable(
+                    "install the 'context-semantic' extra (txtai) to use the semantic adapter"
+                ) from exc
+            embedder = Embeddings(path=str(self._model_dir))
+        self._emb = embedder
+        self._sparse_factory = sparse_factory
+        self._ceiling = _label(ceiling)
         self._tlp_of = tlp_of
         self._w = dense_weight
         self._min_sim = min_similarity
         self._min_score = min_score
-        self._vec: dict[str, object] = {}
+        self._vec: dict[str, Sequence[float]] = {}
         self._tlp: dict[str, _tlp.Label] = {}
         self._sparse_cache: dict[tuple[str, ...], tuple[object, Counter[str], int]] = {}
 
     # -- indexer -------------------------------------------------------------------------------
     def index(self, docs: Sequence[Document]) -> IndexReport:
         batch = _m.check_documents(docs)
+        changed = [d for d in batch if self._docs.get(d.id) != d]
+        # everything that can fail runs before anything is stored: a failure leaves the index
+        # exactly as it was, never a document without its vector or label, never a stale label
+        vecs = self._emb.batchtransform([_embed_text(d) for d in changed]) if changed else []
+        labels = [_tlp.read(self._tlp_of(d)) for d in changed]
+        if len(vecs) != len(changed):
+            raise _m.InvalidDocument("the embedder returned the wrong number of vectors")
         report = super().index(batch)
-        changed = [d for d in batch if d.id in set(report.added) | set(report.replaced)]
+        for d, v, label in zip(changed, vecs, labels, strict=True):
+            self._vec[d.id] = v
+            self._tlp[d.id] = label
         if changed:
-            vecs = self._emb.batchtransform([_embed_text(d) for d in changed])
-            for d, v in zip(changed, vecs, strict=True):
-                self._vec[d.id] = v
-                self._tlp[d.id] = _tlp.read(self._tlp_of(d))
             self._sparse_cache.clear()
         return report
 
@@ -127,7 +161,9 @@ class SemanticContextStore(ContextStore):
         return self._tlp[doc_id]
 
     # -- reader --------------------------------------------------------------------------------
-    def get(self, doc_id: str, allowed: frozenset[str], *, ceiling: str | _tlp.Label | None = None):
+    def get(
+        self, doc_id: str, allowed: frozenset[str], *, ceiling: str | _tlp.Label | None = None
+    ) -> Hit:
         c = self._reader(ceiling)
         hit = super().get(doc_id, allowed)
         if not _tlp.allows(c, self._tlp[doc_id]):
@@ -149,17 +185,21 @@ class SemanticContextStore(ContextStore):
 
     # -- scoring -------------------------------------------------------------------------------
     def _reader(self, ceiling: str | _tlp.Label | None) -> _tlp.Label:
+        """The constructor's ceiling, or a lower one asked for; never a higher one."""
         if ceiling is None:
             return self._ceiling
-        return ceiling if isinstance(ceiling, _tlp.Label) else _tlp.parse(ceiling)
+        return min(self._ceiling, _label(ceiling))
 
     def _sparse(self, visible: list[Document]) -> tuple[object, Counter[str], int]:
-        from txtai.scoring import ScoringFactory
-
         key = tuple(sorted(d.id for d in visible))
         got = self._sparse_cache.get(key)
         if got is None:
-            idx = ScoringFactory.create({"method": "bm25", "terms": True})
+            if self._sparse_factory is not None:
+                idx = self._sparse_factory()
+            else:
+                from txtai.scoring import ScoringFactory
+
+                idx = ScoringFactory.create({"method": "bm25", "terms": True})
             texts = [f"{d.id} {d.title} {d.content}" for d in visible]
             idx.index([(d.id, t, None) for d, t in zip(visible, texts, strict=True)])
             df: Counter[str] = Counter()
@@ -188,7 +228,7 @@ class SemanticContextStore(ContextStore):
         out: dict[str, float] = {}
         for d in visible:
             # batch padding moves the last float bits of a vector; five places hide that
-            cos = round(max(0.0, float(qv @ self._vec[d.id])), 5)
+            cos = round(max(0.0, _dot(qv, self._vec[d.id])), 5)
             sp = sparse.get(d.id, 0.0)
             if sp <= 0 and cos < self._min_sim:
                 continue
@@ -198,20 +238,32 @@ class SemanticContextStore(ContextStore):
         return out
 
 
+def _label(value: str | _tlp.Label) -> _tlp.Label:
+    return value if isinstance(value, _tlp.Label) else _tlp.parse(value)
+
+
+def _dot(a: Sequence[float], b: Sequence[float]) -> float:
+    try:
+        return float(a @ b)  # type: ignore[operator]  # numpy vectors
+    except TypeError:
+        return float(sum(x * y for x, y in zip(a, b, strict=True)))
+
+
 def _embed_text(d: Document) -> str:
     return f"{d.title}\n{d.content}"[:EMBED_CHARS]
 
 
 def make(
     model_dir: str | None = None,
-    ceiling: str = "red",
+    ceiling: str = "clear",
     dense_weight: float = 0.5,
     min_similarity: float = 0.36,
     min_score: float = 0.0,
 ) -> SemanticContextStore:
     """The factory a conformance target names: ``adapter: homelabnext.context_semantic:make``.
 
-    ``model_dir`` defaults to the environment variable ``HNX_CONTEXT_MODEL_DIR``."""
+    ``model_dir`` defaults to the environment variable ``HNX_CONTEXT_MODEL_DIR``.  The target
+    file gives the ceiling its suite documents carry (they are unlabelled, so ``red``) explicitly."""
     model_dir = model_dir or os.environ.get("HNX_CONTEXT_MODEL_DIR", "")
     if not model_dir:
         raise SemanticUnavailable("set model_dir or HNX_CONTEXT_MODEL_DIR to the pinned model")

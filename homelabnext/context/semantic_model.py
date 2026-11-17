@@ -76,7 +76,10 @@ def _sha256(path: Path) -> str:
 
 
 def check_dir(root: str | os.PathLike[str]) -> Path:
-    """The model directory ``root``, verified file by file (size, then sha256), or ``ModelError``."""
+    """The model directory ``root``, verified file by file (size, then sha256), or ``ModelError``.
+
+    A file or directory the manifest does not list is refused too: the loader reads a directory,
+    so an extra file (a tokenizer or code file) would be loaded without being pinned."""
     base = Path(root)
     if not base.is_dir():
         raise ModelError("model directory does not exist (provision it with fetch)")
@@ -89,6 +92,13 @@ def check_dir(root: str | os.PathLike[str]) -> Path:
             problems.append(f"{rel}: wrong size")
         elif _sha256(p) != want:
             problems.append(f"{rel}: sha256 mismatch")
+    for p in sorted(base.rglob("*")):
+        rel = p.relative_to(base).as_posix()
+        if p.is_dir() and not p.is_symlink():
+            if not any(k.startswith(rel + "/") for k in FILES):
+                problems.append(f"{rel}/: unexpected directory")
+        elif rel not in FILES:
+            problems.append(f"{rel}: unexpected file")
     if problems:
         raise ModelError("; ".join(problems))
     return base

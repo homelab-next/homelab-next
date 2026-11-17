@@ -18,7 +18,6 @@ from homelabnext.conform.adapters.openai_compat import ChatResult
 from homelabnext.context import (
     ContextStore,
     Document,
-    Hit,
     NotFound,
     Query,
     evalrun,
@@ -32,6 +31,7 @@ from homelabnext.context.judge import (
     Verdict,
     pair_key,
 )
+from homelabnext.context_semantic import SemanticContextStore, default_tlp_of
 
 ROOT = Path(__file__).resolve().parents[2]
 QUESTIONS = ROOT / "evals" / "context" / "questions.json"
@@ -197,16 +197,273 @@ def test_public_fixture_questions_point_at_real_docs():
     assert {q.kind for q in qs} == set(evalrun.KINDS)
 
 
-# -- the adapter (needs the extra and the provisioned model) ------------------------------------
+# -- the adapter, on fakes (runs everywhere) -----------------------------------------------------
+
+import math
+import re
+import sys
+import types
+from argparse import Namespace
+
+DIM = 32
+
+
+def _words(text):
+    return re.findall(r"\w+", text.lower())
+
+
+class _FakeEmbedder:
+    """Bag-of-words hashing vectors, normalised: shared words mean similarity, no model."""
+
+    def __init__(self, fail=False):
+        self.fail, self.calls = fail, 0
+
+    def batchtransform(self, texts):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("embedder down")
+        out = []
+        for t in texts:
+            v = [0.0] * DIM
+            for w in _words(t):
+                v[sum(map(ord, w)) % DIM] += 1.0
+            n = math.sqrt(sum(x * x for x in v)) or 1.0
+            out.append([x / n for x in v])
+        return out
+
+
+class _FakeBm25:
+    def __init__(self):
+        self.docs = {}
+
+    def index(self, rows):
+        self.docs = {i: _words(t) for i, t, _ in rows}
+
+    def search(self, query, limit):
+        n = len(self.docs)
+        scores = {}
+        for i, toks in self.docs.items():
+            s = 0.0
+            for w in set(_words(query)):
+                tf = toks.count(w)
+                df = sum(w in t for t in self.docs.values())
+                if tf:
+                    s += tf * math.log(1 + n / df)
+            if s > 0:
+                scores[i] = s
+        return sorted(scores.items(), key=lambda kv: -kv[1])[:limit]
+
+
+def _sem(labels=None, ceiling="red", embedder=None, **kw):
+    if labels is not None:
+        kw["tlp_of"] = lambda d: tlp.read(labels.get(d.id))
+    return SemanticContextStore(
+        ceiling=ceiling, embedder=embedder or _FakeEmbedder(), sparse_factory=_FakeBm25, **kw
+    )
+
+
+ALL = frozenset({"d:"})
+
+
+def test_ceiling_is_required_and_a_call_may_only_lower_it():
+    with pytest.raises(TypeError):
+        SemanticContextStore(embedder=_FakeEmbedder(), sparse_factory=_FakeBm25)
+    labels = {"d:a": "clear", "d:b": "green", "d:c": "amber"}
+    s = _sem(labels, ceiling="green")
+    s.index([Document(i, "doc", "disk full overnight") for i in labels])
+    q = _q(ALL, text="disk full", budget=10)
+    assert {h.id for h in s.query(q)} == {"d:a", "d:b"}
+    assert {h.id for h in s.query(q, ceiling="clear")} == {"d:a"}
+    assert {h.id for h in s.query(q, ceiling="red")} == {"d:a", "d:b"}  # never raised
+    with pytest.raises(NotFound):
+        s.get("d:c", ALL, ceiling="red")
+    with pytest.raises(NotFound):
+        s.get("d:c", ALL)
+    assert s.get("d:b", ALL).id == "d:b"
+    assert s.tlp("d:b") is tlp.Label.GREEN
+    with pytest.raises(NotFound):
+        s.tlp("d:zz")
+
+
+def test_a_replaced_document_takes_its_new_stricter_label():
+    labels = {"d:x": "clear"}
+    s = _sem(labels, ceiling="clear")
+    s.index([Document("d:x", "doc", "disk full overnight")])
+    assert [h.id for h in s.query(_q(ALL, text="disk full"))] == ["d:x"]
+    labels["d:x"] = "red"
+    s.index([Document("d:x", "doc", "disk full overnight again")])
+    assert s.query(_q(ALL, text="disk full")) == []
+    with pytest.raises(NotFound):
+        s.get("d:x", ALL)
+
+
+def test_a_failed_index_changes_nothing():
+    emb = _FakeEmbedder()
+    labels = {"d:x": "clear"}
+    s = _sem(labels, ceiling="clear", embedder=emb)
+    s.index([Document("d:x", "doc", "disk full overnight")])
+    emb.fail = True
+    labels["d:x"] = "red"
+    with pytest.raises(RuntimeError):  # a replace that fails keeps the old version, label included
+        s.index([Document("d:x", "doc", "changed text"), Document("d:y", "doc", "new one")])
+    assert s.get("d:x", ALL).content == "disk full overnight"
+    assert s.tlp("d:x") is tlp.Label.CLEAR
+    with pytest.raises(NotFound):  # a failed add leaves no unlabelled document behind
+        s.get("d:y", ALL)
+    emb.fail = False
+    assert [h.id for h in s.query(_q(ALL, text="disk full"))] == ["d:x"]  # and queries still work
+
+    def boom(d):
+        raise ValueError("no label")
+
+    s2 = SemanticContextStore(
+        ceiling="red", embedder=_FakeEmbedder(), sparse_factory=_FakeBm25, tlp_of=boom
+    )
+    with pytest.raises(ValueError):
+        s2.index([Document("d:z", "doc", "anything")])
+    assert s2.query(_q(ALL, text="anything")) == []
+
+
+def test_a_malformed_batch_indexes_nothing():
+    s = _sem()
+    with pytest.raises(Exception):  # noqa: B017 - InvalidDocument, whichever subclass
+        s.index([Document("d:ok", "doc", "fine"), Document("d:ok", "doc", "repeated id")])
+    assert s.query(_q(ALL, text="fine")) == []
+
+
+def test_default_label_is_the_strictest_marker_over_the_whole_document():
+    def lab(text, title=""):
+        return default_tlp_of(Document("d:x", "doc", text, title=title))
+
+    assert lab("intro\ntlp: clear\n" + "x" * 5000 + "\ntlp: red\n") is tlp.Label.RED
+    assert lab("TLP:GREEN body [TLP=AMBER] more") is tlp.Label.AMBER
+    assert lab("no marker at all") is tlp.Label.RED  # unlabelled is red
+    assert lab("body", title="TLP:RED") is tlp.Label.RED
+    # a page that only quotes a marker is indistinguishable from one that carries it
+    assert lab("this page explains that a record may say tlp: clear") is tlp.Label.CLEAR
+
+
+def test_hidden_documents_change_neither_hits_nor_scores():
+    base = [Document(f"d:p{i}", "doc", f"disk full on host {i} overnight") for i in range(4)]
+    labels = {d.id: "clear" for d in base}
+    plain = _sem(labels, ceiling="clear")
+    plain.index(base)
+    q = _q(ALL, text="disk full overnight", budget=20)
+    before = [(h.id, h.score) for h in plain.query(q)]
+    assert before
+    hidden = [Document(f"d:h{i}", "doc", "disk full overnight disk disk") for i in range(30)]
+    labels.update({d.id: "red" for d in hidden})
+    mixed = _sem(labels, ceiling="clear")
+    mixed.index(hidden + base)
+    assert [(h.id, h.score) for h in mixed.query(q)] == before
+
+
+def test_semantic_scoring_cutoffs_and_relations():
+    s = _sem(min_similarity=0.9, min_score=0.0)
+    s.index(
+        [
+            Document("d:a", "doc", "restart the proxy to clear the stuck session"),
+            Document("d:b", "doc", "printer toner", links=("d:a",)),
+        ]
+    )
+    got = [h.id for h in s.query(_q(ALL, text="proxy session", seeds=("d:b",)))]
+    assert got[0] == "d:b" and "d:a" in got  # the seed, then what it links to
+    strict = _sem(min_score=0.999)
+    strict.index([Document("d:a", "doc", "restart the proxy")])
+    assert strict.query(_q(ALL, text="proxy")) == []
+    assert s.query(_q(ALL, text="zebra")) == []
+    s.delete("d:a")
+    assert [h.id for h in s.query(_q(ALL, text="printer"))] == ["d:b"]
+
+
+def test_the_model_directory_must_be_exactly_the_pinned_files(tmp_path, monkeypatch):
+    (tmp_path / "evil.py").write_text("print('x')")
+    with pytest.raises(semantic_model.ModelError) as e:
+        semantic_model.check_dir(tmp_path)
+    assert "evil.py: unexpected file" in str(e.value)
+    # the load path forces offline mode and reads only the verified directory
+    seen = {}
+
+    class _Emb:
+        def __init__(self, path):
+            seen["path"] = path
+
+        def batchtransform(self, texts):
+            return [[1.0]] * len(texts)
+
+    fake = types.ModuleType("txtai")
+    fake.Embeddings = _Emb
+    monkeypatch.setitem(sys.modules, "txtai", fake)
+    import homelabnext.context_semantic as cs
+
+    monkeypatch.setattr(cs, "check_dir", lambda p: Path(p))
+    for k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
+        monkeypatch.delenv(k, raising=False)
+    SemanticContextStore(tmp_path, ceiling="clear", sparse_factory=_FakeBm25)
+    assert seen["path"] == str(tmp_path)
+    assert os.environ["HF_HUB_OFFLINE"] == "1" and os.environ["TRANSFORMERS_OFFLINE"] == "1"
+
+
+# -- judge failure and the eval's transport ------------------------------------------------------
+
+
+class _Boom:
+    def judge(self, question, hit, tlp_label):
+        raise JudgeError("backend down")
+
+
+def test_a_failing_judge_never_crashes_the_query():
+    s = _sem()
+    s.index([Document(f"d:{i}", "doc", f"proxy note {i}") for i in range(3)])
+    q = _q(ALL, text="proxy", budget=5)
+    own = [h.id for h in s.query(q)]
+    assert [h.id for h in JudgedStore(s, _Boom()).query(q)] == own  # fallback: the store's order
+    assert JudgedStore(s, _Boom(), on_error="abstain").query(q) == []
+    with pytest.raises(ValueError):
+        JudgedStore(s, _Boom(), on_error="guess")
+
+
+def test_a_passage_above_the_judge_ceiling_is_never_sent():
+    labels = {"d:0": "clear", "d:1": "red"}
+    s = _sem(labels)
+    s.index([Document(i, "doc", "proxy note") for i in labels])
+    sent = []
+
+    class _Spy:
+        def judge(self, question, hit, label):
+            sent.append((hit.id, label))
+            return Verdict(True, 0.9)
+
+    q = _q(ALL, text="proxy", budget=5)
+    got = JudgedStore(s, _Spy(), judge_ceiling=tlp.Label.GREEN).query(q)
+    assert all(label <= tlp.Label.GREEN for _, label in sent)
+    assert [h.id for h in got] == [h.id for h in s.query(q)]  # fell back, nothing red was sent
+
+
+def test_the_eval_judge_refuses_plaintext_with_a_token_unless_opted_in(monkeypatch):
+    monkeypatch.setenv("HNX_EVAL_GATEWAY_TOKEN", "t")
+    base = {
+        "judge_record": None,
+        "judge_url": "http://" + "gateway.example.internal" + ":" + "8000",
+        "judge_token_env": "HNX_EVAL_GATEWAY_TOKEN",
+        "judge_model": "fast-classifier",
+        "judge_save": None,
+        "judge_allow_plaintext": False,
+    }
+    with pytest.raises(ValueError, match="plaintext"):
+        evalrun._make_judge(Namespace(**base))
+    assert evalrun._make_judge(Namespace(**{**base, "judge_allow_plaintext": True})) is not None
+
+
+# -- the real adapter (needs the extra and the provisioned model) -------------------------------
 
 
 def _semantic(**kw):
     pytest.importorskip("txtai")
     model = os.environ.get("HNX_CONTEXT_MODEL_DIR")
     if not model:
-        pytest.skip("HNX_CONTEXT_MODEL_DIR is not set")
-    from homelabnext.context_semantic import SemanticContextStore
-
+        pytest.skip("the pinned model is not available (set HNX_CONTEXT_MODEL_DIR)")
+    kw.setdefault("ceiling", "red")
     return SemanticContextStore(model, **kw)
 
 
@@ -223,21 +480,17 @@ def test_semantic_tlp_ceiling_hides_what_is_above_it():
     labels = {"d:open": "clear", "d:shared": "green", "d:secret": "red"}
     s = _semantic(ceiling="green", tlp_of=lambda d: tlp.read(labels[d.id]))
     s.index([Document(i, "doc", "the disk filled up overnight") for i in labels])
-    allowed = frozenset({"d:"})
-    got = {h.id for h in s.query(_q(allowed, text="disk filled", budget=10))}
+    got = {h.id for h in s.query(_q(ALL, text="disk filled", budget=10))}
     assert got == {"d:open", "d:shared"}
     with pytest.raises(NotFound):
-        s.get("d:secret", allowed)
-    assert {h.id for h in s.query(_q(allowed, text="disk filled"), ceiling="red")} >= {"d:secret"}
-    assert {h.id for h in s.query(_q(allowed, text="disk filled"), ceiling="clear")} == {"d:open"}
-    assert s.tlp("d:shared") is tlp.Label.GREEN
-    assert isinstance(s.get("d:open", allowed), Hit)
+        s.get("d:secret", ALL)
+    assert {h.id for h in s.query(_q(ALL, text="disk filled"), ceiling="clear")} == {"d:open"}
 
 
 def test_semantic_unlabelled_is_red_and_finds_by_meaning():
     s = _semantic(ceiling="amber")
     s.index([Document("d:x", "doc", "how to repair the brakes of a car")])
-    assert s.query(_q({"d:"}, text="automobile maintenance")) == []  # unlabelled: red
+    assert s.query(_q(ALL, text="automobile maintenance")) == []  # unlabelled: red
     s = _semantic(ceiling="red")
     s.index(
         [
@@ -245,14 +498,14 @@ def test_semantic_unlabelled_is_red_and_finds_by_meaning():
             Document("d:y", "doc", "bread"),
         ]
     )
-    assert [h.id for h in s.query(_q({"d:"}, text="automobile maintenance"))][:1] == ["d:x"]
+    assert [h.id for h in s.query(_q(ALL, text="automobile maintenance"))][:1] == ["d:x"]
 
 
 def test_semantic_min_score_lets_a_query_abstain():
     docs = [Document("d:x", "doc", "how to repair the brakes of a car")]
     loose = _semantic()
     loose.index(docs)
-    assert loose.query(_q({"d:"}, text="brakes"))  # a shared word is a hit
+    assert loose.query(_q(ALL, text="brakes"))  # a shared word is a hit
     strict = _semantic(min_score=0.999)
     strict.index(docs)
-    assert strict.query(_q({"d:"}, text="brakes")) == []
+    assert strict.query(_q(ALL, text="brakes")) == []

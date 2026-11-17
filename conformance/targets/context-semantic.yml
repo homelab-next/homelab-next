@@ -7,4 +7,5 @@ name: context-semantic
 capabilities:
   context:
     adapter: homelabnext.context_semantic:make
+    config: {ceiling: red}   # the suite's documents carry no label, which is red
     features: [semantic]

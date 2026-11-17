@@ -222,11 +222,11 @@ def _keyword(docs: list[Document]):
     return lambda q: s.query(Query(allowed=allowed, text=q, budget=10))
 
 
-def _semantic(model_dir: str, labels, **kw):
+def _semantic(model_dir: str, labels, ceiling: str = "red", **kw):
     from homelabnext.context_semantic import SemanticContextStore
 
     def build(docs):
-        s = SemanticContextStore(model_dir, tlp_of=lambda d: labels[d.id], **kw)
+        s = SemanticContextStore(model_dir, ceiling=ceiling, tlp_of=lambda d: labels[d.id], **kw)
         s.index(docs)
         allowed = frozenset({d.id.split(":", 1)[0] + ":" for d in docs})
         build.store = s
@@ -254,6 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--questions", required=True)
     ap.add_argument("--model-dir", default=os.environ.get("HNX_CONTEXT_MODEL_DIR"))
     ap.add_argument("--min-similarity", type=float, default=0.36)
+    ap.add_argument("--ceiling", default="red", help="the reader TLP ceiling the eval runs at")
     ap.add_argument(
         "--min-score",
         type=float,
@@ -264,6 +265,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--judge-record", help="replay recorded verdicts from this JSON file")
     ap.add_argument("--judge-url", help="live gateway base URL (OpenAI-compatible)")
     ap.add_argument("--judge-token-env", default="HNX_EVAL_GATEWAY_TOKEN")
+    ap.add_argument(
+        "--judge-allow-plaintext",
+        action="store_true",
+        help="allow a bearer token over plain http to a non-loopback host (off by default)",
+    )
     ap.add_argument("--judge-model", default="fast-classifier")
     ap.add_argument("--judge-save", help="write the live verdicts here for replay")
     ap.add_argument("--judge-threshold", type=float, default=0.5)
@@ -277,13 +283,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     contenders: dict = {"keyword": _keyword}
     if a.model_dir:
         sem = _semantic(
-            a.model_dir, labels, min_similarity=a.min_similarity, dense_weight=a.dense_weight
+            a.model_dir,
+            labels,
+            a.ceiling,
+            min_similarity=a.min_similarity,
+            dense_weight=a.dense_weight,
         )
         contenders["semantic"] = sem
         if a.min_score:
             contenders["semantic+cutoff"] = _semantic(
                 a.model_dir,
                 labels,
+                a.ceiling,
                 min_similarity=a.min_similarity,
                 dense_weight=a.dense_weight,
                 min_score=a.min_score,
@@ -337,7 +348,7 @@ def _make_judge(a):
             a.judge_url,
             auth=(lambda: f"Bearer {token}") if token else None,
             timeout=60.0,
-            allow_plaintext=True,
+            allow_plaintext=a.judge_allow_plaintext,
         )
         live = GatewayJudge(client, model=a.judge_model, tag="hnx-context-eval")
         a._judge = _Recording(live) if a.judge_save else live

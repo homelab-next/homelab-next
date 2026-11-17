@@ -132,7 +132,16 @@ class JudgedStore:
         top_k: int = 5,
         threshold: float = 0.5,
         tlp_of=None,
+        judge_ceiling: _tlp.Label | None = None,
+        on_error: str = "fallback",
     ) -> None:
+        """``judge_ceiling`` is the most restrictive label the judge's endpoint may receive: a
+        passage above it is never sent.  ``on_error`` says what a judge failure (backend error,
+        bad reply, an unrecorded pair, a passage above the ceiling) does to the query:
+        ``fallback`` returns the store's own ranking, ``abstain`` returns nothing."""
+        if on_error not in ("fallback", "abstain"):
+            raise ValueError("on_error is 'fallback' or 'abstain'")
+        self._judge_ceiling, self._on_error = judge_ceiling, on_error
         self._store, self._judge = store, judge
         self._top_k, self._threshold = top_k, threshold
         # the label sent with a passage: the store's own when it keeps one, else red
@@ -146,10 +155,16 @@ class JudgedStore:
         hits = self._store.query(q, **kw)
         head = hits[: self._top_k]
         kept: list[tuple[float, int, Hit]] = []
-        for rank, h in enumerate(head):
-            v = self._judge.judge(q.text, h, _tlp.read(self._tlp_of(h.id)))
-            if v.answers and v.confidence >= self._threshold:
-                kept.append((v.confidence, rank, h))
+        try:
+            for rank, h in enumerate(head):
+                label = _tlp.read(self._tlp_of(h.id))
+                if self._judge_ceiling is not None and not _tlp.allows(self._judge_ceiling, label):
+                    raise JudgeError("passage is above the judge's TLP ceiling")
+                v = self._judge.judge(q.text, h, label)
+                if v.answers and v.confidence >= self._threshold:
+                    kept.append((v.confidence, rank, h))
+        except JudgeError:
+            return [] if self._on_error == "abstain" else hits[: q.budget]
         kept.sort(key=lambda t: (-t[0], t[1]))
         ordered = [h for _, _, h in kept]
         if not ordered:
