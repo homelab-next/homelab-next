@@ -3,6 +3,7 @@
   ansible.builtin.command:
     argv: ["{{ model_store_hf_cli }}", version]
   register: model_store_hf_version_out
+  check_mode: false
   changed_when: false
   when: model_store_fetch | bool
   tags: [readiness]
