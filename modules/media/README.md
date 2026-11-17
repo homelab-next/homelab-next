@@ -59,6 +59,8 @@ library's real source; those live in the private overlay.
   Checked against the pinned image with the same flags (`--read-only --cap-drop ALL`, user 61010, no
   new privileges, tmpfs `/tmp` and `/transcode`): the server starts healthy and serves `/health`, and
   `/tmp`, `/transcode`, `/config` and `/cache` are the only writable paths.
+  The library is mounted at its own path, so it cannot lie under `/tmp` or `/transcode` (the tmpfs
+  mounts would overlap; `compose_app` refuses it).
 - **Identity.** The server id is `data/device.txt` in the data directory. A client remembers a
   server by it and by its device tokens: a new id, or a lost device row, and a Fire Cube treats
   the server as a stranger and drops its login. Set `media_expected_server_id` and `health`
