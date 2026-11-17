@@ -12,9 +12,11 @@ in an ``http.extraHeader`` set through git's environment, never in an argument o
 **Documents.**  ``files``: one document per file the source's globs match, id
 ``<kind>:<source>/<path>``.  ``yaml-records``: one per record of a YAML list (a register such as a
 lessons file), id ``<kind>:<source>/<record id>``, content the record's fields as ``key: value``
-lines.  **TLP** (ADR-0033): every item takes the source's declared label, raised to the strictest
-marker or ``tlp`` field it carries; a looser one is kept only with ``honour_item_labels``
-(:func:`homelabnext.tlp.item_label`).
+lines.  **TLP** (ADR-0033): an item's label is the strictest of its base and every TLP marker in
+its content.  The base is the source's declared label, or the item's own ``tlp`` field read against
+it (stricter kept; looser only with ``honour_item_labels``, :func:`homelabnext.tlp.item_label`).
+Markers only ever raise: no field and no ``honour_item_labels`` can lower an item below a marker
+its content carries.
 
 **Removal is guarded** (:func:`safe_remove`): a path is removed only when it resolves, without a
 symlink, strictly inside the sources directory at least three components deep.
@@ -92,6 +94,8 @@ def _git_env(source: Source, env: Mapping[str, str], home: Path) -> dict[str, st
         else:
             value = "Bearer " + value
         pairs.append(("http.extraHeader", f"Authorization: {value}"))
+        # the header is never carried to wherever a redirect points
+        pairs.append(("http.followRedirects", "false"))
     out["GIT_CONFIG_COUNT"] = str(len(pairs))
     for i, (k, v) in enumerate(pairs):
         out[f"GIT_CONFIG_KEY_{i}"] = k
@@ -183,14 +187,18 @@ def _carried(text: str) -> list[_tlp.Label]:
 
 
 def _label(source: Source, carried: list[_tlp.Label], *field: Any) -> _tlp.Label:
-    """``field``: the item's own ``tlp`` value when it has one (``null`` there is ``red``)."""
+    """The item's label: the strictest of its base and every TLP marker in its content.
+
+    The base is the source's declared label, or, when the item has its own ``tlp`` field
+    (``field``; ``null`` there is ``red``), that field read against the declaration
+    (:func:`homelabnext.tlp.item_label`: stricter is kept, looser only with
+    ``honour_item_labels``).  A marker in the content only ever raises the label, with or without
+    ``honour_item_labels`` (ADR-0033 decision 4: the strictest input wins), so a looser field
+    can never hide a ``TLP:RED`` written in the text."""
+    base = source.label
     if field:
-        return _tlp.item_label(source.label, field[0], honour_item_labels=source.honour_item_labels)
-    if carried:
-        return _tlp.item_label(
-            source.label, _tlp.strictest(carried), honour_item_labels=source.honour_item_labels
-        )
-    return source.label
+        base = _tlp.item_label(source.label, field[0], honour_item_labels=source.honour_item_labels)
+    return _tlp.strictest([base, *carried])
 
 
 def _flat(value: Any) -> str:
@@ -223,6 +231,11 @@ def collect(checkout: Path, source: Source) -> Collected:
     for f in _files(checkout, source):
         rel = f.relative_to(checkout).as_posix()
         try:
+            # a file that cannot be a document is never read into memory (4 bytes a character
+            # at most in UTF-8)
+            if f.stat().st_size > 4 * MAX_CONTENT_CHARS:
+                skipped += 1
+                continue
             text = f.read_text(encoding="utf-8", errors="replace")
         except OSError:
             skipped += 1
