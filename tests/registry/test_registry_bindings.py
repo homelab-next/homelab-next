@@ -785,19 +785,17 @@ def test_the_evaluation_resolver_leaves_a_primary_binding_as_it_was(tmp_path):
     assert ev.resolve(role) == mr.resolve(role)
 
 
-def test_the_evaluation_resolver_keeps_the_fallback_trail(tmp_path):
-    """An unresolved binding falls back as ``resolve`` does, with the same trail and ``asked``."""
+def test_the_evaluation_resolver_never_walks_to_a_fallback(tmp_path):
+    """The serving resolver falls back past an unresolved binding; an evaluation refuses, so a
+    report never carries another role's model under this role's name."""
     mr = _resolver(tmp_path, "eval", "svc:inference")
     ev = EvaluationResolver(mr.registry, mr.table, mr.resolver)
     name = next(n for n, r in mr.table.roles.items() if r.fallback)
     mr.resolver.environ = {"HNX_ENDPOINT_INFERENCE": _url("inference", 8000)}
-    assert ev.resolve(name) == mr.resolve(name)
+    assert ev.resolve(name).role == name
     mr.resolver.environ = {}
-    with pytest.raises(ResolutionError) as a:
+    with pytest.raises(ResolutionError, match="no fallback"):
         ev.resolve(name)
-    with pytest.raises(ResolutionError) as b:
-        mr.resolve(name)
-    assert str(a.value) == str(b.value)
 
 
 # ---------------------------------------------------------------- consumers of an old id

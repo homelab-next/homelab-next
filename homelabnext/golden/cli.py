@@ -251,7 +251,7 @@ class EvaluationResolver(ModelResolver):
     """A :class:`ModelResolver` for EVALUATION runs: ``resolve`` also reaches a role binding that
     names an ``eval`` row (by its row name, never through its capability), so ``hnx golden pins
     report`` can run the golden suites against the lab's own backend that the gateway fronts,
-    exactly as the egress canary already does (:func:`_binding_completer`).  Each binding goes
+    exactly as the egress canary already does (:func:`_binding_completer`).  Each of the role's own bindings goes
     through :meth:`ModelResolver.resolve_binding` with ``allow_eval=True``, which reaches an
     ``eval`` row only (never ``retiring`` or ``legacy``) and resolves a primary as always.
 
@@ -261,24 +261,22 @@ class EvaluationResolver(ModelResolver):
     adding it leaves the committed reports current."""
 
     def resolve(self, role: str) -> ResolvedModel:
+        """The first binding of ``role`` itself that resolves.  An evaluation never walks to the
+        role's ``fallback``: that would report another role's model under this role's name."""
         asked = normalize_role(role)
         trail: list[str] = []
-        cur: str | None = asked
-        while cur is not None:
-            r = self.table.get(cur)
-            for b in r.bindings:
-                try:
-                    got = self.resolve_binding(cur, b, allow_eval=True)
-                except NonPrimaryBinding:
-                    raise  # a retiring or legacy row: never rerouted to the next binding
-                except ResolutionError as exc:
-                    trail.append(f"{cur}: svc:{b.backend} unresolved ({str(exc)[:80]})")
-                    continue
-                return replace(got, asked=asked, trail=tuple(trail))
-            if r.fallback:
-                trail.append(f"{cur}: no binding resolved, falling back to mdl:{r.fallback}")
-            cur = r.fallback
-        raise ResolutionError(f"mdl:{asked}", "no binding or fallback resolved", trail)
+        for b in self.table.get(asked).bindings:
+            try:
+                got = self.resolve_binding(asked, b, allow_eval=True)
+            except NonPrimaryBinding:
+                raise  # a retiring or legacy row: never skipped to the next binding
+            except ResolutionError as exc:
+                trail.append(f"{asked}: svc:{b.backend} unresolved ({str(exc)[:80]})")
+                continue
+            return replace(got, trail=tuple(trail))
+        raise ResolutionError(
+            f"mdl:{asked}", "no binding resolved (an evaluation has no fallback)", trail
+        )
 
 
 def _binding_completer(
