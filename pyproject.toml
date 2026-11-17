@@ -127,6 +127,16 @@ markers = [
 # directories; HNX_SUITE_BUDGET_SCALE multiplies them), and the only legitimate skip reasons --
 # any other skip fails.  `pytest --suite-times` prints the table.
 suite_budget_default = "60"
+# the setup of module-, class-, package- and session-scoped fixtures runs once in every shard that
+# draws a test needing it, so it is left out of the per-suite budgets below and held to its own
+# budget per suite and per shard instead (seconds): this default, or the suite's line in
+# suite_shared_budgets.  The merge (tests/shard_report.py) reads these from here, not from the
+# shard reports.  Measured on 12 shards (2026-11-17), the worst single shard: roles 18.8 s,
+# packaging 7.9 s, graph 3.8 s, context 2.8 s, everything else 1.3 s or less.
+suite_shared_budget_default = "15"
+suite_shared_budgets = [
+  "tests/roles = 30",  # 18.8 s measured, about 1.6x
+]
 suite_budgets = [
   # runs ansible-playbook against localhost (skipped where ansible is absent); 900 since the
   # baseline-control roles (21 roles, each config hook run end to end against fake daemons), 1080
@@ -166,7 +176,17 @@ suite_budgets = [
   # 6800 since the rest of wave 2 (openwebui #453, media-automation #455, tts #456, gitea #457, documents #454, the media
   # tmpfs #458) and their role suites: main measured about 4530s on 3.12 (2026-11-16 evening) and a loaded-runner rerun
   # of #458 5585s, over 5400; 6800 is about 1.2x that worst figure with three of those still to land
-  "tests/roles = 6800",
+  # 8900 since the suite moved from 6 to 12 shards per Python version (#467), and the same roles
+  # suites grew: the budgeted figure no longer counts module/session fixture setup (about 34 s of
+  # roles' 6277 s on 3.12, 12 shards: it is not what grew), so the rise is per-test wall time: a
+  # test's first run is prefetched beside the others of its shard, and a smaller shard has a
+  # relatively longer straggler tail and less to overlap.  Seconds a roles test, summed over the
+  # shards (2026-11-17): 1.8-2.25 in six shards (3.11/3.12, 7 runs on main), 1.9-2.5 in twelve
+  # (7 runs, the worst 2.5 on 3.12 at 2676 tests); the budget misses on PRs #455 (7211.9 s and
+  # 7440.2 s on 3.12) and #458 (6953 s) were that rate at about 2900 roles tests.  8900 is about
+  # 1.2x 7440.2 s, the slowest figure: shard count moves the number, so recalibrate it from a
+  # twelve-shard run if the shard count changes again
+  "tests/roles = 8900",
   # 300 since the orchestration conformance harness's strict fault-injection test (stage 2.8)
   # builds the controller and runs the whole suite against it: main measured 180-186 s summed
   # over the shards (2026-11-09), and the pull request that added it 245.8 s, over 240
@@ -179,7 +199,8 @@ suite_budgets = [
   # about 1,130 tests: every schema version's frozen-baseline and additivity checks and the
   # fixtures; CI measured 61.1s on 3.12 (2026-10-27, after the guest 1.6 tests, over the 60 s
   # default); 90 is about 1.5x that
-  "tests/schemas = 90",
+  # 120 since a 12-shard run measured 98.7 s on 3.12 (#455, over 90; 73-88 s typically): about 1.2x
+  "tests/schemas = 120",
   # agent profiles, packs, prompts and memory: about 1,110 tests, 40.5 s on a local 4-core box
   # (2026-11-06) after the memory retraction suites (ADR-0037 PR 3); the coverage job (budgets
   # times 2) measured 126 s on CI before the fuzz was trimmed, against the 120 s it then had; 90
@@ -203,6 +224,13 @@ suite_budgets = [
   # the read-only server starts the MCP SDK over stdio and builds the repository graph, and the
   # catalog's file-level rules (record files, locks, renders, imports) each copy the catalog
   "tests/mcp = 90",
+  # 80 since the shard-report tests (subprocess pytest runs) joined: 50.5 s and 54.9 s on 3.11/3.12
+  # (2026-11-17, twelve shards) against 57.8 s and 61.9 s (over the 60 s default) with the tests
+  # of this change before they were trimmed; 80 is about 1.3x the slower figure
+  "tests/gates = 80",
+  # 75 since a 12-shard run measured 64.6 s on 3.11 (#455, over the 60 s default) against 42-58 s
+  # typically: 1.3x the typical worst figure, 1.16x the one outlier
+  "tests/compute = 75",
   # every suite against its fake, the lab adapters over their stand-ins and records' interleaving
   # check (both wait in real time), the codemode suites' real programs, and the CLI report over
   # every suite and mutant. Until 2026-10-26 this
