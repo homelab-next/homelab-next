@@ -147,6 +147,24 @@ argument_specs:
           firewall rule keyed on a container's source address stays valid across recreates. Empty:
           docker picks one. Changing it recreates the network (and its containers).
         default: ""
+      compose_app_boot_unit:
+        type: bool
+        description: >-
+          Install and enable hnx-compose-<name>.service, a oneshot that runs docker compose up -d
+          at boot, after docker, so a container that did not come back after a power cycle (seen
+          Exited with unless-stopped, LL-571) is started and a failure to start it shows as a failed
+          unit. Needs compose_app_start. Off by default: a removal must then remove the unit too
+          (the unit does nothing once the compose file is gone, but a kept compose file comes back
+          at the next boot).
+        default: false
+      compose_app_unit_dir:
+        type: path
+        description: Where the boot unit is written.
+        default: /etc/systemd/system
+      compose_app_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
   health:
     short_description: Assert every service of the spec has a container and every container is running and healthy.
     options:

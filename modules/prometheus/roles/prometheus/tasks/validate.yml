@@ -41,6 +41,9 @@
       - prometheus_alert_schedule in prometheus_alert_schedules
       - prometheus_alert_readonly_ignore is match(prometheus_alert_ignore_pattern)
       - prometheus_unreachable_after_minutes | int >= 1 and prometheus_unreachable_after_minutes | int <= 1440
+      - prometheus_heartbeat_topic == '' or prometheus_heartbeat_topic is match('^[A-Za-z0-9_-]{1,64}\Z')
+      - prometheus_heartbeat_topic != prometheus_notify_topic
+      - prometheus_heartbeat_every_minutes | int >= 1 and prometheus_heartbeat_every_minutes | int <= 60
     fail_msg: >-
       prometheus: a registry id, an image pinned by tag and digest, the guest's IPv4 address to
       publish on (not all interfaces), ports, a container uid and gid of 1000 or more, absolute
@@ -48,7 +51,7 @@
       evaluation intervals like 30s, a memory limit like 768m, the hnx command (bare or by absolute
       path, or an absolute python running homelabnext.cli), an absolute registry path, plain host names to exclude, alert durations like 10m and
       percentages 1-99, a notify logical id and topic, a priority 1-5, a secret:<name> token
-      reference, an alert schedule of every minute or every 30 seconds, a read-only mount-point pattern of plain regex characters and a positive number of minutes
+      reference, an alert schedule of every minute or every 30 seconds, a read-only mount-point pattern of plain regex characters and a positive number of minutes, a heartbeat topic (not the alert topic, or empty to turn the dead-man off) and 1-60 minutes between heartbeats
   tags: [health, backup, restore, export, upgrade, readiness]
 
 # The pinned compose network is judged in ONE place, compose_app's network_subnet.yml (RFC 1918,

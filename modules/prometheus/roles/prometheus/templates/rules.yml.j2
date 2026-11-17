@@ -5,6 +5,14 @@
 groups:
   - name: hnx-default
     rules:
+      # always firing: proof that the rules are loaded and evaluated. The forwarder never posts it;
+      # it sends the dead-man heartbeat only while this fires (prometheus_heartbeat_topic).
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "always firing: the alert rules are loaded and evaluated"
       - alert: TargetDown
         expr: up == 0
         for: {{ prometheus_alert_target_down_for }}
