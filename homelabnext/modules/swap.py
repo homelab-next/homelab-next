@@ -279,12 +279,12 @@ def _kind_problem(change: str, role: str, changed: set, added: set, removed: set
     if role in added and change != "add":
         return (
             "the role is only in the role table after: a role the swap brings needs an add leg "
-            "(change: add), not a " + change
+            f"(change: add), not a {change}"
         )
     if role in removed and change != "remove":
         return (
             "the role is only in the role table before: a role the swap drops needs a remove leg "
-            "(change: remove), not a" + ("n " if change == "add" else " ") + change
+            f"(change: remove), not {'an' if change == 'add' else 'a'} {change}"
         )
     if change == "add" and role not in added:
         return "an add leg brings a role only the table after has; this one is in the table before"
@@ -303,8 +303,11 @@ def model_role_problems(swap: Doc, models: ModelEvidence) -> list[str]:
       swap starts from, the new one resolves in the table after it (and in the store) and
       differs, and the role's other bindings stay as they were;
     * **add** a role only the table after has: its one binding is the leg's ``to``, resolves in
-      the store, and the role has no other binding;
-    * **remove** a role only the table before has: the leg's ``from`` is one of its bindings.
+      the store, and the role has no other binding; the record names the role in
+      ``model_role_changes``, since every field beside its pin arrives new (the gate holds that
+      name to the trust change, as for an existing role);
+    * **remove** a role only the table before has: the leg's ``from`` is its one binding, on the
+      instance the leg moves (the gate also refuses it while a configuration file names it).
 
     A new binding's backend is the instance the leg moves (``svc:<instance>``, the row the swap
     renames the incoming provider's to; inferred from the name, no manifest is read).  Every leg,
@@ -387,6 +390,26 @@ def model_role_problems(swap: Doc, models: ModelEvidence) -> list[str]:
                 "bindings; an add leg brings a role with its one binding (each further binding "
                 "is evidenced on its own)"
             )
+        if change == "add" and f"mdl:{role}" not in swap.get("model_role_changes", []):
+            out.append(
+                f"{where}: an added role brings every field beside its pin new (kind, fallback, "
+                "limits, params, tlp_ceiling, a binding's leaves_lab and provider_terms): the "
+                f"record names mdl:{role} in model_role_changes, as it would an existing role's "
+                "change, so a reviewer approves them"
+            )
+        if change == "remove" and old is not None:
+            gone = models.before.get(role).bindings
+            if old.backend != leg["instance"]:
+                out.append(
+                    f"{where}: the removed binding's backend svc:{old.backend} is not the instance "
+                    f"the leg moves (svc:{leg['instance']}): a leg removes only a role the swap's "
+                    "own instance serves"
+                )
+            if len(gone) != 1:
+                out.append(
+                    f"{where}: the role has {len(gone)} bindings; a remove leg drops a role with "
+                    "its one binding, the one it names (drop the others first, each on its own)"
+                )
         live = models.require_live or leg["evaluation"].get("require_live", False)
         if live and models.store is None:
             out.append(f"{where}: live evidence is required, and no model store is given")

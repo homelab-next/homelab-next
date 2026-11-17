@@ -108,18 +108,16 @@ and `meaning_changes` is recorded, never checked.
   roles it rebinds; so is a record with legs and no evidence. A malformed leg is refused by name.
 
   **Adding and removing a role.** A leg's optional `change` is `rebind` (the default, above),
-  `add` or `remove`, and the rebind rules are unchanged: a rebind still names a role both tables
-  have. An **add** leg covers a role only the table after has (an overlay's first role, added to
-  a base table of `roles: {}`, included): it names `to` and no `from`; the new binding resolves in
-  the table after and in the store, is on the instance the leg moves, and is the role's only
-  binding (each further binding is evidenced on its own); and its `evaluation.report` is the
-  report for the table after, which must pass `pins check` live: exactly the evidence a rebind
-  carries. A **remove** leg covers a role only the table before has: it names `from` (one of the
-  role's bindings) and no `to`, and pins the report for the table after too, since that table is
-  what the gate checks. A role that appears or disappears without such a leg is refused by name
-  (`... and no model_roles leg adds it`), and so is a leg whose change does not fit its role (a
-  rebind or a remove for an added role, an add for a role the table before has). Removing a role
-  does not check who still asks for it: that is `hnx modules check`'s requirement rules.
+  `add` or `remove`; a rebind still names a role both tables have. An **add** covers a role only
+  the table after has (an overlay's first role included): `to`, no `from`; the new binding is in
+  the store, on the leg's instance and the role's only binding; the report for the table after
+  passes `pins check` live; and since every other field of the role (`kind`, `fallback`, `limits`,
+  `params`, `tlp_ceiling`, a binding's `leaves_lab`, `provider_terms`) arrives new, the record
+  names the role in `model_role_changes`, which the gate requires as for a changed role. A
+  **remove** covers a role only the table before has: `from`, no `to`, the role's one binding, on
+  the leg's instance; it pins the report for the table after; and the gate refuses it while a
+  configuration file in the tree (`*.yml`, `*.json`; not docs, tests or schema examples) still
+  names `mdl:<role>`. An unmatched role, or a leg whose change does not fit it, is refused.
 
   The new binding's backend is the instance the leg moves: `svc:<instance>`, the service row the
   incoming provider's row is renamed to at bind time (see the naming table). The rule reads the
@@ -186,8 +184,8 @@ and `meaning_changes` is recorded, never checked.
   Commit that first table **empty** (`{"version": 1, "roles": {}}`); the first role then lands in
   two changes: the vetting change (the store entry and the live report for the proposed table in
   `lab/model-evals/<name>.json`, from `make models-eval REGISTRY=... MODEL_ROLES=<proposed>`),
-  then the role in `lab/model_roles.json` with a `lab/swaps/` record whose leg is `change: add`
-  (shape: `schemas/platform/examples/module_swap.inference-add.json`). A decision role is
+  then the role in `lab/model_roles.json` with a `lab/swaps/` record whose leg is `change: add`,
+  naming the role in `model_role_changes` (shape: `schemas/platform/examples/module_swap.inference-add.json`). A decision role is
   evaluated by a decision suite and canary (`docs/compute-model.md`, "The egress canary").
 
   **Fields that are not the pin.** `ModelEvidence` compares roles by their pins (backend, model id,

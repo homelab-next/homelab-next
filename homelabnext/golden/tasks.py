@@ -138,6 +138,8 @@ def parse_suite(doc: Any) -> Suite:
     decision = kind == "decision"
     if decision and tool_suite:
         problems.append("modes: a decision suite has no tool-using modes")
+    if decision and not doc.get("role"):
+        problems.append("role: a decision suite names the decision role it evaluates")
     name = doc.get("suite")
     if not isinstance(name, str) or not SLUG.match(name):
         problems.append("suite: must be a slug")

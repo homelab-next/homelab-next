@@ -33,17 +33,26 @@ def client_completer(resolver: ModelResolver, role: str, **client_kwargs) -> tup
     return complete, rm.model_id
 
 
+class ClientDecider:
+    """A decider over one :class:`ModelClient` (``POST /v1/systemone``), with the chat probe the
+    decision canary runs (:meth:`ModelClient.chat_refused`)."""
+
+    def __init__(self, client: ModelClient):
+        self.client = client
+
+    def __call__(self, questions: Mapping[str, str], state: str | None) -> Mapping[str, float]:
+        return self.client.decide(questions, state=state).probabilities
+
+    def chat_refused(self) -> tuple[bool, str]:
+        return self.client.chat_refused()
+
+
 def client_decider(resolver: ModelResolver, role: str, **client_kwargs) -> tuple[Decider, str]:
     """Build a decider for the decision role ``mdl:<role>`` through the resolver (the same
     :class:`ModelClient` a completer uses, on ``POST /v1/systemone``); returns it with the model
     id."""
     rm = resolver.resolve(role)
-    client = ModelClient(rm, **client_kwargs)
-
-    def decide(questions: Mapping[str, str], state: str | None) -> Mapping[str, float]:
-        return client.decide(questions, state=state).probabilities
-
-    return decide, rm.model_id
+    return ClientDecider(ModelClient(rm, **client_kwargs)), rm.model_id
 
 
 def one_probability(answers: object, qid: str) -> float:

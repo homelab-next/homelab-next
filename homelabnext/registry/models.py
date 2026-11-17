@@ -616,7 +616,36 @@ class ModelClient:
             raise ModelError("malformed", "response is not an object")
         return doc
 
+    def _text_kind(self, what: str) -> None:
+        """A decision role answers noul questions only: chat, completions and embeddings on one
+        are refused here, before any request (the gateway refuses them too, ``wrong_model_kind``),
+        so a direct caller cannot chat a backend the table declares a decision model."""
+        if self.model.kind == "decision":
+            raise ModelError(
+                "misconfigured",
+                f"mdl:{self.model.role} is a decision role: it answers {what} with no text; ask "
+                "it with decide() (POST /v1/systemone)",
+            )
+
+    def chat_refused(self) -> tuple[bool, str]:
+        """The decision canary's probe: one minimal ``POST /v1/chat/completions`` that a decision
+        backend must refuse.  ``(True, "")`` for a 4xx or 501; ``(False, why)`` when it answers;
+        a transport failure or another status raises :class:`ModelError`."""
+        body = {
+            "model": self.model.model_id,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
+        try:
+            self._call("/v1/chat/completions", body)
+        except ModelError as exc:
+            if exc.status is not None and (400 <= exc.status < 500 or exc.status == 501):
+                return True, ""
+            raise
+        return False, "the backend answered a chat completion with a body"
+
     def chat(self, messages: list[dict], *, logprobs: bool | None = None, **params: Any):
+        self._text_kind("no chat")
         body: dict[str, Any] = {"model": self.model.model_id, "messages": messages}
         body.update(self.model.params)
         body.update(params)
@@ -641,6 +670,7 @@ class ModelClient:
             raise ModelError("malformed", f"unexpected chat response shape ({exc!r})") from exc
 
     def complete(self, prompt: str, **params: Any) -> str:
+        self._text_kind("no completion")
         body: dict[str, Any] = {"model": self.model.model_id, "prompt": prompt}
         body.update(params)
         doc = self._call("/v1/completions", body)
@@ -674,6 +704,7 @@ class ModelClient:
             raise ModelError("malformed", f"unexpected decision response shape ({exc!r})") from exc
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        self._text_kind("no embedding")
         doc = self._call("/v1/embeddings", {"model": self.model.model_id, "input": texts})
         try:
             return [list(map(float, d["embedding"])) for d in doc["data"]]

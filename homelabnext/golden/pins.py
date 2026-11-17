@@ -204,8 +204,17 @@ def inputs_of(table: RoleTable, suite_paths: Sequence[Path]) -> dict:
         "decide": _decide_inputs(),
         "canary": _canary_inputs(table),
         "kinds": {name: r.kind for name, r in sorted(table.roles.items())},
+        "code": _code_inputs(),
     }
     return {**pinned, "digest": _digest(pinned)}
+
+
+def _code_inputs() -> dict:
+    """The code that decides a suite's and a decision canary's verdicts (the loader, the runner
+    and its ``one_probability``, the scorers), by digest: a change there makes a stored report
+    stale even when nobody bumps :data:`EVAL_VERSION` (the canary's own code is in its inputs)."""
+    here = Path(__file__).resolve().parent
+    return {name: _file_digest(here / f"{name}.py") for name in ("runner", "scorers", "tasks")}
 
 
 def _canary_inputs(table: RoleTable) -> dict:
@@ -335,7 +344,9 @@ def run_eval(
 def _stale(want: dict, have: Any) -> list[str]:
     if not isinstance(have, dict):
         return ["inputs"]
-    out = [k for k in ("eval", "suites", "decide", "canary", "kinds") if have.get(k) != want[k]]
+    out = [
+        k for k in ("eval", "suites", "decide", "canary", "kinds", "code") if have.get(k) != want[k]
+    ]
     hp = have.get("pins") if isinstance(have.get("pins"), dict) else {}
     changed = sorted(r for r in set(want["pins"]) | set(hp) if want["pins"].get(r) != hp.get(r))
     out += [f"pin mdl:{r}" for r in changed]
@@ -431,7 +442,11 @@ def canary_problems(
     suite = cn.load_suite(cn.DEFAULT_SUITE)
     canary = report.get("canary") if isinstance(report.get("canary"), Mapping) else {}
     pins = table.pins()
-    out: list[str] = []
+    out: list[str] = [
+        f"mdl:{role}: a canary entry for a role the table does not have; the report is not this "
+        "table's"
+        for role in sorted(set(map(str, canary)) - set(table.roles))
+    ]
     for role, r in sorted(table.roles.items()):
         c = canary.get(role)
         entries = c.get("bindings") if isinstance(c, Mapping) else None

@@ -818,7 +818,10 @@ ride in, so its bindings are not chatted with. `run_decision_canary` poses each 
 content (the canary's system text, the task's system text, its prompt and any prefill) as the
 **state** of one noul question, `samples` times, through the same `ModelClient`
 (`ModelClient.decide`). A sample fails when the call fails (an error) or when the reply is not
-exactly one probability in [0, 1] for that question (`protocol`). The report has the canary's
+exactly one probability in [0, 1] for that question (`protocol`), and each sample also sends one
+minimal chat completion that the binding must refuse (a 4xx or 501; an answer is
+`chat-answered`), through `ModelClient.chat_refused`; `ModelClient` itself refuses `chat`,
+`complete` and `embed` on a decision role before sending anything. The report has the canary's
 format, tasks and counts, so the pins check validates it the same way. It proves only that the
 binding answers those prompts as a decision model, with nothing that could carry an action; the
 network guard stays the control. `make models-canary` and `hnx golden canary` pick the decider
@@ -843,8 +846,11 @@ A suite runs only where it **applies**: the table has its role, of its kind (a c
 role but a decision one, a decision suite on a decision role); the K-12 replay covers the
 cascade's roles the table has as chat roles. Every role must be evaluated by an applicable suite
 or the replay, a decision role by a decision suite; the report must hold exactly the applicable
-suites' runs, each of its suite's kind, and the role kinds are a pinned input (`inputs.kinds`).
-A suite or cascade role the table does not have is not run and is no problem, so an overlay that
+suites' runs, each of its suite's kind, and no canary entry for a role the table lacks; the role
+kinds (`inputs.kinds`) and the code that decides a verdict (`inputs.code`: the golden runner, its
+scorers and the suite loader) are pinned inputs.
+A suite or cascade role the table does not have is not run and is no problem here (`hnx decide
+lint` holds every tracked spec's model tiers to the repository's table, rule `model-roles`), so an overlay that
 keeps a subset of the example roles, or serves `fast-classifier` as a decision model, is
 evaluated by the suites that fit it. A live run (`make models-eval`) leaves a cascade tier whose
 role the table lacks, or holds as a decision role, simulated.

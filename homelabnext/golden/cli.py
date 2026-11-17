@@ -255,7 +255,9 @@ def _binding_completer(
         resolved = resolver.resolve_binding(role, binding, allow_eval=True)
         client = ModelClient(resolved, **(client_kwargs or {}))
         if decision:
-            return (lambda qs, state: client.decide(qs, state=state).probabilities), "live"
+            from .runner import ClientDecider
+
+            return ClientDecider(client), "live"
         return (lambda messages, params: client.chat(messages, **params)), "live"
 
     return canary_for
