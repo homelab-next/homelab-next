@@ -38,7 +38,15 @@ media_hwaccel: none
 # the server id a restored or imported config must answer with (data/device.txt); empty = not
 # checked. Set it at a cutover so health proves the Fire Cubes' server is the one that answers.
 media_expected_server_id: ""
-media_mem_limit: 8g
+# the container's memory limit. tmpfs pages (the transcode directory, /tmp) are charged to it, so it
+# must cover media_transcode_tmpfs_size and /tmp plus the server and its encoder: validation holds
+# it to at least those plus 2 GiB. The default is the default tmpfs (8 GiB) plus headroom.
+media_mem_limit: 12g
+# the transcode scratch directory, a RAM-backed tmpfs mounted at /transcode (server setting
+# TranscodingTempPath): size in BYTES, 8 GiB by default; 0 turns it off and the server transcodes into
+# the cache volume (/cache/transcodes) as before. The size is memory the guest must have and
+# playback fails when it fills: see the README's sizing rule.
+media_transcode_tmpfs_size: 8589934592
 media_start: true
 media_validate_with_docker: true
 media_health_timeout: 10

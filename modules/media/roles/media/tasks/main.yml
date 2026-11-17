@@ -12,6 +12,9 @@
 - name: Create the data directories
   ansible.builtin.include_tasks: dirs.yml
 
+- name: Point the server's transcoding at the tmpfs (encoding.xml)
+  ansible.builtin.include_tasks: encoding.yml
+
 - name: Render and start the media server
   ansible.builtin.include_role:
     name: compose_app

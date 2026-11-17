@@ -77,8 +77,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -168,8 +177,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -259,8 +277,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -350,8 +377,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -441,8 +477,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -536,8 +581,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).
@@ -631,8 +685,17 @@ argument_specs:
         default: ''
       media_mem_limit:
         type: str
-        description: Container memory limit, like 8g.
-        default: 8g
+        description: >-
+          Container memory limit, like 12g. The transcode tmpfs and /tmp count against it, so it must be at least
+          media_transcode_tmpfs_size plus 256 MiB for /tmp plus 2 GiB of headroom.
+        default: 12g
+      media_transcode_tmpfs_size:
+        type: int
+        description: >-
+          Size in bytes of the RAM-backed tmpfs mounted at /transcode, which the server's TranscodingTempPath
+          (encoding.xml) names, with throttling and segment deletion on. 0 turns it off: transcodes go to the
+          cache volume. Otherwise 1 GiB to 1 TiB; playback fails when it fills.
+        default: 8589934592
       media_start:
         type: bool
         description: Start the container (false renders only).

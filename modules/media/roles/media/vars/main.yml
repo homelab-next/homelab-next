@@ -2,6 +2,21 @@
 # Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
 media_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
 media_hwaccel_values: [none]
+# the container root is read-only (compose_app read_only: true); what the server writes outside
+# /config and /cache is /tmp, a small tmpfs, and the transcode directory
+media_tmp_tmpfs_size: 268435456
+media_transcode_path: /transcode
+media_transcode_tmpfs_min: 1073741824
+media_transcode_tmpfs_max: 1099511627776
+# memory the server, the encoder and the page cache need on top of the tmpfs mounts
+media_mem_headroom: 2147483648
+media_mem_units: {k: 1024, m: 1048576, g: 1073741824}
+# encoding.xml (the server's EncodingOptions), Jellyfin 10.11: throttling pauses the encoder once it
+# is media_transcode_throttle_seconds ahead of the player and segment deletion removes segments
+# media_transcode_keep_seconds behind it, so one long stream holds roughly (throttle + keep) seconds
+# of output in the tmpfs instead of the whole file
+media_transcode_throttle_seconds: 60
+media_transcode_keep_seconds: 300
 media_repository: "{{ media_image.split('@')[0].rsplit(':', 1)[0] }}"
 media_tag: "{{ media_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
 media_digest: "{{ media_image.split('@')[1] | default('') }}"
@@ -12,5 +27,58 @@ media_system_xml_seed: |
   <ServerConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
     <QuickConnectAvailable>true</QuickConnectAvailable>
   </ServerConfiguration>
+# the minimal encoding.xml seeded on a fresh install (never over an existing one)
+media_encoding_xml_seed: |
+  <?xml version="1.0" encoding="utf-8"?>
+  <EncodingOptions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  </EncodingOptions>
 # what the export leaves out: rebuilt by the server, or logs
 media_export_excludes: [./log, ./cache, ./transcodes]
+# Edits encoding.xml (python3 -I -c SCRIPT PATH on|off TEMP_PATH THROTTLE KEEP). The file must parse as
+# XML with an EncodingOptions root and a closing </EncodingOptions> tag (any indentation), or it is
+# refused (exit 3) and left alone. On: each element is replaced where it stands (one per line, as the
+# server writes them) or inserted before the closing tag. Off: only a TranscodingTempPath equal to
+# TEMP_PATH is emptied. Prints "changed" when it wrote, "ok" when nothing was to do.
+media_encoding_script: |
+  import re, sys
+  import xml.etree.ElementTree as ET
+  path, mode, temp, throttle, keep = sys.argv[1:6]
+  def refuse(why):
+      sys.stderr.write("media: " + path + " " + why + "; left unchanged. Repair or remove it (the server rewrites it) and run again.\n")
+      sys.exit(3)
+  with open(path, encoding="utf-8") as f:
+      text = f.read()
+  try:
+      root = ET.fromstring(text.encode("utf-8"))
+  except ET.ParseError as e:
+      refuse("is not well-formed XML (" + str(e) + ")")
+  if root.tag != "EncodingOptions":
+      refuse("has root element " + root.tag + ", not EncodingOptions")
+  close = re.search(r"</EncodingOptions\s*>\s*\Z", text)
+  if close is None:
+      refuse("has no closing </EncodingOptions> tag")
+  def put(text, tag, value):
+      line = "  <%s>%s</%s>" % (tag, value, tag)
+      pat = re.compile(r"^([ \t]*)<%s(?:\s*/>|>[^<]*</%s>)[ \t]*$" % (tag, tag), re.M)
+      if pat.search(text):
+          return pat.sub(lambda m: m.group(1) + line.lstrip(), text, count=1)
+      c = re.search(r"</EncodingOptions\s*>\s*\Z", text)
+      ls = text.rfind("\n", 0, c.start()) + 1
+      if text[ls:c.start()].strip() == "":
+          return text[:ls] + line + "\n" + text[ls:]
+      return text[:c.start()] + "\n" + line + "\n" + text[c.start():]
+  new = text
+  if mode == "on":
+      for tag, value in (("TranscodingTempPath", temp), ("EnableThrottling", "true"),
+                         ("ThrottleDelaySeconds", throttle), ("EnableSegmentDeletion", "true"),
+                         ("SegmentKeepSeconds", keep)):
+          new = put(new, tag, value)
+  else:
+      pat = re.compile(r"^([ \t]*)<TranscodingTempPath>%s</TranscodingTempPath>[ \t]*$" % re.escape(temp), re.M)
+      new = pat.sub(lambda m: m.group(1) + "<TranscodingTempPath />", new)
+  if new == text:
+      print("ok")
+  else:
+      with open(path, "w", encoding="utf-8") as f:
+          f.write(new)
+      print("changed")
