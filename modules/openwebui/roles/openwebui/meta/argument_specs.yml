@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run Open WebUI (core role open_webui) as the chat provider, behind the gateway and the identity provider.
+    options: &all
+      openwebui_logical_id:
+        type: str
+        description: "The instance's registry id (the chat row's name); also the OpenID Connect client's id."
+        required: true
+      openwebui_gateway_id:
+        type: str
+        description: "The lab's own LLM gateway's registry id (its product must be one of openwebui_gateway_impls)."
+        required: true
+      openwebui_public_url:
+        type: str
+        description: "https://<the row's public_hostname>: the address users reach it at through the edge; the sign-in redirects back to it and it is the only CORS origin."
+        required: true
+      openwebui_oidc_issuer_url:
+        type: str
+        description: "https://<sso name>/realms/<realm>: the OpenID Connect issuer (the platform's idp)."
+        required: true
+      openwebui_admin_email:
+        type: str
+        description: "Email of the break-glass local administrator (created at start only while no user exists)."
+        required: true
+      openwebui_image:
+        type: str
+        description: "repository:tag@sha256:<digest> of the Open WebUI image."
+        default: ghcr.io/open-webui/open-webui:v0.12.5@sha256:03443b8de6b617da9d900edd09b4bf1cb0ddbfdcba6afb42c548336a0b821ded
+      openwebui_gateway_impls:
+        type: list
+        elements: str
+        description: "Registry product(s) (the row's impl) the gateway id must be: the gateway and an engine behind it both answer as inference."
+        required: true
+      openwebui_gateway_key_ref:
+        type: str
+        description: "secret:<name> of this app's own gateway key (the gateway spec's keys entry for it)."
+        default: secret:gateway/key-openwebui
+      openwebui_gateway_tlp:
+        type: str
+        description: "TLP label sent as X-HNX-TLP on every gateway call: clear, green, amber or amber+strict."
+        default: amber
+      openwebui_gateway_tag_prefix:
+        type: str
+        description: "Prefix of the X-HNX-Tag usage tag (<prefix>:<user id>)."
+        default: openwebui
+      openwebui_session_key_ref:
+        type: str
+        description: "secret:<name> of the session signing key (WEBUI_SECRET_KEY)."
+        default: secret:openwebui/session-key
+      openwebui_admin_login_ref:
+        type: str
+        description: "secret:<name> of the break-glass administrator's password."
+        default: secret:openwebui/admin-password
+      openwebui_oidc_client_secret_ref:
+        type: str
+        description: "secret:<name> of the OpenID Connect client's secret: the realm generator's name for this row's client (idp/clients/<row name>)."
+        required: true
+      openwebui_oidc_provider_name:
+        type: str
+        description: "The sign-in button's label."
+        default: SSO
+      openwebui_bind:
+        type: str
+        description: "Host address the port is published on (the guest's own address: the edge reaches it there)."
+        default: "{{ ansible_host }}"
+      openwebui_port:
+        type: int
+        description: "Host port."
+        default: 8080
+      openwebui_dir:
+        type: path
+        description: "The compose project directory (data/ under it)."
+        default: /opt/compose/openwebui
+      openwebui_owner:
+        type: str
+        description: "Owner of the project directory."
+        default: root
+      openwebui_group:
+        type: str
+        description: "Group of the project directory."
+        default: root
+      openwebui_mem_limit:
+        type: str
+        description: "Container memory limit."
+        default: 2g
+      openwebui_extra_env:
+        type: dict
+        description: "Extra non-secret settings, each named in the core role's allowlist (open_webui_allowed_env)."
+        default: {}
+      openwebui_export_dir:
+        type: path
+        description: "Open-format export target."
+        default: /var/backups/compose/openwebui/export
+      openwebui_start:
+        type: bool
+        description: "Run docker compose up after rendering."
+        default: true
+      openwebui_validate_with_docker:
+        type: bool
+        description: "Run docker compose config on the rendered file."
+        default: true
+      openwebui_health_timeout:
+        type: int
+        description: "Seconds for each health request."
+        default: 10
+  health:
+    short_description: Fail unless the container is healthy and the public configuration shows the policy (an administrator exists, sign-up off, the one provider).
+    options: *all
+  readiness:
+    short_description: Fail unless the engine is ready, the gateway is the lab's own and accepts connections, and every secret resolves.
+    options: *all
+  backup:
+    short_description: Name the data directory (accounts, chats, uploads) for the backup.
+    options: *all
+  export:
+    short_description: Write the open-format exit copy of the data directory.
+    options: *all
+  restore:
+    short_description: Restore the data directory from a backup source.
+    options:
+      <<: *all
+      openwebui_restore_source:
+        type: path
+        description: Directory to restore from.
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest) and record it as pending.
+    options:
+      <<: *all
+      openwebui_target_image:
+        type: str
+        description: "repository:tag@sha256:<digest> to move to (the same repository as openwebui_image)."
+        required: true
