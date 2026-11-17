@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes: keyed by the slot, renamed to the
+# instance the site selects; version is product.version, host the module's host role (docs/modules/
+# registry-rows.md). Internal only, no public route: HTTPS with a certificate from the lab's
+# internal CA, accounts of its own (auth: own; an identity-provider sign-in is optional). One row
+# carries one port: the git-over-SSH port (default 2222) and the container registry on the same
+# HTTPS port (/v2/) are in the README and are the site's firewall rules. The health path answers
+# without a credential and reports the database and the cache.
+services:
+  forge:
+    capability: forge
+    impl: gitea
+    host: server
+    protocol: https
+    port: 3443
+    health: {kind: http, path: /api/healthz, expect_status: 200, interval_s: 60}
+    owner: operator
+    tls: internal
+    auth: own
+    tags: [git, registry]
+    description: Gitea, git over HTTPS and SSH and the lab's own container registry; local accounts. No public route.

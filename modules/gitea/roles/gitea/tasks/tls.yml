@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# The certificate chain, its key and the lab CA, and the SSH host keys, written from their secrets.
+# The service reads them at start, so a change restarts it (main.yml).
+- name: Write the certificate chain, the key and the CA
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ gitea_dir }}/tls/{{ item.name }}"
+    owner: "{{ gitea_owner }}"
+    group: "{{ gitea_gid | int }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {name: chain.pem, mode: "0644", content: "{{ lookup('hnx_secret', gitea_tls_cert_ref) | trim ~ '\n' }}"}
+    - {name: server.key, mode: "0440", content: "{{ lookup('hnx_secret', gitea_tls_key_ref) | trim ~ '\n' }}"}
+    - {name: ca.pem, mode: "0644", content: "{{ lookup('hnx_secret', gitea_ca_ref) | trim ~ '\n' }}"}
+  loop_control:
+    label: "{{ item.name }}"
+  register: gitea_tls_files
+  no_log: true
+
+- name: Write the SSH host keys (the source's, on a migration, so known_hosts entries stay valid)
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', item.value) | trim ~ '\n' }}"
+    dest: "{{ gitea_dir }}/sshkeys/gitea.{{ item.key }}"
+    owner: "{{ gitea_owner }}"
+    group: "{{ gitea_gid | int }}"
+    mode: "0440"
+  loop: "{{ gitea_ssh_host_key_refs | dict2items }}"
+  loop_control:
+    label: "gitea.{{ item.key }}"
+  register: gitea_ssh_files
+  no_log: true

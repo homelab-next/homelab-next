@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (object-tree, docs/modules/data.md): <data root>/export/{dump.zip, manifest.json,
+# repos.tsv, listing.jsonl}. The service is stopped for the length of the dump.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Dump, list and describe
+      ansible.builtin.include_tasks: dump.yml
+  tags: [export]

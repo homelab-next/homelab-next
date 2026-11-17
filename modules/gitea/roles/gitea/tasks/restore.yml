@@ -1,0 +1,155 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore from an export (README, "Migrating in" and "Restore drill"). Nothing is written until the
+# source has passed every check: listing.jsonl names exactly the archive, the manifest and the
+# repositories' manifest with the sizes and sha256 they have; the manifest is of this format, of a
+# version not newer than the image, and not vacuous (accounts and repositories, unless
+# gitea_restore_allow_empty); and the database inside the archive says what the manifest says.
+# Then, with the service STOPPED, gitea_restore.py places the instance (repositories, database,
+# avatars, attachments, packages, signing keys) beside what is there, which it renames to
+# *.before-restore.<stamp> and never deletes. The restored state is then verified BEFORE the service
+# starts: the database file against the manifest (counts and content fingerprint) and every
+# repository against repos.tsv (refs digest, fsck verdict). A failure leaves the service stopped.
+# Only then the service starts, its hooks are regenerated for this installation's paths, and health
+# runs. Run again with a newer export for the final delta: the instance is the instance again.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Read the source's listing
+      ansible.builtin.slurp:
+        src: "{{ gitea_restore_source }}/listing.jsonl"
+      register: gitea_restore_listing
+    - name: Read the source's files (size, sha256)
+      ansible.builtin.stat:
+        path: "{{ gitea_restore_source }}/{{ item }}"
+        checksum_algorithm: sha256
+        follow: false
+      loop: [dump.zip, manifest.json, repos.tsv]
+      register: gitea_restore_stat
+    - name: Name the listing's entries
+      ansible.builtin.set_fact:
+        gitea_listed: "{{ (gitea_restore_listing.content | b64decode).splitlines() | reject('equalto', '') | map('from_json') | list }}"
+    - name: Refuse a source that is not exactly what its listing says (nothing is written)
+      ansible.builtin.assert:
+        that:
+          - gitea_listed | map(attribute='key') | sort == ['dump.zip', 'manifest.json', 'repos.tsv']
+          - gitea_restore_stat.results | rejectattr('stat.exists') | list | length == 0
+          - gitea_restore_stat.results | selectattr('stat.islnk', 'equalto', true) | list | length == 0
+          - gitea_restore_stat.results | selectattr('stat.isreg', 'equalto', false) | list | length == 0
+          - >-
+            gitea_restore_stat.results | map(attribute='stat') | map(attribute='checksum') | sort
+            == gitea_listed | map(attribute='sha256') | sort
+          - >-
+            gitea_restore_stat.results | map(attribute='stat') | map(attribute='size') | map('int') | sort
+            == gitea_listed | map(attribute='size') | map('int') | sort
+        fail_msg: "forge: {{ gitea_restore_source }} is not an intact export (listing, sizes or sha256 differ)"
+    - name: Read the manifests
+      ansible.builtin.slurp:
+        src: "{{ gitea_restore_source }}/{{ item }}"
+      loop: [manifest.json, repos.tsv]
+      register: gitea_restore_docs
+    - name: Name what the source says
+      ansible.builtin.set_fact:
+        gitea_want: "{{ gitea_restore_docs.results[0].content | b64decode | from_json }}"
+        gitea_want_repos: "{{ (gitea_restore_docs.results[1].content | b64decode).splitlines() | map('trim') | reject('equalto', '') | list }}"
+    - name: Refuse a source this role cannot restore, or one that proves nothing (nothing is written)
+      ansible.builtin.assert:
+        that:
+          - gitea_want.format | default(0) == 1
+          - gitea_want.product_version | default('') is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+          - gitea_want.product_version is version(gitea_product_version, '<=')
+          - gitea_want.counts.users | int > 0 or gitea_restore_allow_empty | bool
+          - gitea_want.counts.repos | int > 0 or gitea_restore_allow_empty | bool
+          - gitea_want_repos | length > 0 or gitea_restore_allow_empty | bool
+          - gitea_want_repos | length == gitea_want.repositories | int
+          - gitea_want_repos | select('search', '\tfail\Z') | list | length == 0
+          - (gitea_want_repos | reject('search', '\.wiki\.git\t') | list | length) == gitea_want.counts.repos | int
+        fail_msg: >-
+          forge: the export's manifest is not one to restore from (format 1; a version not newer than
+          {{ gitea_product_version }}; accounts and repositories, unless gitea_restore_allow_empty; every
+          repository's fsck ok; one repos.tsv line per repository in the database)
+    - name: Read the archive's own database (must equal the manifest)
+      ansible.builtin.include_tasks: helper.yml
+      vars:
+        gitea_helper_cmd: dbcounts
+        gitea_helper_extra: {zip: "{{ gitea_restore_source }}/dump.zip"}
+    - name: The archive is what the manifest describes
+      ansible.builtin.assert:
+        that:
+          - gitea_facts.counts == gitea_want.counts
+          - gitea_facts.fingerprint == gitea_want.fingerprint
+        fail_msg: "forge: the archive's database differs from the manifest's counts or fingerprint"
+    # The accounts' two-factor seeds and stored credentials are encrypted with the application
+    # secrets: a restore under different ones restores and passes every other check and is unusable.
+    # The manifest holds HMAC fingerprints of the source's (never the values); the configured ones
+    # must produce the same.
+    - name: The configured application secrets are the source's (a refusal names the secret, never a value)
+      ansible.builtin.include_tasks: helper.yml
+      vars:
+        gitea_helper_cmd: secretfp
+        gitea_helper_extra:
+          values: "{{ gitea_app_keymat }}"
+          expect: "{{ gitea_want.app_key_fingerprints | default(none) }}"
+    - name: Restore with the service stopped, verify, and only then start
+      block:
+        - name: Stop the service
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ gitea_dir }}/docker-compose.yml", stop, "{{ gitea_service }}"]
+          changed_when: true
+        - name: Name this restore
+          ansible.builtin.command:
+            argv: [date, -u, +%Y%m%dT%H%M%SZ]
+          register: gitea_stamp
+          changed_when: false
+          check_mode: false
+        - name: Place the instance
+          ansible.builtin.command:
+            argv: [python3, -I, "{{ gitea_dir }}/bin/gitea_restore.py"]
+            stdin: "{{ {'data': gitea_data_root ~ '/data', 'zip': gitea_restore_source ~ '/dump.zip', 'uid': gitea_uid | int, 'gid': gitea_gid | int, 'stamp': gitea_stamp.stdout | trim, 'allow_empty': gitea_restore_allow_empty | bool} | to_json }}"
+          register: gitea_placed
+          changed_when: true
+        - name: Take the restored repositories' manifest
+          ansible.builtin.include_tasks: repos.yml
+        - name: Read the restored database's facts
+          ansible.builtin.include_tasks: helper.yml
+          vars:
+            gitea_helper_cmd: dbcounts
+            gitea_helper_extra: {db: "{{ gitea_data_root }}/data/gitea.db"}
+        - name: The restored instance is the source's (nothing starts otherwise)
+          ansible.builtin.assert:
+            that:
+              - gitea_facts.counts == gitea_want.counts
+              - gitea_facts.fingerprint == gitea_want.fingerprint
+              - gitea_repos_lines | sort == gitea_want_repos | sort
+              - gitea_repos_lines | select('search', '\tfail\Z') | list | length == 0
+              - gitea_repos_lines | length > 0 or gitea_restore_allow_empty | bool
+            fail_msg: >-
+              forge: the restored instance differs from the export (database counts or fingerprint, or a
+              repository's refs digest, or an fsck failure). The service is left STOPPED. What was there
+              before is beside it as *.before-restore.{{ gitea_stamp.stdout | trim }} under
+              {{ gitea_data_root }}/data
+      rescue:
+        - name: Say where the restore stopped
+          ansible.builtin.fail:
+            msg: >-
+              forge: the restore did not complete and the service is left stopped; nothing was
+              deleted (the previous data, when there was any, is beside the live paths as
+              *.before-restore.*). {{ ansible_failed_result.msg | default('') | truncate(600) }}
+    - name: Start the service
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ gitea_dir }}/docker-compose.yml", up, -d, --wait, "{{ gitea_service }}"]
+      changed_when: true
+    - name: Wait for the service to answer
+      ansible.builtin.include_tasks: helper.yml
+      vars:
+        gitea_helper_cmd: wait
+    - name: Regenerate the repositories' hooks for this installation's paths
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ gitea_dir }}/docker-compose.yml", exec, -T, "{{ gitea_service }}", gitea, admin, regenerate, hooks]
+      changed_when: true
+    - name: Prove the restored service (health)
+      ansible.builtin.include_tasks: health.yml
+  tags: [restore]
