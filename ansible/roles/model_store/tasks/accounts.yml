@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+# The accounts the tree is chowned to, created when absent (a fresh guest has none of them: the
+# chown would fail "failed to look up user"). Groups first: the owner's primary group is one of them.
+# An id is set only when the site fixed one (a consumer that needs a number, not a name); an
+# existing account is never renumbered or reshaped beyond what is stated here.
+# Never renumber: a fixed id that disagrees with an existing account is a failure to report, not a
+# change to make (the files the account owns, and every consumer of its number, would be orphaned).
+- name: Look up the accounts that may already exist
+  ansible.builtin.getent:
+    database: "{{ item.db }}"
+    key: "{{ item.key }}"
+    fail_key: false
+  loop:
+    - {db: group, key: "{{ model_store_group }}"}
+    - {db: group, key: "{{ model_store_exports_group }}"}
+    - {db: passwd, key: "{{ model_store_owner }}"}
+  loop_control:
+    label: "{{ item.db }} {{ item.key }}"
+  check_mode: false
+
+- name: Refuse to renumber an existing account
+  ansible.builtin.assert:
+    that:
+      - >-
+        model_store_gid | string == '' or getent_group[model_store_group] is not defined
+        or getent_group[model_store_group] is none or getent_group[model_store_group][1] == model_store_gid | string
+      - >-
+        model_store_exports_gid | string == '' or getent_group[model_store_exports_group] is not defined
+        or getent_group[model_store_exports_group] is none
+        or getent_group[model_store_exports_group][1] == model_store_exports_gid | string
+      - >-
+        model_store_uid | string == '' or getent_passwd[model_store_owner] is not defined
+        or getent_passwd[model_store_owner] is none or getent_passwd[model_store_owner][1] == model_store_uid | string
+    fail_msg: >-
+      model_store: an account that already exists has a different number than the one fixed for it
+      (model_store_gid, model_store_exports_gid or model_store_uid); this role never renumbers an
+      account. Set the variable to the existing number, or leave it empty.
+
+- name: Create the store's group and the trainers' group
+  ansible.builtin.group:
+    name: "{{ item.name }}"
+    gid: "{{ item.gid if item.gid | string != '' else omit }}"
+    system: true
+    state: present
+  loop:
+    - {name: "{{ model_store_group }}", gid: "{{ model_store_gid }}"}
+    - {name: "{{ model_store_exports_group }}", gid: "{{ model_store_exports_gid }}"}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create the account that owns the tree (no login, no home)
+  ansible.builtin.user:
+    name: "{{ model_store_owner }}"
+    uid: "{{ model_store_uid if model_store_uid | string != '' else omit }}"
+    group: "{{ model_store_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+    state: present

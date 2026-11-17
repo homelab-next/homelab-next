@@ -23,6 +23,22 @@ argument_specs:
         type: str
         description: "Group allowed to write exports/ (the trainers, Unsloth Studio)."
         default: model-trainers
+      model_store_manage_accounts:
+        type: bool
+        description: "Create model_store_owner and the two groups when absent (false: they must already exist)."
+        default: true
+      model_store_uid:
+        type: str
+        description: "Fixed numeric uid for model_store_owner when it is created (empty: the system picks)."
+        default: ""
+      model_store_gid:
+        type: str
+        description: "Fixed numeric gid for model_store_group when it is created (empty: the system picks)."
+        default: ""
+      model_store_exports_gid:
+        type: str
+        description: "Fixed numeric gid for model_store_exports_group when it is created (empty: the system picks)."
+        default: ""
       model_store_fetch: &fetch
         type: bool
         description: "Fetch the hub entries (false: create the layout and the manifest copy only)."
@@ -32,10 +48,18 @@ argument_specs:
         elements: str
         description: "Fetch only these entry ids (empty: every hf and gguf entry)."
         default: []
+      model_store_hf_install: &hfinstall
+        type: bool
+        description: "Install the hf CLI (huggingface_hub, pinned and hashed) into model_store_hf_venv; false: the site provides it."
+        default: true
+      model_store_hf_venv: &hfvenv
+        type: path
+        description: "The managed CLI's virtualenv."
+        default: /opt/hnx/model-store/venv
       model_store_hf_cli: &cli
         type: str
-        description: "The Hugging Face CLI (hf, from huggingface_hub)."
-        default: hf
+        description: "The Hugging Face CLI (default: the managed virtualenv's hf, or hf on the PATH when not installing)."
+        default: "{{ (model_store_hf_venv ~ '/bin/hf') if (model_store_hf_install | bool) else 'hf' }}"
       model_store_hf_endpoint: &endpoint
         type: str
         description: "A hub mirror (https URL) used instead of the public hub; empty: the hub."
@@ -63,8 +87,10 @@ argument_specs:
       model_store_manifest: *manifest
       model_store_root: *root
   readiness:
-    short_description: The hf CLI runs (when fetching).
+    short_description: The hf CLI runs and reports its version (when fetching).
     options:
+      model_store_hf_install: *hfinstall
+      model_store_hf_venv: *hfvenv
       model_store_hf_cli: *cli
       model_store_fetch: *fetch
   backup:

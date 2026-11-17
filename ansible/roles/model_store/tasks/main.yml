@@ -2,6 +2,14 @@
 - name: Validate the inputs
   ansible.builtin.include_tasks: validate.yml
 
+- name: Create the owner and the groups when absent
+  ansible.builtin.include_tasks: accounts.yml
+  when: model_store_manage_accounts | bool
+
+- name: Install the hf CLI (pinned by version, installed by hash)
+  ansible.builtin.include_tasks: install_cli.yml
+  when: (model_store_hf_install | bool) and (model_store_fetch | bool)
+
 - name: Create the store directories (engines read through the group, never write)
   ansible.builtin.file:
     path: "{{ model_store_root }}/{{ item }}"

@@ -11,6 +11,12 @@
       - model_store_owner is match('^[a-z_][a-z0-9_-]{0,31}\Z')
       - model_store_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
       - model_store_exports_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - model_store_manage_accounts is boolean
+      - model_store_hf_install is boolean
+      - model_store_hf_venv is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in model_store_hf_venv.split('/')
+      - model_store_uid | string == '' or model_store_uid | string is match('^[1-9][0-9]{0,9}\Z')
+      - model_store_gid | string == '' or model_store_gid | string is match('^[1-9][0-9]{0,9}\Z')
+      - model_store_exports_gid | string == '' or model_store_exports_gid | string is match('^[1-9][0-9]{0,9}\Z')
       - model_store_hf_endpoint == '' or model_store_hf_endpoint is match('^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._/-]*)?\Z')
       - model_store_hf_token_ref == '' or model_store_hf_token_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
       - model_store_fetch_ids | difference(model_store_manifest.models.keys() | list) | length == 0
