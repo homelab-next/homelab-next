@@ -5,10 +5,10 @@
 #   docker build -f modules/tts/image/Dockerfile --build-arg BACKEND=cpu -t hnx-tts:<version>-<commit12> .
 # BACKEND is cpu or cuda (torch's CUDA 12.8 build). Build context: the repository root (the
 # Dockerfile.dockerignore beside this file sends only what is copied below).
-# The base is pinned by digest (python 3.11.14, Debian 13 slim). Every wheel is hash-checked
+# The base is pinned by digest (python 3.11.17, Debian 13 slim). Every wheel is hash-checked
 # (--require-hashes) and nothing is fetched at run time: the model is the model store's files, mounted
 # read-only, and the container is started offline.
-FROM python:3.11.14-slim-trixie@sha256:c8271b1f627d0068857dce5b53e14a9558603b527e46f1f901722f935b786a39
+FROM python:3.11.17-slim-trixie@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377
 ARG BACKEND=cpu
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 COPY modules/tts/image/requirements-${BACKEND}.txt /tmp/requirements.txt
