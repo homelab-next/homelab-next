@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). The container runs
+# as an id of its own, in the model store's group (the weights are readable, never writable); the voice
+# is read-only, the state and the scratch its only writable paths; the card, on cuda, is handed over by
+# its CDI device only. compose_app gives it no capability and never privileged.
+- name: Read the model directory's group (the store's readers' group)
+  ansible.builtin.stat:
+    path: "{{ tts_model_top }}"
+    follow: false
+  register: tts_model_dir_stat
+  when: tts_models_gid | string == ''
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Hold the group to one that exists and is not root's
+  ansible.builtin.assert:
+    that:
+      - tts_models_gid_value | string is match('^[1-9][0-9]{0,9}\Z')
+    fail_msg: >-
+      tts: the model store's group (the directory {{ tts_model_top }}, run model_store first with the
+      {{ tts_model_store_id }} entry) must exist with a group other than root's, or set tts_models_gid
+  vars:
+    tts_models_gid_value: "{{ tts_models_gid if tts_models_gid | string != '' else (tts_model_dir_stat.stat.gid | default('')) }}"
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    tts_app:
+      compose_app_name: tts
+      compose_app_dir: "{{ tts_dir }}"
+      compose_app_data_dir: "{{ tts_data_root }}"
+      compose_app_export_dir: "{{ tts_data_root }}/export"
+      compose_app_owner: "{{ tts_owner }}"
+      compose_app_group: "{{ tts_gid }}"
+      compose_app_start: "{{ tts_start }}"
+      compose_app_validate_with_docker: "{{ tts_validate_with_docker }}"
+      compose_app_bind_extra:
+        - {path: "{{ tts_model_top }}", reason: "the model store's directory of the one voice-model entry (its snapshot files link into blobs/ beside it), mounted read-only"}
+        - {path: "{{ tts_listing }}", reason: "the entry's sha256 listing, the file every load is checked against, mounted read-only"}
+        - {path: "{{ tts_cache_dir }}", reason: "compiled kernels and a home directory for the libraries, rebuilt and not backed up"}
+      compose_app_spec:
+        services:
+          tts: "{{ tts_service_base | combine(tts_gpu_extra) }}"
+  vars:
+    tts_models_gid_value: "{{ tts_models_gid if tts_models_gid | string != '' else (tts_model_dir_stat.stat.gid | default('')) }}"
+    tts_service_base:
+      image: "{{ tts_repository }}"
+      tag: "{{ tts_tag }}"
+      digest: "{{ tts_digest }}"
+      user: "{{ tts_uid | int }}:{{ tts_gid | int }}"
+      group_add: ["{{ tts_models_gid_value | int }}"]
+      environment: "{{ tts_container_env }}"
+      ports: ["{{ tts_bind }}:{{ tts_port | int }}:{{ tts_container_port }}"]
+      volumes:
+        - "{{ tts_model_top }}:{{ tts_container_models_dir }}:ro"
+        - "{{ tts_listing }}:{{ tts_container_listing }}:ro"
+        - "{{ tts_data_root }}/voice:{{ tts_container_voice_dir }}:ro"
+        - "{{ tts_data_root }}/state:{{ tts_container_state_dir }}"
+        - "{{ tts_cache_dir }}:{{ tts_container_cache_dir }}"
+      mem_limit: "{{ tts_mem_limit }}"
+      healthcheck:
+        test: [CMD, python, -c, "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:{{ tts_container_port }}/health', timeout=5).status == 200 else 1)"]
+        interval: 30s
+        timeout: 10s
+        retries: 5
+        start_period: 60s
+    # the card is handed over by its device only (a cpu backend has none)
+    tts_gpu_extra: >-
+      {{ {'devices': ['nvidia.com/gpu=' ~ (tts_gpu_index | int)]} if tts_backend == 'cuda' else {} }}
+  tags: [health, backup, restore, export, upgrade]

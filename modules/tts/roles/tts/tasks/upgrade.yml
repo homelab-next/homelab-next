@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Refuse a target that is not pinned by tag and digest, or is another repository
+      ansible.builtin.assert:
+        that:
+          - tts_target_image is match(tts_ref_pattern)
+          - tts_target_image.split('@')[0].rsplit(':', 1)[1] is not match('^latest\Z')
+          - tts_target_image.split('@')[0].rsplit(':', 1)[0] == tts_repository
+          # the same backend: a cpu image is not an upgrade of a cuda one
+          - tts_target_image.split('@')[0].rsplit(':', 1)[1].endswith('-' ~ tts_backend)
+        fail_msg: "tts: the target must be {{ tts_repository }}:<tag ending -{{ tts_backend }}>@sha256:<64 hex>"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: tts
+        compose_app_dir: "{{ tts_app.compose_app_dir }}"
+        compose_app_owner: "{{ tts_app.compose_app_owner }}"
+        compose_app_group: "{{ tts_app.compose_app_group }}"
+        compose_app_spec: "{{ tts_app.compose_app_spec }}"
+        compose_app_upgrade_service: tts
+        compose_app_upgrade_tag: "{{ tts_target_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ tts_target_image.split('@')[1] }}"
+  tags: [upgrade]
