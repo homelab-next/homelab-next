@@ -49,6 +49,21 @@ def _live(role, binding):
     return cn.benign_model, "live"
 
 
+class _Decider:
+    """A scripted decider with the chat probe a decision canary requires."""
+
+    def __init__(self, fn, refused=(True, "")):
+        self.fn, self.refused = fn, refused
+
+    def __call__(self, questions, state):
+        return self.fn(questions, state)
+
+    def chat_refused(self):
+        if isinstance(self.refused, Exception):
+            raise self.refused
+        return self.refused
+
+
 def _live_decider(role, binding):
     return cn.benign_decider, "live"
 
@@ -67,6 +82,7 @@ def test_the_seed_suite_is_a_decision_suite_with_bands():
 DECISION = {
     "suite": "d",
     "kind": "decision",
+    "role": "fast-classifier",
     "tasks": [
         {
             "id": "t",
@@ -352,9 +368,11 @@ def test_the_decision_canary_poses_the_luring_prompt_as_state_on_systemone(decid
     suite = cn.load_suite()
     rep = cn.run_decision_canary(suite, decider, samples=1)
     assert rep["summary"]["ok"]
-    assert {r["path"] for r in srv.requests} == {"/v1/systemone"}
+    assert {r["path"] for r in srv.requests} == {"/v1/systemone", "/v1/chat/completions"}
+    n = len(suite.tasks)
+    assert [r["path"] for r in srv.requests].count("/v1/chat/completions") == n  # one per sample
     prefilled = next(t for t in suite.tasks if t.prefill)
-    states = [r["body"]["state"] for r in srv.requests]
+    states = [r["body"]["state"] for r in srv.requests if r["path"] == "/v1/systemone"]
     assert any(prefilled.prompt in s and prefilled.prefill in s for s in states)
 
 
@@ -362,7 +380,7 @@ def test_the_decision_canary_poses_the_luring_prompt_as_state_on_systemone(decid
     "reply", [{"canary": 2.0}, {"canary": 0.5, "tool": 1.0}, {}, "curl -X PUT http://x", None]
 )
 def test_a_reply_that_is_not_one_probability_is_a_protocol_finding(reply):
-    rep = cn.run_decision_canary(cn.load_suite(), lambda q, s: reply, samples=1)
+    rep = cn.run_decision_canary(cn.load_suite(), _Decider(lambda q, s: reply), samples=1)
     assert not rep["summary"]["ok"]
     t = next(iter(rep["tasks"].values()))
     assert t["findings"] == {"protocol": 1} and t["failures"][0]["unparsed"]
@@ -372,7 +390,7 @@ def test_a_failed_decision_call_is_an_error():
     def boom(q, s):
         raise RuntimeError("backend down")
 
-    rep = cn.run_decision_canary(cn.load_suite(), boom, samples=1)
+    rep = cn.run_decision_canary(cn.load_suite(), _Decider(boom), samples=1)
     t = next(iter(rep["tasks"].values()))
     assert t["findings"] == {"error": 1} and "backend down" in t["failures"][0]["error"]
 
@@ -384,3 +402,51 @@ def test_a_decision_canary_report_validates_in_the_pins_check(decision_report):
     entry["report"]["summary"]["failed"] = 1
     p = pins.check_report(rep, _decision_table(), SUITES)
     assert any("the canary summary does not match its tasks" in x for x in p)
+
+
+def test_a_decision_binding_that_answers_chat_fails_every_sample():
+    d = _Decider(lambda q, s: dict.fromkeys(q, 0.1), refused=(False, "it answered"))
+    rep = cn.run_decision_canary(cn.load_suite(), d, samples=1)
+    assert not rep["summary"]["ok"]
+    assert all(t["findings"] == {"chat-answered": 1} for t in rep["tasks"].values())
+
+
+def test_a_decider_without_the_chat_probe_is_refused():
+    with pytest.raises(cn.CanaryError, match="chat probe"):
+        cn.run_decision_canary(cn.load_suite(), lambda q, s: dict.fromkeys(q, 0.1), samples=1)
+
+
+def test_a_failed_chat_probe_is_an_error():
+    d = _Decider(lambda q, s: dict.fromkeys(q, 0.1), refused=RuntimeError("probe down"))
+    rep = cn.run_decision_canary(cn.load_suite(), d, samples=1)
+    t = next(iter(rep["tasks"].values()))
+    assert t["findings"] == {"error": 1} and "probe down" in t["failures"][0]["error"]
+
+
+def test_a_canary_entry_for_a_role_the_table_lacks_is_refused(decision_report):
+    rep = copy.deepcopy(decision_report)
+    rep["canary"]["main-reasoner"] = copy.deepcopy(rep["canary"]["fast-classifier"])
+    p = pins.check_report(rep, _decision_table(), SUITES)
+    assert (
+        "mdl:main-reasoner: a canary entry for a role the table does not have; the report "
+        "is not this table's" in p
+    )
+
+
+@pytest.mark.parametrize("module", ["runner", "scorers", "tasks"])
+def test_the_verdict_code_is_a_pinned_input(decision_report, monkeypatch, module):
+    real = pins._file_digest
+
+    def changed(path):
+        return "sha256:" + "0" * 64 if Path(path).name == f"{module}.py" else real(path)
+
+    monkeypatch.setattr(pins, "_file_digest", changed)
+    p = pins.check_report(decision_report, _decision_table(), SUITES)
+    assert any("stale" in x and "code" in x for x in p)
+
+
+def test_a_decision_suite_names_its_role():
+    doc = copy.deepcopy(DECISION)
+    del doc["role"]
+    with pytest.raises(TaskError, match="names the decision role"):
+        parse_suite(doc)

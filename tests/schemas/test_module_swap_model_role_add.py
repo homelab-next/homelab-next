@@ -98,6 +98,12 @@ def _swap(report: dict, **leg) -> dict:
     return swap
 
 
+def _swap_no_names(report: dict, **leg) -> dict:
+    swap = _swap(report, **leg)
+    del swap["model_role_changes"]
+    return swap
+
+
 def _ev(*reports: dict, before=EMPTY, after=ADDED, store=STORE, live=True) -> ms.ModelEvidence:
     return ms.ModelEvidence(
         before=before, after=after, reports=reports, store=store, require_live=live
@@ -106,7 +112,7 @@ def _ev(*reports: dict, before=EMPTY, after=ADDED, store=STORE, live=True) -> ms
 
 def _removal(report: dict) -> dict:
     """The reverse swap: the table after the add is the start, the empty table the end."""
-    swap = _swap(
+    swap = _swap_no_names(
         report,
         change="remove",
         **{"from": {"pin": ms._pin_of(ADDED.get("fast-classifier").bindings[0])}},
@@ -261,6 +267,7 @@ def test_an_add_next_to_an_unchanged_role_holds():
             decision_canary_factory=lambda r, b: (benign_decider, "live"),
         )  # fmt: skip
         swap = _swap(report, role="mdl:triage-decider")
+        swap["model_role_changes"] = ["mdl:triage-decider"]
         models = ms.ModelEvidence(
             before=before, after=after, reports=[report], store=STORE, suites=suites
         )
@@ -344,3 +351,67 @@ def test_the_schema_takes_each_change_and_no_other():
     assert not list(v.iter_errors(doc))
     doc["model_roles"][0]["change"] = "replace"
     assert list(v.iter_errors(doc))
+
+
+# ---------------------------------------------------------------- review blockers (#476)
+
+NAMING = "an added role brings every field beside its pin new"
+
+
+def test_an_add_must_name_the_role_in_model_role_changes(reports):
+    swap = _swap(reports["live"])
+    del swap["model_role_changes"]
+    (p,) = ms.model_role_problems(swap, _ev(reports["live"]))
+    assert NAMING in p and "names mdl:fast-classifier in model_role_changes" in p
+
+
+def _with_fallback() -> tuple[RoleTable, RoleTable]:
+    """The reviewer's probe: the added role falls back to a role served on another backend."""
+    other = {
+        "kind": "decision",
+        "tier": "fast",
+        "bindings": [_binding(backend="other-inference", digest="sha256:" + "2" * 64)],
+    }
+    before = RoleTable.from_dict({"version": 1, "roles": {"main-reasoner": other}})
+    doc = _decision_doc()
+    doc["roles"]["main-reasoner"] = other
+    doc["roles"]["fast-classifier"]["fallback"] = "mdl:main-reasoner"
+    return before, RoleTable.from_dict(doc)
+
+
+def _with_leaves_lab() -> RoleTable:
+    """The reviewer's probe: the added binding leaves the lab."""
+    return RoleTable.from_dict(_decision_doc({**_binding(), "leaves_lab": True}))
+
+
+@pytest.mark.parametrize("probe", ["fallback", "leaves_lab"])
+def test_an_add_carrying_trust_fields_is_refused_unless_named(probe):
+    if probe == "fallback":
+        before, after = _with_fallback()
+    else:
+        before, after = EMPTY, _with_leaves_lab()
+    report = _run(after)
+    swap = _swap(report)
+    del swap["model_role_changes"]
+    models = ms.ModelEvidence(before=before, after=after, reports=[report], store=STORE)
+    assert any(NAMING in p for p in ms.model_role_problems(swap, models))
+    swap["model_role_changes"] = ["mdl:fast-classifier"]
+    assert not any(NAMING in p for p in ms.model_role_problems(swap, models))
+
+
+def test_a_remove_on_another_backend_is_refused(reports):
+    """The reviewer's probe: the swap moves inference/inference, the role is served elsewhere."""
+    before = RoleTable.from_dict(_decision_doc(_binding(backend="elsewhere")))
+    swap = _removal(reports["empty"])
+    swap["model_roles"][0]["from"] = {"pin": ms._pin_of(before.get("fast-classifier").bindings[0])}
+    (p,) = ms.model_role_problems(swap, _ev(reports["empty"], before=before, after=EMPTY))
+    assert "the removed binding's backend svc:elsewhere is not the instance the leg moves" in p
+
+
+def test_a_remove_of_a_role_with_two_bindings_is_refused(reports):
+    """The reviewer's probe: naming one binding must not drop the other unnamed."""
+    second = _binding(digest="sha256:" + "3" * 64)
+    before = RoleTable.from_dict(_decision_doc(_binding(), second))
+    swap = _removal(reports["empty"])
+    (p,) = ms.model_role_problems(swap, _ev(reports["empty"], before=before, after=EMPTY))
+    assert "the role has 2 bindings; a remove leg drops a role with its one binding" in p

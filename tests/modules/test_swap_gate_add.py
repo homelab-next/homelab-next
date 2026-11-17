@@ -169,6 +169,104 @@ def test_the_role_leaves_with_a_remove_record(tmp_path, capsys):
     leg["change"] = "remove"
     leg["from"] = {"pin": ms._pin_of(RoleTable.from_dict(ADDED).get("fast-classifier").bindings[0])}
     del leg["to"]
+    del swap["model_role_changes"]  # a removed role brings no field to approve
     _write(root, f"{LAB_SWAPS}/fast-classifier.json", swap)
+    rc, out = _gate(root, capsys)
+    assert (rc, out["problems"]) == (0, []), out
+
+
+# ---------------------------------------------------------------- review blockers (#476)
+
+
+def test_the_gate_requires_the_added_role_be_named(tmp_path, report, capsys):
+    root = _overlay(tmp_path, EMPTY, ADDED, report)
+    swap = _add_record(report)
+    del swap["model_role_changes"]
+    _write(root, f"{LAB_SWAPS}/fast-classifier.json", swap)
+    rc, out = _gate(root, capsys)
+    assert rc == 1
+    assert any(
+        "mdl:fast-classifier changes bindings[], kind, tier" in p
+        or ("mdl:fast-classifier changes" in p and "model_role_changes" in p)
+        for p in out["problems"]
+    ), out
+
+
+def _leaves_lab() -> dict:
+    doc = json.loads(json.dumps(ADDED))
+    doc["roles"]["fast-classifier"]["bindings"][0]["leaves_lab"] = True
+    return doc
+
+
+def test_the_gate_names_an_added_bindings_leaves_lab(tmp_path, capsys):
+    """The reviewer's probe: an added binding with leaves_lab lands only named and reviewed."""
+    after = _leaves_lab()
+    rep = _report(after)
+    root = _overlay(tmp_path, EMPTY, after, rep)
+    swap = _add_record(rep)
+    del swap["model_role_changes"]
+    _write(root, f"{LAB_SWAPS}/fast-classifier.json", swap)
+    rc, out = _gate(root, capsys)
+    assert rc == 1
+    assert any("bindings[].leaves_lab" in p and "model_role_changes" in p for p in out["problems"])
+    swap["model_role_changes"] = ["mdl:fast-classifier"]
+    _write(root, f"{LAB_SWAPS}/fast-classifier.json", swap)
+    rc, out = _gate(root, capsys)
+    assert (rc, out["problems"]) == (0, []), out
+
+
+def test_the_gate_names_an_added_roles_fallback(tmp_path, capsys):
+    """The reviewer's probe: an added role falling back to a role on another backend."""
+    other = {
+        "kind": "decision",
+        "tier": "fast",
+        "bindings": [{**ADDED["roles"]["fast-classifier"]["bindings"][0],
+                      "backend": "svc:other-inference"}],
+    }  # fmt: skip
+    before = {"version": 1, "roles": {"main-reasoner": other}}
+    after = json.loads(json.dumps(ADDED))
+    after["roles"]["main-reasoner"] = other
+    after["roles"]["fast-classifier"]["fallback"] = "mdl:main-reasoner"
+    rep = _report(after)
+    root = _overlay(tmp_path, before, after, rep)
+    swap = _add_record(rep)
+    del swap["model_role_changes"]
+    _write(root, f"{LAB_SWAPS}/fast-classifier.json", swap)
+    rc, out = _gate(root, capsys)
+    assert rc == 1
+    assert any("mdl:fast-classifier changes" in p and "fallback" in p for p in out["problems"])
+
+
+def _remove_record(empty: dict) -> dict:
+    swap = _add_record(empty)
+    leg = swap["model_roles"][0]
+    leg["change"] = "remove"
+    leg["from"] = {"pin": ms._pin_of(RoleTable.from_dict(ADDED).get("fast-classifier").bindings[0])}
+    del leg["to"]
+    del swap["model_role_changes"]
+    return swap
+
+
+def test_the_gate_refuses_removing_a_role_a_consumer_still_names(tmp_path, capsys):
+    empty = _report(EMPTY)
+    root = _overlay(tmp_path, ADDED, EMPTY, empty)
+    _write(
+        root, "lab/gateway.json", {"keys": [{"name": "triage", "roles": ["mdl:fast-classifier"]}]}
+    )
+    _write(root, "lab/notes.md", {"text": "mdl:fast-classifier"})  # prose: not a consumer
+    _write(root, f"{LAB_SWAPS}/fast-classifier.json", _remove_record(empty))
+    rc, out = _gate(root, capsys)
+    assert rc == 1
+    assert out["problems"] == [
+        "mdl:fast-classifier is removed, but lab/gateway.json still names it: remove that "
+        "consumer in the same change, or keep the role"
+    ]
+
+
+def test_a_similar_role_name_is_no_consumer(tmp_path, capsys):
+    empty = _report(EMPTY)
+    root = _overlay(tmp_path, ADDED, EMPTY, empty)
+    _write(root, "lab/gateway.json", {"roles": ["mdl:fast-classifier-2"]})
+    _write(root, f"{LAB_SWAPS}/fast-classifier.json", _remove_record(empty))
     rc, out = _gate(root, capsys)
     assert (rc, out["problems"]) == (0, []), out

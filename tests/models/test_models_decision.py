@@ -60,9 +60,20 @@ def test_decide_returns_a_probability_per_question(decider):
 
 
 def test_a_decision_model_refuses_chat_and_a_chat_model_refuses_systemone(decider):
-    with pytest.raises(ModelError) as e1:
-        _client(decider, "decider-m").chat([{"role": "user", "content": "hi"}])
-    assert e1.value.status == 501
+    # the client refuses text calls on a decision role before sending anything
+    n = len(decider.requests)
+    for call in (
+        lambda c: c.chat([{"role": "user", "content": "hi"}]),
+        lambda c: c.complete("hi"),
+        lambda c: c.embed(["hi"]),
+    ):
+        with pytest.raises(ModelError, match="is a decision role") as e1:
+            call(_client(decider, "decider-m"))
+        assert e1.value.kind == "misconfigured"
+    assert len(decider.requests) == n
+    # and the server refuses it too: the canary's probe reads that refusal
+    assert _client(decider, "decider-m").chat_refused() == (True, "")
+    assert decider.requests[-1]["path"] == "/v1/chat/completions"
     with pytest.raises(ModelError) as e2:
         _client(decider, "chat-m").decide({"a": "x"})
     assert e2.value.status == 404
@@ -75,3 +86,9 @@ def test_a_malformed_decision_answer_is_an_error(decider):
 
     with pytest.raises(ModelError, match="malformed"):
         Bad(_resolved(decider, "decider-m")).decide({"a": "x"})
+
+
+def test_the_chat_probe_reports_a_backend_that_answers_chat(decider):
+    """A chat-capable backend declared a decision role: the probe says so."""
+    refused, why = _client(decider, "chat-m").chat_refused()
+    assert not refused and "answered a chat completion" in why
