@@ -153,7 +153,10 @@ def test_the_package_is_installed_without_recommends():
     import yaml
 
     tasks = yaml.safe_load(
-        (pathlib.Path(__file__).resolve().parents[2] / "ansible/roles/node_exporter/tasks/main.yml").read_text()
+        (
+            pathlib.Path(__file__).resolve().parents[2]
+            / "ansible/roles/node_exporter/tasks/main.yml"
+        ).read_text()
     )
     apt = [t["ansible.builtin.apt"] for t in tasks if "ansible.builtin.apt" in t]
     assert apt, "the role installs the package with ansible.builtin.apt"
