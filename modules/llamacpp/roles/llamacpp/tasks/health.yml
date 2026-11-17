@@ -2,7 +2,9 @@
 # Healthy means: the unit is active and its container healthy; the GPU's power cap is still within
 # the limit; /health says the model is loaded; /v1/models lists the served model id with the context
 # each slot has (K-14: the role table's max_context_tokens); /metrics answers; and one real token
-# comes back from a chat completion. The completion is the one deviation from role interface v1's
+# comes back from a chat completion (mode generate) or, for a decision model (mode decision, which
+# refuses chat with 501), a probability in [0, 1] from /v1/systemone for a tiny state and for a state
+# past llama-server's forced 512-token batch. The completion is the one deviation from role interface v1's
 # "health does not mutate the service": it leaves one short prompt in a slot's cache.
 - block:
     - name: Validate the inputs
@@ -65,7 +67,7 @@
       register: llamacpp_metrics
       changed_when: false
       failed_when: "'llamacpp:requests_processing' not in llamacpp_metrics.content"
-    - name: One token comes back from a chat completion
+    - name: One token comes back from a chat completion (generate mode)
       ansible.builtin.uri:
         url: "http://{{ llamacpp_bind }}:{{ llamacpp_port | int }}/v1/chat/completions"
         method: POST
@@ -80,7 +82,20 @@
         timeout: "{{ llamacpp_health_timeout | int }}"
       register: llamacpp_completion
       changed_when: false
+      # failed_when replaces the module's own status check, so the status is asserted here too
       failed_when: >-
-        (llamacpp_completion.json.choices | default([])) | length != 1
+        llamacpp_completion.status != 200
+        or (llamacpp_completion.json.choices | default([])) | length != 1
         or (llamacpp_completion.json.usage.completion_tokens | default(0)) | int < 1
+      when: llamacpp_mode == 'generate'
+    - name: A decision model answers a tiny state with a probability (decision mode)
+      ansible.builtin.include_tasks: decision_probe.yml
+      vars:
+        llamacpp_probe_text: "{{ llamacpp_probe_state }}"
+      when: llamacpp_mode == 'decision'
+    - name: A decision model answers a state past 512 tokens (the batch flags took; LL-492)
+      ansible.builtin.include_tasks: decision_probe.yml
+      vars:
+        llamacpp_probe_text: "{{ ('ok ' * (llamacpp_probe_long_words | int)) | trim }}"
+      when: llamacpp_mode == 'decision' and llamacpp_context_size | int >= llamacpp_probe_long_min_context | int
   tags: [health]
