@@ -50,3 +50,28 @@ caddy_auth_proxy_trusted_cidr_pattern: '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]
 caddy_auth_proxy_network: caddy-auth-proxy_default
 # what an unresolved "auto" renders while nothing is started: IPv6 loopback only, never every address
 caddy_auth_proxy_placeholder_trusted: ["::1/128"]
+# The health hook's sign-in probe: for each site, GET /oauth2/start?rd=%2F on the edge's address
+# with the site as the TLS name and Host (the certificate verified against the bundle), no
+# redirect followed; prints {site: {status, location}} as JSON. Errors are reported per site.
+caddy_auth_proxy_probe_script: |
+  import json, socket, ssl, sys
+  spec = json.loads(sys.argv[1])
+  out = {}
+  for name in spec["names"]:
+      try:
+          ctx = ssl.create_default_context(cafile=spec["bundle"])
+          with socket.create_connection((spec["address"], spec["port"]), timeout=spec["timeout"]) as raw:
+              with ctx.wrap_socket(raw, server_hostname=name) as s:
+                  s.sendall(("GET /oauth2/start?rd=%%2F HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n" % name).encode())
+                  data = b""
+                  while len(data) < 65536:
+                      chunk = s.recv(4096)
+                      if not chunk:
+                          break
+                      data += chunk
+          head = data.split(b"\r\n\r\n", 1)[0].decode("latin-1").split("\r\n")
+          hdrs = {k.strip().lower(): v.strip() for k, _, v in (h.partition(":") for h in head[1:])}
+          out[name] = {"status": int(head[0].split()[1]), "location": hdrs.get("location", "")}
+      except (OSError, ssl.SSLError, ValueError, IndexError) as e:
+          out[name] = {"status": 0, "location": "", "error": "%s: %s" % (type(e).__name__, e)}
+  print(json.dumps(out))

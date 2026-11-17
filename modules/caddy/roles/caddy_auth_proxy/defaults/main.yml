@@ -42,3 +42,8 @@ caddy_auth_proxy_health_timeout: 10
 caddy_auth_proxy_trusted_proxy_ips: auto
 # the docker client the role runs (the gateway lookup, the network pre-creation, the port check)
 caddy_auth_proxy_docker_cli: docker
+# where health signs in, through the edge: the edge's own address and port and the trust bundle its
+# certificates verify against (the caddy role's variables when both roles run on this guest)
+caddy_auth_proxy_edge_address: "{{ caddy_bind | default(ansible_host) }}"
+caddy_auth_proxy_edge_port: "{{ caddy_port | default(443) }}"
+caddy_auth_proxy_edge_trust_bundle: "{{ caddy_acme_trust_bundle | default('/etc/ssl/certs/ca-certificates.crt') }}"
