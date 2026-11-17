@@ -25,7 +25,7 @@ Judges:
   noul question "Does this passage answer the question?", the returned probability the confidence.
   The passage is cut to ``max_chars`` (1400; or ``max_tokens`` when a ``count_tokens`` estimate is
   given) to stay under the decision server's batch limit (LL-492), and shrunk once and retried on
-  an HTTP 500.  ``X-HNX-TLP`` is set to the strictest label of what it sends and an ``X-HNX-Tag`` so the turn is attributable (ADR-0033, ADR-0038).  A backend that
+  an HTTP 500 or 502 (the gateway's view of a backend 5xx).  ``X-HNX-TLP`` is set to the strictest label of what it sends and an ``X-HNX-Tag`` so the turn is attributable (ADR-0033, ADR-0038).  A backend that
   misbehaves raises :class:`JudgeError`; the judge never guesses a verdict.
 * :class:`RecordedJudge` replays verdicts recorded earlier (a JSON file keyed by the sha256 of
   question and passage), so CI exercises the whole path with no model.  A pair that was never
@@ -137,9 +137,10 @@ class GatewayJudge:
             try:
                 p = self._ask(question, passage, fields)
             except InferenceError as exc:
-                if exc.status != 500:
+                if exc.status not in (500, 502):
                     raise
-                # the decision server's batch limit (LL-492): shrink the passage and retry once
+                # the decision server's batch limit (LL-492; the gateway shows a backend 5xx as
+                # 502): shrink the passage and retry once
                 p = self._ask(question, passage[: max(1, int(len(passage) * _SHRINK))], fields)
         except Exception as exc:  # the client's own error types vary by transport
             raise JudgeError(f"gateway call failed ({type(exc).__name__})") from exc
@@ -215,7 +216,8 @@ class JudgedStore:
     def _verdicts(self, q: Query, head: list[Hit], labels: list, *, stop_on_clear: bool):
         """``{rank: Verdict}`` for ``head``, the calls at most ``workers`` at a time.  With
         ``stop_on_clear`` the first verdict that clears the threshold ends the run: calls not yet
-        started are skipped (those running finish).  A judge error raises."""
+        started are skipped, and a failure of a call still running after one cleared is ignored.
+        Any other judge error raises."""
         got: dict[int, Verdict] = {}
         stop = threading.Event()
 
@@ -233,7 +235,12 @@ class JudgedStore:
                 ex.submit(ask, h, lb): i for i, (h, lb) in enumerate(zip(head, labels, strict=True))
             }
             for f in as_completed(futs):
-                v = f.result()
+                try:
+                    v = f.result()
+                except JudgeError:
+                    if stop.is_set():
+                        continue  # a passage already cleared: a sibling's failure cannot undo it
+                    raise
                 if v is not None:
                     got[futs[f]] = v
         finally:

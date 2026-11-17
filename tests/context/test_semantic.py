@@ -183,8 +183,9 @@ def test_gateway_judge_truncates_the_passage_by_chars_or_by_a_token_estimate():
     assert len(c.calls[0][3]) - len("Question: q\nPassage: ") <= 400
 
 
-def test_gateway_judge_shrinks_and_retries_once_on_http_500():
-    err = InferenceError("HTTP 500", 500, "batch", "/v1/systemone")
+@pytest.mark.parametrize("status", [500, 502])
+def test_gateway_judge_shrinks_and_retries_once_on_http_500_or_502(status):
+    err = InferenceError(f"HTTP {status}", status, "batch", "/v1/systemone")
     c = _Client([err, {"q": 0.5}])
     assert GatewayJudge(c, tag="t").judge("q", _long_hit(), tlp.Label.CLEAR).answers
     first, second = (len(call[3]) for call in c.calls)
@@ -234,6 +235,37 @@ def test_the_gate_keeps_the_stores_ranking_and_abstains_below_the_threshold():
     low = dict.fromkeys(ids, 0.05)
     assert JudgedStore(s, _Scripted(low)).query(q) == []
     assert JudgedStore(s, _Scripted(probs), threshold=0.95).query(q) == []
+
+
+def test_a_sibling_failure_after_a_passage_cleared_cannot_flip_the_gate():
+    import threading
+    import time
+
+    s = _store()
+    q = _q({"d:"}, text="proxy", budget=5)
+    base = s.query(q)
+    ids = [h.id for h in base]
+    cleared = threading.Event()
+
+    class _Race:
+        def judge(self, question, hit, label):
+            if hit.id == ids[0]:
+                cleared.set()
+                return Verdict(True, 0.9)
+            cleared.wait(5)
+            time.sleep(0.3)  # the clear has been seen and the gate stopped
+            raise JudgeError("the slow sibling failed")
+
+    for on_error in ("abstain", "fallback"):
+        got = JudgedStore(s, _Race(), workers=2, top_k=2, on_error=on_error).query(q)
+        assert got == base
+
+    # with no passage cleared the same failure still follows the policy
+    class _Fail:
+        def judge(self, question, hit, label):
+            raise JudgeError("down")
+
+    assert JudgedStore(s, _Fail(), on_error="abstain").query(q) == []
 
 
 def test_rerank_is_opt_in_and_orders_by_confidence():

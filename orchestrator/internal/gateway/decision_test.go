@@ -35,6 +35,103 @@ func withDecisionRoles(cfg map[string]any) {
 	}
 }
 
+// withDecisionExtras adds decide-fb (a second decision role, on up2) and decide-limited (one request a minute).
+func withDecisionExtras(cfg map[string]any) {
+	withDecisionRoles(cfg)
+	roles := cfg["roles"].(map[string]any)
+	up2 := roleOf(cfg, "chat-a")["deployments"].([]any)[1].(map[string]any)["base_url"].(string)
+	up3 := roleOf(cfg, "chat-b")["deployments"].([]any)[0].(map[string]any)["base_url"].(string)
+	roles["decide-fb"] = role("decision", "red", false, []any{dep("decide-fb-1", "openai", "local", up2, "decider-fb-backend", nil)}, []any{}, nil)
+	roles["decide-limited"] = role("decision", "red", false, []any{dep("decide-limited-1", "openai", "local", up3, "decider-lim-backend", nil)}, []any{},
+		map[string]any{"window_s": 60, "max_requests": 1, "max_tokens": nil, "max_cost": nil})
+	roleOf(cfg, "decide")["fallbacks"] = []any{"decide-fb"}
+	for _, k := range cfg["keys"].([]any) {
+		if key := k.(map[string]any); key["alias"] == "agent-a" {
+			key["roles"] = []any{"chat-a", "chat-b", "cloud", "decide", "decide-cloud", "decide-fb", "decide-limited", "embed"}
+		}
+	}
+}
+
+func decisionExtrasFixture(t *testing.T) *fixture {
+	f := newFixture(t, withDecisionExtras)
+	f.up3.set(decisionBackend)
+	f.up2.set(decisionBackend)
+	return f
+}
+
+func TestDecisionRoleLimitIs429(t *testing.T) {
+	f := decisionExtrasFixture(t)
+	if r := f.do("POST", "/v1/systemone", agentKey, systemoneBody("decide-limited")); r.status != 200 {
+		t.Fatalf("first: %d %s", r.status, r.body)
+	}
+	r := f.do("POST", "/v1/systemone", agentKey, systemoneBody("decide-limited"))
+	if typ, code := r.errCode(t); r.status != 429 || typ != "rate_limit_error" || code != "rate_limited" {
+		t.Fatalf("second: %d %s", r.status, r.body)
+	}
+	if n := len(f.up3.calls()); n != 1 {
+		t.Fatalf("the refused call reached the backend: %d calls", n)
+	}
+}
+
+func TestDecisionBodyOverTheCapIs413(t *testing.T) {
+	f := decisionFixture(t)
+	big := `{"model":"decide","questions":{},"pad":"` + strings.Repeat("x", MaxBodyBytes) + `"}`
+	r := f.do("POST", "/v1/systemone", agentKey, big)
+	if _, code := r.errCode(t); r.status != 413 || code != "request_too_large" {
+		t.Fatalf("%d %s", r.status, r.body)
+	}
+	if len(f.up3.calls()) != 0 {
+		t.Fatal("an oversized body reached the backend")
+	}
+}
+
+func TestDecisionGarbageUsageFallsBackToTheEstimate(t *testing.T) {
+	for name, usage := range map[string]any{
+		"a string":        "x",
+		"negative input":  map[string]any{"input_tokens": -1, "output_tokens": 2},
+		"negative output": map[string]any{"input_tokens": 5, "output_tokens": -9},
+		"null":            nil,
+		"wrong types":     map[string]any{"input_tokens": "5", "output_tokens": []any{}},
+	} {
+		f := decisionFixture(t)
+		f.up3.set(func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+			writeTestJSON(w, 200, map[string]any{"answers": map[string]any{}, "usage": usage})
+		})
+		if r := f.do("POST", "/v1/systemone", agentKey, systemoneBody("decide")); r.status != 200 {
+			t.Fatalf("%s: %d %s", name, r.status, r.body)
+		}
+		rec := f.records()[0]
+		in, _ := rec["input_tokens"].(float64)
+		out, _ := rec["output_tokens"].(float64)
+		if name == "negative output" {
+			// a sane input is kept and the bad output counted as none
+			if in != 5 || out != 0 {
+				t.Errorf("%s: record %v", name, rec)
+			}
+			continue
+		}
+		if rec["usage_estimated"] != true || in <= 0 || out < 0 {
+			t.Errorf("%s: record %v", name, rec)
+		}
+	}
+}
+
+func TestDecisionFallsBackToAnotherDecisionRole(t *testing.T) {
+	f := decisionExtrasFixture(t)
+	f.up3.set(status(500)) // decide's own backend fails
+	r := f.do("POST", "/v1/systemone", agentKey, systemoneBody("decide"))
+	if r.status != 200 || r.header.Get(HeaderAttemptedFallbacks) != "1" {
+		t.Fatalf("%d %v %s", r.status, r.header, r.body)
+	}
+	if got := f.up2.calls(); len(got) != 1 || got[0].path != "/v1/systemone" || got[0].body["model"] != "decider-fb-backend" {
+		t.Fatalf("fallback call: %v", got)
+	}
+	rec := f.records()[0]
+	if rec["served_role"] != "decide-fb" || rec["model_role"] != "decide" || rec["fallbacks"] != float64(1) {
+		t.Fatalf("record: %v", rec)
+	}
+}
+
 func decisionFixture(t *testing.T) *fixture {
 	f := newFixture(t, withDecisionRoles)
 	f.up3.set(decisionBackend)

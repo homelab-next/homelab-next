@@ -1172,9 +1172,10 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
         {
             "key_alias": k.name,
             "key_env": secret_env_name(k.secret),
-            "models": sorted(
-                r for r in _allowed(spec, k) if spec.table.roles[r].kind != "decision"
-            ),
+            # an empty list reads as ALL models in LiteLLM: a key that reaches only decision
+            # roles (which it cannot route) is given the no-model guard instead
+            "models": sorted(r for r in _allowed(spec, k) if spec.table.roles[r].kind != "decision")
+            or [NO_MODELS],
             "metadata": {
                 "owner": k.owner or k.name,
                 "data_tier": k.data_tier,

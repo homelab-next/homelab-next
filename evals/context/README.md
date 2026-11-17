@@ -36,6 +36,6 @@ applied unchanged to a private set of 32 answerable and 6 no-answer questions): 
 at 100% precision with hit@1 94% and hit@5 100% unchanged (private), and recall 17% to 100% at no hit@5 cost with one
 wrong abstain on a question the store already missed (public: 23 and 6); as a reranker hit@1 fell 94% to 91% (private)
 and 74% to 65% (public). Passages are cut to 1400 characters (the server's batch limit, LL-492) and shrunk once on an
-HTTP 500. Latency was 15 to 20 s a query with five sequential calls (about 3 s each): that is why the calls are
+HTTP 500 or 502. Latency was 15 to 20 s a query with five sequential calls (about 3 s each): that is why the calls are
 concurrent and stop early. Only six no-answer questions per set: re-check on a larger set before relying on it.
 a live judge needs a reachable endpoint and sends every passage with its `X-HNX-TLP` label.

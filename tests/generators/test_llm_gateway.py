@@ -2084,3 +2084,35 @@ def test_a_decision_role_cannot_fall_back_to_a_chat_role(tmp_path):
     roles["roles"]["decider"]["fallback"] = "mdl:small-local"
     with pytest.raises(Exception, match="a fallback must be of its role's kind"):
         rich(tmp_path, roles=roles)
+
+
+def test_a_key_that_reaches_only_decision_roles_gets_the_no_model_guard(tmp_path):
+    """An empty models list reads as ALL models in the proxy: a decision-only key must not render one."""
+    keys = [
+        *spec_doc()["keys"],
+        {
+            "name": "judge",
+            "key": "secret:llm-gateway/key-judge",
+            "roles": ["mdl:decider"],
+            "data_tier": "local-only",
+        },
+    ]
+    files = gw.render(rich(tmp_path, roles=_with_decider(), keys=keys))
+    rendered = {k["key_alias"]: k for k in json.loads(files[KEYS])["keys"]}
+    assert rendered["judge"]["models"] == [gw.NO_MODELS]
+    assert rendered["local-agent"]["models"] != [gw.NO_MODELS]
+
+
+def test_no_rendered_key_ever_has_an_empty_models_list(tmp_path):
+    keys = [
+        *spec_doc()["keys"],
+        {
+            "name": "judge",
+            "key": "secret:llm-gateway/key-judge",
+            "roles": ["mdl:decider"],
+            "data_tier": "local-only",
+        },
+    ]
+    for spec in (rich(tmp_path, roles=_with_decider(), keys=keys), gw.load_spec(LAB_SPEC)):
+        for k in json.loads(gw.render(spec)[KEYS])["keys"]:
+            assert k["models"], f"key {k['key_alias']} renders an empty models list"
