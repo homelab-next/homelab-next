@@ -283,7 +283,7 @@ def _repo_lines(ctx: _Ctx, ep: Endpoint) -> list[str]:
     return [ln.strip() for ln in out.splitlines() if ln.strip()]
 
 
-def _secret_fingerprints(ctx: _Ctx, ep: Endpoint, helper) -> dict:
+def _key_fingerprints(ctx: _Ctx, ep: Endpoint, helper) -> dict:
     """HMAC fingerprints of the endpoint's three application secrets, read from its configuration
     file in memory (never printed, never written); a secret the file does not hold in plain text
     (a ``*_URI`` file reference, say) is an error, not a skipped check."""
@@ -387,8 +387,9 @@ def dump(
     before = _repo_lines(ctx, source)
     version = _version(ctx, source)
     zpath = out / DUMP
+    raw = out / ".dump.raw"  # the product's own dump, with its configuration: never an export file
     try:
-        with os.fdopen(os.open(zpath, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+        with os.fdopen(os.open(raw, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
             _in(
                 ctx,
                 source,
@@ -408,14 +409,9 @@ def dump(
         helper = _load_helper()
         # the dump holds the configuration, which holds the application secrets: the export is
         # without it (the restore rebuilds the configuration from the secret store) and records
-        # only a fingerprint of the secrets, which verify compares with the target's
-        secrets = _secret_fingerprints(ctx, source, helper)
-        stripped = out / ".dump.stripped"
-        try:
-            helper.strip_config(str(zpath), str(stripped))
-            os.replace(stripped, zpath)
-        finally:
-            stripped.unlink(missing_ok=True)  # the one other file this run created
+        # only a fingerprint of them, which verify compares with the target's
+        key_fps = _key_fingerprints(ctx, source, helper)
+        helper.strip_config(str(raw), str(zpath))
         try:
             facts = helper.dbcounts({"zip": str(zpath)})
         except helper.HelperError as exc:
@@ -423,8 +419,10 @@ def dump(
         after = _repo_lines(ctx, source)
         _check_instance(after, facts, allow_empty)
     except BaseException:
-        zpath.unlink(missing_ok=True)  # the one file this run created
+        zpath.unlink(missing_ok=True)  # the files this run created
         raise
+    finally:
+        raw.unlink(missing_ok=True)
     frozen = not running and not _running(ctx, source)
     (out / REPOS).write_text("\n".join(after) + "\n")
     manifest = {
@@ -433,7 +431,7 @@ def dump(
         "image": _image(ctx, source),
         "counts": facts["counts"],
         "fingerprint": facts["fingerprint"],
-        "app_key_fingerprints": secrets,
+        "app_key_fingerprints": key_fps,
         "config_included": False,
         "repositories": len(after),
         "source": {"frozen": frozen, "quiescent": frozen and before == after},
@@ -511,7 +509,7 @@ def verify(
     problems = []
     try:
         helper.compare_fingerprints(
-            _secret_fingerprints(ctx, target, helper), manifest.get("app_key_fingerprints")
+            _key_fingerprints(ctx, target, helper), manifest.get("app_key_fingerprints")
         )
     except helper.HelperError as exc:
         problems.append(str(exc))

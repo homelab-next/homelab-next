@@ -163,6 +163,7 @@ class Front:
 
         self.httpd = ThreadingHTTPServer((LOOPBACK, 0), H)
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         (workdir / "chain.pem").write_text(chain)
         (workdir / "front.key").write_text(key)
         ctx.load_cert_chain(str(workdir / "chain.pem"), str(workdir / "front.key"))

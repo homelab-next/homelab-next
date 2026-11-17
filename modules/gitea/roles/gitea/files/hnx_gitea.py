@@ -74,6 +74,10 @@ _FP_MESSAGE = b"hnx-forge-secret-fingerprint-v1"
 CONFIG_MEMBER = "app.ini"
 
 
+#: what a database call can raise (for a caller that does not import sqlite3 itself)
+SQLITE_ERRORS = (sqlite3.Error,)
+
+
 class HelperError(RuntimeError):
     pass
 

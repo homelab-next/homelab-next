@@ -24,9 +24,8 @@ import urllib.request
 from typing import Any
 
 from homelabnext._http import DEFAULT_MAX_BYTES, credential_opener, read_bounded
-from homelabnext.registry.model import secret_env_name
 
-from ._env import AdapterConfigError, env_secret, resolve
+from ._env import optional_credential, resolve
 
 __all__ = ["ForgeError", "ForgeTarget", "make"]
 
@@ -138,12 +137,7 @@ def make(**config: Any) -> ForgeTarget:
     if unknown:
         raise ValueError(f"forge adapter: unknown setting(s) {', '.join(unknown)}")
     endpoint = resolve("forge", env_only=True, schemes=("http", "https"))
-    token = None
-    ref = config.get("credential")
-    if ref is not None:
-        if not isinstance(ref, str) or not _SECRET_REF.fullmatch(ref):
-            raise AdapterConfigError("credential is a secret name (secret:<name>), never a value")
-        token = env_secret(secret_env_name(ref))
+    token = optional_credential(config.get("credential"), _SECRET_REF)
     return ForgeTarget(
         endpoint.url,
         token=token,

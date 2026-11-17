@@ -45,7 +45,6 @@ import json
 import os
 import re
 import shutil
-import sqlite3
 import stat
 import sys
 import zipfile
@@ -121,7 +120,7 @@ def extract(zpath: str, stage: Path) -> dict:
             if taken["bytes"] > MAX_BYTES:
                 raise RestoreError("the dump is larger than the restore accepts")
             dest.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
-            perm = (mode & 0o755) | 0o600 if mode else 0o640
+            perm = (mode & 0o700) | 0o600  # the container's user only: nothing here is for a group
             with (
                 z.open(info) as src,
                 os.fdopen(os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, perm), "wb") as out,
@@ -236,7 +235,7 @@ def main() -> int:
         OSError,
         KeyError,
         ValueError,
-        sqlite3.Error,
+        *hnx_gitea.SQLITE_ERRORS,
         zipfile.BadZipFile,
     ) as exc:
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)

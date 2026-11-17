@@ -98,6 +98,7 @@ capabilities:
   cap:agent-runtime: [exec]
   cap:agent-runner: [exec]  # the agent-runtime slot's contract (ADR-0051): the same surface as cap:agent-runtime
   cap:dataflow: [exec]
+  cap:forge: [exec]  # the forge slot: git and a container registry whose images guests run, so a write acts on every guest that pulls
   cap:log-pipeline: [exec]
   cap:dns: [exec]
   cap:edge-proxy: [exec]
