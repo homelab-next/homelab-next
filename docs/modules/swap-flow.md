@@ -116,8 +116,9 @@ and `meaning_changes` is recorded, never checked.
   names the role in `model_role_changes`, which the gate requires as for a changed role. A
   **remove** covers a role only the table before has: `from`, no `to`, the role's one binding, on
   the leg's instance; it pins the report for the table after; and the gate refuses it while a
-  configuration file in the tree (`*.yml`, `*.json`; not docs, tests or schema examples) still
-  names `mdl:<role>`. An unmatched role, or a leg whose change does not fit it, is refused.
+  configuration file or template in the tree (`*.yml`, `*.json`, `*.j2`; not docs, tests or
+  schema examples) names it: `mdl:<role>`, or the bare name as a `*role:`/`*model:` value or a
+  `capabilities.yml` item. An unmatched role, or a leg whose change does not fit it, is refused.
 
   The new binding's backend is the instance the leg moves: `svc:<instance>`, the service row the
   incoming provider's row is renamed to at bind time (see the naming table). The rule reads the

@@ -445,21 +445,41 @@ def added_role_fields(role: Any) -> list[str]:
     return fields + [f"bindings[].{k}" for k in extras] or ["(new role)"]
 
 
-#: where a role's consumers are declared: configuration files (module manifests, the site, gateway
-#: specs, decision specs, agent profiles), never prose, code or test fixtures
-_CONSUMER_SUFFIXES = (".yml", ".yaml", ".json")
+#: where a role's consumers are declared: configuration files and the templates that render them
+#: (module manifests, the site, gateway specs and keys, decision specs, agent profiles, golden
+#: suites, conformance targets, ``capabilities.yml``, ``*.j2``), never prose, code or test fixtures
+_CONSUMER_SUFFIXES = (".yml", ".yaml", ".json", ".j2", ".jinja", ".jinja2")
 _NOT_CONSUMERS = ("docs/", "tests/", "schemas/", "CHANGELOG")
 _NOT_CONSUMER_PARTS = ("negative", "_frozen", "node_modules")
+#: the file that lists capability names, a role alias among them, one per list item
+_CAPABILITIES = "capabilities.yml"
+
+
+def _consumer_patterns(name: str, capabilities: bool) -> list[re.Pattern[str]]:
+    """How a configuration file names role ``name``: ``mdl:<name>`` anywhere; the bare name as
+    the value of a key ending in ``role`` or ``model`` (``role: x``, ``throttle_model: x``,
+    ``"role": "x"``: a golden suite's role, a conformance target's model); and, in
+    ``capabilities.yml``, as a list item."""
+    n = re.escape(name)
+    pats = [
+        re.compile(rf"(?<![\w-])mdl:{n}(?![\w-])"),
+        re.compile(rf"""(?im)["']?\w*(?:role|model)["']?\s*:\s*["']?{n}["']?\s*(?:[,}}#]|$)"""),
+    ]
+    if capabilities:
+        pats.append(re.compile(rf"""(?m)^\s*-\s*["']?{n}["']?\s*(?:#.*)?$"""))
+    return pats
 
 
 def removed_role_consumers(
     root: Path, removed: Sequence[str], layout: Layout, roles: str | None = None
 ) -> list[str]:
-    """A problem for every configuration file in the working tree that still names a removed role
-    as ``mdl:<role>``: a module's ``requires.model_roles``, a gateway key's roles, a decision
-    spec's tier, an agent profile, the site.  The role table, the store, the reports and the swap
-    records are the evidence, not consumers; prose, code, tests and schema examples are not
-    scanned.  A removal leaves no dangling reference, or the gate names each one."""
+    """A problem for every configuration file or template in the working tree that still names a
+    removed role (:func:`_consumer_patterns`): a module's ``requires.model_roles``, a gateway
+    key's roles, a decision spec's tier, an agent profile, the site, a golden suite's ``role``, a
+    conformance target's ``model``, ``capabilities.yml``, a ``*.j2`` template.  The role table, the
+    store, the reports and the swap records are the evidence, not consumers; prose (docs), code,
+    tests and schema examples are not scanned, nor are the installed package's own files when the
+    tree is an overlay.  A removal leaves no dangling reference, or the gate names each one."""
     if not removed:
         return []
     own = {roles or layout.roles, layout.store, *layout.reports}
@@ -468,7 +488,6 @@ def removed_role_consumers(
     r = _git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
     if r.returncode:
         raise EvidenceError("git ls-files failed: cannot look for the removed roles' consumers")
-    pats = {name: re.compile(rf"(?<![\w-])mdl:{re.escape(name)}(?![\w-])") for name in removed}
     for rel in sorted({x for x in r.stdout.decode("utf-8", "replace").split("\0") if x}):
         parts = PurePosixPath(rel).parts
         if (
@@ -482,11 +501,12 @@ def removed_role_consumers(
         if isinstance(data, str) or data is None:
             continue  # a link, a special file or one over the cap: not a configuration file
         text = data.decode("utf-8", "replace")
+        caps = PurePosixPath(rel).name == _CAPABILITIES
         out += [
             f"mdl:{name} is removed, but {rel} still names it: remove that consumer in the same "
             "change, or keep the role"
-            for name, pat in pats.items()
-            if pat.search(text)
+            for name in removed
+            if any(p.search(text) for p in _consumer_patterns(name, caps))
         ]
     return out
 

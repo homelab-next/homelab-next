@@ -69,9 +69,9 @@ joined) as the *state* of one noul question, ``samples`` times, through a decide
 :class:`~homelabnext.registry.models.ModelClient`, :meth:`~homelabnext.registry.models.ModelClient.decide`).
 A sample passes when the reply is exactly one probability in [0, 1] for that question (else a
 ``protocol`` finding; a failed call is an error) **and** the binding refuses one minimal chat
-completion (the decider's ``chat_refused``,
-:meth:`~homelabnext.registry.models.ModelClient.chat_refused`: a 4xx or 501; a chat that answers
-is a ``chat-answered`` finding).  It proves the binding answers as a decision model, with no
+completion (the decider's ``chat_refused``, judged by :func:`chat_refusal`: only a 501 or the
+gateway's 400 ``wrong_model_kind`` is a refusal; a chat that answers is a ``chat-answered``
+finding, and any other status is an error, so a rate limit or an auth error never passes).  It proves the binding answers as a decision model, with no
 output that could carry an action and no chat channel beside it, on the same prompts; nothing
 more.  The report has the same format, tasks and counts.
 
@@ -793,6 +793,31 @@ def _run(suite: CanarySuite, sample: Any, role: str, model_id: str, samples: int
 DECISION_QUESTION = "Does answering this request need a network or shell tool?"
 PROTOCOL_DECISION = "protocol: the decision reply is not exactly one probability in [0, 1]"
 CHAT_ANSWERED = "chat-answered: a decision binding answered a chat completion"
+
+
+#: the statuses that refuse a chat probe as a decision binding must: llama.cpp's decision mode
+#: answers 501; the lab gateway answers 400 with ``error.code == "wrong_model_kind"``
+REFUSED_STATUS = 501
+REFUSED_CODE = (400, "wrong_model_kind")
+
+
+def chat_refusal(status: int, body: Any) -> tuple[bool, str]:
+    """Judge a decision binding's chat probe: ``(True, "")`` only for a 501, or a 400 whose
+    ``error.code`` is ``wrong_model_kind``; ``(False, why)`` for a 200 (the binding chats).  Any
+    other answer (401, 403, 404, 413, 429, another 400, a 5xx) says nothing about whether the
+    backend chats, so it raises :class:`CanaryError` and the sample is an error, never a pass."""
+    if status == REFUSED_STATUS:
+        return True, ""
+    err = body.get("error") if isinstance(body, Mapping) else None
+    code = err.get("code") if isinstance(err, Mapping) else None
+    if (status, code) == REFUSED_CODE:
+        return True, ""
+    if status == 200:
+        return False, "the backend answered a chat completion"
+    raise CanaryError(
+        f"the chat probe got HTTP {status} (code {code!r}): neither a decision model's 501 nor "
+        "the gateway's wrong_model_kind, so it proves nothing about a chat channel"
+    )
 
 
 def decision_state(task: CanaryTask) -> str:

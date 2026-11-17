@@ -211,10 +211,13 @@ def inputs_of(table: RoleTable, suite_paths: Sequence[Path]) -> dict:
 
 def _code_inputs() -> dict:
     """The code that decides a suite's and a decision canary's verdicts (the loader, the runner
-    and its ``one_probability``, the scorers), by digest: a change there makes a stored report
+    and its ``one_probability``, the scorers, the model client the probes go through), by digest: a change there makes a stored report
     stale even when nobody bumps :data:`EVAL_VERSION` (the canary's own code is in its inputs)."""
     here = Path(__file__).resolve().parent
-    return {name: _file_digest(here / f"{name}.py") for name in ("runner", "scorers", "tasks")}
+    out = {name: _file_digest(here / f"{name}.py") for name in ("runner", "scorers", "tasks")}
+    # the client the decision canary probes chat with (ModelClient.chat_probe, decide)
+    out["registry.models"] = _file_digest(here.parent / "registry" / "models.py")
+    return out
 
 
 def _canary_inputs(table: RoleTable) -> dict:

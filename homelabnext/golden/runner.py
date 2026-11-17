@@ -35,7 +35,8 @@ def client_completer(resolver: ModelResolver, role: str, **client_kwargs) -> tup
 
 class ClientDecider:
     """A decider over one :class:`ModelClient` (``POST /v1/systemone``), with the chat probe the
-    decision canary runs (:meth:`ModelClient.chat_refused`)."""
+    decision canary runs (:meth:`ModelClient.chat_probe`, judged by
+    :func:`homelabnext.golden.canary.chat_refusal`)."""
 
     def __init__(self, client: ModelClient):
         self.client = client
@@ -44,7 +45,9 @@ class ClientDecider:
         return self.client.decide(questions, state=state).probabilities
 
     def chat_refused(self) -> tuple[bool, str]:
-        return self.client.chat_refused()
+        from .canary import chat_refusal
+
+        return chat_refusal(*self.client.chat_probe())
 
 
 def client_decider(resolver: ModelResolver, role: str, **client_kwargs) -> tuple[Decider, str]:

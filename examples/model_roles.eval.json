@@ -170,7 +170,7 @@
   },
   "inputs": {
     "canary": {
-      "code": "sha256:e03db44452e1a83e3d1e42676f648ace1a1b218ca6c20fe0f2cdff7b1a522c7b",
+      "code": "sha256:596fb5b43657ea02496290b470bbbe4978b80fd7dd998ec0806144dbc3ae8f9b",
       "metadata": "sha256:4823a1f2b212edb258cbe4c5edaebc61b64e814444faded40737e1f769fdac85",
       "params": {
         "fast-classifier": {
@@ -183,7 +183,8 @@
       "version": 2
     },
     "code": {
-      "runner": "sha256:e43f4b254420d15c361c5ad7556fa6948575912cdc7d34cd86d01cdcf2c595c6",
+      "registry.models": "sha256:7d22a1c2e455305a64707e825e5051956966932c3776412587985816ee133b44",
+      "runner": "sha256:2e8c1df02d5b366a3cd9a043ba381791f551346c11938d236c7140a65f242113",
       "scorers": "sha256:56c00a9ad13eb98dfed8f2e81250a729053e1ec5335efb4326be7e34131a9613",
       "tasks": "sha256:1a2ac2ac8e9fde6ad8511a594de7e65274a6d2ef0f0abd66e8a97da69d7b4d11"
     },
@@ -195,7 +196,7 @@
       "impact_keywords": "sha256:b52c8fbf86afbbb3b83e17950826b068a9d6b54888adb08b9d5c691cad28dd1a",
       "spec": "sha256:eebf1221c2f81b13bf23e90529e62b0d9230e2d8561c4b6f9406feb5821e4282"
     },
-    "digest": "sha256:d0ba25324d8f0213811833d2d0c0a4a0315f6a5a760bb117295194f876b57a12",
+    "digest": "sha256:03838699d23555dae1006190b980bb94263ab14e05d9245305a4ff93c011e769",
     "eval": 3,
     "kinds": {
       "fast-classifier": "chat",

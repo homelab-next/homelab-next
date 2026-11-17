@@ -819,8 +819,11 @@ content (the canary's system text, the task's system text, its prompt and any pr
 **state** of one noul question, `samples` times, through the same `ModelClient`
 (`ModelClient.decide`). A sample fails when the call fails (an error) or when the reply is not
 exactly one probability in [0, 1] for that question (`protocol`), and each sample also sends one
-minimal chat completion that the binding must refuse (a 4xx or 501; an answer is
-`chat-answered`), through `ModelClient.chat_refused`; `ModelClient` itself refuses `chat`,
+minimal chat completion (`ModelClient.chat_probe`) that the binding must refuse, judged by
+`canary.chat_refusal`: only a 501 (a decision model) or a 400 with `error.code`
+`wrong_model_kind` (the gateway) is a refusal, an answer is `chat-answered`, and any other
+status (401, 403, 404, 413, 429, another 400, a 5xx) is an error, since it proves nothing about a
+chat channel. `ModelClient` itself refuses `chat`,
 `complete` and `embed` on a decision role before sending anything. The report has the canary's
 format, tasks and counts, so the pins check validates it the same way. It proves only that the
 binding answers those prompts as a decision model, with nothing that could carry an action; the
@@ -848,7 +851,7 @@ cascade's roles the table has as chat roles. Every role must be evaluated by an 
 or the replay, a decision role by a decision suite; the report must hold exactly the applicable
 suites' runs, each of its suite's kind, and no canary entry for a role the table lacks; the role
 kinds (`inputs.kinds`) and the code that decides a verdict (`inputs.code`: the golden runner, its
-scorers and the suite loader) are pinned inputs.
+scorers, the suite loader and the model client) are pinned inputs.
 A suite or cascade role the table does not have is not run and is no problem here (`hnx decide
 lint` holds every tracked spec's model tiers to the repository's table, rule `model-roles`), so an overlay that
 keeps a subset of the example roles, or serves `fast-classifier` as a decision model, is

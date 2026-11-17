@@ -627,22 +627,19 @@ class ModelClient:
                 "it with decide() (POST /v1/systemone)",
             )
 
-    def chat_refused(self) -> tuple[bool, str]:
-        """The decision canary's probe: one minimal ``POST /v1/chat/completions`` that a decision
-        backend must refuse.  ``(True, "")`` for a 4xx or 501; ``(False, why)`` when it answers;
-        a transport failure or another status raises :class:`ModelError`."""
+    def chat_probe(self) -> tuple[int, Any]:
+        """The decision canary's probe: one minimal ``POST /v1/chat/completions``, returned as
+        ``(status, body)`` without judging it (a decision backend must refuse it; which refusal
+        counts is :func:`homelabnext.golden.canary.chat_refusal`'s).  A transport failure raises
+        :class:`ModelError`."""
         body = {
             "model": self.model.model_id,
             "messages": [{"role": "user", "content": "ping"}],
             "max_tokens": 1,
         }
-        try:
-            self._call("/v1/chat/completions", body)
-        except ModelError as exc:
-            if exc.status is not None and (400 <= exc.status < 500 or exc.status == 501):
-                return True, ""
-            raise
-        return False, "the backend answered a chat completion with a body"
+        return self.transport(
+            "POST", f"{self.model.base_url}/v1/chat/completions", body, self.timeout
+        )
 
     def chat(self, messages: list[dict], *, logprobs: bool | None = None, **params: Any):
         self._text_kind("no chat")
