@@ -40,6 +40,11 @@ llamacpp_parallel: 2
 # layers kept in VRAM: a count, all or auto; 99 puts every layer of any model this size on the card
 llamacpp_n_gpu_layers: "99"
 llamacpp_flash_attn: auto
+# generate (default): a text-generation model behind /v1/chat/completions. decision: a llama.cpp
+# "decision model" (e.g. Clef) that refuses chat completions (501) and answers POST /v1/systemone;
+# the server then gets -b and -ub equal to the per-slot context (README.md, LL-492) and health
+# probes /v1/systemone instead of a chat completion
+llamacpp_mode: generate
 # the GPU: vulkan and sycl take a DRM render node (its group id is read from the node, or set
 # llamacpp_render_gid), cuda takes the card's index in the container toolkit's CDI spec
 llamacpp_render_node: renderD128

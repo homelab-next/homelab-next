@@ -87,6 +87,10 @@ argument_specs:
         type: str
         description: 'Flash attention: on, off or auto.'
         default: auto
+      llamacpp_mode: &a_mode
+        type: str
+        description: 'generate: a text-generation model behind /v1/chat/completions. decision: a decision model that answers POST /v1/systemone and refuses chat (-b and -ub are set to the per-slot context; health probes systemone).'
+        default: generate
       llamacpp_render_node: &a_render_node
         type: str
         description: 'vulkan and sycl: the DRM render node handed to the container (renderD<NNN> under /dev/dri).'
@@ -164,6 +168,7 @@ argument_specs:
       llamacpp_parallel: *a_parallel
       llamacpp_n_gpu_layers: *a_n_gpu_layers
       llamacpp_flash_attn: *a_flash_attn
+      llamacpp_mode: *a_mode
       llamacpp_render_node: *a_render_node
       llamacpp_render_gid: *a_render_gid
       llamacpp_gpu_index: *a_gpu_index
@@ -201,6 +206,7 @@ argument_specs:
       llamacpp_parallel: *a_parallel
       llamacpp_n_gpu_layers: *a_n_gpu_layers
       llamacpp_flash_attn: *a_flash_attn
+      llamacpp_mode: *a_mode
       llamacpp_render_node: *a_render_node
       llamacpp_render_gid: *a_render_gid
       llamacpp_gpu_index: *a_gpu_index
@@ -247,6 +253,7 @@ argument_specs:
       llamacpp_parallel: *a_parallel
       llamacpp_n_gpu_layers: *a_n_gpu_layers
       llamacpp_flash_attn: *a_flash_attn
+      llamacpp_mode: *a_mode
       llamacpp_render_node: *a_render_node
       llamacpp_render_gid: *a_render_gid
       llamacpp_gpu_index: *a_gpu_index
