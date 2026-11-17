@@ -116,7 +116,8 @@ def test_list_capabilities_matches_the_capability_model(cat):
     assert (ctx["operations"], ctx["must"], ctx["should"]) == (4, 13, 3)
     assert ctx["implementations"]["fake"] == "FakeContextStore"
     assert {a["target_file"] for a in ctx["implementations"]["adapters"]} == {
-        "conformance/targets/context-reference.yml"
+        "conformance/targets/context-reference.yml",
+        "conformance/targets/context-semantic.yml",
     }
     assert caps["lake-query"]["implementations"]["services"] == ["lake-query"]
 
