@@ -626,7 +626,7 @@ def test_compose_app_accepts_a_safe_tmpfs_mount(tmp_path, mount):
     )
     assert r.returncode == 0, r.stdout + r.stderr
     web = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]["web"]
-    got = [v for v in web["volumes"] if isinstance(v, dict) and v["target"] == mount["target"]][0]
+    got = next(v for v in web["volumes"] if isinstance(v, dict) and v["target"] == mount["target"])
     if "mode" in mount:
         assert got["tmpfs"]["mode"] == int(mount["mode"], 8)  # the leading 0 makes it octal
 
