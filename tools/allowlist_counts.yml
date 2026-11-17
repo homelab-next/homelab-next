@@ -9,7 +9,7 @@
 counts:
   product-names-allow: 87
   no-raw-endpoints-allow: 75
-  scripts-allow: 27
+  scripts-allow: 28
   caddy-lint-allow: 4
   credential-headers-allow: 1
   run-output-lint-allow: 0
@@ -22,7 +22,7 @@ counts:
 digests:
   product-names-allow: sha256:203639cfc160d3f5b5d0eb88576a61cf885414f1bd993314944489442596e176
   no-raw-endpoints-allow: sha256:4cd649047149dfe3e3a6ca94977736a0a5af97f559aefa2f7c4ec3a92dd925a2
-  scripts-allow: sha256:a603e8c6c6e0613d2fb5532600eb3c8bd01b210f013989b7e02c7e1ab59c63c0
+  scripts-allow: sha256:a5e062bc9062407c7d0e18af2b4a3f057eae478d3b7210deb53b9f8f66d6586e
   caddy-lint-allow: sha256:b14357e3e396abaf43255c870a43e23f4acedbdb85692c67777de507fe0740c8
   credential-headers-allow: sha256:741f0c84795e4d682d16a229a223a75fc3080304ad8d56716be9730c2524c230
   run-output-lint-allow: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
