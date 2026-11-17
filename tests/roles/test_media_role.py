@@ -393,18 +393,48 @@ def test_main_refuses_to_start_on_an_empty_directory_that_is_not_a_mount(tmp_pat
 # ----------------------------------------------------------------------------- health
 
 
-def _docker(tmp_path: Path, health: str = "healthy") -> dict:
+STARTED = "2026-11-17T18:00:00.123456789Z"
+# what a server that started prints, and what one prints that was handed a database a newer version
+# migrated (the 2026-11-17 import: /health said Healthy all the same)
+GOOD_LOG = "[INF] Main: Startup complete 0:00:21\n"
+DOWNGRADE_LOG = (
+    "[INF] Main: version 10.11.11\n"
+    "[ERR] Microsoft.EntityFrameworkCore.Query: An exception occurred while iterating over the "
+    "results of a query. SQLite Error 1: 'no such column: b.ExtraIds'.\n"
+    "[FTL] Main: An error occurred starting the application\n"
+)
+
+
+def _docker(tmp_path: Path, health: str = "healthy", log: str | None = GOOD_LOG) -> dict:
+    """A docker that answers compose ps (the state), ps -q (one id), inspect (the start time) and
+    logs (``log``; None = the command fails), recording each call."""
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     state = json.dumps({"Service": "media", "State": "running", "Health": health})
-    fake(bindir / "docker", f"import sys\nsys.stdout.write({state + chr(10)!r})\n")
+    calls = tmp_path / "docker-calls.log"
+    fake(
+        bindir / "docker",
+        "import json, sys\n"
+        f"open({str(calls)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "a = sys.argv[1:]\n"
+        "if a[:1] == ['compose'] and '-q' in a:\n"
+        "    print('c0ffee')\n"
+        "elif a[:1] == ['compose']:\n"
+        f"    sys.stdout.write({state + chr(10)!r})\n"
+        "elif a[:1] == ['inspect']:\n"
+        f"    print(json.dumps([{{'State': {{'StartedAt': {STARTED!r}}}}}]))\n"
+        "elif a[:1] == ['logs']:\n"
+        + ("    sys.exit(1)\n" if log is None else f"    sys.stdout.write({log!r})\n"),
+    )
     return {"PATH": f"{bindir}:{os.environ['PATH']}"}
 
 
-def _health(tmp_path, srv, **kw):
+def _health(tmp_path, srv, docker=None, env=None, **kw):
     host, port = srv.addr
     v = media_vars(tmp_path, media_bind=host, media_port=port, **kw)
-    return run_role(tmp_path, ROLE, "health", v, env=_docker(tmp_path))
+    return run_role(
+        tmp_path, ROLE, "health", v, env={**(docker or _docker(tmp_path)), **(env or {})}
+    )
 
 
 def test_health_passes_and_only_reads(tmp_path):
@@ -413,6 +443,82 @@ def test_health_passes_and_only_reads(tmp_path):
         paths = list(srv.paths)
     assert r.returncode == 0, r.stdout + r.stderr
     assert paths == ["/health", "/System/Info/Public", "/QuickConnect/Enabled"]
+
+
+def test_health_reads_the_log_since_the_container_started(tmp_path):
+    with Server() as srv:
+        r = _health(tmp_path, srv)
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = (tmp_path / "docker-calls.log").read_text().splitlines()
+    assert f"logs --since {STARTED} c0ffee" in calls
+
+
+def test_health_fails_on_the_downgrade_that_still_answered_healthy(tmp_path):
+    """2026-11-17: a config from a newer server imported into an older one. The server could not
+    open its database ("no such column: b.ExtraIds", "An error occurred starting the
+    application"), yet /health said Healthy and the public info answered with the right id."""
+    with Server() as srv:
+        r = _health(
+            tmp_path, srv, docker=_docker(tmp_path, log=DOWNGRADE_LOG),
+            media_expected_server_id=SERVER_ID,
+        )  # fmt: skip
+        paths = list(srv.paths)
+    assert r.returncode != 0
+    assert "the server did not start" in r.stdout and "b.ExtraIds" in r.stdout
+    assert "An error occurred starting the application" in r.stdout
+    assert paths == []  # it failed on the log, before asking the server anything
+
+
+@pytest.mark.parametrize("log", [None, ""], ids=["unreadable", "empty"])
+def test_health_fails_when_the_log_cannot_be_read_or_is_empty(tmp_path, log):
+    """No log is not a clean log: an unreadable or empty one proves nothing."""
+    with Server() as srv:
+        r = _health(tmp_path, srv, docker=_docker(tmp_path, log=log))
+    assert r.returncode != 0 and "cannot read the server's log" in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("started", [False, None], ids=["not-complete", "absent"])
+def test_health_fails_on_the_startup_page_when_a_started_server_is_expected(tmp_path, started):
+    """A server still starting or one whose start failed answers the public info from its startup
+    page, setup not complete; with an expected server id that is a failure."""
+    with Server(started=started) as srv:
+        r = _health(tmp_path, srv, media_expected_server_id=SERVER_ID)
+    assert r.returncode != 0 and "first-run setup not complete" in r.stdout
+    with Server(started=started) as srv:  # a fresh install (no expected id) may still be in setup
+        assert _health(tmp_path, srv).returncode == 0
+
+
+def _key_env() -> dict:
+    # a short, obviously fake key, built at run time
+    return {"HNX_SECRET_MEDIA_API_TOKEN": "-".join(["not", "a", "key"])}
+
+
+def test_health_counts_the_libraries_with_the_api_key(tmp_path):
+    key = _key_env()["HNX_SECRET_MEDIA_API_TOKEN"]
+    with Server(folders=3, token=key) as srv:
+        r = _health(tmp_path, srv, env=_key_env(), media_health_min_libraries=3)
+        paths, auth = list(srv.paths), list(srv.auth)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert paths[-1] == "/Library/VirtualFolders"
+    assert auth == [f'MediaBrowser Token="{key}"']
+    assert key not in r.stdout  # never logged
+
+
+def test_health_fails_when_fewer_libraries_load_than_expected(tmp_path):
+    key = _key_env()["HNX_SECRET_MEDIA_API_TOKEN"]
+    with Server(folders=1, token=key) as srv:
+        r = _health(tmp_path, srv, env=_key_env(), media_health_min_libraries=3)
+    assert r.returncode != 0 and "lists 1 libraries, fewer than the 3 expected" in r.stdout
+    with Server(folders=0, token=key) as srv:
+        r = _health(tmp_path, srv, env=_key_env(), media_health_min_libraries=1)
+    assert r.returncode != 0 and "lists 0 libraries" in r.stdout
+
+
+def test_health_fails_when_the_api_key_is_refused(tmp_path):
+    with Server(folders=3, token="another") as srv:
+        r = _health(tmp_path, srv, env=_key_env(), media_health_min_libraries=1)
+    assert r.returncode != 0 and "the API key was refused (HTTP 401)" in r.stdout
+    assert _key_env()["HNX_SECRET_MEDIA_API_TOKEN"] not in r.stdout
 
 
 def test_health_fails_when_the_server_is_not_healthy(tmp_path):
@@ -643,3 +749,34 @@ def test_restore_starts_the_server_only_after_the_swap(tmp_path):
     calls = log.read_text().splitlines()
     assert calls[0].endswith(" stop") and calls[-1].endswith(" up -d")
     assert (tmp_path / "data" / "config" / "data" / "device.txt").read_text() == SERVER_ID
+
+
+def test_restore_compares_the_server_id_without_the_byte_order_mark(tmp_path):
+    """The server writes data/device.txt with a UTF-8 byte order mark; trim does not remove it, so
+    a real config was refused as "another server" against its own id."""
+    v, src, _log, env = _export_for_restore(tmp_path)
+    archive = src / "media-config.tar.gz"
+    with tarfile.open(archive, "w:gz") as t:
+        data = b"\xef\xbb\xbf" + SERVER_ID.encode() + b"\n"  # what the server writes
+        info = tarfile.TarInfo("data/device.txt")
+        info.size = len(data)
+        t.addfile(info, __import__("io").BytesIO(data))
+    (src / "listing.jsonl").write_text(
+        json.dumps(
+            {"key": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
+        )
+        + "\n"
+    )
+    ok = run_role(
+        tmp_path, ROLE, "restore",
+        {**v, "media_restore_source": str(src), "media_expected_server_id": SERVER_ID}, env=env,
+    )  # fmt: skip
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    restored = (tmp_path / "data" / "config" / "data" / "device.txt").read_bytes()
+    assert restored.startswith(b"\xef\xbb\xbf")  # restored byte for byte, the mark kept
+    # another id behind the same mark is still refused (before any swap), named without the mark
+    bad = run_role(
+        tmp_path, ROLE, "restore",
+        {**v, "media_restore_source": str(src), "media_expected_server_id": "f" * 32}, env=env,
+    )  # fmt: skip
+    assert bad.returncode != 0 and f"({SERVER_ID}) is not the expected" in bad.stdout

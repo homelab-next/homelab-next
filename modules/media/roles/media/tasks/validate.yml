@@ -23,6 +23,8 @@
       - media_timezone is match('^[A-Za-z][A-Za-z0-9_+/-]{0,63}\Z')
       - media_published_url == '' or media_published_url is match('^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9_.-]*)*\Z')
       - media_expected_server_id == '' or media_expected_server_id is match('^[0-9a-f]{32}\Z')
+      - media_health_min_libraries | string is match('^[0-9]{1,4}\Z')
+      - media_api_login_ref is match('^secret:[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*\Z')
       - media_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
       # a byte count: 0 (off) or 1 GiB to 1 TiB; a bool, a float or a unit ("8g") is refused
       - media_transcode_tmpfs_size | string is match('^(0|[1-9][0-9]{0,15})\Z')
@@ -39,6 +41,7 @@
       directories with the library outside the data root and not a host-wide directory,
       media_quick_connect true or false, media_hwaccel none (hardware transcoding is not supported
       yet), a timezone, an http(s) published URL or empty, a 32-hex expected server id or empty,
+      a minimum library count (0 to 9999) and a secret:<name> API key reference,
       and a memory limit like 12g that covers the transcode tmpfs (a byte count, 0 or 1 GiB to 1 TiB)
       plus /tmp and 2 GiB of headroom
   tags: [health, backup, restore, export, upgrade]

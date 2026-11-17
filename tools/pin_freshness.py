@@ -213,8 +213,10 @@ NOTES: dict[str, str] = {
     ),
     "role:media/media_image": (
         "an image (modules/media): bump the tag and its digest together, with product.version in "
-        "modules/media/module.yml and the lab registry's version; a newer server migrates its own "
-        "databases on first start, so export the config first (the upgrade playbook does)"
+        "modules/media/module.yml and the lab registry's version, and regenerate "
+        "modules/media/known-migrations.json for it (tools/migrate/jellyfin.py known-migrations); "
+        "a newer server migrates its own databases on first start and an older one cannot open "
+        "them, so export the config first (the upgrade playbook does) and never go below the data"
     ),
     "role:garage/garage_image": (
         "an image (modules/garage): bump the tag and its digest together, with product.version in "
