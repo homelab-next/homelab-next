@@ -11,7 +11,7 @@ library's real source; those live in the private overlay.
 |---|---|
 | Slot | `media` (provisional: no contract or suite yet), stateful, object-tree export |
 | Product | Jellyfin 10.11.11, `docker.io/jellyfin/jellyfin` pinned by tag and digest |
-| Host role | `server`: kind `vm`, baseline `base`, footprint 4 vCPU, 16 GB, 40 GB |
+| Host role | `server`: kind `vm`, baseline `base`, footprint 4 vCPU, 12 GB, 40 GB |
 | Role | `media` (role interface v1), a wrapper of the core `compose_app` |
 | Secrets | none: the accounts are the server's own |
 | Egress | `internet` (metadata and artwork lookups, plugin catalogue); grant it in the overlay |
@@ -51,8 +51,10 @@ library's real source; those live in the private overlay.
     module's slice and the guest's RAM): `media_mem_limit` must be at least the tmpfs size plus 256 MiB
     (`/tmp`) plus 2 GiB for the server and the encoder (validation refuses less; default `12g` for the
     default 8 GiB), and the guest needs that much memory free of everything else on it (the footprint
-    is 16 GB). Pages are used only as they are written, but a tmpfs that fills fails the writer: playback
-    stops with a transcode error, the host is not harmed. Size it for the concurrent transcodes you
+    is 12 GB, equal to the default limit). Pages are used only as they are written, but a tmpfs that fills fails the writer: playback
+    stops with a transcode error, the host is not harmed. The default 8 GiB tmpfs under the 12g limit leaves
+    about 3.75 GiB (12 GiB minus 8 GiB minus 256 MiB) for Jellyfin itself, which is enough but not generous:
+    sites with tight RAM lower `media_transcode_tmpfs_size` (the lab will use 4 GiB, with a smaller limit if it wants). Size it for the concurrent transcodes you
     expect (about 1 GiB each at 20 Mbps, less at typical bitrates), not for the library.
 - **Read-only root.** The container runs with `read_only: true`: the server writes only `/config`,
   `/cache`, a 256 MiB tmpfs `/tmp` (the .NET runtime's pipes and sockets) and the transcode directory.
@@ -126,5 +128,5 @@ The overlay adds: the selection (`slots.media` provider `media`, an instance nam
 guest (resources and the library mount at `media_library_path`), the registry row exactly as bound
 (plus at most `standing`, `backup_job`, `scope`; its `public_hostname` is the site's), the grants
 (`egress.media.server: [internet]`, `public_routes`), group variables (`media_library_path`,
-`media_mem_limit` and `media_transcode_tmpfs_size` when the guest's RAM differs from the 16 GB default, `media_gid` of the mount's group, `media_published_url`, `media_expected_server_id` at a cutover)
+`media_mem_limit` and `media_transcode_tmpfs_size` when the guest's RAM differs from the 12 GB default, `media_gid` of the mount's group, `media_published_url`, `media_expected_server_id` at a cutover)
 and the firewall: the edge and the TV clients' zone to the port.

@@ -88,7 +88,7 @@ def overlay(tmp: Path) -> Path:
         "# SPDX-License-Identifier: Apache-2.0\n"
         "id: guest:media-1\nkind: vm\nprovisioning: terraform\nstatus: planned\n"
         "placement: {node: hv-01, vmid: 241, vmid_scheme: freeform}\n"
-        "resources:\n  cpu: {cores: 4}\n  memory: {size_mb: 16384}\n"
+        "resources:\n  cpu: {cores: 4}\n  memory: {size_mb: 12288}\n"
         "  disks: [{name: rootfs, size_gb: 40, pool: fast}]\n"
         "image: {logical: debian-13-cloudinit, kind: template-clone, os_type: linux-6}\n"
         "cloudinit: {user: ansible, ssh_authorized_keys: [operator]}\n"
@@ -236,3 +236,13 @@ def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
         [*lint, "--playbook", *books, "--inventory", inv], capture_output=True, text=True
     )
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_declared_footprint_memory_matches_the_default_memory_limit():
+    """The guest also hosts another module: the footprint is the container limit (12g), not the tmpfs plus it."""
+    manifest = yaml.safe_load((ROOT / "modules" / "media" / "module.yml").read_text())
+    defaults = yaml.safe_load(
+        (ROOT / "modules" / "media" / "roles" / "media" / "defaults" / "main.yml").read_text()
+    )
+    assert defaults["media_mem_limit"] == "12g"
+    assert manifest["requires"]["hosts"][0]["footprint"]["memory_mb"] == 12288

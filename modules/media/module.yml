@@ -33,7 +33,7 @@ requires:
   hosts:
     - role: server
       kind: vm
-      footprint: {cpu: 4, memory_mb: 16384, disk_gb: 40}
+      footprint: {cpu: 4, memory_mb: 12288, disk_gb: 40}
       guest:
         baselines: [base]
       roles: [role:media]
