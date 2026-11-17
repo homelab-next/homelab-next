@@ -450,3 +450,20 @@ def test_a_decision_suite_names_its_role():
     del doc["role"]
     with pytest.raises(TaskError, match="names the decision role"):
         parse_suite(doc)
+
+
+def test_the_probe_client_is_a_pinned_input(decision_report, monkeypatch):
+    """The chat probe goes through registry/models.py: a change there makes the report stale."""
+    real = pins._file_digest
+
+    def changed(path):
+        p = Path(path)
+        return (
+            "sha256:" + "0" * 64
+            if (p.parent.name, p.name) == ("registry", "models.py")
+            else real(p)
+        )
+
+    monkeypatch.setattr(pins, "_file_digest", changed)
+    p = pins.check_report(decision_report, _decision_table(), SUITES)
+    assert any("stale" in x and "code" in x for x in p)

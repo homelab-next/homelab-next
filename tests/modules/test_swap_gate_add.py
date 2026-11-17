@@ -270,3 +270,51 @@ def test_a_similar_role_name_is_no_consumer(tmp_path, capsys):
     _write(root, f"{LAB_SWAPS}/fast-classifier.json", _remove_record(empty))
     rc, out = _gate(root, capsys)
     assert (rc, out["problems"]) == (0, []), out
+
+
+@pytest.mark.parametrize(
+    ("rel", "text"),
+    [
+        ("lab/golden/decision.yml", "suite: d\nkind: decision\nrole: fast-classifier\n"),
+        ("lab/conformance/target.yml", "gateway:\n  checks:\n    model: fast-classifier\n"),
+        ("lab/conformance/target.yml", "throttle_model: 'fast-classifier'  # the slow one\n"),
+        ("lab/capabilities.yml", "capabilities:\n  - inference\n  - fast-classifier\n"),
+        ("lab/templates/gateway.json.j2", '{"keys": [{"roles": ["mdl:fast-classifier"]}]}\n'),
+        ("lab/templates/client.yml.j2", "role: {{ 'fast-classifier' }}\nmodel: fast-classifier\n"),
+    ],
+)
+def test_the_gate_finds_a_removed_role_named_bare(tmp_path, capsys, rel, text):
+    """The re-review's consumers that name the role without ``mdl:``: a golden suite's role, a
+    conformance target's model, capabilities.yml, a template."""
+    empty = _report(EMPTY)
+    root = _overlay(tmp_path, ADDED, EMPTY, empty)
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(text, encoding="utf-8")
+    _write(root, f"{LAB_SWAPS}/fast-classifier.json", _remove_record(empty))
+    rc, out = _gate(root, capsys)
+    assert rc == 1
+    assert out["problems"] == [
+        f"mdl:fast-classifier is removed, but {rel} still names it: remove that consumer in the "
+        "same change, or keep the role"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("rel", "text"),
+    [
+        ("lab/golden/other.yml", "role: fast-classifier-2\n"),
+        ("lab/notes.yml", "note: fast-classifier was removed\n"),
+        (
+            "lab/list.yml",
+            "items:\n  - fast-classifier\n",
+        ),  # a list item counts only in capabilities.yml
+    ],
+)
+def test_a_bare_name_elsewhere_is_no_consumer(tmp_path, capsys, rel, text):
+    empty = _report(EMPTY)
+    root = _overlay(tmp_path, ADDED, EMPTY, empty)
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(text, encoding="utf-8")
+    _write(root, f"{LAB_SWAPS}/fast-classifier.json", _remove_record(empty))
+    rc, out = _gate(root, capsys)
+    assert (rc, out["problems"]) == (0, []), out
