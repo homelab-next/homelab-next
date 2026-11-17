@@ -180,6 +180,20 @@ command-line arguments.
 A rehearsal that passes proves the **tool and the target**; it does not prove the final data: the
 final copy is verified the same way, on its own.
 
+### When a dump stops
+
+- **`the export names auth.user <id>, which it does not hold`** (exit 2): a document, tag,
+  correspondent or other object is **owned by an account the product's exporter leaves out**. The
+  exporter never exports the internal `consumer` and `AnonymousUser` accounts (nor their settings and
+  permissions), so an object owned by one of them points at an account the export does not carry,
+  and the import could not satisfy it either. The tool stops rather than drop or reassign the owner
+  on its own. Fix it on the **source**, as the library's owner decides: find what that account owns,
+  and give it to a real account (the web UI's bulk edit "set owner", or in the application container
+  `python3 manage.py shell -c "from documents.models import Document; from django.contrib.auth.models import User; print(list(Document.global_objects.filter(owner__username__in=['consumer', 'AnonymousUser']).values_list('pk', flat=True)))"`
+  to list the documents first), or clear the owner, then dump again. Check tags, correspondents,
+  document types, storage paths and custom fields the same way if the id still appears.
+- **Documents that share a checksum** do not stop a dump: they are carried and listed (above).
+
 ## Restore drill
 
 Restoring from this module's own export (`export/library.tar`) is the role's `restore` hook: deploy
