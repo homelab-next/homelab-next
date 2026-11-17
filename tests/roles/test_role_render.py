@@ -600,6 +600,37 @@ def test_compose_app_renders_tmpfs_mounts_in_the_long_syntax(first):
         assert int(mounts["/scratch"]["tmpfs"]["size"]) == 8589934592
 
 
+@pytest.mark.parametrize(
+    "mount",
+    [
+        {"target": "/dev/shm", "size_bytes": 4096},  # allowed exactly
+        {"target": "/devx", "size_bytes": 4096},  # a prefix of a denied root is not under it
+        {"target": "/etcetera", "size_bytes": 4096},
+        {"target": "/usr2", "size_bytes": 4096},
+        {"target": "/runner", "size_bytes": 4096},
+        {"target": "/tmpx", "size_bytes": 4096},  # beside /tmp, not inside it
+        {"target": "/m", "size_bytes": 4096, "mode": "1777"},
+        {"target": "/m", "size_bytes": 4096, "mode": "0700"},
+        {"target": "/m", "size_bytes": 4096, "mode": "0755"},
+        {"target": "/m", "size_bytes": 4096, "mode": "755"},
+        {"target": "/m", "size_bytes": 4096, "mode": "001"},
+    ],
+)
+def test_compose_app_accepts_a_safe_tmpfs_mount(tmp_path, mount):
+    s = spec(tmpfs=[{"target": "/tmp", "size_bytes": 4096}, mount])
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    web = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]["web"]
+    got = [v for v in web["volumes"] if isinstance(v, dict) and v["target"] == mount["target"]][0]
+    if "mode" in mount:
+        assert got["tmpfs"]["mode"] == int(mount["mode"], 8)  # the leading 0 makes it octal
+
+
 def _only_tmpfs(tmp_path):
     s = spec(tmpfs=[{"target": "/scratch", "size_bytes": 4096}])
     s["services"]["web"].pop("volumes")
@@ -618,6 +649,18 @@ def test_compose_app_renders_a_volumes_block_for_a_tmpfs_alone(first):
     web = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]["web"]
     assert web["volumes"] == [{"type": "tmpfs", "target": "/scratch", "tmpfs": {"size": 4096}}]
 
+
+_DENIED_ROOTS = [
+    "/proc", "/sys", "/dev", "/etc", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
+    "/usr", "/run", "/var/run", "/boot",
+]  # fmt: skip
+DENIED_TARGETS = [
+    "/",
+    *_DENIED_ROOTS,
+    *(r + "/sub" for r in _DENIED_ROOTS),
+    "/dev/shm/sub",
+    "/dev/pts",
+]
 
 TMPFS_REJECTED = {
     "not a list": {"tmpfs": {"target": "/x", "size_bytes": 4096}},
@@ -643,6 +686,20 @@ TMPFS_REJECTED = {
     "a size that is a float": {"tmpfs": [{"target": "/x", "size_bytes": 4096.5}]},
     "a size that adds a key": {
         "tmpfs": [{"target": "/x", "size_bytes": "4096\n    privileged: true"}]
+    },
+    "a // target": {"tmpfs": [{"target": "//x", "size_bytes": 4096}]},
+    "a /./ target": {"tmpfs": [{"target": "/./x", "size_bytes": 4096}]},
+    "a setuid mode": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "4755"}]},
+    "a setgid mode": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "2755"}]},
+    "setuid and setgid": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "6777"}]},
+    "mode 000": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "000"}]},
+    "mode 0000": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "0000"}]},
+    "mode 1000 (sticky only)": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "1000"}]},
+    "a two-digit mode": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "77"}]},
+    "an 0o mode": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": "0o755"}]},
+    **{
+        f"the denied path {t}": {"tmpfs": [{"target": t, "size_bytes": 4096}]}
+        for t in DENIED_TARGETS
     },
     "a decimal-looking mode (a bare number)": {
         "tmpfs": [{"target": "/x", "size_bytes": 4096, "mode": 1777}]

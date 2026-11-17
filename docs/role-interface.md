@@ -198,8 +198,11 @@ first on a `compose_app` module's host.
   long syntax (`type: tmpfs`, `tmpfs: {size, mode}`) after the service's `volumes`. `target` is an
   absolute, canonical container path (not `/`) that equals, lies inside or contains no other mount
   of the service (a volume's container path, an anonymous volume, another tmpfs); `size_bytes` is an
-  integer from 4096 to 1 TiB; `mode` is optional, a quoted string of three or four octal digits
-  (`"1777"`, docker's default; a bare number is refused, YAML would read it as decimal). The
+  integer from 4096 to 1 TiB; `mode` is optional, a quoted string of three octal digits with an optional leading 0 or
+  1 (`"1777"`, docker's default, `"0700"`, `"755"`; a bare number is refused, YAML would read it as decimal;
+  setuid and setgid bits and a mode of 000 are refused). A target may not be `/proc`, `/sys`, `/dev`,
+  `/etc`, `/bin`, `/sbin`, `/lib`, `/lib32`, `/lib64`, `/libx32`, `/usr`, `/run`, `/var/run`, `/boot` or lie under them
+  (`/dev/shm` itself is allowed). The
   template writes the mode with a leading 0 because compose reads the number itself. The pages
   live in the container's memory cgroup, so a `mem_limit` must leave room for them, and a full
   tmpfs fails the writer, not the host. This is what lets a service run with `read_only: true`:

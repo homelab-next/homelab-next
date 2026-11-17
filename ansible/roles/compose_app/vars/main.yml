@@ -44,9 +44,16 @@ compose_app_device_pattern: '^(?:/dev/dri/renderD[0-9]{3}|nvidia\.com/gpu=(?:all
 compose_app_group_add_pattern: '^[1-9][0-9]{0,9}\Z'
 # a RAM-backed mount (`tmpfs`: [{target, size_bytes, mode}]): the target an absolute, canonical
 # container path of at least one component (never / itself); the size a positive integer of bytes
-# from one page to 1 TiB; the mode a string of three or four octal digits (docker's default 1777)
+# from one page to 1 TiB; the mode a string of three octal digits with an optional leading 0 or 1 (docker's default 1777)
 compose_app_tmpfs_target_pattern: '^(?:/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
 compose_app_tmpfs_keys: [target, size_bytes, mode]
 compose_app_tmpfs_size_min: 4096
 compose_app_tmpfs_size_max: 1099511627776
-compose_app_tmpfs_mode_pattern: '^[0-7]{3,4}\Z'
+# 3 octal digits, optionally a leading 0 or the sticky bit (1); setuid and setgid (2, 4) cannot be
+# written. A mode whose permission digits are 000 is refused in validate.yml (nobody could use it).
+compose_app_tmpfs_mode_pattern: '^[01]?[0-7]{3}\Z'
+# a tmpfs never goes over the container's own system directories (it would hide the image's files or
+# the runtime's mounts): these paths and everything under them are refused, except /dev/shm itself
+compose_app_tmpfs_denied_roots:
+  [/proc, /sys, /dev, /etc, /bin, /sbin, /lib, /lib32, /lib64, /libx32, /usr, /run, /var/run, /boot]
+compose_app_tmpfs_allowed_exact: [/dev/shm]
