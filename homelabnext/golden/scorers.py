@@ -155,6 +155,21 @@ def max_length(out: str, e: dict) -> tuple[float, str]:
     return (1.0, f"{n} chars") if n <= e["max_chars"] else (0.0, f"{n} > {e['max_chars']} chars")
 
 
+def probability(out: str, e: dict) -> tuple[float, str]:
+    """A decision task's answer (the noul probability, as text) is in the band ``[min, max]``;
+    a value that is not a probability in [0, 1] scores 0."""
+    try:
+        p = float(out)
+    except (TypeError, ValueError):
+        return 0.0, f"not a probability: {str(out)[:40]!r}"
+    if not (math.isfinite(p) and 0.0 <= p <= 1.0):
+        return 0.0, f"not a probability in [0, 1]: {p}"
+    lo, hi = e.get("min", 0.0), e.get("max", 1.0)
+    if lo <= p <= hi:
+        return 1.0, f"p={p:.4f} in [{lo}, {hi}]"
+    return 0.0, f"p={p:.4f} outside [{lo}, {hi}]"
+
+
 SCORERS: dict[str, Callable[[str, dict], tuple[float, str]]] = {
     "exact": exact,
     "one_of": one_of,
@@ -163,6 +178,7 @@ SCORERS: dict[str, Callable[[str, dict], tuple[float, str]]] = {
     "json_fields": json_fields,
     "json_schema": json_schema,
     "max_length": max_length,
+    "probability": probability,
 }
 
 _REQUIRED = {
@@ -231,6 +247,18 @@ def _check_types(name: str, e: dict) -> None:
             raise ScoreError(
                 f"scorer 'json_schema': expect.schema is invalid: {exc.message}"
             ) from exc
+    elif name == "probability":
+        bounds = [b for b in ("min", "max") if b in e]
+        if not bounds:
+            raise ScoreError("scorer 'probability': expect.min or expect.max (the band) is needed")
+        for b in bounds:
+            if not (_is_num(e[b]) and 0.0 <= e[b] <= 1.0):
+                raise ScoreError(f"scorer 'probability': expect.{b} must be a number in [0, 1]")
+        if len(bounds) == 2 and e["min"] > e["max"]:
+            raise ScoreError("scorer 'probability': expect.min exceeds expect.max")
+        stray = sorted(set(e) - {"scorer", "min", "max"})
+        if stray:
+            raise ScoreError(f"scorer 'probability': unknown keys {stray}")
     elif name == "max_length":
         v = e["max_chars"]
         if not isinstance(v, int) or isinstance(v, bool) or v < 0:

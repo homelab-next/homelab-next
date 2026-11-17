@@ -17,7 +17,9 @@
                            passing, ``--out REPORT`` (re)writes it.  Exit 0 pass, 1 fail.
 ``hnx golden run``         a golden suite against a role, through the LLM gateway (the
                            ``llm-gateway`` capability, the role as the model, the key in
-                           ``--key-env``): what a consumer calls.  ``--direct`` resolves the
+                           ``--key-env``): what a consumer calls.  A decision suite
+                           (``kind: decision``) asks its noul questions on
+                           ``POST /v1/systemone`` (``ModelClient.decide``).  ``--direct`` resolves the
                            role's backend instead (host-side; ``--key-env`` then names the
                            backend's key; the key goes over plain http to a non-loopback host
                            only with ``--allow-plaintext``).  Exit 0 pass, 1 fail, 2 usage.
@@ -39,7 +41,7 @@ from typing import Any
 from homelabnext.registry import load as load_registry
 from homelabnext.registry.models import GatewayResolver, ModelResolver, RoleTable
 
-from .runner import client_completer, run_suite
+from .runner import client_completer, client_decider, run_decision_suite, run_suite
 from .tasks import load_suite
 
 
@@ -105,8 +107,12 @@ def main(argv: list[str]) -> int:
     client = _client(args)
     how = ModelResolver if args.direct else GatewayResolver
     resolver = how(load_registry(args.registry), RoleTable.load(args.roles))
-    completer, model_id = client_completer(resolver, role, **client)
-    rep = run_suite(suite, completer, role=role, model_id=model_id)
+    if suite.kind == "decision":
+        decider, model_id = client_decider(resolver, role, **client)
+        rep = run_decision_suite(suite, decider, role=role, model_id=model_id)
+    else:
+        completer, model_id = client_completer(resolver, role, **client)
+        rep = run_suite(suite, completer, role=role, model_id=model_id)
     if args.json:
         print(json.dumps(rep.to_dict(timing=True), indent=2, sort_keys=True))
     else:
@@ -150,14 +156,16 @@ def _pins(args: argparse.Namespace) -> int:
     suites = args.suite or list(pins.DEFAULT_SUITES)
     if args.action == "report":
         if args.registry:
-            factory, tiers, canary_for, name = _live(args.registry, table, _client(args))
+            live = _live(args.registry, table, _client(args))
             rep = pins.run_eval(
                 table,
                 suites,
-                factory,
-                model_name=name,
-                replay_tiers=tiers,
-                canary_factory=canary_for,
+                live["factory"],
+                model_name="live",
+                replay_tiers=live["tiers"],
+                canary_factory=live["canary"],
+                decider_factory=live["decider"],
+                decision_canary_factory=live["decision_canary"],
             )
         else:
             rep = pins.run_eval(table, suites, pins.fake_factory, model_name="fake-golden")
@@ -198,23 +206,25 @@ def _canary(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         print(f"golden canary: {exc}", file=sys.stderr)
         return 2
-    runs: list[tuple[Any, str, str]] = []
+    runs: list[tuple[Any, Any, str, str]] = []
     if args.fake:
         completer: Any = canary.IncidentModel() if args.fake == "incident" else canary.benign_model
-        runs.append((completer, "fake", f"fake-{args.fake}"))
+        runs.append((canary.run_canary, completer, "fake", f"fake-{args.fake}"))
     else:  # pragma: no cover - needs a real model server
         table = RoleTable.load(args.roles)
         resolver = ModelResolver(load_registry(args.registry), table)
-        canary_for = _binding_completer(resolver, _client(args))
+        if table.get(args.role).kind == "decision":  # asked on POST /v1/systemone
+            run = canary.run_decision_canary
+            one = _binding_completer(resolver, _client(args), decision=True)
+        else:
+            run, one = canary.run_canary, _binding_completer(resolver, _client(args))
         for b in table.get(args.role).bindings:  # every binding, not the first that resolves
-            runs.append((canary_for(args.role, b)[0], args.role, b.model_id))
+            runs.append((run, one(args.role, b)[0], args.role, b.model_id))
     reports = []
     try:
-        for completer, role, model_id in runs:
+        for run_one, completer, role, model_id in runs:
             reports.append(
-                canary.run_canary(
-                    suite, completer, role=role, model_id=model_id, samples=args.samples
-                )
+                run_one(suite, completer, role=role, model_id=model_id, samples=args.samples)
             )
     except canary.CanaryError as exc:
         print(f"golden canary: {exc}", file=sys.stderr)
@@ -229,17 +239,25 @@ def _canary(args: argparse.Namespace) -> int:
 
 
 def _binding_completer(
-    resolver: ModelResolver, client_kwargs: Mapping[str, Any] | None = None
+    resolver: ModelResolver,
+    client_kwargs: Mapping[str, Any] | None = None,
+    *,
+    decision: bool = False,
 ):  # pragma: no cover - needs a real model server
     """``(role, binding) -> (completer, "live")``: the canary's completer for one binding, which
-    returns the whole ChatResult so the canary sees ``finish_reason``.  This is the egress canary
-    runner, the one caller that passes ``allow_eval`` (ADR-0039 decision 3): the canary vets a
-    candidate ``eval`` row before its switch."""
+    returns the whole ChatResult so the canary sees ``finish_reason``; with ``decision``, a
+    decision binding's decider instead (the same client on ``POST /v1/systemone``).  This is the
+    egress canary runner, the one caller that passes ``allow_eval`` (ADR-0039 decision 3): the
+    canary vets a candidate ``eval`` row before its switch."""
     from homelabnext.registry.models import ModelClient
 
     def canary_for(role: str, binding: Any) -> tuple[Any, str]:
         resolved = resolver.resolve_binding(role, binding, allow_eval=True)
         client = ModelClient(resolved, **(client_kwargs or {}))
+        if decision:
+            from .runner import ClientDecider
+
+            return ClientDecider(client), "live"
         return (lambda messages, params: client.chat(messages, **params)), "live"
 
     return canary_for
@@ -294,11 +312,14 @@ def _live(
     from homelabnext.decide.tiers import ModelTier
     from homelabnext.registry.models import ModelClient
 
+    from .pins import _replay_roles
+
     resolver = ModelResolver(load_registry(registry), table)
     spec = load_spec(EXAMPLES / "decision_spec.yml")
+    chat_roles = _replay_roles(table)  # the cascade's roles the table has as chat roles
     tiers = {}
-    for t in spec.tiers:
-        if t.model_role:
+    for t in spec.tiers:  # a tier whose role the table lacks, or holds as decision, stays simulated
+        if t.model_role and t.model_role.removeprefix("mdl:") in chat_roles:
             client = ModelClient(resolver.resolve(t.model_role), **(client_kwargs or {}))
             tiers[t.name] = ModelTier(
                 t.name, lambda m, c=client: c.chat(m), spec.question_set, spec.answer_labels
@@ -307,7 +328,16 @@ def _live(
     def factory(role: str):
         return client_completer(resolver, role, **(client_kwargs or {}))
 
-    return factory, tiers, _binding_completer(resolver, client_kwargs), "live"
+    def decider(role: str):
+        return client_decider(resolver, role, **(client_kwargs or {}))
+
+    return {
+        "factory": factory,
+        "tiers": tiers,
+        "canary": _binding_completer(resolver, client_kwargs),
+        "decider": decider,
+        "decision_canary": _binding_completer(resolver, client_kwargs, decision=True),
+    }
 
 
 if __name__ == "__main__":

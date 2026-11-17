@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# A suite kind that is neither chat nor decision.
+suite: decision-smoke
+kind: ranking
+role: fast-classifier
+tasks:
+  - id: rollback-named
+    prompt: "Change: upgrade the queue workers. Rollback: revert the commit."
+    question: "Does this change plan say how the change would be rolled back?"
+    expect: {scorer: probability, min: 0.8}

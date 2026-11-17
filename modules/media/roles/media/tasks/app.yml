@@ -15,7 +15,7 @@
       compose_app_validate_with_docker: "{{ media_validate_with_docker }}"
       compose_app_bind_extra:
         - {path: "{{ media_library_path }}", reason: "the media library the server reads, mounted read-only"}
-        - {path: "{{ media_cache_dir }}", reason: "transcode scratch and image cache, rebuilt by the server and not backed up"}
+        - {path: "{{ media_cache_dir }}", reason: "image cache (and the transcode directory when media_transcode_tmpfs_size is 0), rebuilt by the server and not backed up"}
       compose_app_spec:
         services:
           media:
@@ -32,6 +32,13 @@
               - "{{ media_cache_dir }}:/cache"
               - "{{ media_library_path }}:{{ media_library_path }}:ro"
             mem_limit: "{{ media_mem_limit }}"
+            # nothing is written outside /config, /cache and the tmpfs mounts (checked against the
+            # pinned image: it starts healthy and serves with a read-only root)
+            read_only: true
+            tmpfs: >-
+              {{ [{'target': '/tmp', 'size_bytes': media_tmp_tmpfs_size | int, 'mode': '1777'}]
+                 + ([{'target': media_transcode_path, 'size_bytes': media_transcode_tmpfs_size | int, 'mode': '1777'}]
+                    if media_transcode_tmpfs_size | int > 0 else []) }}
             healthcheck:
               test: [CMD-SHELL, 'curl --noproxy "*" -fsS "$HEALTHCHECK_URL"']  # the image sets HEALTHCHECK_URL to its own /health
               interval: 30s
