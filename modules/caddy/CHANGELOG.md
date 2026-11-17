@@ -3,6 +3,7 @@
 
 ## 0.1.0 (draft)
 
+- Role `caddy_auth_proxy` health asked EVERY edge name to sign in, so the identity provider's own site (not behind the proxy) answered 404 and failed health. It now reads the deployed sites file (`caddy_auth_proxy_sites_file`, default under the `caddy` role's data root) and probes only the names whose site block imports `hnx_forward_auth`, and fails if none does. `caddy_auth_proxy_sites` keeps its meaning (the proxy's whitelist of return hosts).
 - Role `caddy_auth_proxy` health: the sign-in probe asked oauth2-proxy directly (its published port, `X-Forwarded-Host: <site>`), but since the `--trusted-proxy-ip` change the proxy honours forwarded headers only from the gateway of its own network, so the probe's `redirect_uri` named the bind address and health failed while the real sign-in was correct. Health now signs in through the edge, as a user does: `https://<site>/oauth2/start?rd=%2F` on the edge's address, TLS verified by the site's name against the edge's trust bundle (`caddy_auth_proxy_edge_address`, `_edge_port` and `_edge_trust_bundle` default to the `caddy` role's bind, port and trust bundle), with the same assertions (issuer authorization endpoint, client id, PKCE S256, the site's callback). `trusted_proxy_ips` is unchanged. Pinned by `tests/roles/test_edge_auth_probe.py`.
 - The `edge` provider: stock Caddy 2.11.7 (image pinned by tag and digest) serving only one
   deployment's sites, rendered by the role itself with the edge generator and `--edge-host`

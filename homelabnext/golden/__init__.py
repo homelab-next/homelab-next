@@ -2,13 +2,21 @@
 """Golden tasks: prompt, expected structure, scoring function, runner and report."""
 
 from .report import Report, TaskResult
-from .runner import Completer, client_completer, run_suite
+from .runner import (
+    Completer,
+    Decider,
+    client_completer,
+    client_decider,
+    run_decision_suite,
+    run_suite,
+)
 from .scorers import SCORERS, ScoreError, score
 from .tasks import Suite, Task, TaskError, load_suite, parse_suite
 
 __all__ = [
     "SCORERS",
     "Completer",
+    "Decider",
     "Report",
     "ScoreError",
     "Suite",
@@ -16,8 +24,10 @@ __all__ = [
     "TaskError",
     "TaskResult",
     "client_completer",
+    "client_decider",
     "load_suite",
     "parse_suite",
+    "run_decision_suite",
     "run_suite",
     "score",
 ]

@@ -616,7 +616,33 @@ class ModelClient:
             raise ModelError("malformed", "response is not an object")
         return doc
 
+    def _text_kind(self, what: str) -> None:
+        """A decision role answers noul questions only: chat, completions and embeddings on one
+        are refused here, before any request (the gateway refuses them too, ``wrong_model_kind``),
+        so a direct caller cannot chat a backend the table declares a decision model."""
+        if self.model.kind == "decision":
+            raise ModelError(
+                "misconfigured",
+                f"mdl:{self.model.role} is a decision role: it answers {what} with no text; ask "
+                "it with decide() (POST /v1/systemone)",
+            )
+
+    def chat_probe(self) -> tuple[int, Any]:
+        """The decision canary's probe: one minimal ``POST /v1/chat/completions``, returned as
+        ``(status, body)`` without judging it (a decision backend must refuse it; which refusal
+        counts is :func:`homelabnext.golden.canary.chat_refusal`'s).  A transport failure raises
+        :class:`ModelError`."""
+        body = {
+            "model": self.model.model_id,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
+        return self.transport(
+            "POST", f"{self.model.base_url}/v1/chat/completions", body, self.timeout
+        )
+
     def chat(self, messages: list[dict], *, logprobs: bool | None = None, **params: Any):
+        self._text_kind("no chat")
         body: dict[str, Any] = {"model": self.model.model_id, "messages": messages}
         body.update(self.model.params)
         body.update(params)
@@ -641,6 +667,7 @@ class ModelClient:
             raise ModelError("malformed", f"unexpected chat response shape ({exc!r})") from exc
 
     def complete(self, prompt: str, **params: Any) -> str:
+        self._text_kind("no completion")
         body: dict[str, Any] = {"model": self.model.model_id, "prompt": prompt}
         body.update(params)
         doc = self._call("/v1/completions", body)
@@ -674,6 +701,7 @@ class ModelClient:
             raise ModelError("malformed", f"unexpected decision response shape ({exc!r})") from exc
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        self._text_kind("no embedding")
         doc = self._call("/v1/embeddings", {"model": self.model.model_id, "input": texts})
         try:
             return [list(map(float, d["embedding"])) for d in doc["data"]]

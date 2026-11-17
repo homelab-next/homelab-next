@@ -11,7 +11,7 @@ id: media
 kind: provider
 title: Media server on Jellyfin
 description: Fills the media slot with Jellyfin, a self-hosted media server, run as one compose_app
-  container with local accounts, Quick Connect on, a read-only library mount and CPU transcoding;
+  container with local accounts, Quick Connect on, a read-only library mount and root, and CPU transcoding into a RAM-backed tmpfs;
   its config and data (server id, users, devices, watch state) move with tools/migrate/jellyfin.py.
 owner: operator
 author: agent:claude
@@ -33,7 +33,7 @@ requires:
   hosts:
     - role: server
       kind: vm
-      footprint: {cpu: 4, memory_mb: 8192, disk_gb: 40}
+      footprint: {cpu: 4, memory_mb: 12288, disk_gb: 40}
       guest:
         baselines: [base]
       roles: [role:media]

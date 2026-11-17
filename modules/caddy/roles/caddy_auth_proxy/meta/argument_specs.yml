@@ -97,6 +97,9 @@ argument_specs:
       caddy_auth_proxy_edge_trust_bundle: &edge_bundle
         type: str
         description: The CA bundle the edge's certificates verify against (the caddy role's trust bundle by default).
+      caddy_auth_proxy_sites_file: &sites_file
+        type: str
+        description: The edge's deployed sites file, read by health to find the sites fronted by forward auth (the caddy role's data root by default).
   health:
     short_description: Fail unless the container is healthy, /ping answers, the check refuses a request with no session and signing in through the edge (https://<site>/oauth2/start) starts the code flow (PKCE) at the issuer for each site.
     options:
@@ -123,6 +126,7 @@ argument_specs:
       caddy_auth_proxy_edge_address: *edge_address
       caddy_auth_proxy_edge_port: *edge_port
       caddy_auth_proxy_edge_trust_bundle: *edge_bundle
+      caddy_auth_proxy_sites_file: *sites_file
   readiness:
     short_description: Fail unless the container engine is ready and both credentials resolve in their form.
     options:

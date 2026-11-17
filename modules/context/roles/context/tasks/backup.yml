@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Nothing of this service needs a backup: the index is derived (rebuilt from the sources by a reindex,
+# at every start), the checkouts are copies of the sources, and the last reindex's record is rewritten
+# by the next run. The manifest says so, naming no path, so a backup job does not copy a derived tree.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Write the backup manifest (no path, everything is derived from the sources)
+      ansible.builtin.copy:
+        dest: "{{ context_dir }}/backup-manifest.json"
+        content: "{{ context_backup_manifest | to_nice_json }}\n"
+        owner: "{{ context_owner }}"
+        group: "{{ context_gid | int }}"
+        mode: "0640"
+      vars:
+        context_backup_manifest:
+          app: context
+          paths: []
+          derived: ["{{ context_data_root }}"]
+          note: rebuilt from the git sources by a reindex
+  tags: [backup]

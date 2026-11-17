@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# The server's EncodingOptions (config/encoding.xml), written before the container is created so a
+# new or recreated container starts with them (the server reads the file at start). Enabled: the
+# transcode directory is the tmpfs, throttling and segment deletion keep one long stream from filling
+# it. Disabled (media_transcode_tmpfs_size 0): only a TranscodingTempPath this role pointed at the
+# tmpfs is cleared, so the server falls back to its default under /cache. The server writes one
+# element per line; an element that is absent is added before the closing tag.
+- name: Seed config/encoding.xml (a fresh install only; an existing file is edited in place below)
+  ansible.builtin.copy:
+    dest: "{{ media_data_root }}/config/config/encoding.xml"
+    content: "{{ media_encoding_xml_seed }}"
+    owner: "{{ media_uid | int }}"
+    group: "{{ media_gid | int }}"
+    mode: "0600"
+    force: false
+  when: media_transcode_tmpfs_size | int > 0
+
+- name: Look at encoding.xml
+  ansible.builtin.stat:
+    path: "{{ media_data_root }}/config/config/encoding.xml"
+  register: media_encoding_stat
+  check_mode: false
+
+# One XML-aware edit for both directions (see media_encoding_script): a file that is not well-formed
+# or has no closing </EncodingOptions> is refused and left alone, never appended to after its end.
+- name: Set the transcode directory, throttling and segment deletion (or clear our path when the tmpfs is off)
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -I
+      - -c
+      - "{{ media_encoding_script }}"
+      - "{{ media_data_root }}/config/config/encoding.xml"
+      - "{{ 'on' if media_transcode_tmpfs_size | int > 0 else 'off' }}"
+      - "{{ media_transcode_path }}"
+      - "{{ media_transcode_throttle_seconds | int }}"
+      - "{{ media_transcode_keep_seconds | int }}"
+  register: media_encoding_edit
+  changed_when: media_encoding_edit.stdout | trim == 'changed'
+  when: media_encoding_stat.stat.exists | default(false)
