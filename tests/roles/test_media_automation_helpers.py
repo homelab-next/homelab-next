@@ -126,7 +126,7 @@ def test_only_a_hardlinked_file_not_held_by_a_torrent_is_removed(cd, lib):
     assert (c / "seeding.flac").is_file()
 
 
-def test_safe_remove_refuses_a_link_and_a_path_outside_downloads(cd, lib):
+def test_safe_remove_refuses_a_link_and_a_path_outside_downloads_exactly(cd, lib):
     c = completed(lib)
     cd.confine_root(str(c), str(lib))
     os.symlink(lib / "movies" / "film.mkv", c / "l.mkv")
@@ -140,7 +140,7 @@ def test_safe_remove_refuses_a_link_and_a_path_outside_downloads(cd, lib):
 # ----------------------------------------------------------------------------- the blacklist
 
 
-def test_the_blacklist_never_deletes_music_covers_or_books(cd, lib, tmp_path):
+def test_the_blacklist_never_deletes_music_covers_or_books_together(cd, lib, tmp_path):
     c = completed(lib)
     keep = [
         "a.flac",
@@ -184,7 +184,7 @@ def test_the_shipped_blacklist_holds_no_protected_pattern(cd):
     assert "*.exe" in [p.lower() for p in shipped]
 
 
-def test_empty_directory_removal_never_follows_or_removes_a_link(cd, lib):
+def test_empty_directory_removal_never_follows_or_removes_a_link_throughout(cd, lib):
     c = completed(lib)
     cd.confine_root(str(c), str(lib))
     (c / "empty").mkdir()
@@ -207,7 +207,7 @@ def rn(lib, monkeypatch):
     return mod
 
 
-def test_a_rename_stays_inside_its_folder(rn, lib):
+def test_a_rename_stays_inside_its_folder_exactly(rn, lib):
     show = lib / "shows" / "S"
     show.mkdir()
     (show / "a.[x].mkv").write_text("x")

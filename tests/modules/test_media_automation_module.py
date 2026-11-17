@@ -153,7 +153,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
-def test_roles_holds_only_the_contributed_role():
+def test_roles_holds_only_the_contributed_role_by_default():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["media_automation"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
     manifest = ld.load_yaml(MODULE / "module.yml")
@@ -216,7 +216,9 @@ def test_the_defaults_are_a_writable_library_at_a_path_variable_with_downloads_i
 # ----------------------------------------------------------------------------- an overlay
 
 
-def test_an_overlay_placing_the_module_on_a_guest_checks_clean_and_renders(tmp_path, capsys):
+def test_an_overlay_placing_the_module_on_a_guest_checks_clean_and_renders_as_such(
+    tmp_path, capsys
+):
     ov = overlay(tmp_path / "ov")
     code, out = _check(ov, capsys)
     assert code == 0, out
@@ -249,7 +251,7 @@ def test_a_public_route_the_row_does_not_declare_is_refused(tmp_path, capsys):
     assert code == 1 and "public_hostname" in out, out
 
 
-def test_an_ungranted_egress_is_refused(tmp_path, capsys):
+def test_an_ungranted_egress_is_refused_throughout(tmp_path, capsys):
     ov = overlay(tmp_path)
     sel = ld.load_yaml(ov / "lab" / "modules.yml")
     del sel["grants"]["egress"]

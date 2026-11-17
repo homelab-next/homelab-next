@@ -495,7 +495,9 @@ def test_health_passes_and_checks_the_kill_switch_and_the_hardlink(tmp_path):
 
 
 @pytest.mark.parametrize("client", CLIENTS)
-def test_health_fails_when_a_download_client_is_not_behind_the_vpn_client(tmp_path, client):
+def test_health_fails_when_a_download_client_is_not_behind_the_vpn_client_as_documented(
+    tmp_path, client
+):
     with Stack() as s:
         r = _health(tmp_path, s, env=_env(tmp_path, net={f"id-{client}": "bridge"}))
     assert r.returncode != 0 and "not fail-closed behind the VPN client" in r.stdout
@@ -520,7 +522,7 @@ def _recover(tmp_path, ns):
     ]
 
 
-def test_recover_recreates_only_the_orphaned_clients_and_never_the_vpn_client(tmp_path):
+def test_recover_recreates_only_the_orphaned_clients_and_never_the_vpn_client_exactly(tmp_path):
     calls = _recover(tmp_path, {"nzbget": "net:[1]"})
     assert len(calls) == 1 and calls[0].endswith("--no-deps nzbget")
     assert "gluetun" not in calls[0] and "qbittorrent" not in calls[0]

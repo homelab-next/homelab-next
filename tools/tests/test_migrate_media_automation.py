@@ -135,7 +135,7 @@ def do_import(src, tmp_path, **kw):
 # ----------------------------------------------------------------------------- counts
 
 
-def test_counts_reads_every_app(src):
+def test_counts_reads_every_app_in_full(src):
     out = mm.counts(src)
     assert sorted(out) == sorted(mm.ALL_APPS)
     first = SQL[0]
@@ -155,7 +155,7 @@ def test_counts_reads_the_old_volume_layout(tmp_path, src):
     assert sorted(mm.counts(vols, "old_")) == sorted(mm.ALL_APPS)
 
 
-def test_a_directory_with_no_app_is_an_error_not_an_empty_count(tmp_path):
+def test_a_directory_with_no_app_is_an_error_not_an_empty_count_together(tmp_path):
     (tmp_path / "empty").mkdir()
     with pytest.raises(mm.ImportFailed, match="no app config directory"):
         mm.counts(tmp_path / "empty")
@@ -172,7 +172,7 @@ def test_an_unrecognised_schema_is_refused(src, tmp_path):
     assert not (tmp_path / "data").exists()
 
 
-def test_an_empty_primary_table_is_not_verified(src, tmp_path):
+def test_an_empty_primary_table_is_not_verified_throughout(src, tmp_path):
     app = SQL[0]
     c = sqlite3.connect(src / app / mm.SQL_APPS[app][0])
     c.execute(f'DELETE FROM "{mm.SQL_APPS[app][3][0]}"')
@@ -256,7 +256,7 @@ def test_the_resume_file_is_rewritten_as_bencode_and_binary_values_are_left_alon
     assert mm._bencode(doc) == f.read_bytes()  # still canonical: the length prefixes are right
 
 
-def test_a_resume_file_that_is_not_canonical_is_refused(src, tmp_path):
+def test_a_resume_file_that_is_not_canonical_is_refused_exactly(src, tmp_path):
     f = src / CLIENT / "qBittorrent" / "BT_backup" / ("a" * 40 + ".fastresume")
     f.write_bytes(b"d1:bi1e1:ai2ee")  # keys out of order: re-encoding would change it
     with pytest.raises(mm.ImportFailed, match="byte for byte"):
@@ -277,7 +277,7 @@ def test_the_source_is_never_changed(src, tmp_path):
     assert tree_hash(src) == before
 
 
-def test_an_ip_address_host_is_reported_and_refused_when_strict(tmp_path):
+def test_an_ip_address_host_is_reported_and_refused_when_strict_exactly(tmp_path):
     s = build_source(tmp_path / "ip", ip_host=True)
     rep = do_import(s, tmp_path)
     assert rep["ip_hosts"] and "IP address" in rep["warnings"][0]
@@ -293,7 +293,7 @@ def test_a_remapped_ip_host_is_clean(tmp_path):
     assert "ip_hosts" not in rep
 
 
-def test_cover_art_can_be_left_for_the_apps_to_download(src, tmp_path):
+def test_cover_art_can_be_left_for_the_apps_to_download_throughout(src, tmp_path):
     do_import(src, tmp_path, skip_covers=True)
     assert not (tmp_path / "data" / "mod" / "config" / SQL[0] / "MediaCover").exists()
     other = tmp_path / "again"
@@ -371,7 +371,7 @@ def test_a_shallow_or_nested_or_foreign_target_is_refused(src, tmp_path):
         )
 
 
-def test_a_target_that_is_or_holds_or_lies_in_the_library_is_refused(src, tmp_path):
+def test_a_target_that_is_or_holds_or_lies_in_the_library_is_refused_together(src, tmp_path):
     lib = tmp_path / "lib" / "srv" / "media"
     lib.mkdir(parents=True)
     for target in (lib, lib.parent, lib / "cfg"):
@@ -407,7 +407,7 @@ def test_an_existing_config_root_is_moved_aside_never_deleted(src, tmp_path):
         do_import(src, tmp_path, replace=True)  # the first aside copy is not overwritten
 
 
-def test_a_leftover_partial_tree_stops_the_import(src, tmp_path):
+def test_a_leftover_partial_tree_stops_the_import_as_documented(src, tmp_path):
     (tmp_path / "data" / "mod" / "config.partial").mkdir(parents=True)
     with pytest.raises(mm.ImportFailed, match="left by an earlier import"):
         do_import(src, tmp_path)
@@ -434,7 +434,7 @@ def test_a_failed_import_leaves_the_previous_target_intact(src, tmp_path, monkey
     assert (tmp_path / "data" / "mod" / "config.partial").is_dir()  # kept for inspection
 
 
-def test_a_changed_identity_file_fails_the_import(src, tmp_path, monkeypatch):
+def test_a_changed_identity_file_fails_the_import_as_documented(src, tmp_path, monkeypatch):
     real = mm._copy_tree
 
     def tamper(s, d, skipped, covers):
