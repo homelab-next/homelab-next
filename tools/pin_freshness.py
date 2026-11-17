@@ -148,6 +148,7 @@ SOURCES: dict[str, tuple[str, str]] = {
         "release page by hand",
     ),
     "role:open_webui/open_webui_image": ("github", "open-webui/open-webui"),
+    "role:openwebui/openwebui_image": ("github", "open-webui/open-webui"),
     "role:openbao/openbao_version": ("github", "openbao/openbao"),
     "role:openbao/openbao_lego_version": ("github", "go-acme/lego"),
     "role:tailscale_node/tailscale_node_version": ("github", "tailscale/tailscale"),
@@ -168,6 +169,12 @@ NOTES: dict[str, str] = {
     "role:wazuh_agent/wazuh_agent_version": "never newer than the manager it reports to",
     "role:docker_engine/docker_engine_version": "docker-ce and docker-ce-cli move with it",
     "role:open_webui/open_webui_image": "an image: bump the tag and its digest together",
+    "role:openwebui/openwebui_image": (
+        "an image (modules/openwebui): bump the tag and its digest together, in this role's default "
+        "and the core open_webui role's (a test holds them equal), with product.version in "
+        "modules/openwebui/module.yml and the lab registry's version; the upgrade playbook exports "
+        "the data directory first (the database migrates forward on the first start)"
+    ),
     "role:caddy/caddy_image": (
         "an image (modules/caddy): bump the tag and its digest together, with product.version in "
         "modules/caddy/module.yml, the lab registry's version and the CI CADDY_VERSION/CADDY_SHA512"

@@ -35,7 +35,9 @@ registry) and defaults to ``https`` in a url; ``host`` and ``port`` are required
 for the field asked, and a row without one is refused by name.
 
 ``field='capability'`` is what the service provides (empty when the row does not say), so a role
-can refuse an id that resolves to the wrong kind of service.  ``field='public_hostname'`` is the
+can refuse an id that resolves to the wrong kind of service; ``field='impl'`` is the product that
+provides it (empty when the row does not say), for the case a capability has two kinds of provider
+(the gateway and an engine behind it both answer ``inference``).  ``field='public_hostname'`` is the
 name clients use for the service through the edge (the platform registry's ``public_hostname``),
 refused by name when the row has none.
 """
@@ -55,7 +57,7 @@ options:
     description: Logical service ids.
     required: true
   field:
-    description: One of host, host_id, port, url, capability, public_hostname.
+    description: One of host, host_id, port, url, capability, impl, public_hostname.
     default: url
 """
 
@@ -98,7 +100,7 @@ def _platform_name(term: str, row: dict, doc: dict) -> str:
 class LookupModule(LookupBase):
     def run(self, terms, variables=None, **kwargs):
         field = kwargs.get("field", "url")
-        if field not in ("host", "host_id", "port", "url", "capability", "public_hostname"):
+        if field not in ("host", "host_id", "port", "url", "capability", "impl", "public_hostname"):
             raise AnsibleLookupError(f"hnx_registry: unknown field '{field}'")
         path = (variables or {}).get("hnx_registry_file")
         if isinstance(path, str) and "{{" in path and self._templar is not None:
@@ -122,8 +124,8 @@ class LookupModule(LookupBase):
                 raise AnsibleLookupError(f"hnx_registry: unknown service id '{term}'")
             if not isinstance(row, dict):
                 raise AnsibleLookupError(f"hnx_registry: service '{term}' is not a mapping")
-            if field == "capability":
-                out.append(str(row.get("capability", "")))
+            if field in ("capability", "impl"):
+                out.append(str(row.get(field, "")))
                 continue
             if field == "host_id":
                 host_id = row.get("host")

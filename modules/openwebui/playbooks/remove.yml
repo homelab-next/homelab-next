@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the data directory (export_first), stop and remove the container and delete the
+# env_file that holds the keys. The data directory (with the export) and the rest of the compose
+# project are kept for the operator to archive or delete; the decommission audit
+# (module.yml lifecycle.remove.audit) checks nothing still names the service.
+- name: Remove Open WebUI
+  hosts: mod_openwebui_server
+  become: true
+  tasks:
+    - name: Export the data directory first
+      ansible.builtin.include_role:
+        name: openwebui
+        tasks_from: export
+    - name: Stop and remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ openwebui_dir | default('/opt/compose/openwebui') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credentials the container was given
+      ansible.builtin.file:
+        path: "{{ openwebui_dir | default('/opt/compose/openwebui') }}/secrets/open-webui.env"
+        state: absent
