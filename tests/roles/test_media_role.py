@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import pwd
+import shutil
 import tarfile
 from pathlib import Path
 
@@ -33,8 +34,38 @@ GUEST = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())["hosts"
 ]
 
 
+# The library is mounted into the container at its own path, and the container's /tmp is a tmpfs, so
+# a library under /tmp is refused (the mounts would overlap). pytest's base directory is /tmp on CI,
+# so the test library lives under /var/tmp, one directory per test, removed afterwards.
+_LIBS: list[Path] = []
+
+
+def lib_dir(tmp_path: Path) -> Path:
+    lib = Path("/var/tmp") / (
+        "hnx-media-lib-" + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:16]
+    )
+    lib.mkdir(exist_ok=True)
+    if lib not in _LIBS:
+        _LIBS.append(lib)
+    return lib
+
+
+@pytest.fixture(autouse=True)
+def _remove_test_libraries():
+    yield
+    while _LIBS:
+        lib = _LIBS.pop()
+        # only a directory this module made: /var/tmp/hnx-media-lib-<16 hex>, never a link
+        assert (
+            lib.parent == Path("/var/tmp")
+            and lib.name.startswith("hnx-media-lib-")
+            and not lib.is_symlink()
+        )
+        shutil.rmtree(lib, ignore_errors=True)
+
+
 def media_vars(tmp_path: Path, **kw) -> dict:
-    lib = tmp_path / "library"
+    lib = lib_dir(tmp_path)
     lib.mkdir(exist_ok=True)
     (lib / ".hnx-media-library").write_text("")  # the operator's marker on a mounted library
     v = {
@@ -253,7 +284,13 @@ def test_the_library_cannot_be_mounted_over_the_transcode_directory(tmp_path):
     t.mkdir()
     v = media_vars(t, media_library_path="/transcode")
     r = run_role(t, ROLE, "main", {**v, "media_start": False})
-    assert r.returncode != 0, r.stdout
+    assert r.returncode != 0 and "refused tmpfs mount" in r.stdout + r.stderr, r.stdout
+
+
+def test_a_library_under_tmp_is_refused_because_tmp_is_a_tmpfs(tmp_path):
+    v = media_vars(tmp_path, media_library_path="/tmp/hnx-media-test-library")
+    r = run_role(tmp_path, ROLE, "main", v)
+    assert r.returncode != 0 and "refused tmpfs mount" in r.stdout + r.stderr, r.stdout
 
 
 @pytest.mark.parametrize(
@@ -353,13 +390,11 @@ def test_health_fails_when_quick_connect_is_off(tmp_path):
 
 def test_health_fails_when_the_library_is_no_longer_mounted(tmp_path):
     with Server() as srv:
-        (tmp_path / "library").mkdir()
-        (tmp_path / "library" / ".hnx-media-library").unlink(missing_ok=True)
+        lib_dir(tmp_path).mkdir(exist_ok=True)
+        (lib_dir(tmp_path) / ".hnx-media-library").unlink(missing_ok=True)
         host, port = srv.addr
         v = media_vars(tmp_path, media_bind=host, media_port=port)
-        (
-            tmp_path / "library" / ".hnx-media-library"
-        ).unlink()  # the mount (and its marker) went away
+        (lib_dir(tmp_path) / ".hnx-media-library").unlink()  # the mount (and its marker) went away
         r = run_role(tmp_path, ROLE, "health", v, env=_docker(tmp_path))
     assert r.returncode != 0 and "is not a mounted library" in r.stdout
 
