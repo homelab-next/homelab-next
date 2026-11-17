@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes, keyed by the slot and renamed to the
+# instance the site selects; version is product.version (never repeated here), host is the module's
+# host role. The lab registry (lab/services.yml) must carry it exactly as bound (hnx modules check,
+# docs/modules/registry-rows.md). Internal only: no public_hostname and no public route, so the edge
+# renders no site for it; the front (the web UI and the /api/ path the status hub and the bridge
+# read) is reached on the guest's address by the zones the site's firewall admits. auth: own - its
+# own sign-in and API keys; the edge puts nothing in front of it. The status source is the hub's
+# existing StackStorm reader: failed and timed-out executions in the last hour, and what is running.
+# `upstreams: [notify]` is deliberately absent: the pack reaches the broker, never a service.
+services:
+  automation:
+    capability: automation
+    impl: stackstorm  # caddy-lint: allow a provider's row never repeats its version; the site binds product.version (3.9.0) into it
+    host: server
+    protocol: http
+    port: 9101
+    health: {kind: http, path: /, expect_status: 200}
+    owner: operator
+    tls: none
+    auth: own
+    tags: [ops, automation]
+    status_sources:
+      - id: stackstorm-executions
+        kind: poll-stackstorm
+        target: {path: /api/v1/executions}
+        interval_s: 120
+        timeout_s: 15
+        auth: {secret: "secret:stackstorm/status-token", header: St2-Api-Key}
+        mapping: {window_s: 3600, limit: 100}
+        what: Actions with failed or timed-out executions in the last hour (fail) and the running executions.
+    description: StackStorm 3.9 running the rendered workflow pack in shadow mode (rules disabled until a person enables one); the web UI and the /api/ path are on this port, internal only.

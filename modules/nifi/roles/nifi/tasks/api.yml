@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# One run of the API script (vars/main.yml, nifi_api_script) with the command nifi_api_command: wait for
+# the API, then converge, health, export or import-flows. Its settings, the credential among them, go
+# in on standard input (never a command line) and the task's output is hidden; what it prints is
+# JSON of facts, and a failure's one-line reason is shown.
+- block:
+    - name: Name the parameters the provider supplies
+      ansible.builtin.set_fact:
+        nifi_parameter_names: "{{ (nifi_plain_parameters.keys() | list + nifi_sensitive_parameter_refs.keys() | list) | sort }}"
+
+    - name: Build the script's settings
+      ansible.builtin.set_fact:
+        nifi_api_input: >-
+          {{ {'base_url': nifi_self_endpoint,
+              'ca_file': nifi_dir ~ '/tls/ca.pem',
+              'auth': ({'mode': 'single-user', 'username': nifi_single_user_name, 'password': lookup('hnx_secret', nifi_user_pw_ref)}
+                       if nifi_auth == 'single-user' else
+                       {'mode': 'bearer', 'token': lookup('hnx_secret', nifi_api_bearer_ref)}),
+              'wait_s': nifi_ready_timeout | int,
+              'timeout': nifi_health_timeout | int,
+              'expect_version': nifi_product_version,
+              'provider': {'name': nifi_parameter_provider, 'group': nifi_parameter_group, 'context': nifi_parameter_context,
+                           'env_names': nifi_parameter_names, 'sensitive': nifi_sensitive_parameter_refs.keys() | list | sort},
+              'registry_name': nifi_registry_name,
+              'registry': ({'url': nifi_registry_url, 'owner': nifi_registry_owner, 'repo': nifi_registry_repo,
+                            'branch': nifi_registry_branch, 'path': nifi_registry_path,
+                            'token': (lookup('hnx_secret', nifi_registry_auth_ref) if nifi_registry_auth_ref != '' else '')}
+                           if nifi_registry_url != '' else none),
+              'smoke': {'enabled': nifi_smoke_enabled | bool,
+                        'definition': (lookup('ansible.builtin.file', 'hnx-smoke.json') if nifi_api_command == 'converge' else '')}}
+             | combine(nifi_api_extra | default({})) | to_json }}
+      no_log: true
+
+    - name: Run the API script
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "{{ nifi_api_script }}", "{{ nifi_api_command }}"]
+        stdin: "{{ nifi_api_input }}"
+      register: nifi_api_result
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      no_log: true
+
+    - name: The script succeeded
+      ansible.builtin.assert:
+        that: nifi_api_result.rc == 0
+        fail_msg: "nifi: {{ nifi_api_command }} failed: {{ nifi_api_result.stderr | default('') | trim | truncate(500) }}"
+      # the failure's reason is the script's own one line; it never holds a credential
+
+    - name: Read what the script reported
+      ansible.builtin.set_fact:
+        nifi_api_facts: "{{ nifi_api_result.stdout | from_json }}"
+  when: nifi_api_command == 'health' or not (ansible_check_mode | bool)

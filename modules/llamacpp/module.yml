@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+# The inference provider on llama.cpp's llama-server (docs/modules.md; README.md beside this file):
+# one model, one GPU, OpenAI-compatible /v1 behind the model gateway. One compose_app container from
+# a pinned image, started only by a systemd unit that first refuses a GPU whose power cap is above
+# the operator's limit and weights that are not the pinned bytes. The weights are the model
+# store's (role model_store, a sha256 per file) and are mounted read-only; no internet egress,
+# no public route, no web UI. Every real value (the guest, its address, the GPU, the model's
+# store entry) is the site's: the overlay's lab/modules.yml, lab/services.yml and group variables.
+manifest_version: "1.0"
+id: llamacpp
+kind: provider
+title: Inference on llama.cpp
+description: Fills the inference slot with llama.cpp's llama-server, which serves one GGUF model on
+  one GPU through an OpenAI-compatible API, run as one compose_app container behind a unit that
+  checks the card's power cap and the weights before every start; proved by the inference
+  conformance suite through the shared single-server adapter.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: llama-cpp
+  display: llama.cpp
+  version: 0.12033.0
+licence:
+  kind: open-source
+  spdx: MIT
+requires:
+  hosts:
+    - role: server
+      kind: vm
+      footprint:
+        cpu: 8
+        memory_mb: 16384
+        disk_gb: 20
+        # the card's memory is not a footprint dimension here: a guest record declares no GPU memory
+        # yet, so a role that counted it could not be placed on a guest (guest_hosts.py); the claim
+        # on the card itself is the exclusive resource below
+        resources: [{kind: gpu, exclusive: true}]
+      guest:
+        baselines: [server]
+      roles: [role:llamacpp]
+      purpose: runs the llama-server container (docker_engine applied first, compose_app renders it, a unit starts it); the weights come from the model store on the same guest
+provides:
+  slots:
+    inference:
+      formats:
+        - {format: openai-compatible, version: v1}
+      adapter: homelabnext.conform.adapters.inference_server:make
+      features: [streaming]
+      conformance:
+        target: conformance/target.yml
+egress: none
+contributes:
+  roles:
+    - file: roles/llamacpp
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:llamacpp, hook: readiness}
+  docs:
+    - file: README.md
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest of the same backend): the role's upgrade hook validates and records it, then it converges; the weights never move with it"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: false
+    discard_reason: the module keeps no data; the weights are the model store's and its cache holds compiled shaders only
+    audit: [inventory, playbooks, live-refs, monitoring, contributions]

@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). The container
+# runs as an id of its own, in the model store's group (the weights are readable, never writable)
+# and, on a render-node backend, the render node's group; compose_app hands it no capability and
+# never privileged, and only the GPU device it names.
+- name: Read the model directory's group (the store's readers' group)
+  ansible.builtin.stat:
+    path: "{{ llamacpp_store_root }}/gguf/{{ llamacpp_model_repo }}"
+    follow: false
+  register: llamacpp_model_dir_stat
+  when: llamacpp_models_gid | string == ''
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Read the render node's group
+  ansible.builtin.stat:
+    path: "{{ llamacpp_dev_root }}/dri/{{ llamacpp_render_node }}"
+    follow: false
+  register: llamacpp_render_stat
+  when: llamacpp_backend in llamacpp_render_backends and llamacpp_render_gid | string == ''
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Hold the groups to ones that exist and are not root's
+  ansible.builtin.assert:
+    that:
+      - llamacpp_models_gid_value | string is match('^[1-9][0-9]{0,9}\Z')
+      - llamacpp_backend not in llamacpp_render_backends or llamacpp_render_gid_value | string is match('^[1-9][0-9]{0,9}\Z')
+    fail_msg: >-
+      llamacpp: the model store's group (the directory {{ llamacpp_store_root }}/gguf/{{ llamacpp_model_repo }},
+      run model_store first) and, for vulkan and sycl, the render node {{ llamacpp_dev_root }}/dri/{{ llamacpp_render_node }}
+      (the GPU is passed through to this guest) must exist with a group other than root's, or set
+      llamacpp_models_gid and llamacpp_render_gid
+  vars:
+    llamacpp_models_gid_value: "{{ llamacpp_models_gid if llamacpp_models_gid | string != '' else (llamacpp_model_dir_stat.stat.gid | default('')) }}"
+    llamacpp_render_gid_value: "{{ llamacpp_render_gid if llamacpp_render_gid | string != '' else (llamacpp_render_stat.stat.gid | default('')) }}"
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    llamacpp_app:
+      compose_app_name: llamacpp
+      compose_app_dir: "{{ llamacpp_dir }}"
+      compose_app_data_dir: "{{ llamacpp_data_root }}"
+      compose_app_export_dir: "{{ llamacpp_data_root }}/export"
+      compose_app_owner: "{{ llamacpp_owner }}"
+      compose_app_group: "{{ llamacpp_gid }}"
+      compose_app_bind_extra:
+        - path: "{{ llamacpp_model_dir }}"
+          reason: the model store's directory of the one GGUF entry served, mounted read-only
+      compose_app_spec:
+        services:
+          llamacpp: "{{ llamacpp_service_base | combine(llamacpp_gpu_extra) | combine({'group_add': llamacpp_groups}) }}"
+  vars:
+    llamacpp_models_gid_value: "{{ llamacpp_models_gid if llamacpp_models_gid | string != '' else (llamacpp_model_dir_stat.stat.gid | default('')) }}"
+    llamacpp_render_gid_value: "{{ llamacpp_render_gid if llamacpp_render_gid | string != '' else (llamacpp_render_stat.stat.gid | default('')) }}"
+    llamacpp_service_base:
+      image: "{{ llamacpp_repository }}"
+      tag: "{{ llamacpp_tag }}"
+      digest: "{{ llamacpp_digest }}"
+      # the unit is the one starter: a restart policy would bring the container back without the
+      # power-cap and byte checks that run before every start
+      restart: "no"
+      user: "{{ llamacpp_uid | int }}:{{ llamacpp_gid | int }}"
+      command: "{{ llamacpp_command }}"
+      environment:
+        HOME: "{{ llamacpp_container_cache_dir }}"
+        XDG_CACHE_HOME: "{{ llamacpp_container_cache_dir }}"
+        LLAMA_CACHE: "{{ llamacpp_container_cache_dir }}/llama"
+      ports: ["{{ llamacpp_bind }}:{{ llamacpp_port | int }}:{{ llamacpp_container_port }}"]
+      volumes:
+        - "{{ llamacpp_model_dir }}:{{ llamacpp_container_models_dir }}:ro"
+        - "{{ llamacpp_data_root }}/cache:{{ llamacpp_container_cache_dir }}"
+      healthcheck:
+        test: [CMD, curl, -f, "http://localhost:{{ llamacpp_container_port }}/health"]
+        interval: 30s
+        timeout: 5s
+        retries: 5
+        start_period: 600s
+    # a GPU is handed over by its device only (a cpu backend has none); the groups are numbers
+    llamacpp_gpu_extra: >-
+      {{ {'devices': ['/dev/dri/' ~ llamacpp_render_node]} if llamacpp_backend in llamacpp_render_backends
+         else {'devices': ['nvidia.com/gpu=' ~ (llamacpp_gpu_index | int)]} if llamacpp_backend == 'cuda'
+         else {} }}
+    llamacpp_groups: >-
+      {{ ([llamacpp_render_gid_value | int] if llamacpp_backend in llamacpp_render_backends else [])
+         + [llamacpp_models_gid_value | int] }}
+  tags: [health, backup, restore, export, upgrade]

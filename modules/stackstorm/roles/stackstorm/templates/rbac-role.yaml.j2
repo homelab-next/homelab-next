@@ -1,0 +1,11 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role stackstorm); one role per file.
+---
+name: "{{ item.name }}"
+description: "{{ item.description }}"
+enabled: true
+permission_grants:
+{% for g in item.grants %}
+  - {% if g.resource_uid is defined %}resource_uid: "{{ g.resource_uid }}"
+    {% endif %}permission_types: [{{ g.permission_types | map('to_json') | join(', ') }}]
+{% endfor %}

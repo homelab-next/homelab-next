@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy; the API answers over HTTPS, verified against the lab
+# CA, and REFUSES a request with no credential; with the credential it reports the expected version,
+# a single node (not clustered), no invalid component and no failed registry sync, the parameter
+# context holds every parameter (sensitive ones sensitive), the registry client is present exactly
+# when one is configured, and the smoke flow is running and has written its file lately. Nothing is
+# written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: nifi
+        compose_app_dir: "{{ nifi_app.compose_app_dir }}"
+        compose_app_spec: "{{ nifi_app.compose_app_spec }}"
+    - name: The API refuses an anonymous request, and with the credential reports the expected state
+      ansible.builtin.include_tasks: api.yml
+      vars:
+        nifi_api_command: health
+    - name: Read the smoke flow's file
+      ansible.builtin.stat:
+        path: "{{ nifi_data_root }}/smoke/heartbeat.txt"
+      register: nifi_heartbeat
+      when: nifi_smoke_enabled | bool
+    - name: Read the time now, on the host
+      ansible.builtin.command:
+        argv: [date, -u, +%s]
+      register: nifi_now
+      changed_when: false
+      check_mode: false
+      when: nifi_smoke_enabled | bool
+    - name: The smoke flow has written its file lately
+      ansible.builtin.assert:
+        that:
+          - nifi_heartbeat.stat.exists
+          - (nifi_now.stdout | int) - (nifi_heartbeat.stat.mtime | int) < (nifi_smoke_max_age_minutes | int) * 60
+        fail_msg: >-
+          nifi: the smoke flow's file {{ nifi_data_root }}/smoke/heartbeat.txt is missing or older than
+          {{ nifi_smoke_max_age_minutes }} minutes: the flow is not running, or cannot write
+      when: nifi_smoke_enabled | bool
+  tags: [health]

@@ -32,8 +32,10 @@ criteria:
     - 0
   trigger.body.data.retried_by_run_id:
     type: nexists
+    pattern: ''
   trigger.body.data.auto_retry_scheduled:
     type: nexists
+    pattern: ''
 action:
   ref: homelabnext.agent_job_retry
   parameters:

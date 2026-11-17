@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# What the rendered tree must be before anything of it is staged (also the readiness hook's check).
+- name: Read the pack's provenance (the binding digest and each pack's mode)
+  ansible.builtin.set_fact:
+    stackstorm_provenance: "{{ lookup('ansible.builtin.file', stackstorm_pack_src ~ '/provenance.json') | from_json }}"
+    stackstorm_pack_meta: "{{ lookup('ansible.builtin.file', stackstorm_pack_src ~ '/' ~ stackstorm_pack_ref ~ '/pack.yaml') | from_yaml }}"
+  tags: [readiness]
+
+- name: Refuse a tree that is not the rendered pack, or a mode the site did not approve
+  ansible.builtin.assert:
+    that:
+      - stackstorm_provenance is mapping
+      - stackstorm_provenance.binding is defined and stackstorm_provenance.binding is match('^sha256:[0-9a-f]{64}\Z')
+      - stackstorm_provenance.packs is mapping and stackstorm_provenance.packs | length > 0
+      - stackstorm_provenance.packs.values() | map(attribute='digest') | reject('match', stackstorm_digest_pattern) | list | length == 0
+      - stackstorm_provenance.packs.values() | map(attribute='mode') | difference(['shadow', 'live']) | length == 0
+      - stackstorm_pack_meta.ref == stackstorm_pack_ref
+      - stackstorm_pack_meta.version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      # shadow-first: a pack with a live rule is deployed only when the site says so on purpose
+      - stackstorm_allow_live_rules | bool or (stackstorm_provenance.packs.values() | map(attribute='mode') | select('equalto', 'live') | list | length == 0)
+    fail_msg: >-
+      stackstorm: {{ stackstorm_pack_src }} is not the rendered pack (provenance.json with a binding
+      digest, one digest and a mode per pack; homelabnext/pack.yaml with ref {{ stackstorm_pack_ref }}),
+      or it carries a live rule and stackstorm_allow_live_rules is not set. Shadow first: a live rule needs a
+      reviewed promotion in the binding (docs/stackstorm.md, "Shadow, then live") and this setting
+  tags: [readiness]
+
+# The runtime decides shadow or live from each pinned/<name>.json (st2_runtime.step), not from
+# provenance.json, so the gate reads the pins: what the runtime obeys is what is checked.
+- name: Read the mode every pin gives its pack (what the runtime obeys)
+  ansible.builtin.set_fact:
+    stackstorm_pin_modes: >-
+      {%- set out = {} -%}
+      {%- for f in lookup('ansible.builtin.fileglob', stackstorm_pack_src ~ '/' ~ stackstorm_pack_ref ~ '/pinned/*.json', wantlist=True) | sort -%}
+      {%-   set _ = out.update({(f | basename | replace('.json', '')): (lookup('ansible.builtin.file', f) | from_json).mode | default('')}) -%}
+      {%- endfor -%}
+      {{ out }}
+  tags: [readiness]
+
+- name: Refuse a pin that is live unless the site allowed live rules AND turned that rule on
+  ansible.builtin.assert:
+    that:
+      - stackstorm_pin_modes | length > 0
+      - stackstorm_pin_modes.values() | list | difference(['shadow', 'live']) | length == 0
+      - >-
+        stackstorm_pin_modes | dict2items | selectattr('value', 'equalto', 'live')
+        | map(attribute='key') | map('regex_replace', '^', 'on_') | list
+        | difference(stackstorm_enabled_rules if (stackstorm_allow_live_rules | bool) else []) | length == 0
+    fail_msg: >-
+      stackstorm: a pinned/*.json of the rendered pack is not shadow ({{ stackstorm_pin_modes }}). The runtime obeys the
+      pins, not provenance.json: shadow first. A pin may be live only when stackstorm_allow_live_rules is set AND its
+      rule (on_<pin name>) is in stackstorm_enabled_rules (docs/stackstorm.md, "Shadow, then live")
+  tags: [readiness]
+
+- name: List the rendered rules
+  ansible.builtin.find:
+    paths: "{{ stackstorm_pack_src }}/{{ stackstorm_pack_ref }}/rules"
+    patterns: "*.yaml"
+    file_type: file
+  delegate_to: localhost
+  become: false
+  register: stackstorm_rule_files
+  tags: [readiness]
+
+- name: Every rule asked to be enabled exists in the rendered pack
+  ansible.builtin.assert:
+    that:
+      - stackstorm_enabled_rules | difference(stackstorm_rule_files.files | map(attribute='path') | map('basename') | map('regex_replace', '\.yaml\Z', '') | list) | length == 0
+    fail_msg: >-
+      stackstorm: stackstorm_enabled_rules names {{ stackstorm_enabled_rules | difference(stackstorm_rule_files.files | map(attribute='path') | map('basename') | map('regex_replace', '\.yaml\Z', '') | list) }},
+      which the rendered pack has no rule file for ({{ stackstorm_rule_files.files | map(attribute='path') | map('basename') | sort | join(', ') }})
+  tags: [readiness]
+

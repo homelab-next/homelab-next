@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes: keyed by the slot, renamed to the
+# instance the site selects; version is product.version, host the module's host role (docs/modules/
+# registry-rows.md). Internal only, no public route: HTTPS with a certificate from the lab's
+# internal CA, a sign-in of its own (auth: own). The service answers NOTHING without a credential
+# (even its version), so its health probe expects the refusal, 401: a listener that is up and
+# enforcing the sign-in. The authenticated checks (version, single-node cluster summary, controller
+# status, the smoke flow) are the role's health hook and the status hub's collector.
+services:
+  dataflow:
+    capability: dataflow
+    impl: nifi
+    host: server
+    protocol: https
+    port: 9443
+    health: {kind: http, path: /nifi-api/flow/about, expect_status: 401, interval_s: 60}
+    upstreams: [object-store, lake-catalog, lake-query, events]
+    owner: operator
+    tls: internal
+    auth: own
+    tags: [data, dataflow]
+    description: Apache NiFi, single node; HTTPS and its own sign-in. Flows write the lake and publish to the bus. No public route.
