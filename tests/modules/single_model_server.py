@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -30,6 +31,8 @@ class SingleModelServer:
         metrics: bool = True,
         reports_ctx: bool = True,
         reply_tokens: int = 3,
+        first_chat_delay: float = 0.0,
+        chat_delay: float = 0.0,
     ):
         self.model = model
         self.n_ctx = n_ctx
@@ -38,6 +41,10 @@ class SingleModelServer:
         self.metrics = metrics
         self.reports_ctx = reports_ctx
         self.reply_tokens = reply_tokens
+        # seconds the FIRST chat call takes (a cold server's warm-up) / every chat call takes
+        self.first_chat_delay = first_chat_delay
+        self.chat_delay = chat_delay
+        self._chats = 0
         self.requests: list[tuple[str, str]] = []
         self._httpd = ThreadingHTTPServer((LOOPBACK, 0), self._handler())
         self._thread: threading.Thread | None = None
@@ -104,6 +111,10 @@ class SingleModelServer:
                 if self.path != "/v1/chat/completions":
                     self._send(404, {"error": {"code": 404, "message": "not found"}})
                     return
+                srv._chats += 1
+                delay = srv.chat_delay + (srv.first_chat_delay if srv._chats == 1 else 0.0)
+                if delay:
+                    time.sleep(delay)
                 words = ["Hello", "there", "friend"]
                 k = max(1, min(int(req.get("max_tokens") or 64), srv.reply_tokens))
                 text = " ".join(words[:k])
