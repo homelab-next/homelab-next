@@ -83,6 +83,18 @@
   check_mode: false
   when: compose_app_start | bool and compose_app_cgroup_parent | length > 0
 
+# Under --check the limits play only reports the slice file it would write, so on a fresh guest there
+# is no unit for the slice yet: the dry run says so instead of failing, and a real run (which
+# installs the unit first, or stops here) is judged as ever.
+- name: Say the slice's unit is not installed yet (--check, the limits play has not written it)
+  ansible.builtin.debug:
+    msg: >-
+      {{ compose_app_cgroup_parent }} is not installed yet (check mode): the module's limits play
+      writes it, and a real run refuses to start the containers unless it is there
+  when: >-
+    compose_app_start | bool and compose_app_cgroup_parent | length > 0 and ansible_check_mode
+    and 'LoadState=loaded' not in compose_app_slice_unit.stdout_lines
+
 - name: Refuse a slice that has no unit file (it would carry no limits)
   ansible.builtin.assert:
     that:
@@ -91,7 +103,9 @@
     fail_msg: >-
       {{ compose_app_cgroup_parent }} has no unit file: install the module limits first (modules.yml,
       tag hnx_limits) or the containers would run in an empty slice with no limits
-  when: compose_app_start | bool and compose_app_cgroup_parent | length > 0
+  when: >-
+    compose_app_start | bool and compose_app_cgroup_parent | length > 0
+    and not (ansible_check_mode and 'LoadState=loaded' not in compose_app_slice_unit.stdout_lines)
 
 - name: Start the application
   ansible.builtin.command:
