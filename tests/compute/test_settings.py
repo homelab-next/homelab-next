@@ -261,6 +261,41 @@ def test_the_example_lab_binds_every_needed_control_and_sets_its_inputs(capsys, 
     }
 
 
+def test_a_one_guest_baseline_sets_never_reboot_and_the_reboot_alert_for_a_gpu_guest(
+    tmp_path, monkeypatch
+):
+    """A guest whose cards must never be restarted warm: a baseline that extends the shared one
+    overrides the parent's reboot window (`never`) and turns on the reboot alert; the guest's host
+    variables carry both, while every other guest keeps the shared window."""
+    monkeypatch.delenv("HNX_ROLES_DIR")  # the repository's own roles (they type the settings)
+    guests = tmp_path / "guests"
+    shutil.copytree(EXAMPLE, guests)
+    p = guests / "_baselines.yml"
+    doc = yaml.safe_load(p.read_text())
+    doc["baselines"]["gpu-server"] = {
+        "description": "A guest whose GPUs must never be restarted warm: it never reboots by itself.",
+        "extends": ["server"],
+        "controls": [
+            {"id": "patching", "with": {"reboot_time": "never"}},
+            {"id": "restart-required", "with": {"alert_reboot": True}},
+        ],
+    }
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    g = guests / "bus-core.yml"
+    gd = yaml.safe_load(g.read_text())
+    gd["baseline"] = {"names": ["gpu-server"]}
+    g.write_text(yaml.safe_dump(gd, sort_keys=False))
+    zones, domain = open_site(EXAMPLE_SITE)
+    f = load_fleet(guests, zones, domain=domain, flows=site_flows(EXAMPLE_SITE))
+    hosts = render(f, "inventory")
+    gpu = yaml.safe_load(hosts["host_vars/bus-core.example.internal.yml"])
+    assert gpu["unattended_upgrades_reboot_time"] == "never"
+    assert gpu["needrestart_alert_reboot"] is True and gpu["needrestart_notify"] == "auto"
+    other = yaml.safe_load(hosts["host_vars/infer-core.example.internal.yml"])
+    assert other["unattended_upgrades_reboot_time"] == "04:30"
+    assert "needrestart_alert_reboot" not in other
+
+
 # ---------------------------------------------------------------- without the roles
 def test_a_bare_install_skips_the_settings_check_but_a_named_roles_dir_must_hold_the_specs(
     tmp_path, monkeypatch
