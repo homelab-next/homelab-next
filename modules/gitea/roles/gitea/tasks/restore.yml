@@ -85,14 +85,22 @@
     # The accounts' two-factor seeds and stored credentials are encrypted with the application
     # secrets: a restore under different ones restores and passes every other check and is unusable.
     # The manifest holds HMAC fingerprints of the source's (never the values); the configured ones
-    # must produce the same.
-    - name: The configured application secrets are the source's (a refusal names the secret, never a value)
+    # must produce the same. The one exception is a source that ran on the product's built-in
+    # default SECRET_KEY (never set): that key cannot be carried, so the target takes a fresh one
+    # (gitea_app_key_origin: generated), accepted only when the export carries the dump's proof that
+    # nothing was encrypted under the default and the archive itself holds no such row (checked here
+    # again); generated is refused for any other export, and an export on the default key is refused
+    # unless the origin is generated.
+    - name: The configured application secrets fit the export (a refusal names the secret, never a value)
       ansible.builtin.include_tasks: helper.yml
       vars:
-        gitea_helper_cmd: secretfp
+        gitea_helper_cmd: appkey
         gitea_helper_extra:
           values: "{{ gitea_app_keymat }}"
-          expect: "{{ gitea_want.app_key_fingerprints | default(none) }}"
+          origin: "{{ gitea_app_key_origin }}"
+          zip: "{{ gitea_restore_source }}/dump.zip"
+          # the export's whole manifest: the helper reads the key's source, the fingerprints and the proof
+          manifest: "{{ gitea_want }}"
     - name: Restore with the service stopped, verify, and only then start
       block:
         - name: Stop the service

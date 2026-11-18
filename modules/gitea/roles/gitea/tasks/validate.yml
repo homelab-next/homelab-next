@@ -36,10 +36,12 @@
       - >-
         [gitea_dir, gitea_data_root] | reject('match', gitea_path_pattern) | list | length == 0
       - gitea_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - gitea_app_key_origin in ['source', 'generated']
     fail_msg: >-
       forge: a registry id, an internal DNS name, the image pinned by tag and digest (a rootless
       numbered release), the guest's IPv4 address to publish on (not all interfaces), two different
       ports, container ids of 1000 or more, an administrator's name, distinct secret: references, at
       least one SSH host key of type ed25519, rsa or ecdsa, an identity provider's issuer (https) and
-      client when oidc is on, absolute canonical directories and a memory limit like 512m
+      client when oidc is on, absolute canonical directories, a memory limit like 512m and
+      gitea_app_key_origin source or generated
   tags: [health, backup, restore, export, upgrade]

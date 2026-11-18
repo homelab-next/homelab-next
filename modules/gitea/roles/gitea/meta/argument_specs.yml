@@ -150,6 +150,16 @@ argument_specs:
         type: bool
         description: true lets a restore take an export that lists no account or repository.
         default: false
+      gitea_app_key_origin:
+        type: str
+        choices: [source, generated]
+        description: >-
+          Where the SECRET_KEY behind gitea_app_key_ref comes from. source (the default) is the source
+          instance's own key, copied (a restore proves it by fingerprint). generated is a fresh key, for
+          the one case where the source ran on the product's built-in default key (its SECRET_KEY was
+          never set) and its export proves that nothing is encrypted under it; a restore refuses
+          generated for any other export.
+        default: source
   readiness:
     short_description: The container engine is ready and every credential resolves in its form.
     options:
@@ -299,6 +309,16 @@ argument_specs:
         type: bool
         description: true lets a restore take an export that lists no account or repository.
         default: false
+      gitea_app_key_origin:
+        type: str
+        choices: [source, generated]
+        description: >-
+          Where the SECRET_KEY behind gitea_app_key_ref comes from. source (the default) is the source
+          instance's own key, copied (a restore proves it by fingerprint). generated is a fresh key, for
+          the one case where the source ran on the product's built-in default key (its SECRET_KEY was
+          never set) and its export proves that nothing is encrypted under it; a restore refuses
+          generated for any other export.
+        default: source
   health:
     short_description: Read-only checks of the running service.
     options:
@@ -448,6 +468,16 @@ argument_specs:
         type: bool
         description: true lets a restore take an export that lists no account or repository.
         default: false
+      gitea_app_key_origin:
+        type: str
+        choices: [source, generated]
+        description: >-
+          Where the SECRET_KEY behind gitea_app_key_ref comes from. source (the default) is the source
+          instance's own key, copied (a restore proves it by fingerprint). generated is a fresh key, for
+          the one case where the source ran on the product's built-in default key (its SECRET_KEY was
+          never set) and its export proves that nothing is encrypted under it; a restore refuses
+          generated for any other export.
+        default: source
   export:
     short_description: Stop the service, dump the instance, record counts and per-repository refs digests, start it again.
     options:
@@ -597,6 +627,16 @@ argument_specs:
         type: bool
         description: true lets a restore take an export that lists no account or repository.
         default: false
+      gitea_app_key_origin:
+        type: str
+        choices: [source, generated]
+        description: >-
+          Where the SECRET_KEY behind gitea_app_key_ref comes from. source (the default) is the source
+          instance's own key, copied (a restore proves it by fingerprint). generated is a fresh key, for
+          the one case where the source ran on the product's built-in default key (its SECRET_KEY was
+          never set) and its export proves that nothing is encrypted under it; a restore refuses
+          generated for any other export.
+        default: source
   backup:
     short_description: The export, then compose_app's backup manifest.
     options:
@@ -746,6 +786,16 @@ argument_specs:
         type: bool
         description: true lets a restore take an export that lists no account or repository.
         default: false
+      gitea_app_key_origin:
+        type: str
+        choices: [source, generated]
+        description: >-
+          Where the SECRET_KEY behind gitea_app_key_ref comes from. source (the default) is the source
+          instance's own key, copied (a restore proves it by fingerprint). generated is a fresh key, for
+          the one case where the source ran on the product's built-in default key (its SECRET_KEY was
+          never set) and its export proves that nothing is encrypted under it; a restore refuses
+          generated for any other export.
+        default: source
   restore:
     short_description: Restore an export onto the stopped service, verify it, then start it.
     options:
@@ -895,6 +945,16 @@ argument_specs:
         type: bool
         description: true lets a restore take an export that lists no account or repository.
         default: false
+      gitea_app_key_origin:
+        type: str
+        choices: [source, generated]
+        description: >-
+          Where the SECRET_KEY behind gitea_app_key_ref comes from. source (the default) is the source
+          instance's own key, copied (a restore proves it by fingerprint). generated is a fresh key, for
+          the one case where the source ran on the product's built-in default key (its SECRET_KEY was
+          never set) and its export proves that nothing is encrypted under it; a restore refuses
+          generated for any other export.
+        default: source
       gitea_restore_source:
         type: path
         description: The directory of an export (restore only; no default).
@@ -1048,6 +1108,16 @@ argument_specs:
         type: bool
         description: true lets a restore take an export that lists no account or repository.
         default: false
+      gitea_app_key_origin:
+        type: str
+        choices: [source, generated]
+        description: >-
+          Where the SECRET_KEY behind gitea_app_key_ref comes from. source (the default) is the source
+          instance's own key, copied (a restore proves it by fingerprint). generated is a fresh key, for
+          the one case where the source ran on the product's built-in default key (its SECRET_KEY was
+          never set) and its export proves that nothing is encrypted under it; a restore refuses
+          generated for any other export.
+        default: source
       gitea_target_image:
         type: str
         description: The image to upgrade to, pinned by tag and digest (upgrade only; no default).
