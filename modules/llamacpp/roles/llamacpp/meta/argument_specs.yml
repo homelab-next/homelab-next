@@ -192,6 +192,10 @@ argument_specs:
       llamacpp_start: *a_start
       llamacpp_validate_with_docker: *a_validate_with_docker
       llamacpp_health_timeout: *a_health_timeout
+      llamacpp_first_request_timeout:
+        type: int
+        description: Seconds the one warm-up request health sends before its timed probes waits (a cold first request is slow).
+        default: 180
   readiness:
     short_description: Fail unless the container engine is ready, the weights and their listing are in the store and the render node is there.
     options:

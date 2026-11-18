@@ -84,3 +84,6 @@ llamacpp_start_timeout_s: 1800
 llamacpp_start: true
 llamacpp_validate_with_docker: true
 llamacpp_health_timeout: 20
+# the one warm-up request health sends before its timed probes: the first request after a cold load
+# is far slower than a warm one (25.5 s measured for a 177B split model on 4 GPUs)
+llamacpp_first_request_timeout: 180
