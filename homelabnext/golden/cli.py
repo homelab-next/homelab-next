@@ -136,11 +136,42 @@ def _key_env(p: argparse.ArgumentParser, what: str) -> None:
         action="store_true",
         help="send the key over plain http to a non-loopback host (lab only)",
     )
+    p.add_argument(
+        "--timeout",
+        type=_seconds,
+        default=DEFAULT_CLIENT_TIMEOUT,
+        metavar="SECONDS",
+        help="live: how long one model call may take (default %(default)s); a role with a large "
+        "output budget (params.max_tokens) needs it to cover a whole reply",
+    )
+
+
+#: ModelClient's own default; a live run with a large output budget passes a longer one
+DEFAULT_CLIENT_TIMEOUT = 30.0
+
+
+def _seconds(text: str) -> float:
+    """A positive, finite number of seconds (``--timeout``)."""
+    import math
+
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number of seconds") from None
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError(f"{text!r}: a positive number of seconds")
+    return value
 
 
 def _client(args: argparse.Namespace) -> dict[str, Any]:
-    """The ``ModelClient`` keywords the key options name: ``api_key``, ``allow_plaintext``."""
-    return {"api_key": _api_key(args), "allow_plaintext": args.allow_plaintext}
+    """The ``ModelClient`` keywords the key options name: ``api_key``, ``allow_plaintext`` and
+    ``timeout``. The timeout is not a report input: it decides how long the harness waits, not
+    what a reply is judged to be (a call that times out is an error and fails its sample)."""
+    return {
+        "api_key": _api_key(args),
+        "allow_plaintext": args.allow_plaintext,
+        "timeout": args.timeout,
+    }
 
 
 def _api_key(args: argparse.Namespace) -> str | None:

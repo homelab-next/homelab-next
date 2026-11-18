@@ -776,7 +776,10 @@ before it answers fills a small budget with reasoning and returns an empty answe
 inconclusive and fails the sample; a role for such a model declares the budget it is served with.
 The pins report records the budget in each chat entry (`max_tokens`), and `hnx golden pins check`
 calls an entry run at another budget stale (an entry without one ran at the suite's). A budget
-under 16, or one that does not fit the role's `max_context_tokens`, is refused.
+under 16, or one that does not fit the role's `max_context_tokens`, is refused. A live run's client waits 30 s
+for a reply by default; `--timeout SECONDS` (`hnx golden pins report`, `hnx golden canary`) gives
+a large budget the time a whole reply takes (a call that times out is an error and fails its
+sample). The timeout is not a report input.
 
 A sample fails on any of these:
 
