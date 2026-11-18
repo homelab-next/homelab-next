@@ -1436,8 +1436,21 @@ def module_selection_schema() -> dict[str, Any]:
         ),
         "description": "Per agent key the module contributes (an unknown key is refused by the loader).",
     }
+    raised = {
+        "type": "object",
+        "propertyNames": pat(SLUG, None, 64),
+        "additionalProperties": obj(
+            {
+                "cpu": {"type": "number", "minimum": 0.1, "maximum": 256},
+                "memory_mb": {"type": "integer", "minimum": 16},
+                "disk_gb": {"type": "integer", "minimum": 0},
+            },
+            minProperties=1,
+        ),
+        "description": "<host role> -> the footprint this placement runs with: cpu, memory_mb and disk_gb only, each replacing the module's declared value for this one placement (count still multiplies it). The module's own footprint is the floor; the raised one is what the guest and the host's sum are judged by and what the slice takes as its limits (loader; docs/modules/slots.md).",
+    }
     binding = obj(
-        {"placement": role_map, "config": config, "agents": agents},
+        {"placement": role_map, "footprint": raised, "config": config, "agents": agents},
         desc="One module's placement, real config values and lane bindings.",
     )
     capacity = obj(
@@ -1484,6 +1497,7 @@ def module_selection_schema() -> dict[str, Any]:
             "provider": mid,
             "instance": pat(SLUG, None, 64),
             "placement": role_map,
+            "footprint": raised,
             "config": config,
         },
         ["provider", "instance"],

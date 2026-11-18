@@ -109,7 +109,7 @@ argument_specs:
         default: []
       llamacpp_extra_args: &a_extra_args
         type: dict
-        description: 'Throughput settings by name, never a raw flag: batch_size (-b), ubatch_size (-ub, at most batch_size), kv_unified (true: one shared cache of llamacpp_context_size tokens), split_mode (-sm none|layer|row) and tensor_split (-ts, per-GPU proportions); the first three in generate mode only, the last two on a GPU backend only.'
+        description: 'Throughput settings by name, never a raw flag: batch_size (-b), ubatch_size (-ub, at most batch_size), kv_unified (true: one shared cache of llamacpp_context_size tokens), split_mode (-sm none|layer|row), tensor_split (-ts, per-GPU proportions), threads (-t) and threads_batch (-tb), CPU threads 1 to 256; batch_size, ubatch_size and kv_unified in generate mode only, split_mode and tensor_split on a GPU backend only.'
         default: {}
       llamacpp_models_gid: &a_models_gid
         type: str

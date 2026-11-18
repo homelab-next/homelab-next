@@ -1764,21 +1764,94 @@ def _interface_problems(sel, mods) -> list[str]:
     return out
 
 
-def _placed(site, sel):
-    """(module, instance, host role, footprint, site host) for everything placed."""
-    rows = []
-    for cs in site["slots"].values():
+#: the footprint dimensions a site may raise per placement (a selection entry's ``footprint``):
+#: GPU memory and named resources stay the module's own
+RAISABLE = ("cpu", "memory_mb", "disk_gb")
+
+
+def _entries(site):
+    """(module, instance, selection path, entry) for every slot choice, feature and core entry."""
+    for slot, cs in site["slots"].items():
         for c in cs if isinstance(cs, list) else []:
-            for role, host in c.get("placement", {}).items():
-                rows.append((c["provider"], c["instance"], role, host))
+            yield c["provider"], c["instance"], f"slots.{slot}", c
     for sec in ("features", "core"):
         for name, f in site.get(sec, {}).items():
-            for role, host in f.get("placement", {}).items():
-                rows.append((name, None, role, host))
+            yield name, None, f"{sec}.{name}", f
+
+
+def _raises(site) -> dict[tuple, list[tuple[str, Doc]]]:
+    """(module, instance, host role) -> [(selection path, raised footprint)], in file order."""
+    out: dict[tuple, list[tuple[str, Doc]]] = {}
+    for mod, inst, where, e in _entries(site):
+        for role, fp in (e.get("footprint") or {}).items():
+            out.setdefault((mod, inst, role), []).append((where, fp))
+    return out
+
+
+def _number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _raised(h: Doc, fps: list[Doc]) -> Doc:
+    """The host role with its footprint raised: each given dimension of :data:`RAISABLE`
+    replaces the declared one, never below it (the module's footprint is its minimum, so a
+    caller that skipped :func:`raise_problems` still never renders less).  A value that is not
+    a number is carried as it is, for the limits renderer to refuse."""
+    fp = dict(h["footprint"])
+    for raised in fps:
+        for dim in RAISABLE:
+            if dim not in raised:
+                continue
+            v, own = raised[dim], h["footprint"].get(dim)
+            if _number(v) and _number(own):
+                fp[dim] = max(fp[dim], v) if _number(fp[dim]) else fp[dim]
+            else:
+                fp[dim] = v
+    return {**h, "footprint": fp}
+
+
+def _placed(site, sel):
+    """(module, instance, host role, host role as placed, site host) for everything placed: the
+    module's declared host role itself, or a copy whose footprint the selection raised."""
+    rows = []
+    for mod, inst, _where, e in _entries(site):
+        for role, host in e.get("placement", {}).items():
+            rows.append((mod, inst, role, host))
+    raises = _raises(site)
     out = []
     for mod, inst, role, host in sorted(set(rows), key=str):
         h = next((x for x in sel[mod]["requires"].get("hosts", []) if x["role"] == role), None)
+        if h is not None and (mod, inst, role) in raises:
+            h = _raised(h, [fp for _, fp in raises[(mod, inst, role)]])
         out.append((mod, inst, role, h, host))
+    return out
+
+
+def raise_problems(site: Doc, sel: dict[str, Doc]) -> list[str]:
+    """A selection's raised footprints: each names a host role its module places for that
+    instance, is never below the module's own footprint (its minimum), and one placement is not
+    raised twice to different values.  Whether the raised footprint fits the guest and the
+    host's sum is :func:`footprint_problems`' and the guest rules' (they read :func:`_placed`)."""
+    out = []
+    placed = {(m, i, r) for m, i, r, _, _ in _placed(site, sel)}
+    for (mod, inst, role), given in sorted(_raises(site).items(), key=str):
+        if mod not in sel:
+            continue  # an unselected module is reported where it is named
+        who = f"{mod} ({inst})" if inst else mod
+        h = next((x for x in sel[mod]["requires"].get("hosts", []) if x["role"] == role), None)
+        if h is None or (mod, inst, role) not in placed:
+            out += [f"{w}: {who}: footprint names {role}, not a placed host role" for w, _ in given]
+            continue
+        if len({tuple(sorted(fp.items())) for _, fp in given}) > 1:
+            out.append(f"{who}/{role}: footprint raised twice, differently")
+        for where, fp in given:
+            for dim in RAISABLE:
+                v, own = fp.get(dim), h["footprint"].get(dim)
+                if _number(v) and _number(own) and v < own:
+                    out.append(
+                        f"{where}: {who}/{role}: footprint {dim} {v:g} is below the module's own "
+                        f"{own:g}, its minimum"
+                    )
     return out
 
 
@@ -1820,7 +1893,7 @@ def placement_problems(site: Doc, sel: dict[str, Doc]) -> list[str]:
             out.append(
                 f"{k[0]} ({k[1] or sel[k[0]]['kind']}): every host role is placed exactly once"
             )
-    return out + footprint_problems(site, placed)
+    return out + raise_problems(site, sel) + footprint_problems(site, placed)
 
 
 def footprint_problems(site: Doc, placed) -> list[str]:

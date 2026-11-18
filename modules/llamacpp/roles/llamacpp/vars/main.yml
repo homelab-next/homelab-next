@@ -75,6 +75,8 @@ llamacpp_extra_flags:
   kv_unified: --kv-unified
   split_mode: -sm
   tensor_split: -ts
+  threads: -t
+  threads_batch: -tb
 llamacpp_generate_only_args: [batch_size, ubatch_size, kv_unified]
 llamacpp_gpu_only_args: [split_mode, tensor_split]
 llamacpp_split_modes: [none, layer, row]
@@ -99,7 +101,11 @@ llamacpp_command: >-
      + (['-b', llamacpp_extra_args.batch_size | string] if llamacpp_extra_args.batch_size is defined else [])
      + (['-ub', llamacpp_extra_args.ubatch_size | string] if llamacpp_extra_args.ubatch_size is defined else [])
      + (['-sm', llamacpp_extra_args.split_mode] if llamacpp_extra_args.split_mode is defined else [])
-     + (['-ts', llamacpp_extra_args.tensor_split | map('string') | join(',')] if llamacpp_extra_args.tensor_split is defined else []) }}
+     + (['-ts', llamacpp_extra_args.tensor_split | map('string') | join(',')] if llamacpp_extra_args.tensor_split is defined else [])
+     + (['-t', llamacpp_extra_args.threads | string] if llamacpp_extra_args.threads is defined else [])
+     + (['-tb', llamacpp_extra_args.threads_batch | string] if llamacpp_extra_args.threads_batch is defined else []) }}
+# the most -t / -tb may be (the manifest schema's most vCPUs a footprint may have)
+llamacpp_threads_max: 256
 # the precheck's arguments: the power rule alone (the health hook), and with the weights (the unit)
 llamacpp_precheck_power: >-
   {{ ['--backend', llamacpp_backend, '--max-watts', llamacpp_power_cap_max_watts | string]

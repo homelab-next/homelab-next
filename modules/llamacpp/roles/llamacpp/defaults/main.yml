@@ -63,7 +63,9 @@ llamacpp_gpu_indices: []
 # kv_unified (true: the slots share ONE KV cache of llamacpp_context_size tokens, -c is that
 # total and each slot may use all of it; default false: each slot gets a fixed
 # llamacpp_context_size), split_mode (-sm none|layer|row, how a model spreads over several GPUs)
-# and tensor_split (-ts, a list of per-GPU proportions). batch_size, ubatch_size and kv_unified
+# and tensor_split (-ts, a list of per-GPU proportions), threads and threads_batch (-t and -tb,
+# the CPU threads for generation and for prompt processing, 1 to 256: keep them within the
+# placement's footprint cpu, the slice's CPUQuota, or they contend for it). batch_size, ubatch_size and kv_unified
 # are generate mode only (decision mode fixes them); split_mode and tensor_split need a GPU backend.
 llamacpp_extra_args: {}
 # the model store's group id (read from the model's directory when empty): the container reads the
