@@ -19,6 +19,7 @@ import hashlib
 import os
 import pwd
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -932,6 +933,20 @@ def test_health_waits_for_containers_that_are_still_starting(tmp_path):
     with engine() as srv:
         v = health_vars(tmp_path, srv, load_timeout=2, load_poll_s=1)
         r = run_role(tmp_path, ROLE, "health", v, env=env)
+    assert r.returncode != 0 and "starting" in r.stdout + r.stderr
+
+
+def test_health_in_check_mode_does_not_wait_out_the_load_timeout(tmp_path):
+    """The containers' wait runs under --check (read-only), and a first install has none that are
+    healthy: it makes one attempt and the strict check reports, instead of stalling for
+    llamacpp_load_timeout."""
+    env = _fakes(tmp_path, health="starting")
+    with engine() as srv:
+        v = health_vars(tmp_path, srv, load_timeout=900, load_poll_s=5)
+        t0 = time.monotonic()
+        r = run_role(tmp_path, ROLE, "health", v, env=env, check=True)
+        took = time.monotonic() - t0
+    assert took < 60, took
     assert r.returncode != 0 and "starting" in r.stdout + r.stderr
 
 
