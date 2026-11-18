@@ -212,7 +212,9 @@ def test_an_overlay_placing_caddy_on_a_guest_checks_clean_and_renders(tmp_path, 
     assert [(p["name"].rsplit("/", 1)[1], p["tasks_from"]) for p in pre] == [
         ("caddy", "readiness"), ("caddy_auth_proxy", "readiness")
     ]  # fmt: skip
-    assert play["vars"] == {"hnx_module_slice": "hnx-caddy-edge.slice"}
+    assert {k: v for k, v in play["vars"].items() if k != "hnx_module_footprint"} == {
+        "hnx_module_slice": "hnx-caddy-edge.slice"
+    }
     assert (dest / "checks" / "caddy.yml").is_file()
 
 
