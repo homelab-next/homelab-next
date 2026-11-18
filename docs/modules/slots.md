@@ -85,7 +85,8 @@ and one placement raised twice to different values; everything else reads the ra
 (`homelabnext.modules.rules._placed`): the guest alone, the host's sum over every placement on
 it, and the slice's limits, so the accounting stays one sum and a raise takes room from nobody
 unseen. The module play also runs under the footprint as placed (`hnx_module_footprint: {cpu,
-memory_mb, disk_gb}`, the largest of the instances sharing the group and slice): a role that checks
+memory_mb, disk_gb}`, per host: the sum its slice is given, so instances on different hosts
+each get their own host's, and the play is split per host when they differ): a role that checks
 its own budget defaults to it (the automation provider's memory budget, the inference provider's
 threads advisory) instead of keeping a copy that cannot follow a raise.
 
