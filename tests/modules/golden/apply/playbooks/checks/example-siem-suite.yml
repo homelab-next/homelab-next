@@ -18,6 +18,9 @@
   hosts: mod_example_siem_suite_suite
   become: true
   gather_facts: false
+  vars:
+    hnx_module_slice: "hnx-example_siem_suite-suite.slice"
+    hnx_module_footprint: {cpu: 4, disk_gb: 250, memory_mb: 3072}
   tasks:
     - name: "readiness: example_siem_suite"
       ansible.builtin.include_role:

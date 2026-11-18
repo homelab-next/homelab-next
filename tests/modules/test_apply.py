@@ -303,7 +303,7 @@ def _mod(mid: str, *requires: str, roles=("main",), kind="vm") -> dict:
                 {
                     "role": "server",
                     "kind": kind,
-                    "footprint": {},
+                    "footprint": {"cpu": 1, "memory_mb": 512, "disk_gb": 1},
                     "roles": [f"role:{n}" for n in names],
                 }
             ],

@@ -18,6 +18,9 @@
   hosts: mod_example_inference_server
   become: true
   gather_facts: false
+  vars:
+    hnx_module_slice: "hnx-example_inference-server.slice"
+    hnx_module_footprint: {cpu: 4, disk_gb: 60, memory_mb: 5120}
   tasks:
     - name: "readiness: example_inference"
       ansible.builtin.include_role:

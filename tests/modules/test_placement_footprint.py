@@ -234,6 +234,61 @@ def test_the_split_plays_keep_the_tag_and_cover_each_host_once(tree):
     assert "modhost_core" in loop and "modhost_data" in loop
 
 
+def _checks_text(tree, site, module: str = "example-lake") -> str:
+    from homelabnext.modules import apply
+
+    return _books(tree, site)[f"{apply.CHECKS_DIR}/{module}.yml"]
+
+
+def test_the_check_plays_carry_the_raised_footprint_and_the_slice(tree):
+    """A role's validate runs in readiness and health: against the role's own default budget a
+    raised placement the install accepted would fail its check."""
+    from homelabnext.modules import apply
+
+    text = _checks_text(tree, _raised(SMALL_LAB, {"memory_mb": 24576}))
+    assert "    hnx_module_footprint: {cpu: 4, disk_gb: 500, memory_mb: 24576}" in text
+    assert f'    {apply.SLICE_VAR}: "hnx-example_lake-lake.slice"' in text
+
+
+def test_the_check_plays_split_per_host_like_the_install_plays(tree):
+    site = _two_instances("core", {"memory_mb": 4096}, {"memory_mb": 12288})
+    text = _checks_text(tree, site)
+    plays = [p for p in text.split("\n- name: ")[1:] if "mod_example_lake_lake:&" in p]
+    assert [p.splitlines()[1].strip() for p in plays] == [
+        "hosts: mod_example_lake_lake:&modhost_core",
+        "hosts: mod_example_lake_lake:&modhost_data",
+    ]
+    assert "memory_mb: 12288" in plays[0] and "memory_mb: 4096" in plays[1]
+    # the guard asserts each intersection holds a host
+    assert "intersect" in text and "[mod_example_lake_lake, modhost_core]" in text
+
+
+def test_the_install_guard_asserts_each_split_intersection(tree):
+    from homelabnext.modules import apply
+
+    site = _two_instances("core", {"memory_mb": 4096}, {"memory_mb": 12288})
+    text = _books(tree, site)[apply.PLAYBOOK]
+    assert "[mod_example_lake_lake, modhost_core], [mod_example_lake_lake, modhost_data]" in text
+    # one footprint for the group: one play and no intersection to assert
+    assert "intersect" not in _books(tree, ld.load_yaml(SMALL_LAB))[apply.PLAYBOOK]
+
+
+def test_a_footprint_the_accounting_cannot_read_is_refused_by_name_not_dropped(tree):
+    import copy
+
+    from homelabnext.modules import apply
+
+    site = ld.load_yaml(SMALL_LAB)
+    sel = mr.selected(site, tree.mods)
+    bad = copy.deepcopy(sel)
+    bad["example-lake"]["requires"]["hosts"][0]["footprint"]["memory_mb"] = "lots"
+    with pytest.raises(apply.ApplyError, match=r"footprint: .*example-lake/lake.*memory_mb"):
+        apply.render(site, bad, {m: f"../{m}" for m in bad})
+    site["hosts"].pop("data")
+    with pytest.raises(apply.ApplyError, match=r"footprint: .*unknown host"):
+        apply.render(site, sel, {m: f"../{m}" for m in sel})
+
+
 # ----------------------------------------------------------------------------- refusals
 
 
