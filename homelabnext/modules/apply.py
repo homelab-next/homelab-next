@@ -39,7 +39,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from homelabnext.modules.limits import DATA_ROOT, slice_name
+from homelabnext.modules.limits import DATA_ROOT, LimitsError, placed_use, slice_name
 from homelabnext.modules.rules import _placed, us
 
 Doc = dict[str, Any]
@@ -361,27 +361,35 @@ def _plays(site: Mapping[str, Any], sel: Mapping[str, Doc]) -> dict[str, list[tu
     return out
 
 
-def _footprints(site: Mapping[str, Any], sel: Mapping[str, Doc]) -> dict[tuple[str, str], str]:
-    """(module, host role) -> the flow mapping of the footprint the module's play runs under: the
-    manifest's cpu, memory_mb and disk_gb, each raised by the selection where a placement raised
-    it (:func:`homelabnext.modules.rules._placed`, the one every rule and the limits slices read).
-    A role placed by several instances (they share one group and one slice) gets, per dimension,
-    the largest of them."""
-    out: dict[tuple[str, str], dict[str, Any]] = {}
-    for mod, _inst, role, h, _host in _placed(site, sel):
-        fp = (h or {}).get("footprint") or {}
-        cur = out.setdefault((mod, role), {})
-        for dim in ("cpu", "memory_mb", "disk_gb"):
-            v = fp.get(dim)
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                cur[dim] = max(cur.get(dim, v), v)
-    return {
-        k: "{"
-        + ", ".join(f"{d}: {int(v) if float(v).is_integer() else v}" for d, v in sorted(fp.items()))
+def footprint_flow(fp: Mapping[str, Any]) -> str:
+    """A footprint's cpu, memory_mb and disk_gb as the flow mapping a play variable carries."""
+    return (
+        "{"
+        + ", ".join(
+            f"{d}: {int(fp[d]) if float(fp[d]).is_integer() else fp[d]}"
+            for d in ("cpu", "disk_gb", "memory_mb")
+        )
         + "}"
-        for k, fp in out.items()
-        if fp
-    }
+    )
+
+
+def _footprints(
+    site: Mapping[str, Any], sel: Mapping[str, Doc]
+) -> dict[tuple[str, str], dict[str, str]]:
+    """(module, host role) -> {site host: the flow mapping of the footprint the role takes there}.
+    It is :func:`homelabnext.modules.limits.placed_use`, the sum the host role's slice is given
+    (the manifest's footprint, raised where the selection raised it, times its count, summed over
+    every instance placed on that host), so the variable and the slice always agree."""
+    try:
+        use, _external = placed_use(_placed(site, sel), site.get("hosts") or {})
+    except LimitsError:
+        # a footprint or host the limits render cannot read: ``hnx modules check`` and the limits
+        # render refuse it by name; the apply names no footprint rather than a wrong one
+        return {}
+    out: dict[tuple[str, str], dict[str, str]] = {}
+    for (host, mod, role), fp in use.items():
+        out.setdefault((mod, role), {})[host] = footprint_flow(fp)
+    return out
 
 
 def render(
@@ -445,27 +453,39 @@ def render(
             plays += 1
             targets.append(group)
             mine.append(group)
-            L += [
-                f"- name: {_q(name)}",
-                f"  hosts: {group}",
-                # a module's roles install packages, units and files: the play escalates
-                "  become: true",
-                # the module's tag only: a group tag could equal another module's tag
-                # (module a-b is mod_a_b; module a's host role b is mod_a_b too)
-                f"  tags: [{GROUP_PREFIX}{us(mod)}]",
-                # the role's slice (the limits play installs it): compose_app makes it each
-                # container's cgroup parent, so the slice's limits confine the containers too
-                "  vars:",
-                f"    {SLICE_VAR}: {_q(slice_name(mod, role))}",
-            ]
-            if (mod, role) in footprints:
-                L.append(f"    {FOOTPRINT_VAR}: {footprints[mod, role]}")
-            if pre:
-                L.append("  pre_tasks:")
-                for path, hook in pre:
-                    L += _include(path, hook, f"preflight {hook}: {path.rsplit('/', 1)[-1]}")
-            L.append("  roles:")
-            L += [f"    - role: {_q(p)}" for p in paths]
+            # one play for the group; but when its hosts take different footprints (instances on
+            # different hosts with different raises) one play per host, on the group's
+            # intersection with that host's group (every host in exactly one play, so each task
+            # still runs once per host), each carrying what its own slice is given
+            fps = footprints.get((mod, role), {})
+            if len(set(fps.values())) > 1:
+                variants = [(f"{name} on {host}", f"{group}:&{host_group(host)}", fps[host])
+                            for host in sorted(fps)]  # fmt: skip
+                targets += [host_group(host) for host in sorted(fps)]
+            else:
+                variants = [(name, group, next(iter(fps.values()), None))]
+            for vname, hosts_pat, fp in variants:
+                L += [
+                    f"- name: {_q(vname)}",
+                    f"  hosts: {hosts_pat}",
+                    # a module's roles install packages, units and files: the play escalates
+                    "  become: true",
+                    # the module's tag only: a group tag could equal another module's tag
+                    # (module a-b is mod_a_b; module a's host role b is mod_a_b too)
+                    f"  tags: [{GROUP_PREFIX}{us(mod)}]",
+                    # the role's slice (the limits play installs it): compose_app makes it each
+                    # container's cgroup parent, so the slice's limits confine the containers too
+                    "  vars:",
+                    f"    {SLICE_VAR}: {_q(slice_name(mod, role))}",
+                ]
+                if fp is not None:
+                    L.append(f"    {FOOTPRINT_VAR}: {fp}")
+                if pre:
+                    L.append("  pre_tasks:")
+                    for path, hook in pre:
+                        L += _include(path, hook, f"preflight {hook}: {path.rsplit('/', 1)[-1]}")
+                L.append("  roles:")
+                L += [f"    - role: {_q(p)}" for p in paths]
             check += [
                 "",
                 f"- name: {_q(f'{name}: readiness, health')}",
