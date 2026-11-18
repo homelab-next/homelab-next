@@ -72,7 +72,9 @@ class FakeCatalog:
                 self.end_headers()
 
         self._srv = ThreadingHTTPServer((LOOPBACK, 0), H)
-        self._t = threading.Thread(target=self._srv.serve_forever, daemon=True)
+        self._t = threading.Thread(
+            target=self._srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        )
 
     @property
     def url(self) -> str:

@@ -819,9 +819,16 @@ def test_ssh_hardening_check_mode_reads_the_account_and_writes_nothing(first):
     assert calls(tmp_path) == []
 
 
-def test_ssh_hardening_check_mode_on_a_converged_host_is_clean(tmp_path):
+def _first_ssh_hardening_check_mode_on_a_converged_host_is_clean(tmp_path):
     v = ssh_setup(tmp_path)
-    assert run_role(tmp_path, "ssh_hardening", "config", v).returncode == 0
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first_ssh_hardening_check_mode_on_a_converged_host_is_clean)
+def test_ssh_hardening_check_mode_on_a_converged_host_is_clean(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     before = calls(tmp_path)
     r = run_role(tmp_path, "ssh_hardening", "config", v, check=True)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -3125,7 +3132,7 @@ def test_needrestart_posts_to_the_notify_endpoint_and_retries_a_failed_alert(tmp
             pass
 
     srv = http.server.HTTPServer(("127.0.0.1", 0), H)  # no-raw-endpoint: allow test server
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     reg = tmp_path / "registry.yml"
     reg.write_text(
         f"services:\n  notify:\n    host: 127.0.0.1\n    port: {srv.server_port}\n    scheme: http\n"
@@ -3146,7 +3153,9 @@ def test_needrestart_posts_to_the_notify_endpoint_and_retries_a_failed_alert(tmp
         srv2 = http.server.HTTPServer(
             ("127.0.0.1", srv.server_port), H
         )  # no-raw-endpoint: allow test server
-        threading.Thread(target=srv2.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=srv2.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
         assert nr_check(tmp_path).returncode == 0
         assert nr_check(tmp_path).returncode == 0  # unchanged now: silent
         srv2.shutdown()
@@ -3279,11 +3288,23 @@ def test_needrestart_plain_http_opt_in_sends_the_token_to_the_http_endpoint(tmp_
     assert (url.scheme, url.hostname, url.port) == ("http", "notify.svc.example.internal", 80)
 
 
-def test_needrestart_plain_http_opt_in_without_a_token_is_a_no_op(tmp_path):
-    """No token, nothing travels in clear: no warning, no token file, same as the default."""
+def _first_needrestart_plain_http_opt_in_without_a_token_is_a_no_op(tmp_path):
     env = {}
     v, token = _plain_notify(tmp_path, ref="", needrestart_notify_allow_plain_http=True)
-    r = run_role(tmp_path, "needrestart", "config", v, env)
+    return {
+        "role": "needrestart",
+        "tasks_from": "config",
+        "extra_vars": v,
+        "env": env,
+        "setup": {"token": token},
+    }
+
+
+@first_run(_first_needrestart_plain_http_opt_in_without_a_token_is_a_no_op)
+def test_needrestart_plain_http_opt_in_without_a_token_is_a_no_op(first):
+    """No token, nothing travels in clear: no warning, no token file, same as the default."""
+    r, _ = first
+    token = first.setup["token"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert "goes in clear" not in r.stdout and not token.exists()
 

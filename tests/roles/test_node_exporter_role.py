@@ -118,7 +118,7 @@ class _Exporter(http.server.BaseHTTPRequestHandler):
 def _serve(families):
     handler = type("H", (_Exporter,), {"families": families})
     srv = http.server.HTTPServer((LOOPBACK, 0), handler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     return srv
 
 
@@ -139,11 +139,17 @@ def test_health_wants_the_families_the_alert_rules_read(tmp_path, families, ok):
         assert "lacks a metric family" in r.stdout + r.stderr
 
 
-def test_health_fails_when_nothing_listens(tmp_path):
+def _first_health_fails_when_nothing_listens(tmp_path):
     v = _vars(
         tmp_path, node_exporter_bind=LOOPBACK, node_exporter_port=1, node_exporter_health_timeout=2
     )
-    assert run_role(tmp_path, "node_exporter", "health", v).returncode != 0
+    return {"role": "node_exporter", "tasks_from": "health", "extra_vars": v}
+
+
+@first_run(_first_health_fails_when_nothing_listens)
+def test_health_fails_when_nothing_listens(first):
+    first_result, _ = first
+    assert first_result.returncode != 0
 
 
 def test_the_package_is_installed_without_recommends():

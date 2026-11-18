@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 import pytest
 import yaml
-from rolerun import fake, last_run_vars, logging_fake, run_cases, run_role
+from rolerun import fake, first_run, last_run_vars, logging_fake, run_cases, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLE = str(ROOT / "modules" / "context" / "roles" / "context")
@@ -101,10 +101,16 @@ def _sha(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-@needs_ansible
-def test_main_renders_the_service_its_configuration_secrets_and_timer(tmp_path):
+def _first_main_renders_the_service_its_configuration_secrets_and_timer(tmp_path):
     v = context_vars(tmp_path, context_docker_cli=logging_fake(tmp_path, "docker"))
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@needs_ansible
+@first_run(_first_main_renders_the_service_its_configuration_secrets_and_timer)
+def test_main_renders_the_service_its_configuration_secrets_and_timer(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     svc = compose(tmp_path)
     assert svc["image"] == IMAGE and svc["user"] == f"{os.getuid()}:{os.getgid()}"
@@ -158,10 +164,15 @@ def test_main_renders_the_service_its_configuration_secrets_and_timer(tmp_path):
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-@needs_ansible
-def test_the_judge_is_on_with_a_gateway_found_in_the_registry(tmp_path):
+def _first_the_judge_is_on_with_a_gateway_found_in_the_registry(tmp_path):
     v = context_vars(tmp_path, context_gateway_id="llm-gateway", context_judge_ceiling="green")
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@needs_ansible
+@first_run(_first_the_judge_is_on_with_a_gateway_found_in_the_registry)
+def test_the_judge_is_on_with_a_gateway_found_in_the_registry(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     judge = json.loads((tmp_path / "app" / "config.json").read_text())["judge"]
     assert urlsplit(judge["url"]).hostname == "gateway-01.example.internal"
@@ -236,10 +247,23 @@ def test_a_missing_or_malformed_credential_is_refused_before_a_file_is_written(
     assert all(s not in r.stdout for s in (ADMIN, AGENTS, SOURCE))
 
 
-@needs_ansible
-def test_the_gateway_key_is_needed_only_with_the_judge_on(tmp_path):
+def _first_the_gateway_key_is_needed_only_with_the_judge_on(tmp_path):
     env = {k: val for k, val in SECRETS.items() if k != "HNX_SECRET_CONTEXT_GATEWAY_KEY"}
-    assert run_role(tmp_path, ROLE, "main", context_vars(tmp_path), env=env).returncode == 0
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": context_vars(tmp_path),
+        "env": env,
+        "setup": {"env": env},
+    }
+
+
+@needs_ansible
+@first_run(_first_the_gateway_key_is_needed_only_with_the_judge_on)
+def test_the_gateway_key_is_needed_only_with_the_judge_on(first):
+    first_result, tmp_path = first
+    env = first.setup["env"]
+    assert first_result.returncode == 0
     other = tmp_path / "judged"
     other.mkdir()
     r = run_role(
@@ -275,7 +299,9 @@ class _Front:
         self.srv = ThreadingHTTPServer((LOOP, 0), H)
 
     def __enter__(self):
-        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self.srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
         return self
 
     def __exit__(self, *a):
@@ -358,10 +384,23 @@ def test_health_fails_when_the_index_or_the_self_check_does_not_hold(
 # ----------------------------------------------------------------------------- the other hooks
 
 
-@needs_ansible
-def test_backup_names_no_path_and_export_and_restore_have_nothing_to_do(tmp_path):
+def _first_backup_names_no_path_and_export_and_restore_have_nothing_to_do(tmp_path):
     v = context_vars(tmp_path)
-    assert run_role(tmp_path, ROLE, "backup", v, env=SECRETS).returncode == 0
+    return {
+        "role": ROLE,
+        "tasks_from": "backup",
+        "extra_vars": v,
+        "env": SECRETS,
+        "setup": {"v": v},
+    }
+
+
+@needs_ansible
+@first_run(_first_backup_names_no_path_and_export_and_restore_have_nothing_to_do)
+def test_backup_names_no_path_and_export_and_restore_have_nothing_to_do(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     manifest = json.loads((tmp_path / "app" / "backup-manifest.json").read_text())
     assert manifest["paths"] == [] and manifest["derived"] == [str(tmp_path / "data")]
     for hook in ("export", "restore"):

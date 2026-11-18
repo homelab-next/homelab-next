@@ -279,7 +279,7 @@ def test_example_service_health_hook_against_fake_server(tmp_path):
             pass
 
     srv = http.server.HTTPServer(("127.0.0.1", 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     try:
         v = svc_vars(tmp_path, example_service_listen_port=srv.server_address[1])
         assert run_role(tmp_path, "example_service", "health", v).returncode == 0
@@ -413,12 +413,30 @@ def test_compose_app_pins_the_default_network_when_asked(first):
     assert doc["networks"] == {"default": {"ipam": {"config": [{"subnet": PINNED}]}}}
 
 
-def test_compose_app_renders_no_network_block_by_default(tmp_path):
-    r = run_role(
-        tmp_path, "compose_app", "main", app_vars(tmp_path, compose_app_validate_with_docker=False)
-    )
+def _first_compose_app_renders_no_network_block_by_default(tmp_path):
+    return {
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path, compose_app_validate_with_docker=False),
+    }
+
+
+@first_run(_first_compose_app_renders_no_network_block_by_default)
+def test_compose_app_renders_no_network_block_by_default(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert "networks" not in yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
+
+
+def _first_compose_app_accepts_private_network_addresses(tmp_path, subnet):
+    return {
+        "role": "compose_app",
+        "tasks_from": "network_subnet",
+        "extra_vars": {
+            "compose_app_network_subnet": subnet,
+            "compose_app_subnet_pattern": SUBNET_PATTERN,
+        },
+    }
 
 
 @pytest.mark.parametrize(
@@ -426,13 +444,9 @@ def test_compose_app_renders_no_network_block_by_default(tmp_path):
     [net(10, 0, 0, 0, 16), net(10, 255, 255, 240, 28), net(172, 16, 0, 0, 16),
      net(172, 31, 4, 0, 24), net(192, 168, 0, 0, 16), net(192, 168, 9, 0, 29)],
 )  # fmt: skip
-def test_compose_app_accepts_private_network_addresses(tmp_path, subnet):
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "network_subnet",
-        {"compose_app_network_subnet": subnet, "compose_app_subnet_pattern": SUBNET_PATTERN},
-    )
+@first_run(_first_compose_app_accepts_private_network_addresses)
+def test_compose_app_accepts_private_network_addresses(first, subnet):
+    r, _ = first
     assert r.returncode == 0, r.stdout + r.stderr
 
 
@@ -459,14 +473,22 @@ BAD_SUBNETS = {
 }
 
 
+def _first_compose_app_refuses_a_network_subnet_that_is_not_a_private_network_address(
+    tmp_path, bad
+):
+    return {
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(
+            tmp_path, compose_app_validate_with_docker=False, compose_app_network_subnet=bad
+        ),
+    }
+
+
 @pytest.mark.parametrize("bad", list(BAD_SUBNETS.values()), ids=list(BAD_SUBNETS))
-def test_compose_app_refuses_a_network_subnet_that_is_not_a_private_network_address(tmp_path, bad):
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(tmp_path, compose_app_validate_with_docker=False, compose_app_network_subnet=bad),
-    )
+@first_run(_first_compose_app_refuses_a_network_subnet_that_is_not_a_private_network_address)
+def test_compose_app_refuses_a_network_subnet_that_is_not_a_private_network_address(first, bad):
+    r, tmp_path = first
     assert r.returncode != 0 and "compose_app_network_subnet must be" in r.stdout + r.stderr
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
@@ -500,14 +522,19 @@ def test_compose_app_refuses_a_network_overlapping_the_guest(tmp_path, subnet, h
     assert r.returncode != 0 and "compose_app_network_subnet must not" in r.stdout + r.stderr
 
 
-def test_compose_app_accepts_a_network_beside_the_guest(tmp_path):
+def _first_compose_app_accepts_a_network_beside_the_guest(tmp_path):
     extra = {
         "compose_app_network_subnet": net(192, 168, 51, 0),
         "compose_app_subnet_pattern": SUBNET_PATTERN,
         "ansible_default_ipv4": GUEST_FACTS,
         "ansible_host": GUEST_FACTS["address"],
     }
-    r = run_role(tmp_path, "compose_app", "network_subnet", extra)
+    return {"role": "compose_app", "tasks_from": "network_subnet", "extra_vars": extra}
+
+
+@first_run(_first_compose_app_accepts_a_network_beside_the_guest)
+def test_compose_app_accepts_a_network_beside_the_guest(first):
+    r, _ = first
     assert r.returncode == 0, r.stdout + r.stderr
 
 
@@ -600,6 +627,15 @@ def test_compose_app_renders_tmpfs_mounts_in_the_long_syntax(first):
         assert int(mounts["/scratch"]["tmpfs"]["size"]) == 8589934592
 
 
+def _first_compose_app_accepts_a_safe_tmpfs_mount(tmp_path, mount):
+    s = spec(tmpfs=[{"target": "/tmp", "size_bytes": 4096}, mount])
+    return {
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    }
+
+
 @pytest.mark.parametrize(
     "mount",
     [
@@ -616,14 +652,9 @@ def test_compose_app_renders_tmpfs_mounts_in_the_long_syntax(first):
         {"target": "/m", "size_bytes": 4096, "mode": "001"},
     ],
 )
-def test_compose_app_accepts_a_safe_tmpfs_mount(tmp_path, mount):
-    s = spec(tmpfs=[{"target": "/tmp", "size_bytes": 4096}, mount])
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
-    )
+@first_run(_first_compose_app_accepts_a_safe_tmpfs_mount)
+def test_compose_app_accepts_a_safe_tmpfs_mount(first, mount):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     web = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]["web"]
     got = next(v for v in web["volumes"] if isinstance(v, dict) and v["target"] == mount["target"])
@@ -722,14 +753,20 @@ TMPFS_REJECTED = {
 }
 
 
+def _first_compose_app_refuses_a_bad_tmpfs_mount(tmp_path, case):
+    return {
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(
+            tmp_path, spec(**TMPFS_REJECTED[case]), compose_app_validate_with_docker=False
+        ),
+    }
+
+
 @pytest.mark.parametrize("case", sorted(TMPFS_REJECTED))
-def test_compose_app_refuses_a_bad_tmpfs_mount(tmp_path, case):
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(tmp_path, spec(**TMPFS_REJECTED[case]), compose_app_validate_with_docker=False),
-    )
+@first_run(_first_compose_app_refuses_a_bad_tmpfs_mount)
+def test_compose_app_refuses_a_bad_tmpfs_mount(first, case):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert "refused tmpfs mount" in r.stdout + r.stderr, r.stdout  # this rule, not another
     assert not (tmp_path / "app" / "docker-compose.yml").exists()

@@ -36,7 +36,7 @@ from forge_front import (
     ssh_tools,
     tsv,
 )
-from rolerun import run_role
+from rolerun import first_run, run_role
 
 from homelabnext.registry.model import secret_env_name
 
@@ -115,9 +115,17 @@ def fp(path: Path) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- render
 
 
-def test_main_renders_one_container_with_the_application_secrets_only_as_read_only_files(tmp_path):
+def _first_main_renders_one_container_with_the_application_secrets_only_as_read_only_files(
+    tmp_path,
+):
     v = pv(tmp_path)
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@first_run(_first_main_renders_one_container_with_the_application_secrets_only_as_read_only_files)
+def test_main_renders_one_container_with_the_application_secrets_only_as_read_only_files(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "app" / "docker-compose.yml").read_text()
     svc = yaml.safe_load(text)["services"]
@@ -176,15 +184,20 @@ def test_main_renders_one_container_with_the_application_secrets_only_as_read_on
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-def test_main_puts_the_container_in_the_role_slice_the_module_play_names(tmp_path):
+def _first_main_puts_the_container_in_the_role_slice_the_module_play_names(tmp_path):
     v = pv(tmp_path, hnx_module_slice=f"hnx-{MID}-server.slice")
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@first_run(_first_main_puts_the_container_in_the_role_slice_the_module_play_names)
+def test_main_puts_the_container_in_the_role_slice_the_module_play_names(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     assert {s["cgroup_parent"] for s in doc["services"].values()} == {f"hnx-{MID}-server.slice"}
 
 
-def test_an_identity_provider_adds_its_ca_to_the_trust_and_nothing_else_to_the_environment(
+def _first_an_identity_provider_adds_its_ca_to_the_trust_and_nothing_else_to_the_environment(
     tmp_path,
 ):
     ref = f"secret:{MID}/oidc-client-secret"
@@ -195,7 +208,12 @@ def test_an_identity_provider_adds_its_ca_to_the_trust_and_nothing_else_to_the_e
         oidc_issuer_url="https://sso.example.internal/realms/lab",
         oidc_client_id="forge",
     )
-    r = run_role(tmp_path, ROLE, "main", v, env=env)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": env}
+
+
+@first_run(_first_an_identity_provider_adds_its_ca_to_the_trust_and_nothing_else_to_the_environment)
+def test_an_identity_provider_adds_its_ca_to_the_trust_and_nothing_else_to_the_environment(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     svc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"][MID]
     assert svc["environment"]["SSL_CERT_FILE"] == "/tls/ca.pem"
@@ -205,11 +223,16 @@ def test_an_identity_provider_adds_its_ca_to_the_trust_and_nothing_else_to_the_e
 # ----------------------------------------------------------------------------- refusals
 
 
-@pytest.mark.parametrize("ref", sorted(VALUES))
-def test_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(tmp_path, ref):
-    """Review Focus 3: a module deployed before its secret exists is refused, by name."""
+def _first_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(tmp_path, ref):
     env = {**SECRETS, secret_env_name(ref): ""}
-    r = run_role(tmp_path, ROLE, "main", pv(tmp_path), env=env)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": pv(tmp_path), "env": env}
+
+
+@pytest.mark.parametrize("ref", sorted(VALUES))
+@first_run(_first_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing)
+def test_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(first, ref):
+    """Review Focus 3: a module deployed before its secret exists is refused, by name."""
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert ref in r.stdout + r.stderr
     assert not (tmp_path / "app").exists() and not (tmp_path / "data").exists()
@@ -217,21 +240,42 @@ def test_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(tm
         assert value not in r.stdout + r.stderr
 
 
-@pytest.mark.parametrize("which, extra_env", [
-    ("oidc", {"oidc_enabled": True, "oidc_issuer_url": "https://sso.example.internal/r", "oidc_client_id": "forge"}),
-    ("pull", {"registry_pull_user": "puller"}),
-])  # fmt: skip
-def test_an_optional_secret_is_refused_by_name_only_when_its_feature_is_on(
+def _first_an_optional_secret_is_refused_by_name_only_when_its_feature_is_on(
     tmp_path, which, extra_env
 ):
     ref = f"secret:{MID}/" + ("oidc-client-secret" if which == "oidc" else "registry-pull-token")
     (tmp_path / "off").mkdir()
-    r = run_role(tmp_path, ROLE, "main", pv(tmp_path, **extra_env), env=SECRETS)
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pv(tmp_path, **extra_env),
+        "env": SECRETS,
+        "setup": {"ref": ref},
+    }
+
+
+@pytest.mark.parametrize("which, extra_env", [
+    ("oidc", {"oidc_enabled": True, "oidc_issuer_url": "https://sso.example.internal/r", "oidc_client_id": "forge"}),
+    ("pull", {"registry_pull_user": "puller"}),
+])  # fmt: skip
+@first_run(_first_an_optional_secret_is_refused_by_name_only_when_its_feature_is_on)
+def test_an_optional_secret_is_refused_by_name_only_when_its_feature_is_on(first, which, extra_env):
+    r, tmp_path = first
+    ref = first.setup["ref"]
     assert r.returncode != 0 and ref in r.stdout + r.stderr
     assert not (tmp_path / "app").exists()
     # the same configuration with the feature off never reads the reference
     off = run_role(tmp_path / "off", ROLE, "main", pv(tmp_path / "off"), env=SECRETS)
     assert off.returncode == 0, off.stdout + off.stderr
+
+
+def _first_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pv(tmp_path, **over),
+        "env": {**SECRETS, **env},
+    }
 
 
 @pytest.mark.parametrize(
@@ -264,8 +308,9 @@ def test_an_optional_secret_is_refused_by_name_only_when_its_feature_is_on(
         ({}, {secret_env_name(f"secret:{MID}/ssh-host-key-rsa"): "not a key"}),
     ],
 )  # fmt: skip
-def test_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
-    r = run_role(tmp_path, ROLE, "main", pv(tmp_path, **over), env={**SECRETS, **env})
+@first_run(_first_main_refuses_bad_inputs_and_credentials)
+def test_main_refuses_bad_inputs_and_credentials(first, over, env):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
@@ -503,14 +548,37 @@ def test_export_stops_dumps_lists_and_starts_the_service_again(tmp_path):
     assert (again / "dump.zip.prev").is_file()  # one previous generation is kept
 
 
-def test_export_starts_the_service_again_even_when_the_dump_fails(tmp_path):
+def _first_export_starts_the_service_again_even_when_the_dump_fails(tmp_path):
     env = _stood(tmp_path)
     (tmp_path / "dump.fails").write_text("")
-    r = run_role(tmp_path, ROLE, "export", pv(tmp_path, start=True), env=env)
+    return {
+        "role": ROLE,
+        "tasks_from": "export",
+        "extra_vars": pv(tmp_path, start=True),
+        "env": env,
+    }
+
+
+@first_run(_first_export_starts_the_service_again_even_when_the_dump_fails)
+def test_export_starts_the_service_again_even_when_the_dump_fails(first):
+    r, tmp_path = first
     assert r.returncode != 0
     log = calls(tmp_path)
     assert any(" stop " in c for c in log) and any(" up " in c for c in log)
     assert not (tmp_path / "data" / "export" / "dump.zip").exists()
+
+
+def _first_export_refuses_a_dump_that_proves_nothing_and_puts_nothing_in_place(
+    tmp_path, repos_out, why
+):
+    env = _stood(tmp_path)
+    (tmp_path / "repos.out").write_text(repos_out)
+    return {
+        "role": ROLE,
+        "tasks_from": "export",
+        "extra_vars": pv(tmp_path, start=True),
+        "env": env,
+    }
 
 
 @pytest.mark.parametrize("repos_out, why", [
@@ -518,12 +586,9 @@ def test_export_starts_the_service_again_even_when_the_dump_fails(tmp_path):
     (tsv(repos=(("labs", "alpha"),)), "fewer repositories on disk than the database lists"),
     ("", "no repository on disk"),
 ])  # fmt: skip
-def test_export_refuses_a_dump_that_proves_nothing_and_puts_nothing_in_place(
-    tmp_path, repos_out, why
-):
-    env = _stood(tmp_path)
-    (tmp_path / "repos.out").write_text(repos_out)
-    r = run_role(tmp_path, ROLE, "export", pv(tmp_path, start=True), env=env)
+@first_run(_first_export_refuses_a_dump_that_proves_nothing_and_puts_nothing_in_place)
+def test_export_refuses_a_dump_that_proves_nothing_and_puts_nothing_in_place(first, repos_out, why):
+    r, tmp_path = first
     assert r.returncode != 0 and "nothing was put in place" in r.stdout + r.stderr, why
     assert not (tmp_path / "data" / "export" / "dump.zip").exists()
     assert any(" up " in c for c in calls(tmp_path))  # and the service is back
@@ -634,11 +699,25 @@ def test_restore_refuses_an_export_of_a_newer_version(tmp_path):
 # ----------------------------------------------------------------------------- upgrade
 
 
-def test_upgrade_records_only_a_pinned_newer_target_of_the_same_repository(tmp_path):
+def _first_upgrade_records_only_a_pinned_newer_target_of_the_same_repository(tmp_path):
     env = _stood(tmp_path)
     base = DEFAULTS[f"{P}_image"].split("@")[0].rsplit(":", 1)[0]
     ok = f"{base}:28.5.0-rootless@sha256:" + "a" * 64
-    r = run_role(tmp_path, ROLE, "main", pv(tmp_path), env=env)
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pv(tmp_path),
+        "env": env,
+        "setup": {"base": base, "env": env, "ok": ok},
+    }
+
+
+@first_run(_first_upgrade_records_only_a_pinned_newer_target_of_the_same_repository)
+def test_upgrade_records_only_a_pinned_newer_target_of_the_same_repository(first):
+    r, tmp_path = first
+    base = first.setup["base"]
+    env = first.setup["env"]
+    ok = first.setup["ok"]
     assert r.returncode == 0, r.stdout + r.stderr
     good = run_role(tmp_path, ROLE, "upgrade", pv(tmp_path, target_image=ok), env=env)
     assert good.returncode == 0, good.stdout + good.stderr

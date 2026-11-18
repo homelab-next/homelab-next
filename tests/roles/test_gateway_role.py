@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_role
+from rolerun import fake, first_run, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLE = str(ROOT / "modules" / "gateway" / "roles" / "gateway")
@@ -206,6 +206,12 @@ def test_an_image_of_another_repository_is_refused_as_not_the_labs_own_gateway(t
     assert compose(tmp_path)["services"]["gateway"]["image"] == mine
 
 
+def _first_main_refuses_an_unset_secret_naming_its_reference(tmp_path, name):
+    env = {k: v for k, v in SECRETS.items() if k != name}
+    v = gateway_vars(tmp_path)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": env}
+
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -215,10 +221,9 @@ def test_an_image_of_another_repository_is_refused_as_not_the_labs_own_gateway(t
         "HNX_SECRET_GATEWAY_UPSTREAM_CLOUD",
     ],
 )
-def test_main_refuses_an_unset_secret_naming_its_reference(tmp_path, name):
-    env = {k: v for k, v in SECRETS.items() if k != name}
-    v = gateway_vars(tmp_path)
-    r = run_role(tmp_path, ROLE, "main", v, env=env)
+@first_run(_first_main_refuses_an_unset_secret_naming_its_reference)
+def test_main_refuses_an_unset_secret_naming_its_reference(first, name):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
     assert "secret:gateway" in r.stdout  # the reference is named, never a value
@@ -380,7 +385,9 @@ class StandIn:
         self.url = "http://{}:{}".format(*self._httpd.server_address[:2])
 
     def __enter__(self):
-        threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
         return self
 
     def __exit__(self, *a):
@@ -485,10 +492,16 @@ def _usage(tmp_path: Path, lines=3, partial=True) -> bytes:
     return rows.encode()
 
 
-def test_export_copies_whole_usage_records_and_lists_them(tmp_path):
+def _first_export_copies_whole_usage_records_and_lists_them(tmp_path):
     complete = _usage(tmp_path)
     v = gateway_vars(tmp_path)
-    r = run_role(tmp_path, ROLE, "export", v)
+    return {"role": ROLE, "tasks_from": "export", "extra_vars": v, "setup": {"complete": complete}}
+
+
+@first_run(_first_export_copies_whole_usage_records_and_lists_them)
+def test_export_copies_whole_usage_records_and_lists_them(first):
+    r, tmp_path = first
+    complete = first.setup["complete"]
     assert r.returncode == 0, r.stdout + r.stderr
     export = tmp_path / "data" / "export"
     assert (
@@ -499,20 +512,33 @@ def test_export_copies_whole_usage_records_and_lists_them(tmp_path):
                    "sha256": hashlib.sha256(complete).hexdigest()}  # fmt: skip
 
 
-def test_export_refuses_a_missing_or_corrupt_usage_file(tmp_path):
+def _first_export_refuses_a_missing_or_corrupt_usage_file(tmp_path):
     v = gateway_vars(tmp_path)
     (tmp_path / "data" / "state").mkdir(parents=True)
-    r = run_role(tmp_path, ROLE, "export", v)
+    return {"role": ROLE, "tasks_from": "export", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first_export_refuses_a_missing_or_corrupt_usage_file)
+def test_export_refuses_a_missing_or_corrupt_usage_file(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode != 0 and "usage.jsonl" in r.stdout
     (tmp_path / "data" / "state" / "usage.jsonl").write_text("not json\n")
     bad = run_role(tmp_path, ROLE, "export", v)
     assert bad.returncode != 0 and "not a JSON record" in bad.stdout
 
 
-def test_restore_checks_the_export_before_it_stops_the_gateway(tmp_path):
+def _first_restore_checks_the_export_before_it_stops_the_gateway(tmp_path):
     _usage(tmp_path, partial=False)
     v = gateway_vars(tmp_path)
-    assert run_role(tmp_path, ROLE, "export", v).returncode == 0
+    return {"role": ROLE, "tasks_from": "export", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first_restore_checks_the_export_before_it_stops_the_gateway)
+def test_restore_checks_the_export_before_it_stops_the_gateway(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     src = tmp_path / "src"
     src.mkdir()
     for p in (tmp_path / "data" / "export").iterdir():
@@ -572,9 +598,16 @@ def test_restore_checks_the_export_before_it_stops_the_gateway(tmp_path):
 # ----------------------------------------------------------------------------- upgrade
 
 
-def test_upgrade_records_a_pinned_target_of_the_same_repository_only(tmp_path):
+def _first_upgrade_records_a_pinned_target_of_the_same_repository_only(tmp_path):
     v = gateway_vars(tmp_path)
-    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@first_run(_first_upgrade_records_a_pinned_target_of_the_same_repository_only)
+def test_upgrade_records_a_pinned_target_of_the_same_repository_only(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     for target in (
         "localhost/hnx-llm-gateway:0.2.0",  # not pinned by digest
         "localhost/hnx-other:0.2.0-0123456789ab@sha256:" + "b" * 64,  # another repository
@@ -716,7 +749,12 @@ def test_the_module_target_has_no_embeddings_feature_until_a_backend_exists():
     assert "embeddings" not in manifest["provides"]["slots"]["inference"]["features"]
 
 
-def test_a_restore_source_that_is_not_a_canonical_absolute_path_is_refused(tmp_path):
+def _first_a_restore_source_that_is_not_a_canonical_absolute_path_is_refused(tmp_path):
     v = {**gateway_vars(tmp_path), "gateway_restore_source": "relative/../src"}
-    r = run_role(tmp_path, ROLE, "restore", v)
+    return {"role": ROLE, "tasks_from": "restore", "extra_vars": v}
+
+
+@first_run(_first_a_restore_source_that_is_not_a_canonical_absolute_path_is_refused)
+def test_a_restore_source_that_is_not_a_canonical_absolute_path_is_refused(first):
+    r, _ = first
     assert r.returncode != 0

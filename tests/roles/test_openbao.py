@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-from rolerun import _invocation, calls, fake, run_cases, run_role
+from rolerun import _invocation, calls, fake, first_run, run_cases, run_role
 
 pytestmark = pytest.mark.requires_tool("ansible-playbook", "openssl")
 
@@ -219,9 +219,14 @@ def test_main_needs_its_required_inputs(tmp_path):
 # ---------------------------------------------------------------- the rendered files
 
 
-def test_config_renders_raft_tls_and_audit_and_a_hardened_unit(tmp_path):
+def _first_config_renders_raft_tls_and_audit_and_a_hardened_unit(tmp_path):
     v = base(tmp_path)
-    r = run_role(tmp_path, ROLE, "config", v)
+    return {"role": ROLE, "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first_config_renders_raft_tls_and_audit_and_a_hardened_unit)
+def test_config_renders_raft_tls_and_audit_and_a_hardened_unit(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     hcl = (tmp_path / "etc" / "openbao.hcl").read_text()
     etc = tmp_path / "etc"
@@ -359,10 +364,21 @@ def test_admin_socket_path_must_sit_under_run(tmp_path):
         assert failed and "openbao" in msg, (over, msg)
 
 
-def test_config_quotes_every_string_it_writes(tmp_path):
-    """A value is written JSON-quoted, so it cannot close its string and add a stanza."""
+def _first_config_quotes_every_string_it_writes(tmp_path):
     evil = 'n1"\n}\nlistener "tcp" { tls_disable = true'
-    r = run_role(tmp_path, ROLE, "config", base(tmp_path, openbao_node_id=evil))
+    return {
+        "role": ROLE,
+        "tasks_from": "config",
+        "extra_vars": base(tmp_path, openbao_node_id=evil),
+        "setup": {"evil": evil},
+    }
+
+
+@first_run(_first_config_quotes_every_string_it_writes)
+def test_config_quotes_every_string_it_writes(first):
+    """A value is written JSON-quoted, so it cannot close its string and add a stanza."""
+    r, tmp_path = first
+    evil = first.setup["evil"]
     assert r.returncode == 0, r.stdout + r.stderr
     hcl = (tmp_path / "etc" / "openbao.hcl").read_text()
     assert f"node_id = {json.dumps(evil)}" in hcl
@@ -553,6 +569,12 @@ def test_check_mode_on_a_fresh_host_skips_what_needs_the_archive(tmp_path, pki):
 SWAPS = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"
 
 
+def _first_platform_refuses_active_swap_unless_allowed(tmp_path, swaps, allow, refused):
+    (tmp_path / "swaps").write_text(SWAPS + swaps)
+    v = base(tmp_path, openbao_proc_swaps=str(tmp_path / "swaps"), openbao_allow_swap=allow)
+    return {"role": ROLE, "tasks_from": "platform", "extra_vars": v}
+
+
 @pytest.mark.parametrize(
     ("swaps", "allow", "refused"),
     [
@@ -561,10 +583,9 @@ SWAPS = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"
         ("/dev/vda3   partition\t1048572\t\t0\t\t-2\n", True, False),
     ],
 )
-def test_platform_refuses_active_swap_unless_allowed(tmp_path, swaps, allow, refused):
-    (tmp_path / "swaps").write_text(SWAPS + swaps)
-    v = base(tmp_path, openbao_proc_swaps=str(tmp_path / "swaps"), openbao_allow_swap=allow)
-    r = run_role(tmp_path, ROLE, "platform", v)
+@first_run(_first_platform_refuses_active_swap_unless_allowed)
+def test_platform_refuses_active_swap_unless_allowed(first, swaps, allow, refused):
+    r, _ = first
     if refused:
         assert r.returncode != 0 and "swap is active (/dev/vda3)" in r.stdout, r.stdout
     else:
@@ -812,7 +833,7 @@ def fake_openbao(pki, status: int, body: dict, api=None):
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(pki / "cert.pem", pki / "key.pem")
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
-    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
     t.start()
     try:
         yield f"https://{LOOPBACK}:{srv.server_address[1]}"
@@ -1087,6 +1108,8 @@ def test_a_snapshot_needs_the_snapshot_principal(tmp_path, pki):
 def verbose_run(tmp_path, hook, v, env=None):
     """run_role at -vvv: what an operator debugging a run would see (module arguments included,
     where a task is not under no_log, and every remote command line)."""
+    # not piped: a piped module has no remote command line to print, and the test reads them
+    env = {**(env or {}), "ANSIBLE_PIPELINING": "False"}
     cmd, env = _invocation(tmp_path, ROLE, hook, v, env)
     return subprocess.run([*cmd, "-vvv"], capture_output=True, text=True, env=env, cwd=tmp_path)
 
@@ -1792,7 +1815,7 @@ def lego_mirror(pki, tmp_path):
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(pki / "cert.pem", pki / "key.pem")
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     try:
         yield f"https://{LOOPBACK}:{srv.server_address[1]}", hashlib.sha256(data).hexdigest()
     finally:

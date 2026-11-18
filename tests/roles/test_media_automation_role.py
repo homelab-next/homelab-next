@@ -22,7 +22,7 @@ from typing import ClassVar
 
 import pytest
 import yaml
-from rolerun import fake, last_run_vars, run_role
+from rolerun import fake, first_run, last_run_vars, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / "modules" / "media-automation"
@@ -260,17 +260,31 @@ def test_the_data_directories_and_only_the_missing_downloads_directories_are_cre
 # ----------------------------------------------------------------------------- refusals
 
 
-@pytest.mark.parametrize("unset", list(SECRETS))
-def test_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(tmp_path, unset):
-    """Review Focus 3: a module deployed before its secret exists is refused, by name."""
+def _first_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(tmp_path, unset):
     env = {**SECRETS, unset: ""}
-    r = run_role(tmp_path, ROLE, "main", mv(tmp_path), env=env)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": mv(tmp_path), "env": env}
+
+
+@pytest.mark.parametrize("unset", list(SECRETS))
+@first_run(_first_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing)
+def test_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(first, unset):
+    """Review Focus 3: a module deployed before its secret exists is refused, by name."""
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     out = r.stdout + r.stderr
     assert REFS[unset] in out
     assert not (tmp_path / "app").exists() and not (tmp_path / "data").exists()
     for value in (PRIVATE, PRESHARED, PASSWORD):
         assert value not in out
+
+
+def _first_main_refuses_a_credential_in_the_wrong_form(tmp_path, var, bad):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": mv(tmp_path),
+        "env": {**SECRETS, var: bad},
+    }
 
 
 @pytest.mark.parametrize(
@@ -282,11 +296,16 @@ def test_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(tm
         ("HNX_SECRET_MEDIA_AUTOMATION_QBITTORRENT_PASSWORD", "has a space in it 123"),
     ],
 )
-def test_main_refuses_a_credential_in_the_wrong_form(tmp_path, var, bad):
-    r = run_role(tmp_path, ROLE, "main", mv(tmp_path), env={**SECRETS, var: bad})
+@first_run(_first_main_refuses_a_credential_in_the_wrong_form)
+def test_main_refuses_a_credential_in_the_wrong_form(first, var, bad):
+    r, tmp_path = first
     assert r.returncode != 0
     assert "must resolve in their form" in r.stdout + r.stderr
     assert not (tmp_path / "app").exists()
+
+
+def _first_main_refuses_bad_inputs(tmp_path, over):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": mv(tmp_path, **over), "env": SECRETS}
 
 
 @pytest.mark.parametrize(
@@ -316,14 +335,20 @@ def test_main_refuses_a_credential_in_the_wrong_form(tmp_path, var, bad):
         {"media_automation_helpers_enabled": "yes please"},
     ],
 )
-def test_main_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, ROLE, "main", mv(tmp_path, **over), env=SECRETS)
+@first_run(_first_main_refuses_bad_inputs)
+def test_main_refuses_bad_inputs(first, over):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
 def _cidr(*parts: int) -> str:
     return "{}.{}.{}.{}/{}".format(*parts)
+
+
+def _first_the_kill_switch_admits_lab_ranges_only(tmp_path, bad):
+    over = {"media_automation_vpn_outbound_subnets": [SUBNET, _cidr(*bad)]}
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": mv(tmp_path, **over), "env": SECRETS}
 
 
 @pytest.mark.parametrize(
@@ -338,10 +363,10 @@ def _cidr(*parts: int) -> str:
         (172, 32, 0, 0, 16),
     ],
 )
-def test_the_kill_switch_admits_lab_ranges_only(tmp_path, bad):
+@first_run(_first_the_kill_switch_admits_lab_ranges_only)
+def test_the_kill_switch_admits_lab_ranges_only(first, bad):
     """A public range in FIREWALL_OUTBOUND_SUBNETS is a hole around the tunnel."""
-    over = {"media_automation_vpn_outbound_subnets": [SUBNET, _cidr(*bad)]}
-    r = run_role(tmp_path, ROLE, "main", mv(tmp_path, **over), env=SECRETS)
+    r, tmp_path = first
     assert r.returncode != 0 and not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
@@ -408,7 +433,9 @@ class Stack:
         self.host, self.port = self.httpd.server_address[:2]
 
     def __enter__(self):
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self.httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
         return self
 
     def __exit__(self, *a):
@@ -714,8 +741,14 @@ def test_restore_refuses_an_archive_with_a_link(tmp_path):
     assert r.returncode != 0 and "link" in r.stdout
 
 
-def test_backup_names_the_data_root_not_the_library(tmp_path):
-    assert run_role(tmp_path, ROLE, "backup", mv(tmp_path)).returncode == 0
+def _first_backup_names_the_data_root_not_the_library(tmp_path):
+    return {"role": ROLE, "tasks_from": "backup", "extra_vars": mv(tmp_path)}
+
+
+@first_run(_first_backup_names_the_data_root_not_the_library)
+def test_backup_names_the_data_root_not_the_library(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     manifest = json.loads((tmp_path / "app" / "backup-manifest.json").read_text())
     assert manifest == {"app": "media-automation", "paths": [str(tmp_path / "data")]}
 
@@ -723,17 +756,26 @@ def test_backup_names_the_data_root_not_the_library(tmp_path):
 # ----------------------------------------------------------------------------- upgrade
 
 
-def test_upgrade_records_one_apps_bump_and_refuses_an_unpinned_or_foreign_target(tmp_path):
+def _first_upgrade_records_one_apps_bump_and_refuses_an_unpinned_or_foreign_target(tmp_path):
     cur = DEFAULTS[f"media_automation_{P}_image"]
     repo = cur.split("@")[0].rsplit(":", 1)[0]
     new = f"{repo}:99.0.1-ls1@sha256:" + "b" * 64
     (tmp_path / "app").mkdir()  # an installed stack: upgrade records beside its compose file
-    ok = run_role(
-        tmp_path,
-        ROLE,
-        "upgrade",
-        mv(tmp_path, media_automation_upgrade_app=P, media_automation_target_image=new),
-    )
+    return {
+        "role": ROLE,
+        "tasks_from": "upgrade",
+        "extra_vars": mv(
+            tmp_path, media_automation_upgrade_app=P, media_automation_target_image=new
+        ),
+        "setup": {"new": new, "repo": repo},
+    }
+
+
+@first_run(_first_upgrade_records_one_apps_bump_and_refuses_an_unpinned_or_foreign_target)
+def test_upgrade_records_one_apps_bump_and_refuses_an_unpinned_or_foreign_target(first):
+    ok, tmp_path = first
+    new = first.setup["new"]
+    repo = first.setup["repo"]
     assert ok.returncode == 0, ok.stdout + ok.stderr
     pending = json.loads((tmp_path / "app" / "pending-upgrade.json").read_text())
     assert pending["service"] == P and pending["tag"] == "99.0.1-ls1"
@@ -801,9 +843,7 @@ def test_the_helper_scripts_are_carried_and_run_by_hardened_timers():
     assert "Persistent=true" in timer and "OnCalendar=" in timer
 
 
-def test_the_helper_env_file_holds_the_client_password_0600_and_nothing_else_secret(tmp_path):
-    """The password comes from the secret store into a 0600 file the units read; the units carry
-    none of it."""
+def _first_the_helper_env_file_holds_the_client_password_0600_and_nothing_else_secret(tmp_path):
     calls, units = _helpers(tmp_path)
     v = mv(
         tmp_path,
@@ -812,7 +852,22 @@ def test_the_helper_env_file_holds_the_client_password_0600_and_nothing_else_sec
         media_automation_libexec_dir=str(tmp_path / "libexec"),
         media_automation_systemctl_cli=str(tmp_path / "bin" / "systemctl"),
     )
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": SECRETS,
+        "setup": {"calls": calls, "units": units},
+    }
+
+
+@first_run(_first_the_helper_env_file_holds_the_client_password_0600_and_nothing_else_secret)
+def test_the_helper_env_file_holds_the_client_password_0600_and_nothing_else_secret(first):
+    """The password comes from the secret store into a 0600 file the units read; the units carry
+    none of it."""
+    r, tmp_path = first
+    calls = first.setup["calls"]
+    units = first.setup["units"]
     assert r.returncode == 0, r.stdout + r.stderr
     env_file = tmp_path / "app" / "helpers" / "helper.env"
     body = env_file.read_text()

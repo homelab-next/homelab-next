@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_role
+from rolerun import fake, first_run, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.requires_tool("ansible-playbook")
@@ -95,8 +95,13 @@ def test_decision_mode_raises_both_batch_sizes_to_the_slot_context(tmp_path, ctx
     assert _flag(cmd, "-c") == str(ctx * 2)
 
 
-def test_an_unknown_mode_is_refused(tmp_path):
-    r = run_role(tmp_path, ROLE, "health", vs(tmp_path, mode="chatty"))
+def _first_an_unknown_mode_is_refused(tmp_path):
+    return {"role": ROLE, "tasks_from": "health", "extra_vars": vs(tmp_path, mode="chatty")}
+
+
+@first_run(_first_an_unknown_mode_is_refused)
+def test_an_unknown_mode_is_refused(first):
+    r, _ = first
     assert r.returncode != 0 and "a mode (generate or decision)" in r.stdout
 
 
@@ -155,7 +160,9 @@ class _Server:
         self._httpd = http.server.ThreadingHTTPServer((LOOP, 0), H)
 
     def __enter__(self):
-        threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
         return self
 
     def __exit__(self, *a):

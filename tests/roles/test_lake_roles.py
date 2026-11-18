@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, last_run_vars, run_role
+from rolerun import fake, first_run, last_run_vars, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 USER = pwd.getpwuid(os.getuid()).pw_name
@@ -89,9 +89,21 @@ def garage_vars(tmp: Path, **kw) -> dict:
     return v
 
 
-def test_garage_main_renders_the_bucket_and_key_with_the_secrets_only_in_the_env_file(tmp_path):
+def _first_garage_main_renders_the_bucket_and_key_with_the_secrets_only_in_the_env_file(tmp_path):
     v = garage_vars(tmp_path)
-    r = run_role(tmp_path, GARAGE, "main", v, env=GARAGE_SECRETS)
+    return {
+        "role": GARAGE,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": GARAGE_SECRETS,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first_garage_main_renders_the_bucket_and_key_with_the_secrets_only_in_the_env_file)
+def test_garage_main_renders_the_bucket_and_key_with_the_secrets_only_in_the_env_file(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "app" / "docker-compose.yml").read_text()
     svc = yaml.safe_load(text)["services"]["garage"]
@@ -119,6 +131,15 @@ def test_garage_main_renders_the_bucket_and_key_with_the_secrets_only_in_the_env
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
+def _first_garage_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
+    return {
+        "role": GARAGE,
+        "tasks_from": "main",
+        "extra_vars": garage_vars(tmp_path, **over),
+        "env": {**GARAGE_SECRETS, **env},
+    }
+
+
 @pytest.mark.parametrize(
     "over, env",
     [
@@ -135,29 +156,43 @@ def test_garage_main_renders_the_bucket_and_key_with_the_secrets_only_in_the_env
         ({}, {"HNX_SECRET_GARAGE_ADMIN_TOKEN": "has space in it and is long enough to pass"}),
     ],
 )
-def test_garage_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
-    r = run_role(
-        tmp_path, GARAGE, "main", garage_vars(tmp_path, **over), env={**GARAGE_SECRETS, **env}
-    )
+@first_run(_first_garage_main_refuses_bad_inputs_and_credentials)
+def test_garage_main_refuses_bad_inputs_and_credentials(first, over, env):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
     assert KEY_SECRET not in r.stdout
 
 
-def test_garage_main_refuses_an_unset_secret_naming_its_reference(tmp_path):
+def _first_garage_main_refuses_an_unset_secret_naming_its_reference(tmp_path):
     env = {k: v for k, v in GARAGE_SECRETS.items() if k != "HNX_SECRET_GARAGE_RPC_SECRET"}
-    r = run_role(tmp_path, GARAGE, "main", garage_vars(tmp_path), env=env)
+    return {"role": GARAGE, "tasks_from": "main", "extra_vars": garage_vars(tmp_path), "env": env}
+
+
+@first_run(_first_garage_main_refuses_an_unset_secret_naming_its_reference)
+def test_garage_main_refuses_an_unset_secret_naming_its_reference(first):
+    r, tmp_path = first
     assert r.returncode != 0
     assert "secret:garage/rpc-secret" in r.stdout + r.stderr
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_garage_upgrade_refuses_another_repository_and_another_major_version(tmp_path):
+def _first_garage_upgrade_refuses_another_repository_and_another_major_version(tmp_path):
     digest = "sha256:" + "a" * 64
-    assert (
-        run_role(tmp_path, GARAGE, "main", garage_vars(tmp_path), env=GARAGE_SECRETS).returncode
-        == 0
-    )
+    return {
+        "role": GARAGE,
+        "tasks_from": "main",
+        "extra_vars": garage_vars(tmp_path),
+        "env": GARAGE_SECRETS,
+        "setup": {"digest": digest},
+    }
+
+
+@first_run(_first_garage_upgrade_refuses_another_repository_and_another_major_version)
+def test_garage_upgrade_refuses_another_repository_and_another_major_version(first):
+    first_result, tmp_path = first
+    digest = first.setup["digest"]
+    assert first_result.returncode == 0
     for target in (f"docker.io/dxflrs/other:v2.6.0@{digest}", f"docker.io/dxflrs/garage:v3.0.0@{digest}",
                    "docker.io/dxflrs/garage:v2.6.0"):  # fmt: skip
         v = garage_vars(tmp_path, garage_target_image=target)
@@ -196,9 +231,21 @@ def catalog_vars(tmp: Path, **kw) -> dict:
     return v
 
 
-def test_catalog_main_renders_the_sqlite_catalog_over_the_fixed_warehouse(tmp_path):
+def _first_catalog_main_renders_the_sqlite_catalog_over_the_fixed_warehouse(tmp_path):
     v = catalog_vars(tmp_path)
-    r = run_role(tmp_path, CATALOG, "main", v, env=CATALOG_SECRETS)
+    return {
+        "role": CATALOG,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": CATALOG_SECRETS,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first_catalog_main_renders_the_sqlite_catalog_over_the_fixed_warehouse)
+def test_catalog_main_renders_the_sqlite_catalog_over_the_fixed_warehouse(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "app" / "docker-compose.yml").read_text()
     svc = yaml.safe_load(text)["services"]["iceberg-rest"]
@@ -222,6 +269,15 @@ def test_catalog_main_renders_the_sqlite_catalog_over_the_fixed_warehouse(tmp_pa
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
+def _first_catalog_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
+    return {
+        "role": CATALOG,
+        "tasks_from": "main",
+        "extra_vars": catalog_vars(tmp_path, **over),
+        "env": {**CATALOG_SECRETS, **env},
+    }
+
+
 @pytest.mark.parametrize(
     "over, env",
     [
@@ -235,25 +291,33 @@ def test_catalog_main_renders_the_sqlite_catalog_over_the_fixed_warehouse(tmp_pa
         ({}, {"HNX_SECRET_ICEBERG_REST_S3_ACCESS_KEY": "not-a-key"}),
     ],
 )
-def test_catalog_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
-    r = run_role(
-        tmp_path, CATALOG, "main", catalog_vars(tmp_path, **over), env={**CATALOG_SECRETS, **env}
-    )
+@first_run(_first_catalog_main_refuses_bad_inputs_and_credentials)
+def test_catalog_main_refuses_bad_inputs_and_credentials(first, over, env):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_catalog_main_refuses_an_unset_secret_naming_its_reference(tmp_path):
-    r = run_role(tmp_path, CATALOG, "main", catalog_vars(tmp_path), env={})
+def _first_catalog_main_refuses_an_unset_secret_naming_its_reference(tmp_path):
+    return {"role": CATALOG, "tasks_from": "main", "extra_vars": catalog_vars(tmp_path), "env": {}}
+
+
+@first_run(_first_catalog_main_refuses_an_unset_secret_naming_its_reference)
+def test_catalog_main_refuses_an_unset_secret_naming_its_reference(first):
+    r, tmp_path = first
     assert r.returncode != 0
     assert "secret:iceberg-rest/s3-access-key" in r.stdout + r.stderr
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_catalog_refuses_a_registry_row_that_is_not_an_object_store(tmp_path):
-    # the example registry's lake-catalog row is a catalog, not an object store
+def _first_catalog_refuses_a_registry_row_that_is_not_an_object_store(tmp_path):
     v = catalog_vars(tmp_path, iceberg_rest_s3_url="", iceberg_rest_object_store_id="lake-catalog")
-    r = run_role(tmp_path, CATALOG, "main", v, env=CATALOG_SECRETS)
+    return {"role": CATALOG, "tasks_from": "main", "extra_vars": v, "env": CATALOG_SECRETS}
+
+
+@first_run(_first_catalog_refuses_a_registry_row_that_is_not_an_object_store)
+def test_catalog_refuses_a_registry_row_that_is_not_an_object_store(first):
+    r, _ = first
     assert r.returncode != 0 and "not an object-store" in r.stdout + r.stderr
 
 
@@ -276,12 +340,27 @@ def _fake_docker(tmp_path: Path, *, has_image: bool) -> dict:
     return {"PATH": f"{bindir}:{os.environ['PATH']}"}
 
 
-def test_catalog_loads_the_pinned_image_from_the_archive_only_when_the_daemon_lacks_it(tmp_path):
+def _first_catalog_loads_the_pinned_image_from_the_archive_only_when_the_daemon_lacks_it(tmp_path):
     archive = tmp_path / "image.tar.zst"
     archive.write_bytes(b"not read by the fake")
     v = catalog_vars(tmp_path, iceberg_rest_image_archive=str(archive))
     env = {**CATALOG_SECRETS, **_fake_docker(tmp_path, has_image=False)}
-    assert run_role(tmp_path, CATALOG, "main", v, env=env).returncode == 0
+    return {
+        "role": CATALOG,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": env,
+        "setup": {"archive": archive, "env": env, "v": v},
+    }
+
+
+@first_run(_first_catalog_loads_the_pinned_image_from_the_archive_only_when_the_daemon_lacks_it)
+def test_catalog_loads_the_pinned_image_from_the_archive_only_when_the_daemon_lacks_it(first):
+    first_result, tmp_path = first
+    archive = first.setup["archive"]
+    env = first.setup["env"]
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     log = (tmp_path / "docker.log").read_text()
     assert f"load -i {archive}" in log
     (tmp_path / "docker.log").unlink()
@@ -289,10 +368,15 @@ def test_catalog_loads_the_pinned_image_from_the_archive_only_when_the_daemon_la
     assert "load" not in (tmp_path / "docker.log").read_text()
 
 
-def test_catalog_refuses_when_the_archive_is_missing_or_does_not_bring_the_digest(tmp_path):
+def _first_catalog_refuses_when_the_archive_is_missing_or_does_not_bring_the_digest(tmp_path):
     v = catalog_vars(tmp_path, iceberg_rest_image_archive=str(tmp_path / "absent.tar.zst"))
     env = {**CATALOG_SECRETS, **_fake_docker(tmp_path, has_image=False)}
-    r = run_role(tmp_path, CATALOG, "main", v, env=env)
+    return {"role": CATALOG, "tasks_from": "main", "extra_vars": v, "env": env}
+
+
+@first_run(_first_catalog_refuses_when_the_archive_is_missing_or_does_not_bring_the_digest)
+def test_catalog_refuses_when_the_archive_is_missing_or_does_not_bring_the_digest(first):
+    r, tmp_path = first
     assert r.returncode != 0 and "not a regular file" in r.stdout + r.stderr
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
@@ -310,9 +394,22 @@ def _catalog_script(name: str) -> str:
     return vars_[name]
 
 
-def test_catalog_export_is_a_consistent_listed_copy(tmp_path):
+def _first_catalog_export_is_a_consistent_listed_copy(tmp_path):
     v = catalog_vars(tmp_path)
-    assert run_role(tmp_path, CATALOG, "main", v, env=CATALOG_SECRETS).returncode == 0
+    return {
+        "role": CATALOG,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": CATALOG_SECRETS,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first_catalog_export_is_a_consistent_listed_copy)
+def test_catalog_export_is_a_consistent_listed_copy(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     _catalog_db(tmp_path / "data" / "catalog" / "iceberg_catalog.db")
     r = run_role(tmp_path, CATALOG, "export", v)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -333,9 +430,22 @@ def _restore(mode_args: list[str]) -> subprocess.CompletedProcess:
                           capture_output=True, text=True)  # fmt: skip
 
 
-def test_catalog_restore_installs_a_checked_export_and_refuses_a_tampered_one(tmp_path):
+def _first_catalog_restore_installs_a_checked_export_and_refuses_a_tampered_one(tmp_path):
     v = catalog_vars(tmp_path)
-    assert run_role(tmp_path, CATALOG, "main", v, env=CATALOG_SECRETS).returncode == 0
+    return {
+        "role": CATALOG,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": CATALOG_SECRETS,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first_catalog_restore_installs_a_checked_export_and_refuses_a_tampered_one)
+def test_catalog_restore_installs_a_checked_export_and_refuses_a_tampered_one(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     _catalog_db(tmp_path / "data" / "catalog" / "iceberg_catalog.db")
     assert run_role(tmp_path, CATALOG, "export", v).returncode == 0
     export, dest = tmp_path / "export", tmp_path / "restored"
@@ -364,9 +474,22 @@ def test_catalog_restore_installs_a_checked_export_and_refuses_a_tampered_one(tm
         assert bad.returncode != 0 and "restore refused" in bad.stderr + bad.stdout
 
 
-def test_catalog_restore_refuses_a_link_and_a_file_the_listing_does_not_name(tmp_path):
+def _first_catalog_restore_refuses_a_link_and_a_file_the_listing_does_not_name(tmp_path):
     v = catalog_vars(tmp_path)
-    assert run_role(tmp_path, CATALOG, "main", v, env=CATALOG_SECRETS).returncode == 0
+    return {
+        "role": CATALOG,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": CATALOG_SECRETS,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first_catalog_restore_refuses_a_link_and_a_file_the_listing_does_not_name)
+def test_catalog_restore_refuses_a_link_and_a_file_the_listing_does_not_name(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     _catalog_db(tmp_path / "data" / "catalog" / "iceberg_catalog.db")
     assert run_role(tmp_path, CATALOG, "export", v).returncode == 0
     export = tmp_path / "export"
@@ -445,9 +568,23 @@ def trino_vars(tmp: Path, **kw) -> dict:
     return v
 
 
-def test_trino_main_renders_the_catalog_with_the_retention_floors_and_no_secret_in_a_file(tmp_path):
+def _first_trino_main_renders_the_catalog_with_the_retention_floors_and_no_secret_in_a_file(
+    tmp_path,
+):
     v = trino_vars(tmp_path)
-    r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    return {
+        "role": TRINO,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": TRINO_SECRETS,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first_trino_main_renders_the_catalog_with_the_retention_floors_and_no_secret_in_a_file)
+def test_trino_main_renders_the_catalog_with_the_retention_floors_and_no_secret_in_a_file(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     etc = tmp_path / "app" / "etc"
     cat = (etc / "catalog" / "iceberg.properties").read_text()
@@ -487,9 +624,14 @@ def test_trino_main_renders_the_catalog_with_the_retention_floors_and_no_secret_
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-def test_trino_main_installs_the_maintenance_timer_with_the_lake_retention_values(tmp_path):
+def _first_trino_main_installs_the_maintenance_timer_with_the_lake_retention_values(tmp_path):
     v = trino_vars(tmp_path)
-    r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    return {"role": TRINO, "tasks_from": "main", "extra_vars": v, "env": TRINO_SECRETS}
+
+
+@first_run(_first_trino_main_installs_the_maintenance_timer_with_the_lake_retention_values)
+def test_trino_main_installs_the_maintenance_timer_with_the_lake_retention_values(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     timer = (tmp_path / "units" / "hnx-lake-maintenance.timer").read_text()
     assert "OnCalendar=*-*-* 03:30:00 UTC" in timer and "Persistent=false" in timer
@@ -521,6 +663,15 @@ def test_trino_main_installs_the_maintenance_timer_with_the_lake_retention_value
     assert MAINT_PW not in script and NOTIFY_TOKEN not in script
 
 
+def _first_trino_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
+    return {
+        "role": TRINO,
+        "tasks_from": "main",
+        "extra_vars": trino_vars(tmp_path, **over),
+        "env": {**TRINO_SECRETS, **env},
+    }
+
+
 @pytest.mark.parametrize(
     "over, env",
     [
@@ -549,28 +700,42 @@ def test_trino_main_installs_the_maintenance_timer_with_the_lake_retention_value
         ({}, {"HNX_SECRET_TRINO_S3_SECRET_KEY": "short"}),
     ],
 )
-def test_trino_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
-    r = run_role(
-        tmp_path, TRINO, "main", trino_vars(tmp_path, **over), env={**TRINO_SECRETS, **env}
-    )
+@first_run(_first_trino_main_refuses_bad_inputs_and_credentials)
+def test_trino_main_refuses_bad_inputs_and_credentials(first, over, env):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
     assert MAINT_PW not in r.stdout and KEY_SECRET not in r.stdout
 
 
-def test_trino_main_refuses_an_unset_secret_naming_its_reference(tmp_path):
+def _first_trino_main_refuses_an_unset_secret_naming_its_reference(tmp_path):
     env = {k: v for k, v in TRINO_SECRETS.items() if k != "HNX_SECRET_TRINO_PASSWORD_DB"}
-    r = run_role(tmp_path, TRINO, "main", trino_vars(tmp_path), env=env)
+    return {"role": TRINO, "tasks_from": "main", "extra_vars": trino_vars(tmp_path), "env": env}
+
+
+@first_run(_first_trino_main_refuses_an_unset_secret_naming_its_reference)
+def test_trino_main_refuses_an_unset_secret_naming_its_reference(first):
+    r, tmp_path = first
     assert r.returncode != 0
     assert "secret:trino/password-db" in r.stdout + r.stderr
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_trino_notify_token_over_plain_http_needs_the_site_opt_in(tmp_path):
+def _first_trino_notify_token_over_plain_http_needs_the_site_opt_in(tmp_path):
     plain = PLAIN_NOTIFY_URL
-    r = run_role(
-        tmp_path, TRINO, "main", trino_vars(tmp_path, trino_notify_url=plain), env=TRINO_SECRETS
-    )
+    return {
+        "role": TRINO,
+        "tasks_from": "main",
+        "extra_vars": trino_vars(tmp_path, trino_notify_url=plain),
+        "env": TRINO_SECRETS,
+        "setup": {"plain": plain},
+    }
+
+
+@first_run(_first_trino_notify_token_over_plain_http_needs_the_site_opt_in)
+def test_trino_notify_token_over_plain_http_needs_the_site_opt_in(first):
+    r, tmp_path = first
+    plain = first.setup["plain"]
     assert r.returncode != 0 and "trino_notify_allow_plain_http" in r.stdout + r.stderr
     ok = run_role(tmp_path, TRINO, "main",
                   trino_vars(tmp_path, trino_notify_url=plain, trino_notify_allow_plain_http=True),
@@ -578,9 +743,21 @@ def test_trino_notify_token_over_plain_http_needs_the_site_opt_in(tmp_path):
     assert ok.returncode == 0, ok.stdout + ok.stderr
 
 
-def test_trino_refuses_to_run_without_access_rules_unless_unrestricted_is_said(tmp_path):
+def _first_trino_refuses_to_run_without_access_rules_unless_unrestricted_is_said(tmp_path):
     v = trino_vars(tmp_path, trino_access_unrestricted=False)
-    r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    return {
+        "role": TRINO,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": TRINO_SECRETS,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first_trino_refuses_to_run_without_access_rules_unless_unrestricted_is_said)
+def test_trino_refuses_to_run_without_access_rules_unless_unrestricted_is_said(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode != 0 and "trino_access_unrestricted" in r.stdout + r.stderr
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
     rules = Path(TRINO) / "files" / "lake-access.example.json"
@@ -601,11 +778,22 @@ def test_the_shipped_example_rules_let_only_the_maintenance_user_change_the_lake
     assert {"owner": False} in rules["schemas"]
 
 
-def test_trino_renders_a_read_only_reader_catalog_only_when_asked(tmp_path):
+def _first_trino_renders_a_read_only_reader_catalog_only_when_asked(tmp_path):
     cat = tmp_path / "app" / "etc" / "catalog"
-    assert (
-        run_role(tmp_path, TRINO, "main", trino_vars(tmp_path), env=TRINO_SECRETS).returncode == 0
-    )
+    return {
+        "role": TRINO,
+        "tasks_from": "main",
+        "extra_vars": trino_vars(tmp_path),
+        "env": TRINO_SECRETS,
+        "setup": {"cat": cat},
+    }
+
+
+@first_run(_first_trino_renders_a_read_only_reader_catalog_only_when_asked)
+def test_trino_renders_a_read_only_reader_catalog_only_when_asked(first):
+    first_result, tmp_path = first
+    cat = first.setup["cat"]
+    assert first_result.returncode == 0
     assert sorted(p.name for p in cat.iterdir()) == ["iceberg.properties"]
     assert "iceberg.security" not in (cat / "iceberg.properties").read_text()
     v = trino_vars(tmp_path, trino_reader_catalog="iceberg_ro")
@@ -629,11 +817,17 @@ def test_trino_renders_a_read_only_reader_catalog_only_when_asked(tmp_path):
         assert r.returncode != 0, bad
 
 
-def test_trino_installs_the_access_rules_when_given_and_removes_them_when_not(tmp_path):
+def _first_trino_installs_the_access_rules_when_given_and_removes_them_when_not(tmp_path):
     rules = tmp_path / "rules.json"
     rules.write_text('{"catalogs": []}\n')
     v = trino_vars(tmp_path, trino_access_rules_src=str(rules))
-    assert run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS).returncode == 0
+    return {"role": TRINO, "tasks_from": "main", "extra_vars": v, "env": TRINO_SECRETS}
+
+
+@first_run(_first_trino_installs_the_access_rules_when_given_and_removes_them_when_not)
+def test_trino_installs_the_access_rules_when_given_and_removes_them_when_not(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     etc = tmp_path / "app" / "etc"
     assert (etc / "lake-access.json").read_text() == '{"catalogs": []}\n'
     assert (
@@ -652,10 +846,17 @@ def test_trino_installs_the_access_rules_when_given_and_removes_them_when_not(tm
     )
 
 
-def test_trino_without_the_maintenance_timer_installs_none_and_needs_none_of_its_secrets(tmp_path):
+def _first_trino_without_the_maintenance_timer_installs_none_and_needs_none_of_its_secrets(
+    tmp_path,
+):
     v = trino_vars(tmp_path, trino_maintenance_enabled=False, trino_notify_url="")
     env = {k: x for k, x in TRINO_SECRETS.items() if "MAINTENANCE" not in k and "NOTIFY" not in k}
-    r = run_role(tmp_path, TRINO, "main", v, env=env)
+    return {"role": TRINO, "tasks_from": "main", "extra_vars": v, "env": env}
+
+
+@first_run(_first_trino_without_the_maintenance_timer_installs_none_and_needs_none_of_its_secrets)
+def test_trino_without_the_maintenance_timer_installs_none_and_needs_none_of_its_secrets(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (tmp_path / "units" / "hnx-lake-maintenance.timer").exists()
     assert not (tmp_path / "libexec").exists()
@@ -758,7 +959,9 @@ class _NotifyHandler(http.server.BaseHTTPRequestHandler):
 
 
 def _serve(server):
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+    ).start()
     return server
 
 
@@ -1013,7 +1216,7 @@ def test_maintenance_per_schema_overrides_set_retention_and_can_turn_orphans_off
     ]  # fmt: skip
 
 
-def test_the_rendered_config_carries_the_allow_skip_and_override_lists(tmp_path):
+def _first_the_rendered_config_carries_the_allow_skip_and_override_lists(tmp_path):
     v = trino_vars(
         tmp_path,
         trino_maintenance_schemas=["cti", "cape.*"],
@@ -1021,7 +1224,12 @@ def test_the_rendered_config_carries_the_allow_skip_and_override_lists(tmp_path)
         trino_maintenance_overrides={"cti": {"expire": "90d", "retain_last": 50}},
         trino_preflight_timeout=42,
     )
-    r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    return {"role": TRINO, "tasks_from": "main", "extra_vars": v, "env": TRINO_SECRETS}
+
+
+@first_run(_first_the_rendered_config_carries_the_allow_skip_and_override_lists)
+def test_the_rendered_config_carries_the_allow_skip_and_override_lists(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     line = next(
         ln for ln in (tmp_path / "libexec" / "hnx-lake-maintenance").read_text().splitlines()
@@ -1031,6 +1239,15 @@ def test_the_rendered_config_carries_the_allow_skip_and_override_lists(tmp_path)
     assert cfg["allow"] == ["cti", "cape.*"] and cfg["skip"] == ["rba"]
     assert cfg["overrides"] == {"cti": {"expire": "90d", "retain_last": 50}}
     assert cfg["preflight_timeout"] == 42
+
+
+def _first_trino_refuses_unsafe_maintenance_lists_and_overrides(tmp_path, over):
+    return {
+        "role": TRINO,
+        "tasks_from": "main",
+        "extra_vars": trino_vars(tmp_path, **over),
+        "env": TRINO_SECRETS,
+    }
 
 
 @pytest.mark.parametrize(
@@ -1057,16 +1274,30 @@ def test_the_rendered_config_carries_the_allow_skip_and_override_lists(tmp_path)
         {"trino_preflight_timeout": 1},
     ],
 )
-def test_trino_refuses_unsafe_maintenance_lists_and_overrides(tmp_path, over):
-    r = run_role(tmp_path, TRINO, "main", trino_vars(tmp_path, **over), env=TRINO_SECRETS)
+@first_run(_first_trino_refuses_unsafe_maintenance_lists_and_overrides)
+def test_trino_refuses_unsafe_maintenance_lists_and_overrides(first, over):
+    r, tmp_path = first
     assert r.returncode != 0
     assert not (tmp_path / "units" / "hnx-lake-maintenance.timer").exists()
 
 
-def test_trino_is_not_armed_on_a_lake_nobody_acknowledged_and_arms_once_acknowledged(tmp_path):
+def _first_trino_is_not_armed_on_a_lake_nobody_acknowledged_and_arms_once_acknowledged(tmp_path):
     log = tmp_path / "systemctl.log"
     v = trino_vars(tmp_path, trino_maintenance_acknowledged_restore=False)
-    r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    return {
+        "role": TRINO,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": TRINO_SECRETS,
+        "setup": {"log": log, "v": v},
+    }
+
+
+@first_run(_first_trino_is_not_armed_on_a_lake_nobody_acknowledged_and_arms_once_acknowledged)
+def test_trino_is_not_armed_on_a_lake_nobody_acknowledged_and_arms_once_acknowledged(first):
+    r, tmp_path = first
+    log = first.setup["log"]
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     # installed (so it can be armed later) but never enabled or started
     assert (tmp_path / "units" / "hnx-lake-maintenance.timer").exists()
@@ -1087,9 +1318,22 @@ def test_trino_default_is_not_armed_until_the_operator_acknowledges(tmp_path):
     assert not (tmp_path / "timer-enabled").exists()
 
 
-def test_trino_disarms_an_installed_timer_when_it_loses_its_acknowledgement(tmp_path):
+def _first_trino_disarms_an_installed_timer_when_it_loses_its_acknowledgement(tmp_path):
     v = trino_vars(tmp_path)
-    assert run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS).returncode == 0
+    return {
+        "role": TRINO,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": TRINO_SECRETS,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first_trino_disarms_an_installed_timer_when_it_loses_its_acknowledgement)
+def test_trino_disarms_an_installed_timer_when_it_loses_its_acknowledgement(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     assert (tmp_path / "timer-enabled").exists()
     v["trino_maintenance_acknowledged_restore"] = False
     r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
@@ -1100,9 +1344,15 @@ def test_trino_disarms_an_installed_timer_when_it_loses_its_acknowledgement(tmp_
     assert not (tmp_path / "timer-enabled").exists()
 
 
-def test_trino_with_maintenance_disabled_stops_and_disables_an_installed_timer(tmp_path):
+def _first_trino_with_maintenance_disabled_stops_and_disables_an_installed_timer(tmp_path):
     v = trino_vars(tmp_path)
-    assert run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS).returncode == 0
+    return {"role": TRINO, "tasks_from": "main", "extra_vars": v, "env": TRINO_SECRETS}
+
+
+@first_run(_first_trino_with_maintenance_disabled_stops_and_disables_an_installed_timer)
+def test_trino_with_maintenance_disabled_stops_and_disables_an_installed_timer(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     assert (tmp_path / "timer-enabled").exists()
     off = trino_vars(tmp_path, trino_maintenance_enabled=False, trino_notify_url="")
     env = {k: x for k, x in TRINO_SECRETS.items() if "MAINTENANCE" not in k and "NOTIFY" not in k}
@@ -1189,10 +1439,19 @@ def test_sigterm_while_listing_the_tables_writes_state_and_alerts(maintenance):
     assert engine.deletes  # the listing query was cancelled too
 
 
-def test_trino_timer_does_not_catch_up_a_missed_run_unless_asked(tmp_path):
-    assert (
-        run_role(tmp_path, TRINO, "main", trino_vars(tmp_path), env=TRINO_SECRETS).returncode == 0
-    )
+def _first_trino_timer_does_not_catch_up_a_missed_run_unless_asked(tmp_path):
+    return {
+        "role": TRINO,
+        "tasks_from": "main",
+        "extra_vars": trino_vars(tmp_path),
+        "env": TRINO_SECRETS,
+    }
+
+
+@first_run(_first_trino_timer_does_not_catch_up_a_missed_run_unless_asked)
+def test_trino_timer_does_not_catch_up_a_missed_run_unless_asked(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     unit = tmp_path / "units" / "hnx-lake-maintenance.timer"
     assert "Persistent=false" in unit.read_text()  # arming never starts a run by itself
     on = trino_vars(tmp_path, trino_maintenance_catch_up=True)

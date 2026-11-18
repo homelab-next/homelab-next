@@ -221,7 +221,9 @@ class _App:
         self._httpd = http.server.ThreadingHTTPServer((LOOP, 0), H)
 
     def __enter__(self):
-        threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
         return self
 
     def __exit__(self, *a):
@@ -269,9 +271,16 @@ def test_health_fails_on_a_config_that_breaks_the_policy(tmp_path, mutate):
 
 
 # --------------------------------------------------------------------------------- upgrade
-def test_upgrade_records_a_bump_of_the_same_repository_and_refuses_another(tmp_path):
+def _first_upgrade_records_a_bump_of_the_same_repository_and_refuses_another(tmp_path):
     v = vs(tmp_path)
-    assert run_role(tmp_path, ROLE, "main", v, env=ENV).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": ENV, "setup": {"v": v}}
+
+
+@first_run(_first_upgrade_records_a_bump_of_the_same_repository_and_refuses_another)
+def test_upgrade_records_a_bump_of_the_same_repository_and_refuses_another(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     same = "ghcr.io/open-webui/open-webui:v0.12.6@sha256:" + "a" * 64
     ok = run_role(tmp_path, ROLE, "upgrade", {**v, "openwebui_target_image": same})
     assert ok.returncode == 0, ok.stdout + ok.stderr

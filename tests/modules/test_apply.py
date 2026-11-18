@@ -465,7 +465,9 @@ def _stub_roles(base: Path, sel: dict) -> dict[str, str]:
 
 
 def _ansible(tmp_path: Path, *args: str) -> subprocess.CompletedProcess:
-    env = dict(os.environ, ANSIBLE_HOME=str(tmp_path / ".ansible"), ANSIBLE_NOCOLOR="1")
+    # no fact gathering: the stub roles need none, and it is most of a run's time
+    env = dict(os.environ, ANSIBLE_HOME=str(tmp_path / ".ansible"), ANSIBLE_NOCOLOR="1",
+               ANSIBLE_GATHERING="explicit")  # fmt: skip
     return subprocess.run(
         ["ansible-playbook", *args], capture_output=True, text=True, env=env, cwd=tmp_path,
         timeout=300,
@@ -782,7 +784,7 @@ def test_an_owed_cap_that_cannot_be_applied_fails_the_play(tmp_path, tree, fleet
     (bin_ / "systemctl").write_text("#!/bin/sh\n")
     (bin_ / "systemctl").chmod(0o755)
     env = dict(os.environ, ANSIBLE_HOME=str(tmp_path / ".ansible"), ANSIBLE_NOCOLOR="1",
-               PATH=f"{bin_}:{os.environ['PATH']}")  # fmt: skip
+               ANSIBLE_GATHERING="explicit", PATH=f"{bin_}:{os.environ['PATH']}")  # fmt: skip
     r = subprocess.run(
         ["ansible-playbook", "-i", "hosts.yml", str(tmp_path / "out" / apply.PLAYBOOK),
          "-e", "ansible_become=false", "-e", f"hnx_limits_unit_dir={tmp_path}",

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_role
+from rolerun import fake, first_run, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLE = str(ROOT / "modules" / "tunnel" / "roles" / "tunnel")
@@ -58,9 +58,15 @@ def tunnel_vars(tmp_path: Path, **kw) -> dict:
     return v
 
 
-def test_main_renders_a_remotely_managed_connector_with_the_token_only_in_the_env_file(tmp_path):
+def _first_main_renders_a_remotely_managed_connector_with_the_token_only_in_the_env_file(tmp_path):
     v = tunnel_vars(tmp_path)
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@first_run(_first_main_renders_a_remotely_managed_connector_with_the_token_only_in_the_env_file)
+def test_main_renders_a_remotely_managed_connector_with_the_token_only_in_the_env_file(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     compose = (tmp_path / "app" / "docker-compose.yml").read_text()
     svc = yaml.safe_load(compose)["services"]["tunnel"]
@@ -87,9 +93,14 @@ def test_main_renders_a_remotely_managed_connector_with_the_token_only_in_the_en
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-def test_main_puts_the_container_in_the_role_slice_the_module_play_names(tmp_path):
+def _first_main_puts_the_container_in_the_role_slice_the_module_play_names(tmp_path):
     v = tunnel_vars(tmp_path, hnx_module_slice="hnx-tunnel-server.slice")
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@first_run(_first_main_puts_the_container_in_the_role_slice_the_module_play_names)
+def test_main_puts_the_container_in_the_role_slice_the_module_play_names(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     assert doc["services"]["tunnel"]["cgroup_parent"] == "hnx-tunnel-server.slice"
@@ -97,6 +108,10 @@ def test_main_puts_the_container_in_the_role_slice_the_module_play_names(tmp_pat
 
 def _b64(obj) -> str:
     return base64.b64encode(json.dumps(obj).encode()).decode()
+
+
+def _first_main_refuses_an_empty_or_malformed_token(tmp_path, env, word):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": tunnel_vars(tmp_path), "env": env}
 
 
 @pytest.mark.parametrize(
@@ -111,8 +126,9 @@ def _b64(obj) -> str:
         ({ENV: base64.b64encode(b"plainly not json " * 5).decode()}, "does not decode"),
     ],
 )
-def test_main_refuses_an_empty_or_malformed_token(tmp_path, env, word):
-    r = run_role(tmp_path, ROLE, "main", tunnel_vars(tmp_path), env=env)
+@first_run(_first_main_refuses_an_empty_or_malformed_token)
+def test_main_refuses_an_empty_or_malformed_token(first, env, word):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert word in r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
@@ -120,11 +136,25 @@ def test_main_refuses_an_empty_or_malformed_token(tmp_path, env, word):
     assert (JOIN_VALUE not in r.stdout and env[ENV].strip() not in r.stdout) or not env[ENV].strip()
 
 
-def test_main_refuses_an_unset_token_naming_the_secret(tmp_path):
-    r = run_role(tmp_path, ROLE, "main", tunnel_vars(tmp_path), env={})
+def _first_main_refuses_an_unset_token_naming_the_secret(tmp_path):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": tunnel_vars(tmp_path), "env": {}}
+
+
+@first_run(_first_main_refuses_an_unset_token_naming_the_secret)
+def test_main_refuses_an_unset_token_naming_the_secret(first):
+    r, tmp_path = first
     assert r.returncode != 0
     assert "secret:tunnel/token" in r.stdout + r.stderr
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def _first_main_refuses_bad_inputs(tmp_path, over):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": tunnel_vars(tmp_path, **over),
+        "env": SECRETS,
+    }
 
 
 @pytest.mark.parametrize(
@@ -142,8 +172,9 @@ def test_main_refuses_an_unset_token_naming_the_secret(tmp_path):
         {"tunnel_mem_limit": "lots"},
     ],
 )
-def test_main_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, ROLE, "main", tunnel_vars(tmp_path, **over), env=SECRETS)
+@first_run(_first_main_refuses_bad_inputs)
+def test_main_refuses_bad_inputs(first, over):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
@@ -183,7 +214,9 @@ class Ready:
         self.httpd.connections = connections
 
     def __enter__(self):
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self.httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
         return self.httpd.server_address[:2]
 
     def __exit__(self, *a):
@@ -217,12 +250,20 @@ def test_health_fails_when_the_port_is_published_on_another_address(tmp_path):
     assert r.returncode != 0 and "bound to the guest's address only" in r.stdout
 
 
-def test_upgrade_refuses_another_repository_and_an_unpinned_target(tmp_path):
+def _first_upgrade_refuses_another_repository_and_an_unpinned_target(tmp_path):
     ok = REPO + ":2026.11.0@sha256:" + "a" * 64
     (tmp_path / "app").mkdir()
-    r = run_role(
-        tmp_path, ROLE, "upgrade", tunnel_vars(tmp_path, tunnel_target_image=ok), env=SECRETS
-    )
+    return {
+        "role": ROLE,
+        "tasks_from": "upgrade",
+        "extra_vars": tunnel_vars(tmp_path, tunnel_target_image=ok),
+        "env": SECRETS,
+    }
+
+
+@first_run(_first_upgrade_refuses_another_repository_and_an_unpinned_target)
+def test_upgrade_refuses_another_repository_and_an_unpinned_target(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     for bad in (REPO + ":2026.11.0", "docker.io/other/x:1@sha256:" + "a" * 64):
         r = run_role(
@@ -262,10 +303,23 @@ def _sysctl(tmp_path: Path, live: int) -> tuple[dict, Path]:
     return {"PATH": f"{bindir}:{os.environ['PATH']}"}, log
 
 
-def test_sysctl_only_raises_a_low_ceiling_and_never_lowers_a_higher_one(tmp_path):
+def _first_sysctl_only_raises_a_low_ceiling_and_never_lowers_a_higher_one(tmp_path):
     env, log = _sysctl(tmp_path, live=999999999)
     v = tunnel_vars(tmp_path, tunnel_sysctl_apply=True)
-    r = run_role(tmp_path, ROLE, "main", v, env={**SECRETS, **env})
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": {**SECRETS, **env},
+        "setup": {"env": env, "log": log},
+    }
+
+
+@first_run(_first_sysctl_only_raises_a_low_ceiling_and_never_lowers_a_higher_one)
+def test_sysctl_only_raises_a_low_ceiling_and_never_lowers_a_higher_one(first):
+    r, tmp_path = first
+    env = first.setup["env"]
+    log = first.setup["log"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (tmp_path / "sysctl.conf").exists()  # above the floor already: nothing written
     assert " -w " not in " " + log.read_text()
@@ -347,16 +401,40 @@ def test_a_rotated_token_recreates_the_running_connector_and_an_unchanged_one_do
     assert rotated not in third.stdout
 
 
-def test_nothing_is_recreated_when_the_connector_is_deliberately_not_started(tmp_path):
+def _first_nothing_is_recreated_when_the_connector_is_deliberately_not_started(tmp_path):
     env, log = _logging_docker(tmp_path)
-    r = run_role(tmp_path, ROLE, "main", tunnel_vars(tmp_path), env={**SECRETS, **env})
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": tunnel_vars(tmp_path),
+        "env": {**SECRETS, **env},
+        "setup": {"log": log},
+    }
+
+
+@first_run(_first_nothing_is_recreated_when_the_connector_is_deliberately_not_started)
+def test_nothing_is_recreated_when_the_connector_is_deliberately_not_started(first):
+    r, _ = first
+    log = first.setup["log"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert not log.exists() or "--force-recreate" not in log.read_text()
 
 
-def test_health_reports_not_started_by_design_instead_of_failing(tmp_path):
+def _first_health_reports_not_started_by_design_instead_of_failing(tmp_path):
     env, log = _logging_docker(tmp_path)
-    r = run_role(tmp_path, ROLE, "health", tunnel_vars(tmp_path), env={**SECRETS, **env})
+    return {
+        "role": ROLE,
+        "tasks_from": "health",
+        "extra_vars": tunnel_vars(tmp_path),
+        "env": {**SECRETS, **env},
+        "setup": {"log": log},
+    }
+
+
+@first_run(_first_health_reports_not_started_by_design_instead_of_failing)
+def test_health_reports_not_started_by_design_instead_of_failing(first):
+    r, _ = first
+    log = first.setup["log"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert "deliberately not running" in r.stdout
     assert not log.exists()  # no container or endpoint was asked

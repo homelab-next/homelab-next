@@ -245,7 +245,9 @@ class Controller:
     # -- life ---------------------------------------------------------------------------------
 
     def __enter__(self):
-        threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
         return self
 
     def __exit__(self, *a):

@@ -117,7 +117,7 @@ def edge(tmp_path):
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(str(crt), str(key))
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     yield srv.server_address[1], str(crt), seen
     srv.shutdown()
 

@@ -297,7 +297,9 @@ def test_the_probe_reads_the_status_from_the_resolved_endpoint(monkeypatch):
     with pytest.raises(AdapterConfigError, match="HNX_ENDPOINT_MEDIA_AUTOMATION"):
         make()  # no default endpoint
     httpd = ThreadingHTTPServer(("localhost", 0), _Front)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(
+        target=httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+    ).start()
     try:
         monkeypatch.setenv(
             "HNX_ENDPOINT_MEDIA_AUTOMATION", "http://{}:{}".format(*httpd.server_address[:2])

@@ -415,10 +415,22 @@ def test_recommends_are_not_installed_so_rootless_extras_stays_at_no_unpinned_ve
     assert "rootless" not in str(FIXED["docker_engine_packages"])
 
 
-def test_check_mode_reports_an_existing_keyring_as_rechecked_by_a_real_run(tmp_path):
+def _first_check_mode_reports_an_existing_keyring_as_rechecked_by_a_real_run(tmp_path):
     ring = tmp_path / "ring.asc"
     ring.write_text("x")
-    r = run_role(tmp_path, ROLE, "signing_key", {"docker_engine_keyring": str(ring)}, check=True)
+    return {
+        "role": ROLE,
+        "tasks_from": "signing_key",
+        "extra_vars": {"docker_engine_keyring": str(ring)},
+        "check": True,
+        "setup": {"ring": ring},
+    }
+
+
+@first_run(_first_check_mode_reports_an_existing_keyring_as_rechecked_by_a_real_run)
+def test_check_mode_reports_an_existing_keyring_as_rechecked_by_a_real_run(first):
+    r, _ = first
+    ring = first.setup["ring"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert "exists; a real run re-checks it" in r.stdout and ring.read_text() == "x"
 

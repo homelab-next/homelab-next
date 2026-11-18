@@ -47,8 +47,11 @@ def _invocation(tmp_path, role, tasks_from, extra_vars, env=None, verbose=False,
         ANSIBLE_LOCALHOST_WARNING="False",
         ANSIBLE_HOME=str(tmp_path / ".ansible"),
         ANSIBLE_NOCOLOR="1",
-        **(env or {}),
+        # one shell call a module task, not four: about 10% off a run.  Not at -v: the -vvv tests
+        # read the remote command lines Ansible prints, which a piped module does not have
+        ANSIBLE_PIPELINING="False" if verbose else "True",
     )
+    run_env.update(env or {})  # after the defaults: a test may set its own pipelining
     cmd = ["ansible-playbook", "-i", "localhost,", "-e", f"@{ev}", str(pb)]
     if verbose:
         cmd.append("-v")
@@ -303,8 +306,9 @@ def _run_case_chunk(tmp_path, tag, role, tasks_from, base_vars, overrides, env):
         ANSIBLE_LOCALHOST_WARNING="False",
         ANSIBLE_HOME=str(tmp_path / f".ansible{tag}"),
         ANSIBLE_NOCOLOR="1",
-        **(env or {}),
+        ANSIBLE_PIPELINING="True",  # one shell call a module task, not four: about 10% off a run
     )
+    run_env.update(env or {})
     r = subprocess.run(
         ["ansible-playbook", "-i", "localhost,", "-e", f"@{ev}", str(pb)],
         capture_output=True, text=True, env=run_env, cwd=tmp_path,

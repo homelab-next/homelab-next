@@ -59,7 +59,9 @@ class SingleModelServer:
         return int(self._httpd.server_address[1])
 
     def __enter__(self) -> SingleModelServer:
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread = threading.Thread(
+            target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        )
         self._thread.start()
         return self
 
