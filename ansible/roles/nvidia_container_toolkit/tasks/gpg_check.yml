@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Read whether gpg is installed
+  ansible.builtin.command:
+    argv: ["{{ nvidia_container_toolkit_dpkg_query_cli }}", -W, -f, '${db:Status-Abbrev}', gpg]
+  register: nvidia_container_toolkit_gpg
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Refuse without gpg (install it first; this role installs nothing but the toolkit)
+  ansible.builtin.assert:
+    that:
+      - nvidia_container_toolkit_gpg.rc == 0
+      - (nvidia_container_toolkit_gpg.stdout | trim) in ['ii', 'hi']
+    fail_msg: >-
+      nvidia_container_toolkit: gpg is not installed (dpkg state
+      '{{ nvidia_container_toolkit_gpg.stdout | trim }}'); it checks the vendor key, and this role
+      installs nothing but the four toolkit packages: install gpg first, or set
+      nvidia_container_toolkit_repository to "" to use the host's own apt sources

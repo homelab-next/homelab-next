@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # What the container runtime can resolve: `nvidia-ctk cdi list` names nvidia.com/gpu=all and, with
-# a GPU count expected, exactly the indices 0..N-1. Zero devices is a failure either way.
+# a GPU count expected (not any), exactly the indices 0..N-1. Zero devices is a failure either way.
 - name: List the CDI devices
   ansible.builtin.command:
     argv: ["{{ nvidia_container_toolkit_ctk_cli }}", cdi, list]
@@ -12,13 +12,13 @@
   vars:
     nvidia_container_toolkit_names: "{{ nvidia_container_toolkit_cdi_list.stdout | regex_findall('(?m)^nvidia\\.com/gpu=(\\S+)\\s*$') }}"
     nvidia_container_toolkit_indices: "{{ nvidia_container_toolkit_names | select('match', '^[0-9]+\\Z') | map('int') | sort | list }}"
-    nvidia_container_toolkit_want_indices: "{{ range(nvidia_container_toolkit_expected_gpus | int) | list }}"
+    nvidia_container_toolkit_want_indices: "{{ [] if nvidia_container_toolkit_expected_gpus == 'any' else range(nvidia_container_toolkit_expected_gpus | int) | list }}"
   ansible.builtin.assert:
     that:
       - "'all' in nvidia_container_toolkit_names"
       - nvidia_container_toolkit_indices | length > 0
-      - nvidia_container_toolkit_expected_gpus | int == 0 or nvidia_container_toolkit_indices == nvidia_container_toolkit_want_indices
+      - nvidia_container_toolkit_expected_gpus == 'any' or nvidia_container_toolkit_indices == nvidia_container_toolkit_want_indices
     fail_msg: >-
       nvidia_container_toolkit: nvidia-ctk cdi list names {{ nvidia_container_toolkit_names | join(', ') or 'no GPU' }};
       wanted nvidia.com/gpu=all and
-      {{ 'at least one GPU index' if nvidia_container_toolkit_expected_gpus | int == 0 else 'exactly the indices 0 to ' ~ (nvidia_container_toolkit_expected_gpus | int - 1) }}
+      {{ 'at least one GPU index' if nvidia_container_toolkit_expected_gpus == 'any' else 'exactly the indices 0 to ' ~ (nvidia_container_toolkit_expected_gpus | int - 1) }}

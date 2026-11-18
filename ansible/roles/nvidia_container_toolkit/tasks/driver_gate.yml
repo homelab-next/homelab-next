@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Nothing in this role may load the NVIDIA kernel module. `nvidia-ctk cdi generate` discovers the
+# cards through NVML, and NVML run as root loads the module itself (nvidia-modprobe or modprobe)
+# when it is absent, as a root nvidia-smi does: on a guest whose cards must never be initialised
+# warm, that load is the hazard. So before any command that can reach NVML, the driver must
+# ALREADY be up: /proc/modules lists the nvidia module and its control device exists. Otherwise
+# the run fails here, having called nothing. Read with slurp and stat only: neither loads anything.
+- name: Read the loaded kernel modules
+  ansible.builtin.slurp:
+    src: "{{ nvidia_container_toolkit_proc_root }}/modules"
+  register: nvidia_container_toolkit_modules
+  check_mode: false
+
+- name: Look for the driver's control device
+  ansible.builtin.stat:
+    path: "{{ nvidia_container_toolkit_dev_root }}/nvidiactl"
+    get_checksum: false
+  register: nvidia_container_toolkit_ctl
+  check_mode: false
+
+- name: Refuse unless the driver is already loaded (this role never loads it)
+  vars:
+    nvidia_container_toolkit_loaded: "{{ nvidia_container_toolkit_modules.content | b64decode | regex_findall('(?m)^(\\S+) ') }}"
+    nvidia_container_toolkit_unloaded: "{{ nvidia_container_toolkit_driver_modules | difference(nvidia_container_toolkit_loaded) }}"
+  ansible.builtin.assert:
+    that:
+      - nvidia_container_toolkit_unloaded | length == 0
+      - nvidia_container_toolkit_ctl.stat.exists
+    fail_msg: >-
+      nvidia_container_toolkit: the NVIDIA driver is not up (kernel modules not loaded:
+      {{ nvidia_container_toolkit_unloaded | join(', ') or 'none' }}; {{ nvidia_container_toolkit_dev_root }}/nvidiactl
+      {{ 'exists' if nvidia_container_toolkit_ctl.stat.exists else 'is missing' }}). Nothing was run: generating
+      the CDI spec goes through NVML, which as root would load the module itself, and on a GPU whose
+      cards must not be initialised warm that load is the hazard. Bring the driver up the way the
+      guest's runbook says (a cold start), then run the role again.

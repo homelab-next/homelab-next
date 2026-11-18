@@ -16,16 +16,18 @@
       - nvidia_container_toolkit_cdi_spec is match(nvidia_container_toolkit_path_pattern)
       - nvidia_container_toolkit_state_dir is match(nvidia_container_toolkit_path_pattern)
       - nvidia_container_toolkit_dev_root is match(nvidia_container_toolkit_path_pattern)
-      - nvidia_container_toolkit_expected_gpus is integer
-      - nvidia_container_toolkit_expected_gpus >= 0
-      - nvidia_container_toolkit_expected_gpus <= 16
+      # 1 to 16 cards, or the word any as the explicit opt-out of the count; 0 is refused
+      - >-
+        nvidia_container_toolkit_expected_gpus == 'any'
+        or (nvidia_container_toolkit_expected_gpus is integer
+            and nvidia_container_toolkit_expected_gpus >= 1 and nvidia_container_toolkit_expected_gpus <= 16)
       - nvidia_container_toolkit_auto_refresh is boolean
       - >-
         [nvidia_container_toolkit_apt_get_cli, nvidia_container_toolkit_apt_mark_cli,
-        nvidia_container_toolkit_dpkg_query_cli, nvidia_container_toolkit_ctk_cli,
-        nvidia_container_toolkit_systemctl_cli] | select('match', '^[A-Za-z0-9_./-]+\Z') | list | length == 5
+        nvidia_container_toolkit_dpkg_query_cli, nvidia_container_toolkit_dpkg_cli, nvidia_container_toolkit_ctk_cli,
+        nvidia_container_toolkit_systemctl_cli] | select('match', '^[A-Za-z0-9_./-]+\Z') | list | length == 6
     fail_msg: >-
       nvidia_container_toolkit: a plain x.y.z version and numeric package revision, an https
       repository (or "" for the host's own apt sources), a channel name, key fingerprints (40
-      upper-case hex digits), absolute paths, a GPU count of 0 to 16, a boolean auto_refresh and
+      upper-case hex digits), absolute paths, a GPU count of 1 to 16 (or any to check no count), a boolean auto_refresh and
       plain command names

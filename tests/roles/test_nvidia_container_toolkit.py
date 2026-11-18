@@ -45,6 +45,12 @@ DRIVER = [
     "docker-ce 5:29.9.2-1 hi",
 ]
 INSTALLED = [f"{p} {PIN} hi" for p in PKGS]
+# /proc/modules of a guest whose driver is up
+MODULES = (
+    "nvidia_uvm 1974272 0 - Live 0x0000000000000000\n"
+    "nvidia 104071168 1 nvidia_uvm, Live 0x0000000000000000\n"
+    "drm 774144 1 nvidia, Live 0x0000000000000000\n"
+)
 GPUS = ["INFO[0000] Found 5 CDI devices", *(f"nvidia.com/gpu={i}" for i in range(4)),
         "nvidia.com/gpu=all"]  # fmt: skip
 
@@ -77,7 +83,12 @@ if NAME == "dpkg-query":
     want = [a for a in ARGS[3:]]
     for n, v, s in rows():
         if not want or n in want:
-            print(n, v, s + " ")
+            if ARGS[2] == "${{db:Status-Abbrev}}":
+                sys.stdout.write(s + " ")
+            else:
+                print(n, v, s + " ")
+    if want and not [r for r in rows() if r[0] in want]:
+        sys.exit(1)
 elif NAME == "apt-get":
     if "-s" in ARGS:
         specs = [a for a in ARGS if "=" in a and not a.startswith("-")]
@@ -105,6 +116,8 @@ elif NAME == "systemctl":
         for u in units:
             print("masked" if os.path.exists(D + "/masked/" + u) else "disabled")
         sys.exit(1)
+elif NAME == "dpkg":
+    sys.stdout.write(read("audit.txt", ""))
 elif NAME == "nvidia-ctk":
     if ARGS[:2] == ["cdi", "generate"]:
         open(ARGS[2].split("=", 1)[1], "w").write(read("ctk.spec", "cdiVersion: 0.5.0\n"))
@@ -118,6 +131,7 @@ FAKES = {
     "apt-get": "apt_get_cli",
     "apt-mark": "apt_mark_cli",
     "dpkg-query": "dpkg_query_cli",
+    "dpkg": "dpkg_cli",
     "systemctl": "systemctl_cli",
     "nvidia-ctk": "ctk_cli",
 }
@@ -137,6 +151,8 @@ def world(tmp, dpkg=None, masked=(), spec="cdiVersion: 0.5.0\n", listing=None, l
     (tmp / "state").mkdir(exist_ok=True)  # made by an earlier run on a converged host
     (tmp / "dev").mkdir(exist_ok=True)
     (tmp / "dev" / "nvidiactl").write_text("")
+    (tmp / "proc").mkdir(exist_ok=True)
+    (tmp / "proc" / "modules").write_text(MODULES)
     if live is not None:
         (tmp / "etc" / "cdi").mkdir(parents=True, exist_ok=True)
         (tmp / "etc" / "cdi" / "nvidia.yaml").write_text(live)
@@ -149,6 +165,7 @@ def world(tmp, dpkg=None, masked=(), spec="cdiVersion: 0.5.0\n", listing=None, l
         f"{P}cdi_spec": str(tmp / "etc" / "cdi" / "nvidia.yaml"),
         f"{P}refresh_spec": str(tmp / "run" / "cdi" / "nvidia.yaml"),
         f"{P}dev_root": str(tmp / "dev"),
+        f"{P}proc_root": str(tmp / "proc"),
     }
     for cmd, var in FAKES.items():
         v[f"{P}{var}"] = fake(tmp / cmd, f"{WORLD.format(tmp=str(tmp), name=cmd)}")
@@ -255,6 +272,8 @@ BAD = {
     "state dir trailing slash": {"state_dir": "/var/lib/hnx/"},
     "dev root relative": {"dev_root": "dev"},
     "gpus negative": {"expected_gpus": -1},
+    "gpus zero (any is the explicit opt-out)": {"expected_gpus": 0},
+    "gpus a word that is not any": {"expected_gpus": "all"},
     "gpus above 16": {"expected_gpus": 17},
     "gpus a word": {"expected_gpus": "four"},
     "gpus a numeral string": {"expected_gpus": "4"},
@@ -545,10 +564,10 @@ def test_uuid_named_devices_beside_the_indices_are_not_counted(first):
 @first_run(
     lambda tmp: main_case(
         tmp, dpkg=[*DRIVER, *INSTALLED], masked=UNITS, live="cdiVersion: 0.5.0\n",
-        listing=["nvidia.com/gpu=0", "nvidia.com/gpu=all"], **{f"{P}expected_gpus": 0},
+        listing=["nvidia.com/gpu=0", "nvidia.com/gpu=all"], **{f"{P}expected_gpus": "any"},
     )
 )  # fmt: skip
-def test_a_count_of_zero_checks_no_count_but_still_needs_a_gpu_and_all(first):
+def test_any_count_checks_no_count_but_still_needs_a_gpu_and_all(first):
     r, _ = first
     assert r.returncode == 0, r.stdout + r.stderr
 
@@ -556,7 +575,7 @@ def test_a_count_of_zero_checks_no_count_but_still_needs_a_gpu_and_all(first):
 @first_run(
     lambda tmp: main_case(
         tmp, dpkg=[*DRIVER, *INSTALLED], masked=UNITS, live="cdiVersion: 0.5.0\n",
-        listing=[], **{f"{P}expected_gpus": 0},
+        listing=[], **{f"{P}expected_gpus": "any"},
     )
 )  # fmt: skip
 def test_zero_devices_is_a_failure_even_with_no_count_expected(first):
@@ -813,3 +832,144 @@ def test_a_second_signing_key_run_changes_nothing(first):
     assert first.setup["ring"].read_bytes() == first.setup["served"]
     again = run_role(tmp, ROLE, "signing_key", first.setup["v"])
     assert again.returncode == 0 and CHANGED_0.search(again.stdout), again.stdout
+
+
+# ---------------------------------------------------------------- the driver must already be up
+GATES = {
+    "the nvidia module is not loaded": {"modules": "nvidia_uvm 1974272 0 - Live 0x0\ndrm 774144 0 - Live 0x0\n"},
+    "no module is loaded": {"modules": ""},
+    "the control device is missing": {"nvidiactl": False},
+}  # fmt: skip
+
+
+def _gate(tmp, case):
+    c = main_case(tmp)
+    want = GATES[case]
+    if "modules" in want:
+        (tmp / "proc" / "modules").write_text(want["modules"])
+    if want.get("nvidiactl") is False:
+        (tmp / "dev" / "nvidiactl").unlink()
+    return c
+
+
+@pytest.mark.parametrize("case", list(GATES))
+@first_run(_gate)
+def test_without_the_driver_loaded_nothing_runs_that_could_reach_nvml(first, case):
+    """Generating the spec goes through NVML, which as root loads the nvidia module itself: on a
+    guest whose cards must not be initialised warm the role refuses, having run nothing."""
+    r, tmp = first
+    assert r.returncode != 0, case
+    assert "the NVIDIA driver is not up" in r.stdout and "Nothing was run" in r.stdout
+    assert calls(tmp) == []  # no nvidia-ctk, no apt, no dpkg, no systemctl
+    assert not (tmp / "etc" / "cdi" / "nvidia.yaml").exists()
+
+
+def test_the_gate_comes_before_anything_that_runs_a_command():
+    tasks = yaml.safe_load((ROLE_DIR / "tasks" / "main.yml").read_text())
+    names = [t.get("ansible.builtin.include_tasks") for t in tasks]
+    gate = names.index("driver_gate.yml")
+    assert names[:gate] == ["validate.yml", "platform.yml"]
+    fixed = yaml.safe_load((ROLE_DIR / "vars" / "main.yml").read_text())
+    assert fixed[f"{P}proc_root"] == "/proc" and fixed[f"{P}driver_modules"] == ["nvidia"]
+    assert f"{P}proc_root" not in DEFAULTS  # a role var: no inventory value can move the gate
+
+
+# ---------------------------------------------------------------- dpkg must be settled first
+UNSETTLED = {
+    "dpkg --audit reports a package": {"audit": "The following packages are only half configured:\n nvidia-dkms-580\n"},
+    "a half-configured driver package": {"state": "nvidia-dkms-580 580.95.05-1 iF"},
+    "an unpacked package": {"state": "libfoo 1.0 iU"},
+    "triggers pending": {"state": "libfoo 1.0 it"},
+}  # fmt: skip
+
+
+def _unsettled(tmp, case):
+    want = UNSETTLED[case]
+    c = main_case(tmp, dpkg=[*DRIVER, *([want["state"]] if "state" in want else [])])
+    if "audit" in want:
+        (tmp / "audit.txt").write_text(want["audit"])
+    return c
+
+
+@pytest.mark.parametrize("case", list(UNSETTLED))
+@first_run(_unsettled)
+def test_an_install_refuses_while_dpkg_has_unfinished_work(first, case):
+    r, tmp = first
+    assert r.returncode != 0, case
+    assert "dpkg has unfinished work" in r.stdout
+    assert [c for c in calls(tmp) if c.split()[0] in ("apt-get", "apt-mark")] == []
+
+
+# ---------------------------------------------------------------- the simulation must be readable
+SILENT = {
+    "no output at all": "",
+    "only Conf lines": "Conf nvidia-container-toolkit (1.20.1-1)\n",
+    "three of the four packages": "".join(f"Inst {p} (1.20.1-1)\n" for p in PKGS[1:]),
+}  # fmt: skip
+
+
+def _silent(tmp, case):
+    c = main_case(tmp)
+    (tmp / "sim.txt").write_text(SILENT[case])
+    return c
+
+
+@pytest.mark.parametrize("case", list(SILENT))
+@first_run(_silent)
+def test_a_simulation_that_does_not_show_each_package_installed_fails_closed(first, case):
+    r, tmp = first
+    assert r.returncode != 0, case
+    assert "an output the role cannot read is refused, so nothing was installed" in r.stdout
+    assert [c for c in calls(tmp) if c.startswith("apt-get")] == ["apt-get update", " ".join(SIM)]
+    assert calls(tmp)[-1] == "apt-mark hold " + " ".join(PKGS)
+
+
+def _partly_pinned(tmp):
+    c = main_case(tmp, dpkg=[*DRIVER, *INSTALLED[:2]])  # two already at the pin, held
+    (tmp / "sim.txt").write_text("".join(f"Inst {p} (1.20.1-1)\n" for p in PKGS[2:]))
+    return c
+
+
+@first_run(_partly_pinned)
+def test_packages_already_at_the_pin_need_no_inst_line(first):
+    r, tmp = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert " ".join(REAL) in calls(tmp)
+
+
+def _held_moved(tmp):
+    import json
+
+    c = main_case(tmp)
+    (tmp / "install.effect.json").write_text(json.dumps({"docker-ce": ["5:29.10.0-1", "hi"]}))
+    return c
+
+
+@first_run(_held_moved)
+def test_a_held_package_that_kept_its_hold_but_moved_fails_by_name(first):
+    r, _ = first
+    assert r.returncode != 0
+    assert "held at another version now" in r.stdout and "docker-ce 5:29.9.2-1" in r.stdout
+
+
+# ---------------------------------------------------------------- gpg is required, never installed
+@pytest.mark.parametrize(("state", "ok"), [("ii", True), ("hi", True), ("rc", False), ("", False)])
+@first_run(
+    lambda tmp, state, ok: {
+        "role": ROLE,
+        "tasks_from": "gpg_check",
+        "extra_vars": world(tmp, dpkg=[*DRIVER, *([f"gpg 2.2.40-1.1 {state}"] if state else [])]),
+    }
+)
+def test_gpg_must_already_be_installed(first, state, ok):
+    r, _ = first
+    assert (r.returncode == 0) is ok, r.stdout
+    if not ok:
+        assert "gpg is not installed" in r.stdout
+
+
+def test_the_source_never_installs_a_package():
+    tasks = yaml.safe_load((ROLE_DIR / "tasks" / "source.yml").read_text())
+    modules = {k for t in tasks for k in t if "." in k}
+    assert not {"ansible.builtin.apt", "ansible.builtin.package"} & modules
+    assert {"ansible.builtin.include_tasks": "gpg_check.yml"}.items() <= tasks[0].items()

@@ -9,6 +9,9 @@
 - name: Check the host has deb packages for its architecture (Debian or Ubuntu, amd64 or arm64)
   ansible.builtin.include_tasks: platform.yml
 
+- name: Refuse unless the driver is already loaded (before anything that could reach NVML)
+  ansible.builtin.include_tasks: driver_gate.yml
+
 - name: Add the vendor apt repository, signed by the checked key (not with an empty repository)
   ansible.builtin.include_tasks: source.yml
   when: nvidia_container_toolkit_repository != ''

@@ -26,7 +26,14 @@ nvidia_container_toolkit_refresh_units:
 # What the refresh service writes; with the role's own spec in /etc/cdi this one must not exist.
 nvidia_container_toolkit_refresh_spec: /var/run/cdi/nvidia.yaml
 nvidia_container_toolkit_staged_spec: "{{ nvidia_container_toolkit_state_dir }}/cdi-staged.yaml"
-# where the driver's control device is (a seam for tests, as for the other GPU role)
+# where the driver's control device is and where the loaded modules are listed (seams for tests,
+# as for the other GPU role: role vars, so no inventory value can point the gate elsewhere)
 nvidia_container_toolkit_dev_root: /dev
+nvidia_container_toolkit_proc_root: /proc
+# the kernel modules that must already be loaded before anything reaches NVML (tasks/driver_gate.yml)
+nvidia_container_toolkit_driver_modules: [nvidia]
+# dpkg states a package may be in before an install: anything else (unpacked, half-configured,
+# triggers pending, a reinstall flag) would be configured as a side effect of the install
+nvidia_container_toolkit_settled_states: [ii, hi, rc, un]
 # canonical absolute paths: no //, no . or .. component, no trailing /
 nvidia_container_toolkit_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'

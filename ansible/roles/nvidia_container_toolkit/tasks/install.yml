@@ -4,6 +4,31 @@
 # be able to move them: a version bump is a re-run), apt simulates the install first, and the run
 # fails before installing anything unless the simulation touches only those four packages.
 # Nothing is ever allowed past a hold: no --allow-change-held-packages, no --allow-downgrades.
+# Before any apt command: dpkg must have nothing half-done. apt configures pending packages after
+# an install (DPkg::ConfigurePending: dpkg --configure --pending), so an unpacked or half-configured
+# driver or DKMS package, or pending triggers, would be configured as a side effect; none of that
+# shows in the simulation's Inst lines.
+- name: Ask dpkg for packages left half-done
+  ansible.builtin.command:
+    argv: ["{{ nvidia_container_toolkit_dpkg_cli }}", --audit]
+  register: nvidia_container_toolkit_audit
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Refuse, before any apt command, unless every package is settled
+  ansible.builtin.assert:
+    that:
+      - nvidia_container_toolkit_audit.rc == 0
+      - nvidia_container_toolkit_audit.stdout | trim == ''
+      - nvidia_container_toolkit_snap.unsettled | length == 0
+    fail_msg: >-
+      nvidia_container_toolkit: dpkg has unfinished work (dpkg --audit exited {{ nvidia_container_toolkit_audit.rc }}:
+      {{ nvidia_container_toolkit_audit.stdout | trim | truncate(300) or 'nothing' }}; packages not in
+      state ii, hi, rc or un: {{ nvidia_container_toolkit_snap.unsettled | join('; ') or 'none' }}); an install
+      would configure them as a side effect, a driver or DKMS package included, so nothing was run:
+      settle them by hand first
+
 - name: Install the pinned toolkit packages, then hold them again whatever happens
   vars:
     nvidia_container_toolkit_apt_env:
@@ -48,6 +73,26 @@
           installs, upgrades or removes a driver, a kernel or any other package, so nothing was
           installed (a dependency the host cannot satisfy: add the package yourself, or pin another version)
 
+    # Fail closed on output that is not what apt prints: every toolkit package not yet at the pin
+    # must show as an Inst line (no output, a changed format or a wrapper must not pass).
+    - name: Fail unless the simulation installs every toolkit package that is not at the pin
+      vars:
+        nvidia_container_toolkit_wanted: "{{ nvidia_container_toolkit_simulation.stdout | regex_findall('(?m)^Inst (\\S+)') }}"
+        nvidia_container_toolkit_at_pin: >-
+          {{ nvidia_container_toolkit_snap.toolkit | dict2items
+             | selectattr('value', 'match', '^' ~ (nvidia_container_toolkit_apt_version | regex_escape) ~ ' ')
+             | map(attribute='key') | list }}
+        nvidia_container_toolkit_unseen: >-
+          {{ nvidia_container_toolkit_packages | difference(nvidia_container_toolkit_at_pin)
+             | difference(nvidia_container_toolkit_wanted) }}
+      ansible.builtin.assert:
+        that: nvidia_container_toolkit_unseen | length == 0
+        fail_msg: >-
+          nvidia_container_toolkit: the simulated install does not show
+          {{ nvidia_container_toolkit_unseen | join(', ') }} being installed at
+          {{ nvidia_container_toolkit_apt_version }} (apt printed: {{ nvidia_container_toolkit_simulation.stdout | trim | truncate(300) or 'nothing' }});
+          an output the role cannot read is refused, so nothing was installed
+
     - name: Install the pinned toolkit packages
       ansible.builtin.command:
         argv: >-
@@ -65,7 +110,9 @@
 - name: Fail unless the driver, the kernel and every other held package are as they were
   vars:
     nvidia_container_toolkit_changed: "{{ nvidia_container_toolkit_before.protected | symmetric_difference(nvidia_container_toolkit_snap.protected) | list }}"
-    nvidia_container_toolkit_released: "{{ nvidia_container_toolkit_before.held | difference(nvidia_container_toolkit_snap.held) | list }}"
+    nvidia_container_toolkit_released: >-
+      {{ (nvidia_container_toolkit_before.held | difference(nvidia_container_toolkit_snap.held))
+         + (nvidia_container_toolkit_before.held_versions | difference(nvidia_container_toolkit_snap.held_versions)) }}
   ansible.builtin.assert:
     that:
       - nvidia_container_toolkit_changed | length == 0
@@ -74,7 +121,7 @@
       nvidia_container_toolkit: the install touched the driver, the kernel or another held package
       (never touched is the guarantee): protected packages whose version or state differs from
       before ("name version state"): {{ nvidia_container_toolkit_changed | join('; ') or 'none' }};
-      held before and not held now: {{ nvidia_container_toolkit_released | join(', ') or 'none' }}
+      held before and not held now, or held at another version now: {{ nvidia_container_toolkit_released | join(', ') or 'none' }}
 
 - name: Fail unless every toolkit package is installed at the pin and held
   when: not ansible_check_mode

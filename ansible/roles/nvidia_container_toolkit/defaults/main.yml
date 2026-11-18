@@ -24,5 +24,6 @@ nvidia_container_toolkit_auto_refresh: false
 nvidia_container_toolkit_apt_get_cli: apt-get
 nvidia_container_toolkit_apt_mark_cli: apt-mark
 nvidia_container_toolkit_dpkg_query_cli: dpkg-query
+nvidia_container_toolkit_dpkg_cli: dpkg
 nvidia_container_toolkit_ctk_cli: nvidia-ctk
 nvidia_container_toolkit_systemctl_cli: systemctl

@@ -4,8 +4,8 @@ argument_specs:
     short_description: Install the pinned NVIDIA container toolkit (held) and keep a CDI spec current, never touching the driver, the kernel or any other package.
     options:
       nvidia_container_toolkit_expected_gpus:
-        type: int
-        description: "How many GPUs the guest has (0 to 16): nvidia-ctk cdi list must then show exactly nvidia.com/gpu=0 to N-1 and nvidia.com/gpu=all. 0 checks no count (at least one GPU and the all device are still required). Required so that the count is a decision for each guest."
+        type: raw
+        description: "How many GPUs the guest has (1 to 16): nvidia-ctk cdi list must then show exactly nvidia.com/gpu=0 to N-1 and nvidia.com/gpu=all. The word any is the explicit opt-out of the count (at least one GPU and the all device are still required); 0 is refused, so no count is ever skipped by accident. Required so that the count is a decision for each guest."
         required: true
       nvidia_container_toolkit_version: &version
         type: str
@@ -52,6 +52,10 @@ argument_specs:
         type: str
         description: The dpkg-query command (reads every package's version and hold before and after the install).
         default: dpkg-query
+      nvidia_container_toolkit_dpkg_cli:
+        type: str
+        description: The dpkg command (only `dpkg --audit`, which must report nothing half-done before any apt command).
+        default: dpkg
       nvidia_container_toolkit_ctk_cli: &ctk
         type: str
         description: The nvidia-ctk command (generates and lists the CDI spec).
@@ -64,8 +68,8 @@ argument_specs:
     short_description: Fail unless the four packages are at the pin and held, the CDI spec exists and resolves the expected GPUs, and (without auto_refresh) the refresh units are masked.
     options:
       nvidia_container_toolkit_expected_gpus: &expected
-        type: int
-        description: How many GPUs the guest has (0 checks no count).
+        type: raw
+        description: How many GPUs the guest has (1 to 16), or any to check no count.
         required: true
       nvidia_container_toolkit_version: *version
       nvidia_container_toolkit_package_revision: *revision
