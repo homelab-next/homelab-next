@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# Container GPU access by CDI name (nvidia.com/gpu=N or =all) for a guest whose NVIDIA driver is
+# installed by hand and held: the toolkit packages are pinned and held, and the role refuses any
+# install that would install, upgrade or remove anything else. The pin was at least 14 days old
+# when it was set (tools/pin_freshness.py watches it).
+nvidia_container_toolkit_version: "1.20.1"
+# The packaging revision of that upstream version; the apt version is <version>-<revision>, exact.
+nvidia_container_toolkit_package_revision: "1"
+# The vendor repository root; the role appends /<channel>/deb/<amd64|arm64> (a flat repository).
+# A lab mirror with the same layout may stand in. "" adds no source and no key: the pinned version
+# is then installed from the apt sources the host already has (a CUDA repository serves the same
+# packages).
+nvidia_container_toolkit_repository: "https://nvidia.github.io/libnvidia-container"
+nvidia_container_toolkit_channel: stable
+# The primary-key fingerprints the repository's signing key (<repository>/gpgkey) must carry:
+# the vendor's "NVIDIA CORPORATION (Open Source Projects)". A key rotation adds the new one here.
+nvidia_container_toolkit_key_fingerprints:
+  - "C95B321B61E88C1809C4F759DDCAE044F796ECB0"
+# The CDI spec the role keeps current (docker reads /etc/cdi without a restart).
+nvidia_container_toolkit_cdi_spec: /etc/cdi/nvidia.yaml
+nvidia_container_toolkit_state_dir: /var/lib/homelabnext/nvidia_container_toolkit
+# false masks the units that regenerate the CDI spec and load kernel modules on driver events.
+nvidia_container_toolkit_auto_refresh: false
+nvidia_container_toolkit_apt_get_cli: apt-get
+nvidia_container_toolkit_apt_mark_cli: apt-mark
+nvidia_container_toolkit_dpkg_query_cli: dpkg-query
+nvidia_container_toolkit_dpkg_cli: dpkg
+nvidia_container_toolkit_ctk_cli: nvidia-ctk
+nvidia_container_toolkit_systemctl_cli: systemctl

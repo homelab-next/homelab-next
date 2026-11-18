@@ -219,6 +219,7 @@ KEY_CASES = {
                        {"tailscale_node_distribution": "Debian", "tailscale_node_release": "bookworm"}),
     "docker_engine": ("debian/gpg", True, "hnx-docker.asc",
                       {"docker_engine_distribution": "Debian", "docker_engine_release": "trixie"}),
+    "nvidia_container_toolkit": ("gpgkey", True, "hnx-nvidia-container-toolkit.asc", {}),
 }  # fmt: skip
 
 
@@ -285,6 +286,7 @@ def test_the_pinned_fingerprints_are_the_vendor_keys():
         "tailscale_node": ["2596A99EAAB33821893C0A79458CA832957F5868"],  # Tailscale Inc. (Package repository signing key)
         "trivy": ["825AD9036F7C850E6A6FED4935B8ACA44FD9CA9F"],  # trivy-repo (Aqua Security) (aquasecurity/trivy-repo deb/public.key)
         "docker_engine": ["9DC858229FC7DD38854AE2D88D81803C0EBFCD88"],  # Docker Release (CE deb) (download.docker.com/linux/debian/gpg)
+        "nvidia_container_toolkit": ["C95B321B61E88C1809C4F759DDCAE044F796ECB0"],  # NVIDIA CORPORATION (Open Source Projects) (nvidia.github.io/libnvidia-container/gpgkey)
     }  # fmt: skip
     for role, want in pins.items():
         d = yaml.safe_load((ANSIBLE / "roles" / role / "defaults" / "main.yml").read_text())

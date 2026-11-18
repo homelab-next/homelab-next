@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# Container GPU access by CDI name for a guest whose NVIDIA driver is installed by hand and held:
+# the four toolkit packages at one pinned version, held, installed only if apt would touch nothing
+# else, and a CDI spec the role keeps current. The driver, the kernel and every other package are
+# never installed, upgraded or removed; nothing is restarted; no kernel module is loaded.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Check the host has deb packages for its architecture (Debian or Ubuntu, amd64 or arm64)
+  ansible.builtin.include_tasks: platform.yml
+
+- name: Refuse unless the driver is already loaded (before anything that could reach NVML)
+  ansible.builtin.include_tasks: driver_gate.yml
+
+- name: Add the vendor apt repository, signed by the checked key (not with an empty repository)
+  ansible.builtin.include_tasks: source.yml
+  when: nvidia_container_toolkit_repository != ''
+
+- name: Read the packages as they are now
+  ansible.builtin.include_tasks: snapshot.yml
+
+- name: Keep that reading to prove the driver and kernel were not touched
+  ansible.builtin.set_fact:
+    nvidia_container_toolkit_before: "{{ nvidia_container_toolkit_snap }}"
+    nvidia_container_toolkit_converged: >-
+      {{ nvidia_container_toolkit_snap.toolkit.values()
+         | select('equalto', nvidia_container_toolkit_apt_version ~ ' hi') | list | length
+         == nvidia_container_toolkit_packages | length }}
+
+- name: Mask the units that refresh the spec and load modules (before any install starts them)
+  ansible.builtin.include_tasks: refresh.yml
+  when: not nvidia_container_toolkit_auto_refresh
+
+- name: Install and hold the pinned toolkit (nothing else is ever touched)
+  ansible.builtin.include_tasks: install.yml
+  when: not nvidia_container_toolkit_converged | bool
+
+- name: Keep the CDI spec current and check what the runtime resolves
+  ansible.builtin.include_tasks: cdi.yml

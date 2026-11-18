@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# The four packages move together, at one version.
+nvidia_container_toolkit_packages:
+  - nvidia-container-toolkit
+  - nvidia-container-toolkit-base
+  - libnvidia-container-tools
+  - libnvidia-container1
+nvidia_container_toolkit_apt_version: "{{ nvidia_container_toolkit_version }}-{{ nvidia_container_toolkit_package_revision }}"
+nvidia_container_toolkit_package_specs: "{{ nvidia_container_toolkit_packages | map('regex_replace', '$', '=' ~ nvidia_container_toolkit_apt_version) | list }}"
+# Packages the role must leave exactly as they were (names, matched against the whole name), the
+# four toolkit packages excluded: the driver, its libraries, CUDA, the kernel.
+nvidia_container_toolkit_protected_pattern: '^(nvidia-.*|libnvidia-.*|cuda-.*|xserver-xorg-video-nvidia.*|firmware-nvidia.*|linux-(image|headers|modules).*)$'
+# Where the checked vendor signing key is installed for apt (the repository's Signed-By).
+nvidia_container_toolkit_keyring: /etc/apt/keyrings/hnx-nvidia-container-toolkit.asc
+nvidia_container_toolkit_source_name: hnx-nvidia-container-toolkit
+nvidia_container_toolkit_distribution: "{{ ansible_facts['distribution'] }}"
+nvidia_container_toolkit_architecture: "{{ ansible_facts['architecture'] }}"
+nvidia_container_toolkit_apt_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[nvidia_container_toolkit_architecture] }}"
+# the flat repository: <root>/<channel>/deb/<arch>, suite /, no components
+nvidia_container_toolkit_apt_uri: "{{ nvidia_container_toolkit_repository }}/{{ nvidia_container_toolkit_channel }}/deb/{{ nvidia_container_toolkit_apt_arch }}"
+# The units the base package ships that regenerate the spec and load kernel modules on driver events.
+nvidia_container_toolkit_refresh_units:
+  - nvidia-cdi-refresh.path
+  - nvidia-cdi-refresh.service
+# What the refresh service writes; with the role's own spec in /etc/cdi this one must not exist.
+nvidia_container_toolkit_refresh_spec: /var/run/cdi/nvidia.yaml
+nvidia_container_toolkit_staged_spec: "{{ nvidia_container_toolkit_state_dir }}/cdi-staged.yaml"
+# where the driver's control device is and where the loaded modules are listed (seams for tests,
+# as for the other GPU role: role vars, so no inventory value can point the gate elsewhere)
+nvidia_container_toolkit_dev_root: /dev
+nvidia_container_toolkit_proc_root: /proc
+# the kernel modules that must already be loaded before anything reaches NVML (tasks/driver_gate.yml)
+nvidia_container_toolkit_driver_modules: [nvidia]
+# dpkg states a package may be in before an install: anything else (unpacked, half-configured,
+# triggers pending, a reinstall flag) would be configured as a side effect of the install
+nvidia_container_toolkit_settled_states: [ii, hi, rc, un]
+# canonical absolute paths: no //, no . or .. component, no trailing /
+nvidia_container_toolkit_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'

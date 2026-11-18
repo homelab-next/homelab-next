@@ -76,6 +76,7 @@ SHIPPED = [
     "module_census",
     "needrestart",
     "nftables_host",
+    "nvidia_container_toolkit",
     "open_webui",
     "os_hardening",
     "restore_drill",

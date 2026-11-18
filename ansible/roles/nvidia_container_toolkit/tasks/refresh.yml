@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# The base package ships nvidia-cdi-refresh.path/.service, which its postinst enables and starts:
+# on a driver or kernel-module event it runs `nvidia-ctk system create-device-nodes
+# --load-kernel-modules` and writes /var/run/cdi/nvidia.yaml. On a guest whose cards must never be
+# touched that is not wanted, so unless nvidia_container_toolkit_auto_refresh is true the units are
+# masked BEFORE the package is installed (its start is then a no-op), and a leftover refreshed spec
+# is removed, so the role's own spec in /etc/cdi is the one CDI resolves. true leaves the units
+# alone (un-masking them, if the role masked them earlier, is by hand).
+- name: Read whether the refresh units are masked
+  ansible.builtin.command:
+    argv: "{{ [nvidia_container_toolkit_systemctl_cli, 'is-enabled'] + nvidia_container_toolkit_refresh_units }}"
+  register: nvidia_container_toolkit_unit_state
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Mask the refresh units (nothing regenerates the spec or loads a kernel module behind the role)
+  ansible.builtin.command:
+    argv: "{{ [nvidia_container_toolkit_systemctl_cli, 'mask'] + nvidia_container_toolkit_refresh_units }}"
+  when: >-
+    nvidia_container_toolkit_unit_state.stdout_lines | select('equalto', 'masked') | list | length
+    != nvidia_container_toolkit_refresh_units | length
+
+- name: Remove a spec the refresh service left under /var/run/cdi
+  ansible.builtin.file:
+    path: "{{ nvidia_container_toolkit_refresh_spec }}"
+    state: absent
