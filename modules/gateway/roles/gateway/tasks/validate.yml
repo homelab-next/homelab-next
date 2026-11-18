@@ -14,6 +14,7 @@
       - >-
         [gateway_dir, gateway_data_root, gateway_spec] | reject('match', gateway_path_pattern) | list | length == 0
       - gateway_restore_source is not defined or gateway_restore_source is match(gateway_path_pattern)
+      - gateway_spec_root == '' or gateway_spec_root is match(gateway_path_pattern)
       - gateway_image_archive == '' or gateway_image_archive is match(gateway_path_pattern)
       - gateway_hnx_cli is sequence and gateway_hnx_cli is not string and gateway_hnx_cli | length > 0
       - gateway_hnx_cli | reject('string') | list | length == 0
