@@ -232,7 +232,8 @@ def test_main_hands_a_cuda_container_its_card_by_cdi_name_and_a_cpu_one_nothing(
     svc = compose(tmp_path)
     assert svc["devices"] == ["nvidia.com/gpu=1"] and svc["group_add"] == [str(MODELS_GID)]
     unit = next((tmp_path / "units").glob("*.service")).read_text()
-    assert "--backend cuda --max-watts 200 --gpu-index 1 --model-file" in unit
+    assert "--backend cuda --max-watts 200 --gpu-index 1 --proc-root /proc --dev-root " in unit
+    assert f"--dev-root {tmp_path / 'dev'} --model-file" in unit
     cpu = tmp_path / "cpu"
     cpu.mkdir()
     store(cpu)
@@ -241,6 +242,78 @@ def test_main_hands_a_cuda_container_its_card_by_cdi_name_and_a_cpu_one_nothing(
     svc = compose(cpu)
     assert "devices" not in svc and svc["group_add"] == [str(MODELS_GID)]
     assert svc["command"][svc["command"].index("-ngl") + 1] == "0"
+
+
+def test_main_serves_a_split_model_from_a_quant_subdirectory_by_its_first_shard(tmp_path):
+    digest = split_store(tmp_path)
+    v = role_vars(tmp_path, model_file=shard(1), model_digest=digest)
+    r = run_role(tmp_path, ROLE, "main", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    svc = compose(tmp_path)
+    cmd = svc["command"]
+    assert cmd[cmd.index("-m") + 1] == f"/models/{shard(1)}"
+    # the entry's directory is the one mount: the shards sit beside the first one inside it
+    assert svc["volumes"][0] == f"{tmp_path / 'store' / 'gguf' / REPO}:/models:ro"
+    unit = next((tmp_path / "units").glob("*.service")).read_text()
+    assert f"--model-file {shard(1)} --listing" in unit
+    again = run_role(tmp_path, ROLE, "main", v)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+    # the unit's check passes on these bytes, as written
+    pre = next(line for line in unit.splitlines() if line.startswith("ExecStartPre="))
+    args = pre.split(" ")[1:]
+    assert precheck(*args).returncode == 0
+
+
+def test_main_refuses_a_split_model_with_a_shard_missing_or_a_linked_subdirectory(tmp_path):
+    digest = split_store(tmp_path)
+    v = role_vars(tmp_path, model_file=shard(1), model_digest=digest)
+    mdir = tmp_path / "store" / "gguf" / REPO
+    (mdir / shard(2)).unlink()  # llama-server would fail mid-load, after the precheck
+    r = run_role(tmp_path, ROLE, "main", v)
+    assert r.returncode != 0 and not list((tmp_path / "units").glob("*.service"))
+    linked = tmp_path / "linked"
+    digest = split_store(linked)
+    v = role_vars(linked, model_file=shard(1), model_digest=digest)
+    mdir = linked / "store" / "gguf" / REPO
+    (mdir / SPLIT_DIR).rename(linked / "elsewhere")
+    (mdir / SPLIT_DIR).symlink_to(linked / "elsewhere")
+    r = run_role(linked, ROLE, "main", v)
+    assert r.returncode != 0 and not list((linked / "units").glob("*.service"))
+
+
+def test_main_hands_a_cuda_container_every_card_or_a_list_and_checks_each_cap(tmp_path):
+    v = role_vars(tmp_path, backend="cuda", image=image_for("cuda"), gpu_indices="all")
+    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+    assert compose(tmp_path)["devices"] == ["nvidia.com/gpu=all"]
+    unit = next((tmp_path / "units").glob("*.service")).read_text()
+    assert "--backend cuda --max-watts 200 --gpu-index all --proc-root /proc --dev-root" in unit
+    v[f"{MID}_gpu_indices"] = [0, 1, 2, 3]
+    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+    assert compose(tmp_path)["devices"] == [f"nvidia.com/gpu={i}" for i in range(4)]
+    unit = next((tmp_path / "units").glob("*.service")).read_text()
+    assert "--gpu-index 0,1,2,3 --proc-root" in unit
+
+
+def test_main_passes_the_allow_listed_throughput_settings_by_name(tmp_path):
+    extra = {"batch_size": 4096, "ubatch_size": 2048, "kv_unified": True,
+             "split_mode": "layer", "tensor_split": [1, 1, 1.5, 1]}  # fmt: skip
+    v = role_vars(tmp_path, backend="cuda", image=image_for("cuda"), gpu_indices="all",
+                  parallel=16, extra_args=extra)  # fmt: skip
+    r = run_role(tmp_path, ROLE, "main", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    cmd = compose(tmp_path)["command"]
+    # one cache of CTX tokens shared by the 16 slots: -c is the total, not CTX x 16
+    assert cmd[cmd.index("-c") + 1] == str(CTX) and cmd[cmd.index("-np") + 1] == "16"
+    assert "--kv-unified" in cmd and "--no-kv-unified" not in cmd
+    assert cmd[cmd.index("-b") + 1] == "4096" and cmd[cmd.index("-ub") + 1] == "2048"
+    assert cmd[cmd.index("-sm") + 1] == "layer" and cmd[cmd.index("-ts") + 1] == "1,1,1.5,1"
+    assert cmd.count("-b") == 1 and cmd.count("-ub") == 1
+    # kv_unified false is the default's per-slot cache
+    v[f"{MID}_extra_args"] = {"kv_unified": False, "batch_size": 512}
+    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+    cmd = compose(tmp_path)["command"]
+    assert cmd[cmd.index("-c") + 1] == str(CTX * 16) and "--no-kv-unified" in cmd
+    assert cmd[cmd.index("-b") + 1] == "512" and "-ub" not in cmd and "-sm" not in cmd
 
 
 def test_main_reads_the_groups_from_the_store_and_the_render_node(tmp_path):
@@ -283,6 +356,72 @@ REFUSED = {
     "a models group over 2^32-1": {"models_gid": 9999999999},
     "a power attribute that is a path": {"power_cap_attrs": ["../power1_cap"]},
     "no power attribute": {"power_cap_attrs": []},
+    # the model file: a path inside the entry, a split model by its first shard
+    "an absolute model file": {"model_file": "/srv/models/x.gguf"},
+    "a model file with a traversal": {"model_file": "../x.gguf"},
+    "a model file with a traversal inside": {"model_file": "Q8_0/../../x.gguf"},
+    "a model file in a dot directory": {"model_file": ".hidden/x.gguf"},
+    "a model file with an empty segment": {"model_file": "Q8_0//x.gguf"},
+    "a model file five directories deep": {"model_file": "a/b/c/d/e/x.gguf"},
+    "a later shard": {"model_file": "Q8_0/m-00002-of-00003.gguf"},
+    "a shard of no series": {"model_file": "m-00001-of-00000.gguf"},
+    "a series too long to check": {"model_file": "m-00001-of-99999.gguf"},
+    # the cards: cuda only, "all" or distinct indices
+    "cards on a render-node backend": {"gpu_indices": [0, 1]},
+    "all cards on the cpu backend": {
+        "backend": "cpu",
+        "image": image_for("cpu"),
+        "gpu_indices": "all",
+    },
+    "a card twice": {"backend": "cuda", "image": image_for("cuda"), "gpu_indices": [0, 0]},
+    "a card index above 15": {"backend": "cuda", "image": image_for("cuda"), "gpu_indices": [16]},
+    "a card index as a string": {
+        "backend": "cuda",
+        "image": image_for("cuda"),
+        "gpu_indices": ["1"],
+    },
+    "a card index that is a boolean": {
+        "backend": "cuda",
+        "image": image_for("cuda"),
+        "gpu_indices": [True],
+    },
+    "cards named by a word": {
+        "backend": "cuda",
+        "image": image_for("cuda"),
+        "gpu_indices": "every",
+    },
+    "cards as a mapping": {"backend": "cuda", "image": image_for("cuda"), "gpu_indices": {"0": 1}},
+    # the throughput settings: the allow-list's names and types only
+    "an extra flag that is not allow-listed": {"extra_args": {"threads": 4}},
+    "an extra raw flag": {"extra_args": {"--mlock": True}},
+    "extra arguments as a string": {"extra_args": "-b 4096"},
+    "a batch size as a string": {"extra_args": {"batch_size": "4096"}},
+    "a batch size that is a boolean": {"extra_args": {"batch_size": True}},
+    "a batch size of zero": {"extra_args": {"batch_size": 0}},
+    "a micro-batch above the batch": {"extra_args": {"batch_size": 512, "ubatch_size": 1024}},
+    "a unified cache that is not a boolean": {"extra_args": {"kv_unified": "yes"}},
+    "a split mode that is not one": {"extra_args": {"split_mode": "column"}},
+    "an empty tensor split": {"extra_args": {"tensor_split": []}},
+    "a negative tensor split": {"extra_args": {"tensor_split": [1, -1]}},
+    "an all-zero tensor split": {"extra_args": {"tensor_split": [0, 0]}},
+    "a tensor split as a string": {"extra_args": {"tensor_split": "1,1"}},
+    "a tensor split of booleans": {"extra_args": {"tensor_split": [True, True]}},
+    "an infinite tensor split": {"extra_args": {"tensor_split": [1, float("inf")]}},
+    "a tensor split that is not a number": {"extra_args": {"tensor_split": [1, float("nan")]}},
+    "a tensor split of another length than the cards": {
+        "backend": "cuda",
+        "image": image_for("cuda"),
+        "gpu_indices": [0, 1],
+        "extra_args": {"tensor_split": [1, 1, 1]},
+    },
+    "a micro-batch alone above the default batch": {"extra_args": {"ubatch_size": 4096}},
+    "a batch size in decision mode": {"mode": "decision", "extra_args": {"batch_size": 4096}},
+    "a unified cache in decision mode": {"mode": "decision", "extra_args": {"kv_unified": True}},
+    "a split mode on the cpu backend": {
+        "backend": "cpu",
+        "image": image_for("cpu"),
+        "extra_args": {"split_mode": "layer"},
+    },
 }
 
 
@@ -388,16 +527,109 @@ def _smi(tmp_path: Path, out: str, rc: int = 0) -> dict:
     return {"PATH": f"{d}:{os.environ['PATH']}"}
 
 
+def driver_up(
+    tmp_path: Path,
+    modules: str = "nvidia_uvm 1 0 - Live 0x0\nnvidia 2 1 nvidia_uvm, Live 0x0\n",
+    ctl: bool = True,
+) -> list[str]:
+    """--proc-root and --dev-root of a guest whose driver is loaded (or, by the arguments, not)."""
+    proc, dev = tmp_path / "proc", tmp_path / "devroot"
+    proc.mkdir(exist_ok=True)
+    dev.mkdir(exist_ok=True)
+    (proc / "modules").write_text(modules)
+    if ctl:
+        (dev / "nvidiactl").write_text("")
+    return ["--proc-root", str(proc), "--dev-root", str(dev)]
+
+
 @pytest.mark.parametrize(
-    "out, rc, ok",
-    [("180.00\n", 0, True), ("200\n", 0, True), (" 200.00 \n", 0, True), ("200.01\n", 0, False),
-     ("300.00\n", 0, False), ("[N/A]\n", 0, False), ("0.00\n", 0, False), ("", 0, False),
-     ("180.00\n", 9, False)],
+    "modules, ctl",
+    [("", True), ("nvidia_uvm 1 0 - Live 0x0\ndrm 2 0 - Live 0x0\n", True),
+     ("nvidia 2 0 - Live 0x0\n", False)],
 )  # fmt: skip
-def test_precheck_judges_an_nvidia_cards_power_limit_in_watts(tmp_path, out, rc, ok):
+def test_precheck_never_runs_nvidia_smi_unless_the_driver_is_already_loaded(tmp_path, modules, ctl):
+    """nvidia-smi as root loads the nvidia module when it is absent: a warm-card load on a guest
+    whose cards must not be initialised that way. Without the module and its control device the
+    check refuses before calling it."""
+    env = _smi(tmp_path, _rows(("180.00", "180.00")))
+    log = tmp_path / "smi.log"
+    fake(tmp_path / "smi" / "nvidia-smi",
+         f"import sys\nopen({str(log)!r}, 'a').write('ran')\nsys.stdout.write({_rows(('180.00', '180.00'))!r})\n")  # fmt: skip
+    r = precheck("--backend", "cuda", "--max-watts", "200", "--gpu-index", "all", "--power-only",
+                 *driver_up(tmp_path, modules, ctl), env=env)  # fmt: skip
+    assert r.returncode == 1 and "nvidia-smi is not run" in r.stderr, r.stderr
+    assert not log.exists()
+    ok = tmp_path / "ok"
+    ok.mkdir()
+    r = precheck("--backend", "cuda", "--max-watts", "200", "--gpu-index", "all", "--power-only",
+                 *driver_up(ok), env=env)  # fmt: skip
+    assert r.returncode == 0 and log.read_text() == "ran", r.stderr
+
+
+def test_the_unit_passes_the_driver_seams_as_fixed_paths():
+    fixed = yaml.safe_load((MODULE / "roles" / MID / "vars" / "main.yml").read_text())
+    assert fixed[f"{MID}_proc_root"] == "/proc" and fixed[f"{MID}_dev_root"] == "/dev"
+    assert f"{MID}_proc_root" not in DEFAULTS
+
+
+def _rows(*limits: tuple[str, str]) -> str:
+    """nvidia-smi --query-gpu=index,power.limit,enforced.power.limit csv, one card per pair."""
+    return "".join(f"{i}, {lim}, {enf}\n" for i, (lim, enf) in enumerate(limits))
+
+
+@pytest.mark.parametrize(
+    "limit, enforced, rc, ok",
+    [("180.00", "180.00", 0, True), ("200", "200", 0, True), (" 200.00 ", "200.00", 0, True),
+     ("200.01", "200.00", 0, False), ("300.00", "300.00", 0, False), ("[N/A]", "180.00", 0, False),
+     ("0.00", "0.00", 0, False), ("", "", 0, False), ("180.00", "180.00", 9, False),
+     # the limit set is within, the one the card enforces is not (or cannot be read)
+     ("180.00", "250.00", 0, False), ("180.00", "[N/A]", 0, False), ("180.00", "[Not Supported]", 0, False)],
+)  # fmt: skip
+def test_precheck_judges_an_nvidia_cards_power_limit_in_watts(tmp_path, limit, enforced, rc, ok):
     r = precheck("--backend", "cuda", "--max-watts", "200", "--gpu-index", "0", "--power-only",
-                 env=_smi(tmp_path, out, rc))  # fmt: skip
+                 *driver_up(tmp_path),
+                 env=_smi(tmp_path, _rows((limit, enforced)), rc))  # fmt: skip
     assert (r.returncode == 0) is ok, r.stdout + r.stderr
+
+
+FOUR = _rows(("200.00", "200.00"), ("180.00", "180.00"), ("200.00", "200.00"), ("150.00", "150.00"))
+
+
+@pytest.mark.parametrize(
+    "gpus, out, ok, needle",
+    [("all", FOUR, True, "GPU 3 power limit"),
+     ("0,1,2,3", FOUR, True, "GPU 2 power limit"),
+     ("1,3", FOUR, True, "GPU 3 power limit"),
+     # one card of four above the cap, by its limit or by the one it enforces
+     ("all", FOUR.replace("2, 200.00, 200.00", "2, 250.00, 250.00"), False, "GPU 2's power.limit is 250.00 W"),
+     ("all", FOUR.replace("3, 150.00, 150.00", "3, 150.00, 201.00"), False, "GPU 3's enforced.power.limit"),
+     ("0,2", FOUR.replace("2, 200.00, 200.00", "2, 250.00, 250.00"), False, "GPU 2's"),
+     # a card that is not there, no card at all, a card listed twice
+     ("0,4", FOUR, False, "GPU 4 is not listed once"),
+     ("all", "", False, "lists no GPU"),
+     ("0", FOUR + "0, 180.00, 180.00\n", False, "GPU 0 is not listed once"),
+     # a card's cap that is not read is not skipped, also when another card names it
+     ("all", FOUR.replace("1, 180.00, 180.00", "1, [N/A], [N/A]"), False, "GPU 1's power.limit")],
+)  # fmt: skip
+def test_precheck_holds_every_card_a_multi_gpu_container_gets_to_the_cap(
+    tmp_path, gpus, out, ok, needle
+):
+    r = precheck("--backend", "cuda", "--max-watts", "200", "--gpu-index", gpus, "--power-only",
+                 *driver_up(tmp_path),
+                 env=_smi(tmp_path, out))  # fmt: skip
+    assert (r.returncode == 0) is ok, r.stdout + r.stderr
+    assert needle in (r.stdout if ok else r.stderr), r.stdout + r.stderr
+    if ok:  # every card named was judged, one line each
+        n = 4 if gpus == "all" else len(gpus.split(","))
+        assert r.stdout.count("within 200 W") == n
+
+
+@pytest.mark.parametrize("gpus", ["", "0,", ",1", "0,,1", "all,1", "one", "0;1", "-1"])
+def test_precheck_refuses_a_malformed_card_list(tmp_path, gpus):
+    r = precheck("--backend", "cuda", "--max-watts", "200", "--gpu-index", gpus, "--power-only",
+                 *driver_up(tmp_path),
+                 env=_smi(tmp_path, FOUR))  # fmt: skip
+    assert r.returncode == 2, (gpus, r.stderr)
 
 
 def test_precheck_passes_a_cpu_backend_and_refuses_bad_usage(tmp_path):
@@ -461,6 +693,90 @@ def test_precheck_requires_the_served_file_to_be_in_the_pinned_listing(tmp_path)
     # an unlisted file swapped in beside a correctly pinned one is still refused as unlisted
     (mdir / "other.bin").write_bytes(b"other")
     assert precheck(*_bytes_args(tmp_path, "sha256:" + "0" * 64)).returncode == 1
+
+
+SPLIT_DIR, SPLIT_STEM = "Q8_0", "model-Q8_0"
+
+
+def shard(n: int, total: int = 3) -> str:
+    return f"{SPLIT_DIR}/{SPLIT_STEM}-{n:05d}-of-{total:05d}.gguf"
+
+
+def split_store(tmp_path: Path, total: int = 3, listed=None) -> str:
+    """The model store with one split entry: ``total`` shards in a quant subdirectory, all on disk,
+    ``listed`` (default all) in the listing; returns the listing's digest."""
+    root = tmp_path / "store"
+    mdir = root / "gguf" / REPO
+    (mdir / SPLIT_DIR).mkdir(parents=True, exist_ok=True)
+    lines = []
+    for n in range(1, total + 1):
+        body = f"shard {n}".encode()
+        (mdir / shard(n, total)).write_bytes(body)
+        if listed is None or n in listed:
+            lines.append(f"{hashlib.sha256(body).hexdigest()}  {shard(n, total)}\n")
+    listing = "".join(sorted(lines, key=lambda line: line.split("  ", 1)[1]))
+    (root / "manifests" / "listings").mkdir(parents=True, exist_ok=True)
+    (root / "manifests" / "listings" / f"{STORE_ID}.sha256").write_text(listing)
+    return "sha256:" + hashlib.sha256(listing.encode()).hexdigest()
+
+
+def _split_args(tmp_path: Path, digest: str, mfile: str | None = None) -> list[str]:
+    root = tmp_path / "store"
+    return ["--backend", "cpu", "--max-watts", "200", "--model-file", mfile or shard(1),
+            "--listing", str(root / "manifests" / "listings" / f"{STORE_ID}.sha256"),
+            "--digest", digest, "--model-dir", str(root / "gguf" / REPO)]  # fmt: skip
+
+
+def test_precheck_passes_a_split_model_whose_every_shard_is_pinned(tmp_path):
+    digest = split_store(tmp_path)
+    r = precheck(*_split_args(tmp_path, digest))
+    assert r.returncode == 0, r.stderr
+    assert f"all 3 shards of {SPLIT_DIR}/{SPLIT_STEM} are listed" in r.stdout
+    # a shard changed on disk after model_store verified it
+    (tmp_path / "store" / "gguf" / REPO / shard(3)).write_bytes(b"shard X")
+    r = precheck(*_split_args(tmp_path, digest))
+    assert r.returncode == 1 and "does not match" in r.stderr
+
+
+def test_precheck_refuses_a_split_model_with_an_unpinned_shard_or_a_later_shard_named(tmp_path):
+    # the listing pins shards 1 and 2 only: llama-server would open shard 3 unchecked
+    digest = split_store(tmp_path, listed={1, 2})
+    r = precheck(*_split_args(tmp_path, digest))
+    assert r.returncode == 1 and f"{shard(3)} (shard 3 of 00003) is not in" in r.stderr
+    ok = tmp_path / "ok"
+    digest = split_store(ok)
+    r = precheck(*_split_args(ok, digest, shard(2)))
+    assert r.returncode == 1 and "must be given the first shard" in r.stderr
+
+
+@pytest.mark.parametrize(
+    "mfile",
+    ["/etc/x.gguf", "../x.gguf", "Q8_0/../x.gguf", "./x.gguf", "Q8_0//x.gguf", "Q8_0/./x.gguf"],
+)
+def test_precheck_refuses_a_model_file_that_is_not_a_path_inside_the_entry(tmp_path, mfile):
+    digest = split_store(tmp_path)
+    r = precheck(*_split_args(tmp_path, digest, mfile))
+    assert r.returncode == 1 and "is not a path inside" in r.stderr, r.stderr
+
+
+def test_precheck_refuses_shards_that_resolve_out_of_the_entry(tmp_path):
+    """The right bytes behind a link out of the store still refuse: nothing manages them."""
+    digest = split_store(tmp_path)
+    mdir = tmp_path / "store" / "gguf" / REPO
+    outside = tmp_path / "outside"
+    (mdir / SPLIT_DIR).rename(outside)
+    (mdir / SPLIT_DIR).symlink_to(outside)  # the quant subdirectory is a link
+    r = precheck(*_split_args(tmp_path, digest))
+    assert r.returncode == 1 and "resolves outside" in r.stderr, r.stderr
+    (mdir / SPLIT_DIR).unlink()
+    (mdir / SPLIT_DIR).mkdir()
+    for n in (1, 2, 3):
+        (mdir / shard(n)).write_bytes((outside / Path(shard(n)).name).read_bytes())
+    assert precheck(*_split_args(tmp_path, digest)).returncode == 0
+    (mdir / shard(2)).unlink()
+    (mdir / shard(2)).symlink_to(outside / Path(shard(2)).name)  # one shard is a link
+    r = precheck(*_split_args(tmp_path, digest))
+    assert r.returncode == 1 and f"{shard(2)} resolves outside" in r.stderr, r.stderr
 
 
 def test_precheck_refuses_a_limit_above_the_operators_200_w(tmp_path):
@@ -554,6 +870,20 @@ def test_health_fails_for_each_thing_it_checks(tmp_path, what, srv_kw, fakes_kw,
         v = health_vars(tmp_path, srv, sysfs_root=str(sysfs(tmp_path, power)))
         r = run_role(tmp_path, ROLE, "health", v, env=env)
     assert r.returncode != 0, what
+
+
+def test_health_with_a_unified_cache_holds_each_slot_to_the_shared_total(tmp_path):
+    """With kv_unified the slots share one cache of the context size, and each may use all of it:
+    the engine reports that total as a slot's n_ctx, which health compares as before."""
+    env = _fakes(tmp_path)
+    extra = {"kv_unified": True, "batch_size": 2048, "ubatch_size": 512}
+    with engine() as srv:
+        v = health_vars(tmp_path, srv, parallel=16, extra_args=extra)
+        assert run_role(tmp_path, ROLE, "health", v, env=env).returncode == 0
+    with SingleModelServer(model=DEFAULTS[f"{MID}_served_model_name"], n_ctx=CTX // 16,
+                           metric_prefix=MID) as srv:  # fmt: skip
+        v = health_vars(tmp_path, srv, parallel=16, extra_args=extra)
+        assert run_role(tmp_path, ROLE, "health", v, env=env).returncode != 0
 
 
 def test_health_fails_when_another_model_is_served(tmp_path):

@@ -57,7 +57,7 @@ argument_specs:
         default: ggml-org/Clef-GGUF
       llamacpp_model_file: &a_model_file
         type: str
-        description: The single .gguf file of the entry that is served.
+        description: "The .gguf file served, relative to the entry's directory (a subdirectory of the repository allowed, never absolute or ..): a single file, or the first shard <stem>-00001-of-0000M.gguf of a split model, whose other shards the server opens beside it."
         default: Clef-Q4_K_M.gguf
       llamacpp_model_store_id: &a_model_store_id
         type: str
@@ -73,7 +73,7 @@ argument_specs:
         default: clef
       llamacpp_context_size: &a_context_size
         type: int
-        description: The context each parallel slot gets, in tokens (the server is started with this times the slots; K-14 compares it with /v1/models meta.n_ctx).
+        description: The context each parallel slot gets, in tokens (the server is started with this times the slots; with llamacpp_extra_args.kv_unified it is the one cache all slots share, and each may use all of it); K-14 compares it with /v1/models meta.n_ctx.
         default: 8192
       llamacpp_parallel: &a_parallel
         type: int
@@ -103,6 +103,14 @@ argument_specs:
         type: int
         description: 'cuda: the card''s index in the container toolkit''s CDI spec (nvidia.com/gpu=<index>), and nvidia-smi''s -i.'
         default: 0
+      llamacpp_gpu_indices: &a_gpu_indices
+        type: raw
+        description: 'cuda: the cards handed to the container: "all" (nvidia.com/gpu=all), a list of indices, or empty for the one card llamacpp_gpu_index; the power-cap check covers each.'
+        default: []
+      llamacpp_extra_args: &a_extra_args
+        type: dict
+        description: 'Throughput settings by name, never a raw flag: batch_size (-b), ubatch_size (-ub, at most batch_size), kv_unified (true: one shared cache of llamacpp_context_size tokens), split_mode (-sm none|layer|row) and tensor_split (-ts, per-GPU proportions); the first three in generate mode only, the last two on a GPU backend only.'
+        default: {}
       llamacpp_models_gid: &a_models_gid
         type: str
         description: 'The model store''s readers'' group id; empty: read from the model''s directory.'
@@ -172,6 +180,8 @@ argument_specs:
       llamacpp_render_node: *a_render_node
       llamacpp_render_gid: *a_render_gid
       llamacpp_gpu_index: *a_gpu_index
+      llamacpp_gpu_indices: *a_gpu_indices
+      llamacpp_extra_args: *a_extra_args
       llamacpp_models_gid: *a_models_gid
       llamacpp_power_cap_max_watts: *a_power_cap_max_watts
       llamacpp_power_cap_attrs: *a_power_cap_attrs
@@ -210,6 +220,8 @@ argument_specs:
       llamacpp_render_node: *a_render_node
       llamacpp_render_gid: *a_render_gid
       llamacpp_gpu_index: *a_gpu_index
+      llamacpp_gpu_indices: *a_gpu_indices
+      llamacpp_extra_args: *a_extra_args
       llamacpp_models_gid: *a_models_gid
       llamacpp_power_cap_max_watts: *a_power_cap_max_watts
       llamacpp_power_cap_attrs: *a_power_cap_attrs
@@ -257,6 +269,8 @@ argument_specs:
       llamacpp_render_node: *a_render_node
       llamacpp_render_gid: *a_render_gid
       llamacpp_gpu_index: *a_gpu_index
+      llamacpp_gpu_indices: *a_gpu_indices
+      llamacpp_extra_args: *a_extra_args
       llamacpp_models_gid: *a_models_gid
       llamacpp_power_cap_max_watts: *a_power_cap_max_watts
       llamacpp_power_cap_attrs: *a_power_cap_attrs

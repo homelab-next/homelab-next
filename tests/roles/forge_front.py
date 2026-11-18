@@ -212,10 +212,31 @@ def ssh_tools(bindir: Path, presented: str = "AAAAkey1", held: str = "AAAAkey1")
     return {}
 
 
+#: rows that hold data encrypted with the application's SECRET_KEY, one statement per table the
+#: role's helper reads for them (``dump_sql(encrypted=[...])`` inserts the named ones); short
+#: placeholder values, never a real ciphertext
+ENCRYPTED_ROWS = {
+    "two_factor": "INSERT INTO two_factor VALUES (1, 1, 'c1')",
+    "secret": "INSERT INTO secret VALUES (1, 1, 0, 'NAME', 'c2')",
+    "webhook": "INSERT INTO webhook VALUES (1, 1, 'https://hook.example.internal/', 'c3')",
+    "login_source": """INSERT INTO login_source VALUES (1, 2, 'dir', '{"BindPasswordEncrypt": "c4"}')""",
+    "task": """INSERT INTO task VALUES (1, 1, '{"auth_token_encrypted": "c5"}')""",
+}
+
+
 def dump_sql(
-    *, users=2, orgs=1, repos=(("labs", "alpha"), ("labs", "beta")), admin_hash="h1"
+    *,
+    users=2,
+    orgs=1,
+    repos=(("labs", "alpha"), ("labs", "beta")),
+    admin_hash="h1",
+    encrypted=(),
+    key_tables=True,
 ) -> str:
-    """The SQL of a database with the tables the role reads, as the product's dump writes it."""
+    """The SQL of a database with the tables the role reads, as the product's dump writes it;
+    ``encrypted`` names tables of ENCRYPTED_ROWS that get a row, ``key_tables=False`` leaves those
+    tables out (a schema the helper does not know). Rows the key does not encrypt are always there:
+    a webhook without an authorization header, an OAuth2 source, a finished task without credentials."""
     c = sqlite3.connect(":memory:")
     c.executescript(
         'CREATE TABLE "user" (id INTEGER PRIMARY KEY, lower_name TEXT, type INTEGER, is_admin INTEGER, passwd TEXT, email TEXT);'
@@ -225,6 +246,19 @@ def dump_sql(
         "CREATE TABLE access_token (id INTEGER PRIMARY KEY, uid INTEGER, token_hash TEXT);"
         "CREATE TABLE package (id INTEGER PRIMARY KEY);"
     )
+    if key_tables:
+        c.executescript(
+            "CREATE TABLE two_factor (id INTEGER PRIMARY KEY, uid INTEGER, secret TEXT);"
+            "CREATE TABLE secret (id INTEGER PRIMARY KEY, owner_id INTEGER, repo_id INTEGER, name TEXT, data TEXT);"
+            "CREATE TABLE webhook (id INTEGER PRIMARY KEY, repo_id INTEGER, url TEXT, header_authorization_encrypted TEXT);"
+            "CREATE TABLE login_source (id INTEGER PRIMARY KEY, type INTEGER, name TEXT, cfg TEXT);"
+            "CREATE TABLE task (id INTEGER PRIMARY KEY, type INTEGER, payload_content TEXT);"
+            "INSERT INTO webhook VALUES (10, 1, 'https://plain.example.internal/', '');"
+            """INSERT INTO login_source VALUES (10, 6, 'sso', '{"Provider": "openidConnect"}');"""
+            """INSERT INTO task VALUES (10, 0, '{"clone_addr": "https://src.example.internal/r.git"}');"""
+        )
+        for table in encrypted:
+            c.execute(ENCRYPTED_ROWS[table])
     for i in range(users):
         c.execute(
             'INSERT INTO "user" VALUES (?,?,?,?,?,?)',

@@ -6,30 +6,38 @@
 #   purpose: Refuse to start the inference server unless the GPU's power cap is at or under the limit and the weights are the pinned bytes.
 #   owner: platform
 #   trigger: [role:llamacpp]
-#   inputs: the backend, the power limit in watts, the GPU (a DRM render node or an index), the model store's listing, the pinned digest and the model directory
+#   inputs: the backend, the power limit in watts, the GPU (a DRM render node, or NVIDIA card indices or all), the model store's listing, the pinned digest and the model directory
 #   outputs: one line on stdout per check that passed; the refusal on stderr
 #   installs_to: /usr/local/libexec/homelabnext/hnx-llamacpp-precheck
 #   exit:
-#     "0": the power cap is within the limit (or the backend has no GPU) and the bytes are the pinned ones
-#     "1": a refusal - the cap is above the limit, unset or unreadable, or the weights are not the pinned bytes
+#     "0": every card's power cap is within the limit (or the backend has no GPU) and the bytes are the pinned ones
+#     "1": a refusal - a cap is above the limit, unset or unreadable, a named card is absent, or the weights are not the pinned bytes
 #     "2": usage error
 # The unit's ExecStartPre (role llamacpp): nothing loads onto the card until both hold, also after a
 # restart or a reboot. Usage:
 #   hnx-llamacpp-precheck --backend vulkan|sycl|cuda|cpu --max-watts N
-#       [--render-node renderD128] [--gpu-index N] [--attrs power1_cap,power1_max] [--sysfs-root /sys]
+#       [--render-node renderD128] [--gpu-index N|N,M,...|all] [--attrs power1_cap,power1_max] [--sysfs-root /sys]
+#       [--proc-root /proc] [--dev-root /dev]
 #       [--model-file NAME --listing FILE --digest sha256:HEX --model-dir DIR | --power-only]
 #  1. power: on vulkan and sycl every attribute of --attrs (default power1_cap) under the render node's hwmon (microwatts) must exist,
-#     be above 0 (0 is "no limit set") and be at most N watts; on cuda nvidia-smi's power.limit for
-#     the index must be a number at most N; cpu has no card and passes. An unreadable cap refuses:
-#     a cap that cannot be read is not a cap that holds.
+#     be above 0 (0 is "no limit set") and be at most N watts; on cuda, for every card --gpu-index
+#     names (all: every card nvidia-smi lists, at least one), both power.limit (the limit set) and
+#     enforced.power.limit (the one the card enforces) must be numbers above 0 and at most N, and a
+#     named card that nvidia-smi does not list refuses; nvidia-smi runs only when /proc/modules
+#     already lists the nvidia module and /dev/nvidiactl exists (as root it would load the module
+#     otherwise), else it refuses; cpu has no card and passes. An unreadable
+#     cap refuses: a cap that cannot be read is not a cap that holds.
 #  2. bytes: sha256 of the store's listing is the pinned digest, then every file in it has its
 #     sha256 in the model directory (sha256sum --check --strict), as hnx-model-verify does for the other serving role,
-#     and the file the server loads (--model-file) must be one of the listed files: an unlisted file is
-#     never checked by that, so it refuses.
+#     and the file the server loads (--model-file, a path relative to the model directory) must be one
+#     of the listed files: an unlisted file is never checked by that, so it refuses. A split model's
+#     --model-file is its first shard (<stem>-00001-of-0000M.gguf) and every shard of the series must
+#     be listed (llama-server opens them all). Every listed file must resolve inside the model
+#     directory: a file or a directory on its path that links out of it refuses.
 #  The limit is the operator's 200 W rule at most: --max-watts above it is a usage error.
 set -eu
-usage() { echo "usage: hnx-llamacpp-precheck --backend B --max-watts N [--render-node NODE] [--gpu-index N] [--attrs A,B] [--sysfs-root DIR] [--model-file NAME --listing F --digest sha256:HEX --model-dir D | --power-only]" >&2; exit 2; }
-backend="" max="" mfile="" node="" idx=0 sysfs=/sys listing="" digest="" dir="" power_only=0 attrs=""
+usage() { echo "usage: hnx-llamacpp-precheck --backend B --max-watts N [--render-node NODE] [--gpu-index N] [--attrs A,B] [--sysfs-root DIR] [--proc-root DIR] [--dev-root DIR] [--model-file NAME --listing F --digest sha256:HEX --model-dir D | --power-only]" >&2; exit 2; }
+backend="" max="" mfile="" node="" idx=0 sysfs=/sys proc=/proc devroot=/dev listing="" digest="" dir="" power_only=0 attrs=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --backend) [ "$#" -ge 2 ] || usage; backend=$2; shift 2 ;;
@@ -38,6 +46,8 @@ while [ "$#" -gt 0 ]; do
     --gpu-index) [ "$#" -ge 2 ] || usage; idx=$2; shift 2 ;;
     --attrs) [ "$#" -ge 2 ] || usage; attrs=$(printf '%s' "$2" | tr ',' ' '); shift 2 ;;
     --sysfs-root) [ "$#" -ge 2 ] || usage; sysfs=$2; shift 2 ;;
+    --proc-root) [ "$#" -ge 2 ] || usage; proc=$2; shift 2 ;;
+    --dev-root) [ "$#" -ge 2 ] || usage; devroot=$2; shift 2 ;;
     --model-file) [ "$#" -ge 2 ] || usage; mfile=$2; shift 2 ;;
     --listing) [ "$#" -ge 2 ] || usage; listing=$2; shift 2 ;;
     --digest) [ "$#" -ge 2 ] || usage; digest=$2; shift 2 ;;
@@ -49,7 +59,11 @@ done
 case "$backend" in vulkan|sycl|cuda|cpu) ;; *) usage ;; esac
 case "$max" in ''|*[!0-9]*) usage ;; esac
 if [ "$max" -le 0 ] || [ "$max" -gt 200 ]; then usage; fi
-case "$idx" in ''|*[!0-9]*) usage ;; esac
+# one index, a comma-separated list of indices, or all
+case "$idx" in
+  all) ;;
+  ''|,*|*,|*,,*|*[!0-9,]*) usage ;;
+esac
 refuse() { echo "hnx-llamacpp-precheck: $*; refusing to load the model" >&2; exit 1; }
 
 case "$backend" in
@@ -75,14 +89,36 @@ case "$backend" in
     done
     ;;
   cuda)
-    w=$(nvidia-smi -i "$idx" --query-gpu=power.limit --format=csv,noheader,nounits 2>/dev/null) \
-      || refuse "nvidia-smi cannot read GPU $idx's power limit"
-    w=$(printf '%s' "$w" | tr -d ' \r\n')
-    case "$w" in ''|*[!0-9.]*|.*|*.*.*) refuse "GPU $idx's power limit is '$w', not a number of watts" ;; esac
-    if ! awk -v w="$w" -v m="$max" 'BEGIN { exit !(w > 0 && w <= m) }'; then
-      refuse "GPU $idx's power limit is $w W, not within 0 to $max W"
+    # nvidia-smi run as root loads the nvidia kernel module when it is absent; on a guest whose
+    # cards must never be initialised warm that load is the hazard. So it runs only when the driver
+    # is ALREADY up: /proc/modules lists nvidia and its control device exists; otherwise refuse.
+    grep -q '^nvidia ' "$proc/modules" 2>/dev/null \
+      || refuse "the nvidia kernel module is not loaded ($proc/modules); nvidia-smi is not run, since as root it would load it"
+    [ -e "$devroot/nvidiactl" ] \
+      || refuse "$devroot/nvidiactl is missing: the driver is not up; nvidia-smi is not run, since as root it would load it"
+    # every card nvidia-smi lists, one line each: "<index>, <power.limit>, <enforced.power.limit>"
+    rows=$(nvidia-smi --query-gpu=index,power.limit,enforced.power.limit --format=csv,noheader,nounits 2>/dev/null) \
+      || refuse "nvidia-smi cannot read the GPUs' power limits"
+    rows=$(printf '%s\n' "$rows" | tr -d ' \r')
+    want=$(printf '%s' "$idx" | tr ',' ' ')
+    if [ "$idx" = all ]; then
+      want=$(printf '%s\n' "$rows" | awk -F, 'NF { print $1 }')
+      [ -n "$want" ] || refuse "nvidia-smi lists no GPU"
     fi
-    echo "hnx-llamacpp-precheck: GPU $idx power limit is $w W, within $max W"
+    for i in $want; do
+      case "$i" in ''|*[!0-9]*) refuse "nvidia-smi lists a GPU index '$i', not a number" ;; esac
+      row=$(printf '%s\n' "$rows" | awk -F, -v i="$i" '$1 == i { print; n++ } END { exit n != 1 }') \
+        || refuse "GPU $i is not listed once by nvidia-smi: its power limit cannot be read"
+      for field in 2 3; do
+        w=$(printf '%s' "$row" | cut -d, -f "$field")
+        what=power.limit; [ "$field" -eq 3 ] && what=enforced.power.limit
+        case "$w" in ''|*[!0-9.]*|.*|*.*.*) refuse "GPU $i's $what is '$w', not a number of watts" ;; esac
+        if ! awk -v w="$w" -v m="$max" 'BEGIN { exit !(w > 0 && w <= m) }'; then
+          refuse "GPU $i's $what is $w W, not within 0 to $max W"
+        fi
+      done
+      echo "hnx-llamacpp-precheck: GPU $i power limit and enforced limit are within $max W"
+    done
     ;;
   cpu) echo "hnx-llamacpp-precheck: cpu backend, no card to cap" ;;
 esac
@@ -92,8 +128,40 @@ if [ -z "$mfile" ] || [ -z "$listing" ] || [ -z "$digest" ] || [ -z "$dir" ]; th
 [ -f "$listing" ] || refuse "$listing is missing (run model_store)"
 have=$(sha256sum < "$listing" | cut -d ' ' -f 1)
 [ "sha256:$have" = "$digest" ] || refuse "$listing is sha256:$have, the module pins $digest"
-awk -v f="$mfile" 'length($1) == 64 { p = substr($0, 67); if (substr(p, 1, 1) == "*") p = substr(p, 2); if (p == f || p == "./" f) found = 1 } END { exit !found }' "$listing" \
-  || refuse "$mfile is not in $listing, so its bytes are not pinned"
+# the file the server loads is a relative path inside the model directory
+case "$mfile" in /*|../*|*/../*|*/..|..|./*|*/./*|*//*) refuse "$mfile is not a path inside $dir" ;; esac
+listed() { awk -v f="$1" 'length($1) == 64 { p = substr($0, 67); if (substr(p, 1, 1) == "*") p = substr(p, 2); if (p == f || p == "./" f) found = 1 } END { exit !found }' "$listing"; }
+listed "$mfile" || refuse "$mfile is not in $listing, so its bytes are not pinned"
+# a split model: the server is given the first shard and opens the rest beside it, so every shard
+# of the series must be listed (and so checked below); a later shard as --model-file refuses
+case "$mfile" in
+  *-[0-9][0-9][0-9][0-9][0-9]-of-[0-9][0-9][0-9][0-9][0-9].gguf)
+    stem=${mfile%-?????-of-?????.gguf}
+    rest=${mfile#"$stem"-}
+    n=${rest%%-of-*}
+    total=${rest#*-of-}
+    total=${total%.gguf}
+    [ "$n" = 00001 ] || refuse "$mfile is shard $n of a split model; the server must be given the first shard"
+    count=${total#"${total%%[!0]*}"}  # the leading zeros off (a shell reads 00008 as octal)
+    if [ -z "$count" ]; then refuse "$mfile names no shard count"; fi
+    k=1
+    while [ "$k" -le "$count" ]; do
+      shard=$(printf '%s-%05d-of-%s.gguf' "$stem" "$k" "$total")
+      listed "$shard" || refuse "$shard (shard $k of $total) is not in $listing, so its bytes are not pinned"
+      k=$((k + 1))
+    done
+    echo "hnx-llamacpp-precheck: all $count shards of $stem are listed"
+    ;;
+esac
 cd "$dir" || refuse "$dir is missing (run model_store)"
+# every listed file must resolve inside the model directory: a file, or a directory on its path,
+# that links out of it would keep the pinned digest while its bytes live elsewhere
+real_dir=$(pwd -P)
+outside=$(awk 'length($1) == 64 { p = substr($0, 67); if (substr(p, 1, 1) == "*") p = substr(p, 2); print p }' "$listing" \
+  | while IFS= read -r f; do
+      real=$(realpath -e -- "$f" 2>/dev/null) || continue  # a missing file is sha256sum's to report
+      case "$real" in "$real_dir"/*) ;; *) printf '%s\n' "$f" ;; esac
+    done)
+[ -z "$outside" ] || refuse "$(printf '%s\n' "$outside" | head -n 1) resolves outside $dir"
 sha256sum --check --strict --quiet "$listing" >&2 || refuse "$dir does not match $listing"
 echo "hnx-llamacpp-precheck: the weights in $dir are the pinned bytes"

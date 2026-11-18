@@ -27,14 +27,21 @@ container that runs the instance; nothing here names a host, an address or a lab
   is the format the provider's role restores (the role's ``restore_source``).  The product's dump
   carries the configuration file, which holds the three application secrets: the export is made
   WITHOUT it, and the manifest records an HMAC-SHA256 fingerprint of each secret instead (never a
-  value).  The files are 0600 in a 0700 directory all the same: the database inside holds every
+  value).  A source whose ``SECRET_KEY`` was never set runs on the product's built-in default key,
+  which cannot be carried: the dump then counts the rows of every table the product encrypts with
+  that key (read from the dump's own database), refuses when there is one, and otherwise records
+  the key's source as ``builtin-default`` and the proof (``secret_key_unused_proof``), so the
+  target may take a fresh generated key.  It never makes up a key that pretends to be the
+  source's.  The files are 0600 in a 0700 directory all the same: the database inside holds every
   account's password hash, and the repositories are the data.
 * :func:`stage` -- copy an export into a new directory under the target's data root over ssh
   (mode 0700, nothing overwritten); the role's restore reads it from there.
 * :func:`verify` -- on the target, **independently of the restore's own checks**: the database's
   counts and fingerprint read from the target's database file, and every repository's refs digest
   and fsck verdict, against the export; zero accounts or repositories where the export has some is
-  an error.
+  an error.  The application secrets: the source's (by fingerprint), except a ``SECRET_KEY`` the
+  export proved was the built-in default with nothing encrypted under it, which must then be a set,
+  fresh one.
 * :func:`freeze` / :func:`unfreeze` -- stop / start the instance's container (a *write*, done only
   in the cutover window, only to stop and start).  ``freeze`` first sets the restart policy to
   ``no`` (a container with ``always`` would come back with the host: split brain) and reports the
@@ -283,10 +290,13 @@ def _repo_lines(ctx: _Ctx, ep: Endpoint) -> list[str]:
     return [ln.strip() for ln in out.splitlines() if ln.strip()]
 
 
-def _key_fingerprints(ctx: _Ctx, ep: Endpoint, helper) -> dict:
-    """HMAC fingerprints of the endpoint's three application secrets, read from its configuration
-    file in memory (never printed, never written); a secret the file does not hold in plain text
-    (a ``*_URI`` file reference, say) is an error, not a skipped check."""
+def _key_values(ctx: _Ctx, ep: Endpoint, helper) -> tuple[dict, str]:
+    """The endpoint's three application secrets, read from its configuration file in memory (never
+    printed, never written), and where its ``SECRET_KEY`` comes from: ``configured``, or
+    ``builtin-default`` when the file sets none (no ``SECRET_KEY`` and no ``SECRET_KEY_URI``: the
+    product then falls back to its built-in key) or sets that very key; the value is then ``None``.
+    Any other secret the file does not hold in plain text (a ``*_URI`` file reference, say) is an
+    error, not a skipped check."""
     text = _in(ctx, ep, ["cat", ep.config]).decode("utf-8", "replace")
     ini = configparser.ConfigParser(interpolation=None, strict=False, allow_no_value=True)
     ini.optionxform = str  # type: ignore[assignment]  # the product's keys are case-sensitive
@@ -296,18 +306,29 @@ def _key_fingerprints(ctx: _Ctx, ep: Endpoint, helper) -> dict:
         raise MigrateError(
             f"{ep.config}: not readable as a configuration ({type(exc).__name__})"
         ) from None
-    values = {}
+    values: dict = {}
+    source = helper.KEY_CONFIGURED
     for name, (section, key) in SECRET_KEYS.items():
         raw = ini.get(section, key, fallback=None)
         value = (raw or "").strip().strip("`\"'")
-        if not value:
+        uri = (ini.get(section, f"{key}_URI", fallback=None) or "").strip()
+        if name == "secret_key" and not uri and value in ("", helper.BUILTIN_APP_KEY):
+            source, value = helper.KEY_BUILTIN, None
+        elif not value:
             raise MigrateError(
                 f"{ep.config}: no {key} in [{section}] in plain text: cannot prove the secret is "
                 "the same on both sides (a *_URI or file reference is not supported)"
             )
         values[name] = value
+    return values, source
+
+
+def _key_fingerprints(values: dict, source: str, helper) -> dict:
+    """HMAC fingerprints of the secrets the export carries: all three, or, for a built-in
+    ``SECRET_KEY`` (not carried), the other two."""
+    names = helper.SECRET_NAMES if source == helper.KEY_CONFIGURED else helper.OTHER_SECRET_NAMES
     try:
-        return helper.secret_fingerprints(values)
+        return helper.secret_fingerprints(values, names)
     except helper.HelperError as exc:
         raise MigrateError(str(exc)) from None
 
@@ -410,12 +431,23 @@ def dump(
         # the dump holds the configuration, which holds the application secrets: the export is
         # without it (the restore rebuilds the configuration from the secret store) and records
         # only a fingerprint of them, which verify compares with the target's
-        key_fps = _key_fingerprints(ctx, source, helper)
+        key_values, key_source = _key_values(ctx, source, helper)
+        key_fps = _key_fingerprints(key_values, key_source, helper)
         helper.strip_config(str(raw), str(zpath))
         try:
             facts = helper.dbcounts({"zip": str(zpath)})
         except helper.HelperError as exc:
             raise VerifyMismatch(f"the dump's database is not an instance's: {exc}") from exc
+        key_proof = None
+        if key_source == helper.KEY_BUILTIN:
+            # the key cannot be carried: prove, from the very database this export holds, that
+            # nothing is encrypted under it (a refusal names every table that holds such rows)
+            try:
+                key_proof = helper.unused_key_proof(
+                    helper.from_dump(str(zpath), helper.app_key_uses)
+                )
+            except helper.HelperError as exc:
+                raise VerifyMismatch(str(exc)) from exc
         after = _repo_lines(ctx, source)
         _check_instance(after, facts, allow_empty)
     except BaseException:
@@ -432,6 +464,8 @@ def dump(
         "counts": facts["counts"],
         "fingerprint": facts["fingerprint"],
         "app_key_fingerprints": key_fps,
+        "secret_key_source": key_source,
+        **({"secret_key_unused_proof": key_proof} if key_proof is not None else {}),
         "config_included": False,
         "repositories": len(after),
         "source": {"frozen": frozen, "quiescent": frozen and before == after},
@@ -507,12 +541,24 @@ def verify(
         if tmp.is_file() and not tmp.is_symlink() and tmp.parent.resolve() == src.resolve():
             tmp.unlink()
     problems = []
-    try:
-        helper.compare_fingerprints(
-            _key_fingerprints(ctx, target, helper), manifest.get("app_key_fingerprints")
-        )
-    except helper.HelperError as exc:
-        problems.append(str(exc))
+    values, target_source = _key_values(ctx, target, helper)
+    # the target always has a SECRET_KEY of its own: the source's, or (only for an export that
+    # proved the source's was the built-in one with nothing under it) a fresh one
+    builtin = manifest.get("secret_key_source") == helper.KEY_BUILTIN
+    if target_source == helper.KEY_BUILTIN:
+        problems.append("the target runs on the built-in default SECRET_KEY: set one")
+    else:
+        try:
+            helper.check_app_key(
+                {
+                    "values": values,
+                    "origin": "generated" if builtin else "source",
+                    "manifest": manifest,
+                    "zip": str(src / DUMP),
+                }
+            )
+        except helper.HelperError as exc:
+            problems.append(str(exc))
     if facts["counts"] != manifest["counts"]:
         diff = {
             k: (manifest["counts"].get(k), facts["counts"].get(k))

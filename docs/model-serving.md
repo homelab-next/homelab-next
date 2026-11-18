@@ -48,7 +48,7 @@ fails on drift in any of them.
   hf/hub/models--<org>--<name>/      HF_HOME=/srv/models/hf: the hub cache layout
      blobs/<sha256>                    one copy of each file (the hub client deduplicates by blob)
      snapshots/<revision>/<file>       symlinks into blobs/, one directory per pinned commit
-  gguf/<org>/<name>/<file>.gguf      single-file GGUF (gguf-split --merge a sharded one first)
+  gguf/<org>/<name>/[<dir>/]<file>.gguf  one GGUF model: a single file, or a complete split series
   exports/<run>/                     fine-tune exports (group model-trainers may write here)
   manifests/model_store.json         the manifest the role deployed
 ```
@@ -71,6 +71,15 @@ Rules the manifest enforces (`homelabnext.models.store`; the schema carries what
 - No two entries share (source, revision, quant). Two quants of one GGUF repository are two
   entries; the same quant twice is refused.
 - Every file is listed with its sha256 and size, relative to the entry's directory, with no `..`.
+- A GGUF entry (`gguf`, or an export with `layout: gguf`) holds exactly one model: one `.gguf`
+  file, or ONE complete split series as gguf-split names it (`<stem>-00001-of-0000M.gguf` ..
+  `<stem>-0000M-of-0000M.gguf`, every shard listed with its own sha256, all in one directory,
+  which may be a subdirectory of the repository such as `unsloth-Q8_0/`). A partial series, two
+  stems or totals (mixed quants) and a stem that does not carry the entry's `quant` are refused.
+  The digest covers every shard. The engine is given the first shard (`Entry.model_file`;
+  modules/llamacpp's `llamacpp_model_file`) and opens the others beside it, so no merged copy is
+  needed (merging needs the space of a second copy, and the merged file is not on the hub at the
+  pinned revision).
 - An entry's **digest** is `sha256:` of its `sha256sum` listing (`<hex>  <path>` lines in path
   order). `sha256sum` reproduces it, and `hnx models store list` prints it. This is the value a
   role binding's `digest` pins, so G-11 names one set of bytes, not a file name.
@@ -186,7 +195,12 @@ against fakes.
    unit checks before it starts.
 
 Hooks: `health` checks the layout and every file's size (fast). `tasks_from: verify` is the sha256
-pass. `backup` names `exports/` and `manifests/` only, because hub entries can be re-fetched byte
+pass. Both cover the entries this host keeps: `model_store_fetch_ids` when it is set (the same list
+that scopes the fetch), else every entry. Two GPU guests sharing the lab's one manifest each set it
+to their own model, so neither fails health for the other's weights, which are not on its disk; an
+id that names no entry is refused rather than skipped (a scope that matched nothing would pass
+vacuously). A file under a directory of the entry that is a link (a split model's quant
+subdirectory pointing elsewhere) fails both, like a snapshot link out of `blobs/`. `backup` names `exports/` and `manifests/` only, because hub entries can be re-fetched byte
 for byte. `restore` puts `exports/` back. `export` writes the manifest and each entry's `sha256sum`
 listing.
 

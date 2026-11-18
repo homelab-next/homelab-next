@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # The module's dependencies are the container engine (docker_engine, applied to the guest before
-# it), the weights in the model store (role model_store: the file, and its listing the unit checks
+# it), the weights in the model store (role model_store: the file, or every shard of a split model,
+# and its listing the unit checks
 # the bytes against) and, on a GPU backend, the card passed through to this guest. It calls no
 # other service and reads no secret.
 - block:
@@ -10,18 +11,30 @@
       ansible.builtin.include_role:
         name: docker_engine
         tasks_from: readiness
-    - name: Read the weights and their listing in the store
+    - name: Read the weights (every shard of a split model), the directories on the way and the listing
       ansible.builtin.stat:
         path: "{{ item }}"
         follow: false
-      loop:
-        - "{{ llamacpp_model_dir }}/{{ llamacpp_model_file }}"
-        - "{{ llamacpp_listing }}"
+        get_checksum: false
+      loop: >-
+        {{ (llamacpp_model_files | map('regex_replace', '^', llamacpp_model_dir ~ '/') | list)
+           + [llamacpp_listing] }}
       register: llamacpp_ready
-    - name: Fail unless both are regular files (run model_store)
+    - name: Read the directories between the entry and the model file
+      ansible.builtin.stat:
+        path: "{{ llamacpp_model_dir }}/{{ item }}"
+        follow: false
+        get_checksum: false
+      loop: "{{ llamacpp_model_subdirs }}"
+      register: llamacpp_ready_dirs
+    - name: Fail unless each is a regular file and each directory a real one (run model_store)
       ansible.builtin.assert:
-        that: llamacpp_ready.results | map(attribute='stat') | selectattr('isreg', 'defined') | selectattr('isreg') | list | length == 2
-        fail_msg: "llamacpp: the store lacks {{ llamacpp_model_dir }}/{{ llamacpp_model_file }} or {{ llamacpp_listing }} (model_store fetches and lists it)"
+        that:
+          - llamacpp_ready.results | map(attribute='stat') | selectattr('isreg', 'defined') | selectattr('isreg') | list | length == llamacpp_model_files | length + 1
+          - llamacpp_ready_dirs.results | map(attribute='stat') | selectattr('isdir', 'defined') | selectattr('isdir') | list | length == llamacpp_model_subdirs | length
+        fail_msg: >-
+          llamacpp: the store lacks one of {{ llamacpp_model_files | join(', ') }} under {{ llamacpp_model_dir }}
+          or {{ llamacpp_listing }}, or a directory on the way is a link (model_store fetches and lists the entry)
     - name: Read the GPU's device node
       ansible.builtin.stat:
         path: "{{ llamacpp_dev_root }}/dri/{{ llamacpp_render_node }}"

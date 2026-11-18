@@ -75,10 +75,11 @@
         timeout: 5s
         retries: 5
         start_period: 600s
-    # a GPU is handed over by its device only (a cpu backend has none); the groups are numbers
+    # a GPU is handed over by its device only (a cpu backend has none): cuda by CDI name, one card,
+    # a list of them or nvidia.com/gpu=all (llamacpp_gpu_indices); the groups are numbers
     llamacpp_gpu_extra: >-
       {{ {'devices': ['/dev/dri/' ~ llamacpp_render_node]} if llamacpp_backend in llamacpp_render_backends
-         else {'devices': ['nvidia.com/gpu=' ~ (llamacpp_gpu_index | int)]} if llamacpp_backend == 'cuda'
+         else {'devices': llamacpp_cuda_devices} if llamacpp_backend == 'cuda'
          else {} }}
     llamacpp_groups: >-
       {{ ([llamacpp_render_gid_value | int] if llamacpp_backend in llamacpp_render_backends else [])

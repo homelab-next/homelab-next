@@ -28,6 +28,9 @@ llamacpp_gid: 61000
 # the model store (role model_store) and the one GGUF entry served from it
 llamacpp_store_root: /srv/models
 llamacpp_model_repo: ggml-org/Clef-GGUF
+# the file the server loads, relative to the entry's directory: a single .gguf, or the first shard
+# of a split model (<stem>-00001-of-0000M.gguf), also in a subdirectory of the repository
+# (unsloth-Q8_0/<stem>-00001-of-00006.gguf); llama-server opens the other shards beside it
 llamacpp_model_file: Clef-Q4_K_M.gguf
 llamacpp_model_store_id: clef-q4-k-m
 # the entry's digest: sha256 of its sha256sum listing (hnx models store list prints it)
@@ -50,6 +53,19 @@ llamacpp_mode: generate
 llamacpp_render_node: renderD128
 llamacpp_render_gid: ""
 llamacpp_gpu_index: 0
+# cuda only: the cards handed to the container (a model split across several GPUs). "all" is every
+# card the container toolkit's CDI spec lists (nvidia.com/gpu=all), a list is those indices
+# ([0, 1, 2, 3]), and empty is the one card llamacpp_gpu_index. The power-cap check covers every
+# card it names ("all": every card nvidia-smi lists).
+llamacpp_gpu_indices: []
+# Throughput settings, by name; never a raw flag (the command line is the role's). Allowed keys:
+# batch_size (-b, logical batch, tokens), ubatch_size (-ub, physical batch, at most batch_size),
+# kv_unified (true: the slots share ONE KV cache of llamacpp_context_size tokens, -c is that
+# total and each slot may use all of it; default false: each slot gets a fixed
+# llamacpp_context_size), split_mode (-sm none|layer|row, how a model spreads over several GPUs)
+# and tensor_split (-ts, a list of per-GPU proportions). batch_size, ubatch_size and kv_unified
+# are generate mode only (decision mode fixes them); split_mode and tensor_split need a GPU backend.
+llamacpp_extra_args: {}
 # the model store's group id (read from the model's directory when empty): the container reads the
 # weights through it and can write none
 llamacpp_models_gid: ""

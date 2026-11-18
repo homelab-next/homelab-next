@@ -10,7 +10,7 @@
 # below, at an exact version, verified by apt against the archive's signed release files. Every wheel is
 # hash-checked (--require-hashes). The model is fetched once, here, and verified; at run time nothing is
 # downloaded but the configured git sources.
-FROM python:3.11.14-slim-trixie@sha256:c8271b1f627d0068857dce5b53e14a9558603b527e46f1f901722f935b786a39
+FROM python:3.11.17-slim-trixie@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 RUN printf '%s\n' \
       'Types: deb' 'URIs: http://snapshot.debian.org/archive/debian/20261101T000000Z' \

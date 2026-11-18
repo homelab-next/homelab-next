@@ -521,7 +521,7 @@
         "2": "usage error"
       },
       "id": "forge-helper",
-      "inputs": "wait | health | signin | dbcounts, with the settings as JSON on standard input (the credential is among them)",
+      "inputs": "wait | health | signin | dbcounts | strip | secretfp | appkey, with the settings as JSON on standard input (the credential is among them)",
       "kind": "tool",
       "language": "python",
       "outputs": "JSON of facts on stdout; a one-line reason on stderr",
@@ -1031,12 +1031,12 @@
     },
     {
       "exit": {
-        "0": "the power cap is within the limit (or the backend has no GPU) and the bytes are the pinned ones",
-        "1": "a refusal - the cap is above the limit, unset or unreadable, or the weights are not the pinned bytes",
+        "0": "every card's power cap is within the limit (or the backend has no GPU) and the bytes are the pinned ones",
+        "1": "a refusal - a cap is above the limit, unset or unreadable, a named card is absent, or the weights are not the pinned bytes",
         "2": "usage error"
       },
       "id": "llamacpp-precheck",
-      "inputs": "the backend, the power limit in watts, the GPU (a DRM render node or an index), the model store's listing, the pinned digest and the model directory",
+      "inputs": "the backend, the power limit in watts, the GPU (a DRM render node, or NVIDIA card indices or all), the model store's listing, the pinned digest and the model directory",
       "installs_to": "/usr/local/libexec/homelabnext/hnx-llamacpp-precheck",
       "kind": "job",
       "language": "shell",
