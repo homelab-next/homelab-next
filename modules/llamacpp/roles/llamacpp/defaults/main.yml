@@ -87,3 +87,9 @@ llamacpp_health_timeout: 20
 # the one warm-up request health sends before its timed probes: the first request after a cold load
 # is far slower than a warm one (25.5 s measured for a 177B split model on 4 GPUs)
 llamacpp_first_request_timeout: 180
+# health waits for readiness before it probes: the unit is active once the precheck ends and the
+# container starts, but the model then loads for a while longer (~90 s for a 177B split model on 4
+# GPUs). /health and the containers' health are each retried every llamacpp_load_poll_s seconds for
+# up to llamacpp_load_timeout seconds (ansible's retry delay is whole seconds, at least 1)
+llamacpp_load_timeout: 900
+llamacpp_load_poll_s: 5
