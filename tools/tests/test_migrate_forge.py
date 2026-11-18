@@ -83,7 +83,9 @@ class Host:
         )
         self.users, self.hook, self.policy = users, hook, policy
         k = {**KEYS, **(keys or {})}
+        # a stock app.ini: the product writes APP_NAME, RUN_MODE and WORK_PATH above the first section
         self.config = (
+            "APP_NAME = Gitea: Git with a cup of tea\nRUN_MODE = prod\nWORK_PATH = /data/gitea\n\n"
             "[server]\nSSH_PORT = 22\n"
             f"[security]\nINSTALL_LOCK = true\nSECRET_KEY = {k['SECRET_KEY']}\n"
             f"INTERNAL_TOKEN = {k['INTERNAL_TOKEN']}\n[oauth2]\nJWT_SECRET = {k['JWT_SECRET']}\n"
@@ -653,3 +655,15 @@ def test_a_source_with_its_own_key_keeps_the_copy_path_and_a_fresh_key_is_refuse
     assert sorted(m["app_key_fingerprints"]) == ["internal_token", "jwt_secret", "secret_key"]
     with pytest.raises(mt.VerifyMismatch, match="secret_key is not the source's"):
         mt.verify(ep(), private / "out", _ctx=Host(private, keys=FRESH).ctx())
+
+
+@pytest.mark.parametrize(
+    "top", ["", "APP_NAME = x\nRUN_MODE = prod\n\n", "; a comment\nWORK_PATH = /data/gitea\n"]
+)
+def test_a_configuration_with_keys_above_the_first_section_is_read(private, top):
+    # the product's own app.ini starts with section-less keys (go-ini's default section)
+    host = Host(private)
+    host.config = top + host.config.split("\n\n", 1)[-1]
+    m = _dump(private, host)
+    assert m["secret_key_source"] == "configured"
+    assert sorted(m["app_key_fingerprints"]) == ["internal_token", "jwt_secret", "secret_key"]
