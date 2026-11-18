@@ -156,6 +156,13 @@ command-line arguments.
      --staging-dir /usr/src/paperless/export --dir <private dir>/dump-1
    ```
 
+   **No downgrade.** An application cannot open what a newer one migrated, so the restore reads the
+   source's version (the export's own `metadata.json`, recorded in the dump manifest) and refuses,
+   before it writes anything, a source newer than `product.version` of `module.yml` (the version the
+   image pin carries), naming both versions; a dump that records no version is refused too.
+   `--source-version <image tag>` supplies or confirms it (the newer of the two decides). The fix for
+   a refusal is to pin the module to the source's version or newer, never to restore anyway.
+
    It refuses a target that holds any document or account before it writes, imports, then reads the
    target: the product's exporter is run again **on the target** and its manifest compared with the
    dump's, document by document (by id): checksums, owner, tags, correspondent, document type, storage

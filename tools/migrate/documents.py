@@ -844,10 +844,62 @@ def _read_manifest(dump_dir: Path) -> dict:
     return manifest
 
 
+MODULE_DIR = Path(__file__).resolve().parents[2] / "modules" / "documents"
+
+
+def _version_key(text: str) -> tuple[int, ...] | None:
+    """``3.4.2`` (up to four dotted parts) -> ``(3, 4, 2, 0)``; None for anything else."""
+    parts = str(text).strip().split(".")
+    if not 1 <= len(parts) <= 4 or not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts) + (0,) * (4 - len(parts))
+
+
+def pinned_version(module_dir: Path = MODULE_DIR) -> str:
+    """``product.version`` of the module's manifest (the version its image pin carries)."""
+    inside = False
+    for line in (module_dir / "module.yml").read_text(encoding="utf-8").splitlines():
+        if line.startswith("product:"):
+            inside = True
+        elif inside and line and not line[0].isspace():
+            break
+        elif inside and line.strip().startswith("version:"):
+            version = line.split(":", 1)[1].strip().strip("\"'")
+            if _version_key(version) is not None:
+                return version
+    raise MigrateError(f"{module_dir / 'module.yml'}: no product.version")
+
+
+def check_version(recorded: str, given: str | None, target: str) -> str:
+    """The source version a restore may go ahead with; refuse a downgrade (MigrateError).
+
+    A newer application migrates its database and writes records an older one cannot open, so an
+    export of a newer version is not restored into an older one.  The version is the one the
+    export recorded (its ``metadata.json``) and/or ``given`` (``--source-version``); when both are
+    present the newer decides.  No usable version at all is refused too: unknown is not "ok".
+    """
+    if given is not None and _version_key(given) is None:
+        raise MigrateError(f"--source-version {given!r}: not a version")
+    known = [v for v in (recorded, given) if v and _version_key(v) is not None]
+    if not known:
+        raise MigrateError(
+            "the dump records no version of its source: pass --source-version (the source's "
+            "image tag), refusing to guess"
+        )
+    source = max(known, key=_version_key)
+    if _version_key(source) > _version_key(target):
+        raise MigrateError(
+            f"the source application is {source}, newer than the target {target}: restoring it "
+            "would be a downgrade; pin the module to the source's version or newer"
+        )
+    return source
+
+
 def restore(
     target: Endpoint,
     dump_dir: str | os.PathLike,
     *,
+    source_version: str | None = None,
     expect_counts: Mapping[str, int] | None = None,
     require_quiescent: bool = False,
     disable_egress: bool = False,
@@ -855,7 +907,8 @@ def restore(
 ) -> dict:
     """Import ``dump_dir`` into an empty ``target`` and verify it; return the report.
 
-    Refused before anything is written: a dump whose tar is not what its manifest says, or not
+    Refused before anything is written: a source application newer than the module's pinned
+    version (a downgrade), or one that records no version (``--source-version`` supplies it); a dump whose tar is not what its manifest says, or not
     whole; a dump not taken from a source that stood still (``require_quiescent``); one that is not
     the state ``expect_counts`` names; a target that holds any document or account.  After the
     import the counts and the checksum of every file on disk must equal the dump's.  A failure
@@ -870,9 +923,13 @@ def restore(
     ctx = _ctx or _Ctx()
     root = Path(dump_dir)
     manifest = _read_manifest(root)
+    target_version = pinned_version()
+    source_seen = check_version(str(manifest.get("version") or ""), source_version, target_version)
     if not target.staging_dir:
         raise MigrateError("restore needs a staging directory in the target's export volume")
     scan = scan_export(root / TAR_FILE)
+    if scan["version"] != str(manifest.get("version") or ""):
+        raise VerifyMismatch(f"{root / TAR_FILE}: its version is not what {MANIFEST} recorded")
     if scan["counts"] != manifest["counts"] or scan["digest"] != manifest.get("documents_digest"):
         raise VerifyMismatch(f"{root / TAR_FILE}: its contents are not what {MANIFEST} recorded")
     if require_quiescent and not manifest.get("quiescent"):
@@ -974,6 +1031,8 @@ def restore(
         "duplicate_checksums": scan["duplicates"],
         "sanity_known_from_source": sum(known.values()),
         "egress": egress,
+        "source_version": source_seen,
+        "target_version": target_version,
     }
 
 
@@ -1065,6 +1124,8 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--allow-empty", action="store_true", help="dump: accept a source with no documents"
     )
+    ap.add_argument("--source-version",
+                    help="restore: the source application's version (its image tag); refused when newer than the module's pin")  # fmt: skip
     ap.add_argument("--disable-egress", action="store_true",
                     help="restore: switch off imported mail rules and e-mail/webhook workflows")  # fmt: skip
     ap.add_argument("--require-quiescent", action="store_true",
@@ -1094,6 +1155,7 @@ def _command(a: argparse.Namespace) -> dict:
         a.dir,
         expect_counts=_expect(a.expect_counts),
         require_quiescent=a.require_quiescent,
+        source_version=a.source_version,
         disable_egress=a.disable_egress,
     )
 

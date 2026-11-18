@@ -1029,7 +1029,7 @@ def test_source_version_overrides_a_missing_record_and_can_refuse(private):
     ok = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
     assert mt.restore(dst_ep(), out, source_version="3.4.2", _ctx=ctx_for(ok))["source_version"] == "3.4.2"  # fmt: skip
     bad = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
-    with pytest.raises(mt.MigrateError, match="3.5.1.*newer"):
+    with pytest.raises(mt.MigrateError, match=r"3\.5\.1.*newer"):
         mt.restore(dst_ep(), out, source_version="3.5.1", _ctx=ctx_for(bad))
     assert bad.log == []
 
