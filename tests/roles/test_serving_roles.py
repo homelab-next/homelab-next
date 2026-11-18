@@ -1554,7 +1554,8 @@ def test_model_store_creates_its_groups_then_its_owner_when_absent():
     group_task, user_task = [
         t
         for t in _accounts_tasks()
-        if "ansible.builtin.getent" not in t and "ansible.builtin.assert" not in t
+        if not {"ansible.builtin.getent", "ansible.builtin.assert", "ansible.builtin.set_fact"}
+        & set(t)
     ]
     assert list(group_task).count("ansible.builtin.group") == 1
     g = group_task["ansible.builtin.group"]
@@ -1708,3 +1709,49 @@ def test_model_store_never_renumbers_an_existing_account(tmp_path, which):
     assert bad.returncode != 0 and "never renumbers an account" in bad.stdout, bad.stdout
     ok = run_role(tmp_path, "model_store", "accounts", {**base, var: str(right)}, check=True)
     assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
+def _check_first(tmp_path):
+    """``--check`` on a guest where the store's owner and groups do not exist yet."""
+    store = manifest()
+    v = store_vars(
+        tmp_path,
+        store,
+        model_store_manage_accounts=True,
+        model_store_owner="hnxnosuchowner",
+        model_store_group="hnxnosuchgroup",
+        model_store_exports_group="hnxnosuchtrainers",
+        model_store_fetch=False,
+    )
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": v, "check": True,
+            "setup": {"v": v}}  # fmt: skip
+
+
+@first_run(_check_first)
+def test_check_mode_on_a_guest_without_the_accounts_does_not_chown_to_them(first):
+    """Check mode does not create the owner, so every task that names it as owner would fail "failed
+    to look up user"; those tasks wait until the accounts exist, and nothing is written."""
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "failed to look up" not in r.stdout + r.stderr
+    assert not (tmp_path / "srv").exists()  # check mode wrote nothing
+
+
+def _real_first(tmp_path):
+    """A real (not --check) run (account creation needs root, so the accounts are not managed)."""
+    store = manifest()
+    v = store_vars(tmp_path, store, model_store_fetch=False)
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_real_first)
+def test_a_real_run_is_never_deferred_by_the_pending_accounts_note(first):
+    """model_store_accounts_pending is true only under --check: a real run, writes the store (a forced-true flag would skip all of it and still exit 0)."""
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (tmp_path / "srv" / "manifests" / "model_store.json").is_file()
+    assert (tmp_path / "srv" / "exports").is_dir()
+    accounts = _accounts_tasks()
+    (note,) = [t for t in accounts if "ansible.builtin.set_fact" in t]
+    expr = note["ansible.builtin.set_fact"]["model_store_accounts_pending"]
+    assert expr.lstrip().startswith("{{ ansible_check_mode | bool and")
