@@ -381,3 +381,33 @@ def test_the_docker_commands_reach_this_hosts_daemon_whatever_the_environment_sa
             "DOCKER_HOST": "unix:///run/docker.sock",
             "DOCKER_CONFIG": "{{ docker_engine_state_dir }}/cli-config",
         }, hook
+
+
+def _first(tmp):
+    from test_product_roles import key_setup
+
+    v, ring, _ = key_setup(tmp, ROLE)
+    return {"role": ROLE, "tasks_from": "signing_key", "extra_vars": v, "check": True,
+            "setup": {"ring": ring}}  # fmt: skip
+
+
+@pytest.mark.requires_tool("gpg")
+@first_run(_first)
+def test_the_signing_key_task_list_works_in_check_mode(first):
+    """In --check the staging file and scratch GnuPG home are never made, so the key listing that
+    reads them cannot run; it waits for a real run and nothing is installed or left behind."""
+    r, _ = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not first.setup["ring"].exists()
+    assert not first.setup["ring"].parent.exists()  # not even the keyring directory
+
+
+def test_recommends_are_not_installed_so_rootless_extras_stays_at_no_unpinned_version():
+    """docker-ce recommends docker-ce-rootless-extras, which apt would install at the newest
+    version beside the pinned engine (5:29.10.0 beside 29.9.2).  This role pins and holds exactly the
+    packages it names and installs nothing else, so the transaction takes no recommends."""
+    tasks = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / "main.yml").read_text())
+    (install,) = [t["ansible.builtin.apt"] for t in tasks if "ansible.builtin.apt" in t
+                  and "docker_engine_packages" in str(t["ansible.builtin.apt"].get("name"))]  # fmt: skip
+    assert install["install_recommends"] is False
+    assert "rootless" not in str(FIXED["docker_engine_packages"])
