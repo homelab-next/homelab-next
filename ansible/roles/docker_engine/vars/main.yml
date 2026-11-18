@@ -16,3 +16,6 @@ docker_engine_packages:
   - {name: docker-compose-plugin, version: "{{ docker_engine_compose_version }}-*"}
 # Where a new daemon.json waits for dockerd --validate: beside the live file (tasks/config.yml).
 docker_engine_staged_file: "{{ docker_engine_config_file | dirname }}/.homelabnext-staged.json"
+# Unpinned, never held: what docker-ce Recommends that the engine really needs (the install of
+# the pinned packages takes no recommends).
+docker_engine_prerequisites: [apparmor, ca-certificates]

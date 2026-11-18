@@ -2,7 +2,11 @@
 # The repository root is configurable (a lab mirror may stand in for the vendor), so the key it
 # serves is not trusted for coming from it: it is fetched to a staging file and installed for apt
 # only when every primary key in it is one of the pinned vendor fingerprints.
+# Under --check nothing is fetched (get_url writes no staging file, tempfile makes no scratch
+# home), so the listing that reads them cannot run: the whole fetch, check and install waits for a
+# real run, which is the only one that can say whether the served key is the pinned one.
 - name: Fetch, check and install the vendor signing key
+  when: not ansible_check_mode
   block:
     - name: Ensure the apt keyring directory exists
       ansible.builtin.file:
@@ -63,3 +67,20 @@
         state: absent
       loop: "{{ [docker_engine_keyring ~ '.download'] + ([docker_engine_gnupg_home.path] if docker_engine_gnupg_home.path is defined else []) }}"
       changed_when: false  # scratch files only: a second run must report no change
+
+# A check run must not be silent about the key: it cannot fetch the vendor key to judge it, but it
+# can say whether the keyring is there, so a missing key shows as "would install".
+- name: Look at the keyring (check mode only)
+  when: ansible_check_mode
+  ansible.builtin.stat:
+    path: "{{ docker_engine_keyring }}"
+  register: docker_engine_keyring_stat
+
+- name: Say what a real run would do about the signing key (check mode only)
+  when: ansible_check_mode
+  ansible.builtin.debug:
+    msg: >-
+      docker_engine (check mode): the signing key is not fetched or checked here.
+      {{ 'The keyring ' ~ docker_engine_keyring ~ ' exists; a real run re-checks it against the pinned fingerprints and replaces it if the served key differs (a rotation).'
+         if docker_engine_keyring_stat.stat.exists
+         else 'The keyring ' ~ docker_engine_keyring ~ ' is missing; a real run would fetch, check and install the key.' }}
