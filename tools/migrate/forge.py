@@ -301,6 +301,7 @@ def _key_values(ctx: _Ctx, ep: Endpoint, helper) -> tuple[dict, str]:
     Any other secret the file does not hold in plain text (a ``*_URI`` file reference, say) is an
     error, not a skipped check."""
     text = _in(ctx, ep, ["cat", ep.config]).decode("utf-8", "replace")
+    text = text.removeprefix("\ufeff")  # a byte-order mark would hide the first section header
     ini = configparser.ConfigParser(interpolation=None, strict=False, allow_no_value=True)
     ini.optionxform = str  # type: ignore[assignment]  # the product's keys are case-sensitive
     try:

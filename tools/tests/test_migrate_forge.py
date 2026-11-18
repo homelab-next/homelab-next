@@ -85,7 +85,7 @@ class Host:
         k = {**KEYS, **(keys or {})}
         # a stock app.ini: the product writes APP_NAME, RUN_MODE and WORK_PATH above the first section
         self.config = (
-            "APP_NAME = Gitea: Git with a cup of tea\nRUN_MODE = prod\nWORK_PATH = /data/gitea\n\n"
+            "APP_NAME = forge\nRUN_MODE = prod\nWORK_PATH = /data/forge\n\n"
             "[server]\nSSH_PORT = 22\n"
             f"[security]\nINSTALL_LOCK = true\nSECRET_KEY = {k['SECRET_KEY']}\n"
             f"INTERNAL_TOKEN = {k['INTERNAL_TOKEN']}\n[oauth2]\nJWT_SECRET = {k['JWT_SECRET']}\n"
@@ -658,12 +658,31 @@ def test_a_source_with_its_own_key_keeps_the_copy_path_and_a_fresh_key_is_refuse
 
 
 @pytest.mark.parametrize(
-    "top", ["", "APP_NAME = x\nRUN_MODE = prod\n\n", "; a comment\nWORK_PATH = /data/gitea\n"]
+    "top", ["", "APP_NAME = x\nRUN_MODE = prod\n\n", "; a comment\nWORK_PATH = /data/forge\n"]
 )
 def test_a_configuration_with_keys_above_the_first_section_is_read(private, top):
-    # the product's own app.ini starts with section-less keys (go-ini's default section)
+    # the forge slot's configuration starts with section-less keys (go-ini's default section)
     host = Host(private)
     host.config = top + host.config.split("\n\n", 1)[-1]
     m = _dump(private, host)
     assert m["secret_key_source"] == "configured"
     assert sorted(m["app_key_fingerprints"]) == ["internal_token", "jwt_secret", "secret_key"]
+
+
+def test_a_configuration_with_a_byte_order_mark_is_read(private):
+    # the mark sits in front of the first section header, which must still read as one
+    host = Host(private)
+    rest = host.config.split("\n\n", 1)[-1].replace("[server]\nSSH_PORT = 22\n", "")
+    assert rest.startswith("[security]\n")
+    host.config = "\ufeff" + rest + "[server]\nSSH_PORT = 22\n"
+    m = _dump(private, host)
+    assert m["secret_key_source"] == "configured"
+
+
+def test_a_top_level_key_does_not_answer_for_a_section(private):
+    # a SECRET_KEY above the first section is not [security]'s: the source is still on the built-in key
+    host = _builtin_source(private, "absent")
+    host.config = "SECRET_KEY = " + "k" * 32 + "\n" + host.config
+    m = _dump(private, host)
+    assert m["secret_key_source"] == "builtin-default"
+    assert sorted(m["app_key_fingerprints"]) == ["internal_token", "jwt_secret"]
