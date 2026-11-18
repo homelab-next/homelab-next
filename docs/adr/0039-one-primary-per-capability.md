@@ -179,7 +179,9 @@ ends at the IdP's ledger row (ADR-0043), which this ADR makes checkable.
 
    At run time, `ModelResolver.resolve` raises on a binding naming a non-primary row, so the
    silent reroute above cannot happen. `resolve_binding` reaches an eval row only when the egress
-   canary runner passes `allow_eval=True`, and then resolves that row by its row name (decision
+   canary runner passes `allow_eval=True` (and `hnx golden pins report`, through its
+   `EvaluationResolver`, to evaluate a role bound to an eval row; no serving path does), and then
+   resolves that row by its row name (decision
    2), never through the capability. No file name or call path grants the exception. CI runs the
    check over `examples/` (`make check`). The overlay's `checks.yml` template runs it over `lab/`.
 4. **Replicas are not tiers.** A row that serves the same data as a primary from a second place

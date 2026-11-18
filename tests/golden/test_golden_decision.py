@@ -27,7 +27,7 @@ from homelabnext.golden import canary as cn
 from homelabnext.golden.cli import main as golden_main
 from homelabnext.golden.runner import one_probability
 from homelabnext.registry import FakeDNS, Resolver
-from homelabnext.registry.models import ModelResolver, RoleTable
+from homelabnext.registry.models import ModelResolver, NonPrimaryBinding, RoleTable
 
 ROOT = Path(__file__).resolve().parents[2]
 SEED = ROOT / "homelabnext" / "golden" / "examples" / "decision_smoke.yml"
@@ -467,3 +467,61 @@ def test_the_probe_client_is_a_pinned_input(decision_report, monkeypatch):
     monkeypatch.setattr(pins, "_file_digest", changed)
     p = pins.check_report(decision_report, _decision_table(), SUITES)
     assert any("stale" in x and "code" in x for x in p)
+
+
+# ------------------------------------- a role bound to an eval row: evaluated, never served
+
+
+@pytest.fixture
+def eval_backend(tmp_path):
+    """``fast-classifier`` bound to ``svc:inference-small``, an ``eval`` row beside the capability's
+    primary (the lab's shape: the gateway is the primary, the llama-server its backend), on a fake
+    decision server.  Yields (registry path, role table, server)."""
+    import yaml
+
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    row = copy.deepcopy(doc["services"]["inference"])
+    row.update(port=8002, standing={"tier": "eval", "until": "2027-01-31", "why": "a backend"})
+    doc["services"]["inference-small"] = row
+    path = tmp_path / "services.yml"
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    srv = FakeOpenAIServer(
+        models=[], decision_models=["small-decider"], decision_rules={"rolled back": 0.93}
+    ).start()
+    doc = json.loads(ROLES.read_text(encoding="utf-8"))
+    role = doc["roles"]["fast-classifier"]
+    role["kind"] = "decision"
+    role["bindings"][0].update(backend="svc:inference-small", model_id="small-decider")
+    for k in ("logprobs", "params"):
+        role.pop(k, None)
+    table = RoleTable.from_dict({"version": 1, "roles": {"fast-classifier": role}})
+    yield path, table, srv
+    srv.stop()
+
+
+def test_pins_report_evaluates_a_role_bound_to_an_eval_row(eval_backend, monkeypatch):
+    from homelabnext.golden.cli import _live
+
+    path, table, srv = eval_backend
+    monkeypatch.setenv("HNX_ENDPOINT_INFERENCE_SMALL", srv.url)
+    live = _live(str(path), table)
+    decider, model_id = live["decider"]("fast-classifier")
+    assert model_id == "small-decider"
+    rep = run_decision_suite(parse_suite(WIRE), decider, role="fast-classifier", model_id=model_id)
+    assert rep.results[0].passed and srv.requests[0]["path"] == "/v1/systemone"
+
+
+def test_the_same_role_is_refused_at_serving_time(eval_backend, monkeypatch):
+    """ADR-0039 decision 3 stays enforced: every resolver a consumer builds still refuses."""
+    path, table, srv = eval_backend
+    monkeypatch.setenv("HNX_ENDPOINT_INFERENCE_SMALL", srv.url)
+    from homelabnext.registry import load
+
+    reg = load(path)
+    res = Resolver(reg, dns=FakeDNS(), hosts={}, environ={"HNX_ENDPOINT_INFERENCE_SMALL": srv.url})
+    serving = ModelResolver(reg, table, res)
+    with pytest.raises(NonPrimaryBinding, match="is an eval row"):
+        serving.resolve("fast-classifier")
+    with pytest.raises(NonPrimaryBinding):
+        client_decider(serving, "fast-classifier")
+    assert srv.requests == []  # refused before any request
