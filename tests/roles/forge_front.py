@@ -306,11 +306,12 @@ def docker(
     users: str = "ID\tUsername\n",
     auth: str = "ID\tName\tType\tEnabled\n",
     health: str = "healthy",
+    running: bool = True,
 ) -> dict:
     """A fake ``docker``.  Every call is appended to ``docker.log`` (one line, argv joined); what a
     call needs from the environment is read from files under ``tmp`` so a test can change it:
     ``users.txt`` / ``auth.txt`` (what the product's listings print), ``repos.out`` (the repositories'
-    manifest), ``dump.zip`` (what ``dump`` writes), and the markers ``dump.fails`` and ``run.fails``."""
+    manifest), ``dump.zip`` (what ``dump`` writes), and the markers ``dump.fails`` and ``run.fails``.  ``running=False``: ``ps`` lists nothing (a fresh guest)."""
     bindir = tmp / "bin"
     bindir.mkdir(exist_ok=True)
     (tmp / "users.txt").write_text(users)
@@ -325,7 +326,9 @@ T = {str(tmp)!r}
 open(T + "/docker.log", "a").write(" ".join(a) + "\\n")
 def env_seen(n):
     open(T + "/env.log", "a").write(n + "=" + ("set" if os.environ.get(n) else "unset") + "\\n")
-if "ps" in a:
+if "ps" in a and not {running!r}:
+    pass  # a guest with no container yet: nothing is listed
+elif "ps" in a:
     sys.stdout.write(json.dumps({{"Service": {MID!r}, "State": "running", "Health": {health!r}}}) + "\\n")
 elif "exec" in a and a[-3:] == ["admin", "user", "list"]:
     sys.stdout.write(open(T + "/users.txt").read())

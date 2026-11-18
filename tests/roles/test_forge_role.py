@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import pwd
+import time
 from pathlib import Path
 
 import pytest
@@ -830,3 +831,35 @@ def test_restore_refuses_a_fresh_key_when_the_proof_is_absent_or_the_archive_hol
     _relist(src, lambda m: m.pop("secret_key_unused_proof"))
     r = _restore(tmp_path / "b", {**env, **FRESH_KEY}, src, app_key_origin="generated")
     assert r.returncode != 0 and "no proof" in r.stdout + r.stderr
+
+
+# ----------------------------------------------------------------------------- --check on a fresh guest
+
+
+def test_check_mode_on_a_fresh_guest_reports_changes_and_waits_for_no_service(tmp_path):
+    """--check starts nothing, so a guest with no container yet has no service to wait for or to
+    seed: the readiness wait (a read-only task that runs in --check) must not poll out its whole
+    timeout, and nothing may be run inside a container that does not exist."""
+    ssh_tools(tmp_path / "bin")
+    env = {**SECRETS, **docker(tmp_path, running=False)}
+    v = pv(tmp_path, start=True, ready_timeout=25, bind=LOOPBACK, port=free_port())
+    t0 = time.monotonic()
+    r = run_role(tmp_path, ROLE, "main", v, env=env, check=True)
+    took = time.monotonic() - t0
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert took < 20, took  # the wait would have used its 25 s
+    assert not any(" exec " in c for c in calls(tmp_path))
+    assert "changed=" in r.stdout and "changed=0" not in r.stdout  # the dry run reports what it would do
+
+
+def test_check_mode_on_a_running_service_still_waits_and_reads(tmp_path):
+    """The guard is for a service that is not there: where one runs, --check keeps its read-only
+    checks (the answer wait and the account listing), so a real run's behaviour is not guessed."""
+    with Front(PKI[0], PKI[1], tmp_path, password=ADMIN) as front:
+        banner = Banner()
+        env = _env(tmp_path, users="ID\tUsername\n1\tadmin\n")
+        v = _live(tmp_path, front, banner)
+        r = run_role(tmp_path, ROLE, "main", v, env=env, check=True)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert any("admin user list" in c for c in calls(tmp_path))
+        banner.close()
