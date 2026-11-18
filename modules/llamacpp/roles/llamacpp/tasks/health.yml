@@ -41,9 +41,11 @@
       until: >-
         llamacpp_wait_loaded.status | default(-1) | int == 200
         and (llamacpp_wait_loaded.json.status | default('')) == 'ok'
-      retries: "{{ [((llamacpp_load_timeout | int) / (llamacpp_load_poll_s | int)) | round(0, 'ceil') | int, 1] | max }}"
+      # one attempt under --check: a first install has no server to wait for, and --check must report promptly
+      retries: "{{ 1 if ansible_check_mode else [((llamacpp_load_timeout | int) / (llamacpp_load_poll_s | int)) | round(0, 'ceil') | int, 1] | max }}"
       delay: "{{ llamacpp_load_poll_s | int }}"
     - name: The model finished loading within llamacpp_load_timeout
+      when: not ansible_check_mode  # the wait's uri is skipped under --check, so there is no status to judge
       ansible.builtin.assert:
         that:
           - llamacpp_wait_loaded.status | default(-1) | int == 200
@@ -64,7 +66,8 @@
         and llamacpp_wait_containers.stdout is search('"State":\\s*"running"')
         and llamacpp_wait_containers.stdout is not search('"State":\\s*"(?!running")')
         and llamacpp_wait_containers.stdout is not search('"Health":\\s*"(?!healthy")')
-      retries: "{{ [((llamacpp_load_timeout | int) / (llamacpp_load_poll_s | int)) | round(0, 'ceil') | int, 1] | max }}"
+      # one attempt under --check: a first install has no server to wait for, and --check must report promptly
+      retries: "{{ 1 if ansible_check_mode else [((llamacpp_load_timeout | int) / (llamacpp_load_poll_s | int)) | round(0, 'ceil') | int, 1] | max }}"
       delay: "{{ llamacpp_load_poll_s | int }}"
     - name: Every container of the spec is running and healthy
       ansible.builtin.include_role:
