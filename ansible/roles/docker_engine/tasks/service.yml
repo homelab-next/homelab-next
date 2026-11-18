@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Under --check on a guest whose engine is about to be installed there is no unit yet (the package
+# makes it), and systemd refuses to start one it cannot find; install.yml has said what a real run does.
+- name: Enable and start the engine
+  ansible.builtin.systemd_service:
+    name: "{{ docker_engine_service }}"
+    enabled: true
+    state: started
+  when: not (docker_engine_would_install | default(false) | bool)

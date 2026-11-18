@@ -28,6 +28,12 @@ def base(**kw):
     return {"docker_engine_log_max_size": "10m", **kw}
 
 
+def _main_and_install_tasks():
+    """main.yml's tasks, then install.yml's (the packages' tasks live there so --check can test them)."""
+    d = ANSIBLE / "roles" / ROLE / "tasks"
+    return [t for f in ("main.yml", "install.yml") for t in yaml.safe_load((d / f).read_text())]
+
+
 # ---------------------------------------------------------------- inputs
 def test_the_pins_are_the_defaults_and_every_package_follows_one():
     assert (DEFAULTS["docker_engine_version"], DEFAULTS["docker_engine_containerd_version"],
@@ -118,7 +124,7 @@ def test_every_pin_is_installed_in_one_transaction_and_held_after():
     """The engine depends on the matching CLI and containerd, so all five install together; they
     are dpkg-held, so the bump path (a new pin, re-run main) must be allowed to move them, and the
     holds are set again after."""
-    tasks = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / "main.yml").read_text())
+    tasks = _main_and_install_tasks()
     (i,) = [n for n, t in enumerate(tasks) if "ansible.builtin.apt" in t
             and "docker_engine_packages" in str(t["ansible.builtin.apt"].get("name"))]  # fmt: skip
     install = tasks[i]["ansible.builtin.apt"]
@@ -408,7 +414,7 @@ def test_recommends_are_not_installed_so_rootless_extras_stays_at_no_unpinned_ve
     """docker-ce recommends docker-ce-rootless-extras, which apt would install at the newest
     version beside the pinned engine (5:29.10.0 beside 29.9.2).  This role pins and holds exactly the
     packages it names and installs nothing else, so the transaction takes no recommends."""
-    tasks = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / "main.yml").read_text())
+    tasks = _main_and_install_tasks()
     (install,) = [t["ansible.builtin.apt"] for t in tasks if "ansible.builtin.apt" in t
                   and "docker_engine_packages" in str(t["ansible.builtin.apt"].get("name"))]  # fmt: skip
     assert install["install_recommends"] is False
@@ -439,7 +445,7 @@ def test_apparmor_and_ca_certificates_are_installed_by_name_not_through_recommen
     """install_recommends is off for the pinned transaction, which would drop what docker-ce
     recommends and a guest needs (the docker-default AppArmor profile, registry TLS roots)."""
     assert FIXED["docker_engine_prerequisites"] == ["apparmor", "ca-certificates"]
-    tasks = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / "main.yml").read_text())
+    tasks = _main_and_install_tasks()
     (i,) = [n for n, t in enumerate(tasks) if "ansible.builtin.apt" in t
             and t["ansible.builtin.apt"].get("name") == "{{ docker_engine_prerequisites }}"]  # fmt: skip
     assert tasks[i]["ansible.builtin.apt"]["state"] == "present"
