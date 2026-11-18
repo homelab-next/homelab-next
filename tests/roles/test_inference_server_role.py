@@ -921,7 +921,7 @@ def test_health_fails_naming_loading_when_the_model_never_loads_in_time(tmp_path
         calls = [p for _, p in srv.requests]
     out = r.stdout + r.stderr
     assert r.returncode != 0
-    assert "still loading" in out and "503" in out and "llamacpp_load_timeout" in out, out[-2000:]
+    assert "still loading" in out and "503" in out and "_load_timeout" in out, out[-2000:]
     assert "/v1/models" not in calls  # nothing after the wait ran
 
 
