@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_role
+from rolerun import fake, first_run, run_role
 
 from tests.modules.documents_front import AGENT_TOKEN, TOKEN, Server
 
@@ -79,11 +79,17 @@ def compose(tmp_path: Path) -> dict:
 # ----------------------------------------------------------------------------- render
 
 
-def test_main_renders_the_application_and_its_broker_with_the_secrets_only_in_the_env_file(
+def _first_main_renders_the_application_and_its_broker_with_the_secrets_only_in_the_env_file(
     tmp_path,
 ):
     v = dv(tmp_path)
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@first_run(_first_main_renders_the_application_and_its_broker_with_the_secrets_only_in_the_env_file)
+def test_main_renders_the_application_and_its_broker_with_the_secrets_only_in_the_env_file(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     doc = compose(tmp_path)
     assert sorted(doc["services"]) == ["app", "broker"]
@@ -129,19 +135,24 @@ def test_main_renders_the_application_and_its_broker_with_the_secrets_only_in_th
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-def test_a_library_to_be_imported_creates_no_administrator(tmp_path):
+def _first_a_library_to_be_imported_creates_no_administrator(tmp_path):
     v = dv(tmp_path, documents_admin_bootstrap=False)
     env = {
         k: val for k, val in SECRETS.items() if "ADMIN" not in k
     }  # the admin password is not needed
-    r = run_role(tmp_path, ROLE, "main", v, env=env)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": env}
+
+
+@first_run(_first_a_library_to_be_imported_creates_no_administrator)
+def test_a_library_to_be_imported_creates_no_administrator(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     app = compose(tmp_path)["services"]["app"]
     assert "PAPERLESS_ADMIN_USER" not in app["environment"]
     assert "PAPERLESS_ADMIN_PASSWORD" not in (tmp_path / "app" / "secrets" / "app.env").read_text()
 
 
-def test_ocr_languages_are_data_and_the_url_and_extra_settings_reach_the_environment(tmp_path):
+def _first_ocr_languages_are_data_and_the_url_and_extra_settings_reach_the_environment(tmp_path):
     v = dv(
         tmp_path,
         documents_ocr_languages=["eng", "deu"],
@@ -152,7 +163,13 @@ def test_ocr_languages_are_data_and_the_url_and_extra_settings_reach_the_environ
             "PAPERLESS_FILENAME_FORMAT": "{{ '{{' }}created_year{{ '}}' }}/x"[:0] + "year/title"
         },
     )
-    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@first_run(_first_ocr_languages_are_data_and_the_url_and_extra_settings_reach_the_environment)
+def test_ocr_languages_are_data_and_the_url_and_extra_settings_reach_the_environment(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     env = compose(tmp_path)["services"]["app"]["environment"]
     assert env["PAPERLESS_OCR_LANGUAGE"] == "eng+deu"
     assert env["PAPERLESS_URL"] == "https://docs.example.internal"
@@ -164,11 +181,21 @@ def test_ocr_languages_are_data_and_the_url_and_extra_settings_reach_the_environ
     assert env["PAPERLESS_FILENAME_FORMAT"] == "year/title"
 
 
-def test_the_containers_join_the_role_slice_the_module_play_names(tmp_path):
+def _first_the_containers_join_the_role_slice_the_module_play_names(tmp_path):
     v = dv(tmp_path, hnx_module_slice="hnx-documents-server.slice")
-    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@first_run(_first_the_containers_join_the_role_slice_the_module_play_names)
+def test_the_containers_join_the_role_slice_the_module_play_names(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     for svc in compose(tmp_path)["services"].values():
         assert svc["cgroup_parent"] == "hnx-documents-server.slice"
+
+
+def _first_main_refuses_bad_inputs(tmp_path, over):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": dv(tmp_path, **over), "env": SECRETS}
 
 
 @pytest.mark.parametrize(
@@ -207,13 +234,19 @@ def test_the_containers_join_the_role_slice_the_module_play_names(tmp_path):
         {"documents_extra_env": {"PAPERLESS_EMAIL_TASK_CRON": "* * * * *"}},  # the role's own
     ],
 )
-def test_main_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, ROLE, "main", dv(tmp_path, **over), env=SECRETS)
+@first_run(_first_main_refuses_bad_inputs)
+def test_main_refuses_bad_inputs(first, over):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
 # ----------------------------------------------------------------------------- credentials
+
+
+def _first_a_reference_with_no_value_is_named_and_nothing_is_written(tmp_path, missing, ref):
+    env = {k: v for k, v in SECRETS.items() if k != missing}
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": dv(tmp_path), "env": env}
 
 
 @pytest.mark.parametrize(
@@ -225,11 +258,16 @@ def test_main_refuses_bad_inputs(tmp_path, over):
         ("HNX_SECRET_DOCUMENTS_AGENT_TOKEN", "secret:documents/agent-token"),
     ],
 )
-def test_a_reference_with_no_value_is_named_and_nothing_is_written(tmp_path, missing, ref):
-    env = {k: v for k, v in SECRETS.items() if k != missing}
-    r = run_role(tmp_path, ROLE, "main", dv(tmp_path), env=env)
+@first_run(_first_a_reference_with_no_value_is_named_and_nothing_is_written)
+def test_a_reference_with_no_value_is_named_and_nothing_is_written(first, missing, ref):
+    r, tmp_path = first
     assert r.returncode != 0 and ref in r.stdout + r.stderr, r.stdout
     assert not (tmp_path / "app").exists() and not (tmp_path / "data").exists()
+
+
+def _first_a_malformed_or_repeated_credential_is_refused(tmp_path, name, value):
+    env = {**SECRETS, name: value}
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": dv(tmp_path), "env": env}
 
 
 @pytest.mark.parametrize(
@@ -243,18 +281,23 @@ def test_a_reference_with_no_value_is_named_and_nothing_is_written(tmp_path, mis
         ("HNX_SECRET_DOCUMENTS_ADMIN_PASSWORD", SIGNING),  # equal to the signing key
     ],
 )
-def test_a_malformed_or_repeated_credential_is_refused(tmp_path, name, value):
-    env = {**SECRETS, name: value}
-    r = run_role(tmp_path, ROLE, "main", dv(tmp_path), env=env)
+@first_run(_first_a_malformed_or_repeated_credential_is_refused)
+def test_a_malformed_or_repeated_credential_is_refused(first, name, value):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
     assert value not in r.stdout + r.stderr or len(value) < 8  # a value is never printed
 
 
-def test_the_credential_check_names_a_missing_reference_and_passes_with_all(tmp_path):
-    """The readiness hook runs this file after the container engine's own check."""
+def _first_the_credential_check_names_a_missing_reference_and_passes_with_all(tmp_path):
     env = {k: v for k, v in SECRETS.items() if k != "HNX_SECRET_DOCUMENTS_API_TOKEN"}
-    bad = run_role(tmp_path, ROLE, "credentials", dv(tmp_path), env=env)
+    return {"role": ROLE, "tasks_from": "credentials", "extra_vars": dv(tmp_path), "env": env}
+
+
+@first_run(_first_the_credential_check_names_a_missing_reference_and_passes_with_all)
+def test_the_credential_check_names_a_missing_reference_and_passes_with_all(first):
+    """The readiness hook runs this file after the container engine's own check."""
+    bad, tmp_path = first
     assert bad.returncode != 0 and "secret:documents/api-token" in bad.stdout + bad.stderr
     ok = run_role(tmp_path, ROLE, "credentials", dv(tmp_path), env=SECRETS)
     assert ok.returncode == 0, ok.stdout + ok.stderr
@@ -589,16 +632,28 @@ def test_a_verification_that_does_not_say_ok_fails_even_if_the_command_succeeds(
 # ----------------------------------------------------------------------------- backup, upgrade
 
 
-def test_backup_names_the_data_root(tmp_path):
-    r = run_role(tmp_path, ROLE, "backup", dv(tmp_path), env=SECRETS)
+def _first_backup_names_the_data_root(tmp_path):
+    return {"role": ROLE, "tasks_from": "backup", "extra_vars": dv(tmp_path), "env": SECRETS}
+
+
+@first_run(_first_backup_names_the_data_root)
+def test_backup_names_the_data_root(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     m = json.loads((tmp_path / "app" / "backup-manifest.json").read_text())
     assert m == {"app": "documents", "paths": [str(tmp_path / "data")]}
 
 
-def test_upgrade_records_a_newer_pinned_target_and_refuses_the_rest(tmp_path):
+def _first_upgrade_records_a_newer_pinned_target_and_refuses_the_rest(tmp_path):
     v = dv(tmp_path)
-    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@first_run(_first_upgrade_records_a_newer_pinned_target_and_refuses_the_rest)
+def test_upgrade_records_a_newer_pinned_target_and_refuses_the_rest(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     newer = REPO + ":3.5.0@sha256:" + "b" * 64
     ok = run_role(tmp_path, ROLE, "upgrade", {**v, "documents_target_image": newer}, env=SECRETS)
     assert ok.returncode == 0, ok.stdout + ok.stderr
@@ -661,8 +716,14 @@ def test_the_agents_account_waits_for_the_administrator_and_a_site_may_have_none
     assert not [c for c in _calls(other) if "HNX-AGENT" in c]
 
 
-def test_the_application_never_polls_mail_unless_the_site_says_so(tmp_path):
-    assert run_role(tmp_path, ROLE, "main", dv(tmp_path), env=SECRETS).returncode == 0
+def _first_the_application_never_polls_mail_unless_the_site_says_so(tmp_path):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": dv(tmp_path), "env": SECRETS}
+
+
+@first_run(_first_the_application_never_polls_mail_unless_the_site_says_so)
+def test_the_application_never_polls_mail_unless_the_site_says_so(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     assert (
         compose(tmp_path)["services"]["app"]["environment"]["PAPERLESS_EMAIL_TASK_CRON"]
         == "disable"

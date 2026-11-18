@@ -280,7 +280,7 @@ def _service(answers: dict, status=200):
             pass
 
     srv = _Quick((LOOPBACK, 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     return srv
 
 

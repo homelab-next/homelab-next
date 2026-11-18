@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import _invocation, calls, fake, logging_fake, run_role
+from rolerun import _invocation, calls, fake, first_run, logging_fake, run_role
 
 from homelabnext.edge_identity import AUTH_PROXY_COOKIE
 
@@ -192,8 +192,18 @@ def test_the_health_check_reads_the_sign_in_redirect_encoded_or_not_but_only_to_
         assert r.returncode != 0 and "not the sign-in redirect" in r.stdout, (loc, r.stdout)
 
 
-def test_main_never_renders_without_an_edge_host(tmp_path):
-    r = run_role(tmp_path, CADDY, "main", caddy_vars(tmp_path, caddy_edge_hosts=[]), env=SECRETS)
+def _first_main_never_renders_without_an_edge_host(tmp_path):
+    return {
+        "role": CADDY,
+        "tasks_from": "main",
+        "extra_vars": caddy_vars(tmp_path, caddy_edge_hosts=[]),
+        "env": SECRETS,
+    }
+
+
+@first_run(_first_main_never_renders_without_an_edge_host)
+def test_main_never_renders_without_an_edge_host(first):
+    r, tmp_path = first
     assert r.returncode != 0
     assert "never renders" in r.stdout, r.stdout
     assert not (tmp_path / "data").exists()  # refused before anything was written
@@ -286,9 +296,21 @@ def auth_vars(tmp_path: Path, **kw) -> dict:
     return v
 
 
-def test_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file(tmp_path):
+def _first_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file(tmp_path):
     v = auth_vars(tmp_path)
-    r = run_role(tmp_path, AUTH, "main", v, env=AUTH_SECRETS)
+    return {
+        "role": AUTH,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": AUTH_SECRETS,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file)
+def test_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     svc = doc["services"]["auth-proxy"]
@@ -320,6 +342,15 @@ def test_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
+def _first_the_auth_proxy_refuses_bad_inputs(tmp_path, over, env):
+    return {
+        "role": AUTH,
+        "tasks_from": "main",
+        "extra_vars": auth_vars(tmp_path, **over),
+        "env": {**AUTH_SECRETS, **env},
+    }
+
+
 @pytest.mark.parametrize(
     "over, env",
     [
@@ -342,8 +373,9 @@ def test_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file
         ({"caddy_auth_proxy_cookie_expire": "721m"}, {}),
     ],
 )
-def test_the_auth_proxy_refuses_bad_inputs(tmp_path, over, env):
-    r = run_role(tmp_path, AUTH, "main", auth_vars(tmp_path, **over), env={**AUTH_SECRETS, **env})
+@first_run(_first_the_auth_proxy_refuses_bad_inputs)
+def test_the_auth_proxy_refuses_bad_inputs(first, over, env):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
@@ -357,10 +389,15 @@ def trusted_of(tmp_path: Path) -> list[str]:
     return env["OAUTH2_PROXY_TRUSTED_PROXY_IPS"].split(",")
 
 
-def test_auto_trusts_exactly_the_gateway_docker_reports_for_the_project_network(tmp_path):
+def _first_auto_trusts_exactly_the_gateway_docker_reports_for_the_project_network(tmp_path):
     docker = logging_fake(tmp_path, "docker", GATEWAY + "\n")
     v = auth_vars(tmp_path, caddy_auth_proxy_docker_cli=docker)
-    r = run_role(tmp_path, AUTH, "main", v, env=AUTH_SECRETS)
+    return {"role": AUTH, "tasks_from": "main", "extra_vars": v, "env": AUTH_SECRETS}
+
+
+@first_run(_first_auto_trusts_exactly_the_gateway_docker_reports_for_the_project_network)
+def test_auto_trusts_exactly_the_gateway_docker_reports_for_the_project_network(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert trusted_of(tmp_path) == [GATEWAY + "/32"]
     assert any(
@@ -368,33 +405,48 @@ def test_auto_trusts_exactly_the_gateway_docker_reports_for_the_project_network(
     )
 
 
-@pytest.mark.parametrize("gateway", ["not-an-address\n", "0.0.0.0\n", GATEWAY + "/16\n", "::1\n"])
-def test_auto_refuses_a_gateway_that_is_not_one_ipv4_address(tmp_path, gateway):
+def _first_auto_refuses_a_gateway_that_is_not_one_ipv4_address(tmp_path, gateway):
     docker = logging_fake(tmp_path, "docker", gateway)
     v = auth_vars(tmp_path, caddy_auth_proxy_docker_cli=docker)
-    r = run_role(tmp_path, AUTH, "main", v, env=AUTH_SECRETS)
+    return {"role": AUTH, "tasks_from": "main", "extra_vars": v, "env": AUTH_SECRETS}
+
+
+@pytest.mark.parametrize("gateway", ["not-an-address\n", "0.0.0.0\n", GATEWAY + "/16\n", "::1\n"])
+@first_run(_first_auto_refuses_a_gateway_that_is_not_one_ipv4_address)
+def test_auto_refuses_a_gateway_that_is_not_one_ipv4_address(first, gateway):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_an_override_is_rendered_as_given_and_docker_is_not_asked(tmp_path):
+def _first_an_override_is_rendered_as_given_and_docker_is_not_asked(tmp_path):
     docker = logging_fake(tmp_path, "docker", GATEWAY + "\n")
     v = auth_vars(
         tmp_path,
         caddy_auth_proxy_docker_cli=docker,
         caddy_auth_proxy_trusted_proxy_ips=[GUEST + "/32", "::1/128"],
     )
-    r = run_role(tmp_path, AUTH, "main", v, env=AUTH_SECRETS)
+    return {"role": AUTH, "tasks_from": "main", "extra_vars": v, "env": AUTH_SECRETS}
+
+
+@first_run(_first_an_override_is_rendered_as_given_and_docker_is_not_asked)
+def test_an_override_is_rendered_as_given_and_docker_is_not_asked(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert trusted_of(tmp_path) == [GUEST + "/32", "::1/128"]
     assert not calls(tmp_path)
 
 
-def test_a_missing_network_renders_only_the_placeholder_never_every_address(tmp_path):
+def _first_a_missing_network_renders_only_the_placeholder_never_every_address(tmp_path):
     docker = logging_fake(tmp_path, "docker", "")
     (tmp_path / "docker.fails").write_text("")  # `docker network inspect` fails: no such network
     v = auth_vars(tmp_path, caddy_auth_proxy_docker_cli=docker)
-    r = run_role(tmp_path, AUTH, "main", v, env=AUTH_SECRETS)
+    return {"role": AUTH, "tasks_from": "main", "extra_vars": v, "env": AUTH_SECRETS}
+
+
+@first_run(_first_a_missing_network_renders_only_the_placeholder_never_every_address)
+def test_a_missing_network_renders_only_the_placeholder_never_every_address(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert trusted_of(tmp_path) == ["::1/128"]
 

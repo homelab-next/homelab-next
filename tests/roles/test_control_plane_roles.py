@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import calls, fake, logging_fake, run_cases, run_role
+from rolerun import calls, fake, first_run, logging_fake, run_cases, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
@@ -1329,11 +1329,7 @@ def _me():
     return pwd.getpwuid(os.getuid()).pw_name, grp.getgrgid(os.getgid()).gr_name
 
 
-def test_broker_bad_manifest_never_replaces_the_live_one(tmp_path):
-    """The manifest and its handlers are staged together (``staged/``, so the manifest's
-    ``handlers/`` resolve against the staged handlers) and validated by the release's own
-    ``hnx broker validate`` before either is copied over the live ones: a set that fails
-    validation stops the play and the running broker's manifest and handlers are untouched."""
+def _first_broker_bad_manifest_never_replaces_the_live_one(tmp_path):
     user, group = _me()
     conf = tmp_path / "etc"
     (conf / "handlers").mkdir(parents=True)
@@ -1354,8 +1350,26 @@ def test_broker_bad_manifest_never_replaces_the_live_one(tmp_path):
     good.write_text("manifest_id: next\n")
     bad.write_text("manifest_id: bad\n")
     handler.write_text("#!/bin/sh\necho v1\n")
+    return {
+        "role": "broker",
+        "tasks_from": "manifest",
+        "extra_vars": {**base, "broker_manifest": str(good)},
+        "setup": {"bad": bad, "base": base, "conf": conf, "good": good, "handler": handler},
+    }
 
-    r = run_role(tmp_path, "broker", "manifest", {**base, "broker_manifest": str(good)})
+
+@first_run(_first_broker_bad_manifest_never_replaces_the_live_one)
+def test_broker_bad_manifest_never_replaces_the_live_one(first):
+    """The manifest and its handlers are staged together (``staged/``, so the manifest's
+    ``handlers/`` resolve against the staged handlers) and validated by the release's own
+    ``hnx broker validate`` before either is copied over the live ones: a set that fails
+    validation stops the play and the running broker's manifest and handlers are untouched."""
+    r, tmp_path = first
+    bad = first.setup["bad"]
+    base = first.setup["base"]
+    conf = first.setup["conf"]
+    good = first.setup["good"]
+    handler = first.setup["handler"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert (conf / "manifest.yml").read_text() == "manifest_id: next\n"
     assert (conf / "handlers" / "run.sh").read_text() == "#!/bin/sh\necho v1\n"

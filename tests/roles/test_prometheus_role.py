@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import _invocation, run_role
+from rolerun import _invocation, first_run, run_role
 
 from homelabnext.generators import generate
 from homelabnext.registry import load
@@ -145,8 +145,18 @@ def test_a_setting_that_could_widen_or_break_the_service_is_refused(tmp_path, ov
     assert "prometheus: a registry id" in r.stdout, r.stdout
 
 
-def test_main_renders_nothing_for_a_refused_setting(tmp_path):
-    r = run_role(tmp_path, ROLE, "main", pvars(tmp_path, prometheus_bind="0.0.0.0"), env=SECRETS)
+def _first_main_renders_nothing_for_a_refused_setting(tmp_path):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pvars(tmp_path, prometheus_bind="0.0.0.0"),
+        "env": SECRETS,
+    }
+
+
+@first_run(_first_main_renders_nothing_for_a_refused_setting)
+def test_main_renders_nothing_for_a_refused_setting(first):
+    r, tmp_path = first
     assert r.returncode != 0
     assert not (tmp_path / "data").exists()
 
@@ -322,16 +332,20 @@ def test_the_own_host_exporter_target_is_unchanged(tmp_path):
     assert f"{GUEST}:9100" in [x for n in nodes for x in n["targets"]]
 
 
-def test_the_pinned_subnet_is_in_the_compose_file_main_produces(tmp_path):
+def _first_the_pinned_subnet_is_in_the_compose_file_main_produces(tmp_path):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pvars(tmp_path, prometheus_unit_dir=str(tmp_path / "units")),
+        "env": SECRETS,
+    }
+
+
+@first_run(_first_the_pinned_subnet_is_in_the_compose_file_main_produces)
+def test_the_pinned_subnet_is_in_the_compose_file_main_produces(first):
     """main runs compose_app for real (nothing started); the example registry has no notify service,
     so the run stops at the alert forwarder's first task, after the compose file is written."""
-    r = run_role(
-        tmp_path,
-        ROLE,
-        "main",
-        pvars(tmp_path, prometheus_unit_dir=str(tmp_path / "units")),
-        env=SECRETS,
-    )
+    r, tmp_path = first
     assert "Resolve the notify endpoint" in r.stdout + r.stderr, r.stdout + r.stderr
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     assert doc["networks"] == {"default": {"ipam": {"config": [{"subnet": SUBNET}]}}}

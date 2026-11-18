@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_role
+from rolerun import fake, first_run, run_role
 
 from conformance.fakes.ntfy_api import FakeNtfy
 from tests.modules.ntfy_front import DenyAllNtfy
@@ -60,9 +60,15 @@ def ntfy_vars(tmp_path: Path, **kw) -> dict:
     return v
 
 
-def test_main_renders_deny_all_with_the_credentials_only_in_the_env_file(tmp_path):
+def _first_main_renders_deny_all_with_the_credentials_only_in_the_env_file(tmp_path):
     v = ntfy_vars(tmp_path)
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@first_run(_first_main_renders_deny_all_with_the_credentials_only_in_the_env_file)
+def test_main_renders_deny_all_with_the_credentials_only_in_the_env_file(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     svc = doc["services"]["ntfy"]
@@ -97,14 +103,28 @@ def test_main_renders_deny_all_with_the_credentials_only_in_the_env_file(tmp_pat
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-def test_main_puts_the_container_in_the_role_slice_the_module_play_names(tmp_path):
+def _first_main_puts_the_container_in_the_role_slice_the_module_play_names(tmp_path):
+    v = ntfy_vars(tmp_path, hnx_module_slice="hnx-ntfy-server.slice")
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@first_run(_first_main_puts_the_container_in_the_role_slice_the_module_play_names)
+def test_main_puts_the_container_in_the_role_slice_the_module_play_names(first):
     """The module apply path sets hnx_module_slice on ntfy's play (its role slice, installed by
     the limits play); compose_app makes it the container's cgroup parent without ntfy passing it."""
-    v = ntfy_vars(tmp_path, hnx_module_slice="hnx-ntfy-server.slice")
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     assert doc["services"]["ntfy"]["cgroup_parent"] == "hnx-ntfy-server.slice"
+
+
+def _first_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": ntfy_vars(tmp_path, **over),
+        "env": {**SECRETS, **env},
+    }
 
 
 @pytest.mark.parametrize(
@@ -126,8 +146,9 @@ def test_main_puts_the_container_in_the_role_slice_the_module_play_names(tmp_pat
         ({}, {"HNX_SECRET_NTFY_ADMIN_PASSWORD_HASH": "$2b$04$" + "f" * 53}),  # cost under 10
     ],
 )
-def test_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
-    r = run_role(tmp_path, ROLE, "main", ntfy_vars(tmp_path, **over), env={**SECRETS, **env})
+@first_run(_first_main_refuses_bad_inputs_and_credentials)
+def test_main_refuses_bad_inputs_and_credentials(first, over, env):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
     assert TOKEN not in r.stdout
@@ -216,10 +237,16 @@ def _databases(root: Path) -> None:
         c.close()
 
 
-def test_export_writes_an_object_tree_and_restore_checks_it(tmp_path):
+def _first_export_writes_an_object_tree_and_restore_checks_it(tmp_path):
     v = ntfy_vars(tmp_path)
     _databases(tmp_path / "data")
-    r = run_role(tmp_path, ROLE, "export", v)
+    return {"role": ROLE, "tasks_from": "export", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first_export_writes_an_object_tree_and_restore_checks_it)
+def test_export_writes_an_object_tree_and_restore_checks_it(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     export = tmp_path / "data" / "export"
     listing = [json.loads(x) for x in (export / "listing.jsonl").read_text().splitlines()]
@@ -268,9 +295,16 @@ def test_export_writes_an_object_tree_and_restore_checks_it(tmp_path):
     assert bad.returncode != 0 and "the listing does not name" in bad.stdout
 
 
-def test_upgrade_refuses_an_unpinned_target_and_records_a_pinned_one(tmp_path):
+def _first_upgrade_refuses_an_unpinned_target_and_records_a_pinned_one(tmp_path):
     v = ntfy_vars(tmp_path)
-    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@first_run(_first_upgrade_refuses_an_unpinned_target_and_records_a_pinned_one)
+def test_upgrade_refuses_an_unpinned_target_and_records_a_pinned_one(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     bad = run_role(
         tmp_path, ROLE, "upgrade", {**v, "ntfy_target_image": "docker.io/binwiederhier/ntfy:v9"}
     )
@@ -321,7 +355,9 @@ class Notify:
                 pass
 
         self.srv = _Quick((LOOPBACK, 0), H)
-        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self.srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
 
     def close(self):
         self.srv.shutdown()
@@ -578,7 +614,9 @@ elif a[0] in ("is-enabled", "is-active"):
 """
 
 
-def test_with_beats_the_script_units_and_owner_only_token_are_installed_and_it_converges(tmp_path):
+def _first_with_beats_the_script_units_and_owner_only_token_are_installed_and_it_converges(
+    tmp_path,
+):
     systemctl = fake(
         tmp_path / "systemctl",
         FAKE_SYSTEMCTL.replace("LOG", repr(str(tmp_path / "sc.log"))).replace(
@@ -587,7 +625,13 @@ def test_with_beats_the_script_units_and_owner_only_token_are_installed_and_it_c
     )
     (tmp_path / "units").mkdir()
     v = dvars(tmp_path, ntfy_systemctl_cli=systemctl)
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@first_run(_first_with_beats_the_script_units_and_owner_only_token_are_installed_and_it_converges)
+def test_with_beats_the_script_units_and_owner_only_token_are_installed_and_it_converges(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     script = tmp_path / "libexec" / "watch"
     assert script.exists() and "BEATS = " in script.read_text() and TOKEN not in script.read_text()
@@ -610,9 +654,14 @@ def test_with_beats_the_script_units_and_owner_only_token_are_installed_and_it_c
     assert calls.count("daemon-reload") == 1  # nor reload: the units did not change
 
 
-def test_without_beats_nothing_of_the_watch_is_installed(tmp_path):
+def _first_without_beats_nothing_of_the_watch_is_installed(tmp_path):
     v = dvars(tmp_path, ntfy_deadman_beats=[])
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@first_run(_first_without_beats_nothing_of_the_watch_is_installed)
+def test_without_beats_nothing_of_the_watch_is_installed(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (tmp_path / "units").exists() and not (tmp_path / "libexec").exists()
 
@@ -629,22 +678,42 @@ BAD = {
 }
 
 
-def test_a_schedule_the_watch_does_not_know_is_refused(tmp_path):
+def _first_a_schedule_the_watch_does_not_know_is_refused(tmp_path):
     v = dvars(tmp_path, ntfy_deadman_schedule="*-*-* *:0/7:00 UTC")
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@first_run(_first_a_schedule_the_watch_does_not_know_is_refused)
+def test_a_schedule_the_watch_does_not_know_is_refused(first):
+    r, _ = first
     assert r.returncode != 0 and "each dead-man beat needs" in r.stdout + r.stderr
 
 
+def _first_a_bad_beat_is_refused_before_anything_is_written(tmp_path, beats):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": dvars(tmp_path, ntfy_deadman_beats=beats),
+        "env": SECRETS,
+    }
+
+
 @pytest.mark.parametrize("beats", list(BAD.values()), ids=list(BAD))
-def test_a_bad_beat_is_refused_before_anything_is_written(tmp_path, beats):
-    r = run_role(tmp_path, ROLE, "main", dvars(tmp_path, ntfy_deadman_beats=beats), env=SECRETS)
+@first_run(_first_a_bad_beat_is_refused_before_anything_is_written)
+def test_a_bad_beat_is_refused_before_anything_is_written(first, beats):
+    r, tmp_path = first
     assert r.returncode != 0 and "each dead-man beat needs" in r.stdout + r.stderr
     assert not (tmp_path / "app").exists() and not (tmp_path / "units").exists()
 
 
-def test_a_topic_the_publisher_may_not_write_is_refused(tmp_path):
+def _first_a_topic_the_publisher_may_not_write_is_refused(tmp_path):
     v = dvars(tmp_path, ntfy_publisher_topics=["alerts-*"])
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@first_run(_first_a_topic_the_publisher_may_not_write_is_refused)
+def test_a_topic_the_publisher_may_not_write_is_refused(first):
+    r, tmp_path = first
     assert r.returncode != 0 and "['beat'] may not be" in r.stdout + r.stderr
     sub = tmp_path / "ok"
     sub.mkdir()

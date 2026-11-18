@@ -275,7 +275,15 @@ def test_the_suite_passes_through_the_modules_target_on_the_repositorys_controll
         monkeypatch.setenv("HNX_ENDPOINT_ORCHESTRATION", live._url)  # the live subject's own URL
         monkeypatch.setenv("HNX_ORCHESTRATION_PROFILES_DIR", str(tmp_path / "work" / "profiles"))
         binding = dataclasses.replace(binding, config=config)
-        factory = make_factory(binding, root=ROOT)
+        make_subject = make_factory(binding, root=ROOT)
+
+        def factory():
+            # a cancel against this local controller is a process kill: three seconds is ample,
+            # and the suite's watch that a hold outlives two graces shrinks with it (10 s default)
+            subject = make_subject()
+            subject.cancel_grace_s = 3.0
+            return subject
+
         wanted = [
             s.id for s in orch_suite.SUITE.specs if "fault-injection" not in (s.requires or ())
         ]

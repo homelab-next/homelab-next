@@ -64,7 +64,9 @@ class SingleModelServer:
 
     def __enter__(self) -> SingleModelServer:
         self._started = time.monotonic()
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread = threading.Thread(
+            target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        )
         self._thread.start()
         return self
 

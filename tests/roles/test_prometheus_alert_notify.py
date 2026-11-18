@@ -77,7 +77,9 @@ class Fake:
                 pass
 
         self.srv = _Quick((LOOPBACK, 0), H)
-        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self.srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
 
     @property
     def url(self):

@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_role
+from rolerun import fake, first_run, run_role
 
 from tests.modules.keycloak_stand_in import LOOPBACK
 
@@ -74,9 +74,15 @@ def pv(tmp_path: Path, **kw) -> dict:
 # ----------------------------------------------------------------------------- render
 
 
-def test_main_renders_four_containers_with_the_credentials_only_in_the_env_files(tmp_path):
+def _first_main_renders_four_containers_with_the_credentials_only_in_the_env_files(tmp_path):
     v = pv(tmp_path)
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@first_run(_first_main_renders_four_containers_with_the_credentials_only_in_the_env_files)
+def test_main_renders_four_containers_with_the_credentials_only_in_the_env_files(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "app" / "docker-compose.yml").read_text()
     doc = yaml.safe_load(text)
@@ -112,13 +118,28 @@ def test_main_renders_four_containers_with_the_credentials_only_in_the_env_files
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-def test_main_puts_the_containers_in_the_role_slice_the_module_play_names(tmp_path):
+def _first_main_puts_the_containers_in_the_role_slice_the_module_play_names(tmp_path):
     v = pv(tmp_path, hnx_module_slice="hnx-openproject-server.slice")
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@first_run(_first_main_puts_the_containers_in_the_role_slice_the_module_play_names)
+def test_main_puts_the_containers_in_the_role_slice_the_module_play_names(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     assert {s["cgroup_parent"] for s in doc["services"].values()} == {
         "hnx-openproject-server.slice"
+    }
+
+
+def _first_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(tmp_path, unset):
+    env = {k: v for k, v in SECRETS.items() if k != unset}
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pv(tmp_path),
+        "env": {**env, unset: ""},
     }
 
 
@@ -127,16 +148,25 @@ def test_main_puts_the_containers_in_the_role_slice_the_module_play_names(tmp_pa
     ["HNX_SECRET_OPENPROJECT_DB_PASSWORD", "HNX_SECRET_OPENPROJECT_SECRET_KEY_BASE",
      "HNX_SECRET_OPENPROJECT_ADMIN_PASSWORD"],
 )  # fmt: skip
-def test_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(tmp_path, unset):
+@first_run(_first_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing)
+def test_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(first, unset):
     """Review Focus 3: a module deployed before its secret exists is refused, by name."""
-    env = {k: v for k, v in SECRETS.items() if k != unset}
-    r = run_role(tmp_path, ROLE, "main", pv(tmp_path), env={**env, unset: ""})
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     ref = REFS[unset]
     assert ref in r.stdout + r.stderr
     assert not (tmp_path / "app").exists() and not (tmp_path / "data").exists()
     for value in (DB_PASSWORD, ADMIN_PASSWORD, SESSION_KEY):
         assert value not in r.stdout + r.stderr
+
+
+def _first_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pv(tmp_path, **over),
+        "env": {**SECRETS, **env},
+    }
 
 
 @pytest.mark.parametrize(
@@ -162,8 +192,9 @@ def test_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(tm
         ({}, {"HNX_SECRET_OPENPROJECT_ADMIN_PASSWORD": DB_PASSWORD}),
     ],
 )  # fmt: skip
-def test_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
-    r = run_role(tmp_path, ROLE, "main", pv(tmp_path, **over), env={**SECRETS, **env})
+@first_run(_first_main_refuses_bad_inputs_and_credentials)
+def test_main_refuses_bad_inputs_and_credentials(first, over, env):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
@@ -199,7 +230,9 @@ class Front:
         self.port = self.httpd.server_address[1]
 
     def __enter__(self):
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self.httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
         return self
 
     def __exit__(self, *a):
@@ -345,13 +378,23 @@ def test_export_writes_an_object_tree_with_a_sha256_listing(tmp_path):
     assert not list(Path("/tmp").glob("*projects*dump*"))  # nothing staged in /tmp
 
 
-def test_restore_refuses_a_tampered_export_and_writes_nothing(tmp_path):
+def _first_restore_refuses_a_tampered_export_and_writes_nothing(tmp_path):
     env = {**SECRETS, **_docker(tmp_path)}
     v = pv(tmp_path)
     exp = _export(tmp_path, env, v)
     (exp / "db" / "projects.dump").write_bytes(b"PGDMP tampered")
     (tmp_path / "docker.log").unlink()
-    r = run_role(tmp_path, ROLE, "restore", {**v, "openproject_restore_source": str(exp)}, env=env)
+    return {
+        "role": ROLE,
+        "tasks_from": "restore",
+        "extra_vars": {**v, "openproject_restore_source": str(exp)},
+        "env": env,
+    }
+
+
+@first_run(_first_restore_refuses_a_tampered_export_and_writes_nothing)
+def test_restore_refuses_a_tampered_export_and_writes_nothing(first):
+    r, tmp_path = first
     assert r.returncode != 0 and "not an intact export" in r.stdout + r.stderr
     assert not [c for c in _calls(tmp_path) if "pg_restore" in c or " stop " in f" {c} "]
 
@@ -381,9 +424,16 @@ def test_restore_stops_the_app_restores_and_starts_it_again_and_can_be_repeated(
 # ----------------------------------------------------------------------------- upgrade
 
 
-def test_upgrade_records_only_a_pinned_target_of_the_same_repository(tmp_path):
+def _first_upgrade_records_only_a_pinned_target_of_the_same_repository(tmp_path):
     v = pv(tmp_path)
-    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0  # installed
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@first_run(_first_upgrade_records_only_a_pinned_target_of_the_same_repository)
+def test_upgrade_records_only_a_pinned_target_of_the_same_repository(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     good = "docker.io/openproject/openproject:15.5.2-slim@sha256:" + "c" * 64
     r = run_role(tmp_path, ROLE, "upgrade", {**v, "openproject_target_image": good}, env=SECRETS)
     assert r.returncode == 0, r.stdout + r.stderr

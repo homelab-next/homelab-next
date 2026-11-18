@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 import yaml
 from dataflow_front import Controller, make_pki, smoke_definition
-from rolerun import fake, run_role
+from rolerun import fake, first_run, run_role
 
 from homelabnext.registry.model import secret_env_name
 
@@ -141,8 +141,13 @@ def default_ref(name: str) -> str:
 # ----------------------------------------------------------------------------- main renders
 
 
-def test_main_renders_the_service_with_no_secret_in_the_compose_file(tmp_path):
-    r = run_role(tmp_path, ROLE, "main", vs(tmp_path), env=secrets())
+def _first_main_renders_the_service_with_no_secret_in_the_compose_file(tmp_path):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": vs(tmp_path), "env": secrets()}
+
+
+@first_run(_first_main_renders_the_service_with_no_secret_in_the_compose_file)
+def test_main_renders_the_service_with_no_secret_in_the_compose_file(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "app" / "docker-compose.yml").read_text()
     svc = compose(tmp_path)
@@ -193,17 +198,33 @@ def test_main_renders_the_service_with_no_secret_in_the_compose_file(tmp_path):
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-def test_the_container_joins_the_role_slice_the_module_play_names(tmp_path):
+def _first_the_container_joins_the_role_slice_the_module_play_names(tmp_path):
     v = vs(tmp_path)
     v["hnx_module_slice"] = f"hnx-{MID}-server.slice"
-    assert run_role(tmp_path, ROLE, "main", v, env=secrets()).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": secrets()}
+
+
+@first_run(_first_the_container_joins_the_role_slice_the_module_play_names)
+def test_the_container_joins_the_role_slice_the_module_play_names(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     assert compose(tmp_path)["cgroup_parent"] == f"hnx-{MID}-server.slice"
 
 
-def test_extra_parameters_reach_the_flows_as_sensitive_values_only_in_the_env_file(tmp_path):
+def _first_extra_parameters_reach_the_flows_as_sensitive_values_only_in_the_env_file(tmp_path):
     extra = {"HNX_FEED_LOGIN": ref("feed-key")}
     env = {**secrets(), **env_of("feed-key", "feed-key-value-0123")}
-    r = run_role(tmp_path, ROLE, "main", vs(tmp_path, extra_parameters=extra), env=env)
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": vs(tmp_path, extra_parameters=extra),
+        "env": env,
+    }
+
+
+@first_run(_first_extra_parameters_reach_the_flows_as_sensitive_values_only_in_the_env_file)
+def test_extra_parameters_reach_the_flows_as_sensitive_values_only_in_the_env_file(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert "feed-key-value-0123" not in (tmp_path / "app" / "docker-compose.yml").read_text()
     assert (
@@ -212,14 +233,19 @@ def test_extra_parameters_reach_the_flows_as_sensitive_values_only_in_the_env_fi
     )
 
 
-def test_oidc_renders_its_settings_and_reads_its_client_secret_from_the_store(tmp_path):
+def _first_oidc_renders_its_settings_and_reads_its_client_secret_from_the_store(tmp_path):
     over = {
         "auth": "oidc", "oidc_issuer_url": "https://idp.example.internal/realms/lab",
         "oidc_client_id": "dataflow", "initial_admin": "alice",
     }  # fmt: skip
     env = {**secrets(), **env_of("oidc-client-secret", "oidc-client-secret-0123456789"),
            **env_of("api-token", "api-token-0123456789abcdefgh")}  # fmt: skip
-    r = run_role(tmp_path, ROLE, "main", vs(tmp_path, **over), env=env)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": vs(tmp_path, **over), "env": env}
+
+
+@first_run(_first_oidc_renders_its_settings_and_reads_its_client_secret_from_the_store)
+def test_oidc_renders_its_settings_and_reads_its_client_secret_from_the_store(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     e = compose(tmp_path)["environment"]
     assert e["AUTH"] == "oidc" and e["INITIAL_ADMIN_IDENTITY"] == "alice"
@@ -293,9 +319,19 @@ BAD = [
 ]
 
 
+def _first_main_refuses_bad_inputs_and_credentials_before_rendering_anything(tmp_path, over, bad):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": vs(tmp_path, **over),
+        "env": secrets(**bad),
+    }
+
+
 @pytest.mark.parametrize("over, bad", BAD)
-def test_main_refuses_bad_inputs_and_credentials_before_rendering_anything(tmp_path, over, bad):
-    r = run_role(tmp_path, ROLE, "main", vs(tmp_path, **over), env=secrets(**bad))
+@first_run(_first_main_refuses_bad_inputs_and_credentials_before_rendering_anything)
+def test_main_refuses_bad_inputs_and_credentials_before_rendering_anything(first, over, bad):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
@@ -311,13 +347,18 @@ def test_a_credential_the_store_does_not_hold_is_refused_by_name(tmp_path):
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_oidc_refuses_a_missing_client_secret_and_a_missing_api_token(tmp_path):
+def _first_oidc_refuses_a_missing_client_secret_and_a_missing_api_token(tmp_path):
     over = {
         "auth": "oidc", "oidc_issuer_url": "https://idp.example.internal/realms/lab",
         "oidc_client_id": "dataflow", "initial_admin": "alice",
     }  # fmt: skip
     env = {**secrets(), **env_of("oidc-client-secret", "oidc-client-secret-0123456789")}
-    r = run_role(tmp_path, ROLE, "main", vs(tmp_path, **over), env=env)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": vs(tmp_path, **over), "env": env}
+
+
+@first_run(_first_oidc_refuses_a_missing_client_secret_and_a_missing_api_token)
+def test_oidc_refuses_a_missing_client_secret_and_a_missing_api_token(first):
+    r, tmp_path = first
     assert r.returncode != 0  # no bearer token for the role's own calls: not a skipped check
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
@@ -339,13 +380,28 @@ def test_upgrade_refuses_an_unpinned_a_foreign_and_an_older_target(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_upgrade_refuses_the_running_tag_at_another_digest_unless_allowed(tmp_path):
+def _first_upgrade_refuses_the_running_tag_at_another_digest_unless_allowed(tmp_path):
     running = default_ref("image")
     repo_tag, digest = running.split("@")
     other = "sha256:" + "2b" * 32
     (tmp_path / "app").mkdir()
     v = vs(tmp_path, target_image=f"{repo_tag}@{other}")
-    assert run_role(tmp_path, ROLE, "upgrade", v, env=secrets()).returncode != 0
+    return {
+        "role": ROLE,
+        "tasks_from": "upgrade",
+        "extra_vars": v,
+        "env": secrets(),
+        "setup": {"digest": digest, "repo_tag": repo_tag, "v": v},
+    }
+
+
+@first_run(_first_upgrade_refuses_the_running_tag_at_another_digest_unless_allowed)
+def test_upgrade_refuses_the_running_tag_at_another_digest_unless_allowed(first):
+    first_result, tmp_path = first
+    digest = first.setup["digest"]
+    repo_tag = first.setup["repo_tag"]
+    v = first.setup["v"]
+    assert first_result.returncode != 0
     ok = run_role(
         tmp_path, ROLE, "upgrade", dict(v, **{f"{P}_allow_same_tag_rebuild": True}), env=secrets()
     )
@@ -812,11 +868,24 @@ def restore_vars(tmp: Path, src: Path, **kw) -> dict:
     return {**vs(tmp, restore_source=str(src), start=True, **kw)}
 
 
-def test_restore_swaps_the_state_in_and_moves_what_it_replaces_aside(tmp_path):
+def _first_restore_swaps_the_state_in_and_moves_what_it_replaces_aside(tmp_path):
     seed_state(tmp_path)
     src = archive_of(tmp_path, GOOD)
     env = {**secrets(), **fake_docker(tmp_path)}
-    r = run_role(tmp_path, ROLE, "restore", restore_vars(tmp_path, src), env=env)
+    return {
+        "role": ROLE,
+        "tasks_from": "restore",
+        "extra_vars": restore_vars(tmp_path, src),
+        "env": env,
+        "setup": {"env": env, "src": src},
+    }
+
+
+@first_run(_first_restore_swaps_the_state_in_and_moves_what_it_replaces_aside)
+def test_restore_swaps_the_state_in_and_moves_what_it_replaces_aside(first):
+    r, tmp_path = first
+    env = first.setup["env"]
+    src = first.setup["src"]
     assert r.returncode == 0, r.stdout + r.stderr
     data = tmp_path / "data"
     assert (data / "conf" / "flow.json.gz").read_text() == "flow-restored"
@@ -837,6 +906,20 @@ def test_restore_swaps_the_state_in_and_moves_what_it_replaces_aside(tmp_path):
     assert again.returncode != 0 and "before-restore" in again.stdout
 
 
+def _first_restore_refuses_a_tampered_foreign_or_linked_archive_and_changes_nothing(
+    tmp_path, build
+):
+    seed_state(tmp_path)
+    src = build(tmp_path)
+    env = {**secrets(), **fake_docker(tmp_path)}
+    return {
+        "role": ROLE,
+        "tasks_from": "restore",
+        "extra_vars": restore_vars(tmp_path, src),
+        "env": env,
+    }
+
+
 @pytest.mark.parametrize(
     "build",
     [
@@ -855,11 +938,9 @@ def test_restore_swaps_the_state_in_and_moves_what_it_replaces_aside(tmp_path):
         ),
     ],
 )
-def test_restore_refuses_a_tampered_foreign_or_linked_archive_and_changes_nothing(tmp_path, build):
-    seed_state(tmp_path)
-    src = build(tmp_path)
-    env = {**secrets(), **fake_docker(tmp_path)}
-    r = run_role(tmp_path, ROLE, "restore", restore_vars(tmp_path, src), env=env)
+@first_run(_first_restore_refuses_a_tampered_foreign_or_linked_archive_and_changes_nothing)
+def test_restore_refuses_a_tampered_foreign_or_linked_archive_and_changes_nothing(first, build):
+    r, tmp_path = first
     assert r.returncode != 0
     data = tmp_path / "data"
     assert (data / "conf" / "flow.json.gz").read_text() == "flow-v1"
@@ -889,9 +970,22 @@ def test_restore_flows_imports_the_definitions_the_service_lacks_after_checking_
         c.__exit__()
 
 
-def test_restore_needs_a_source_and_an_intact_listing(tmp_path):
+def _first_restore_needs_a_source_and_an_intact_listing(tmp_path):
     env = {**secrets(), **fake_docker(tmp_path)}
-    assert run_role(tmp_path, ROLE, "restore", vs(tmp_path, start=True), env=env).returncode != 0
+    return {
+        "role": ROLE,
+        "tasks_from": "restore",
+        "extra_vars": vs(tmp_path, start=True),
+        "env": env,
+        "setup": {"env": env},
+    }
+
+
+@first_run(_first_restore_needs_a_source_and_an_intact_listing)
+def test_restore_needs_a_source_and_an_intact_listing(first):
+    first_result, tmp_path = first
+    env = first.setup["env"]
+    assert first_result.returncode != 0
     src = tmp_path / "src"
     src.mkdir()
     (src / "listing.jsonl").write_text("")
@@ -903,8 +997,13 @@ def test_restore_needs_a_source_and_an_intact_listing(tmp_path):
     assert run_role(tmp_path, ROLE, "restore", restore_vars(tmp_path, src), env=env).returncode != 0
 
 
-def test_backup_names_the_data_root(tmp_path):
-    r = run_role(tmp_path, ROLE, "backup", vs(tmp_path), env=secrets())
+def _first_backup_names_the_data_root(tmp_path):
+    return {"role": ROLE, "tasks_from": "backup", "extra_vars": vs(tmp_path), "env": secrets()}
+
+
+@first_run(_first_backup_names_the_data_root)
+def test_backup_names_the_data_root(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     manifest = json.loads((tmp_path / "app" / "backup-manifest.json").read_text())
     assert str(tmp_path / "data") not in manifest["paths"]  # not the whole root: see below
@@ -949,7 +1048,9 @@ def _ready_run(tmp_path, events_url, query_sock):
     host = ".".join(["127", "0", "0", "1"])
     srvs = [HTTPServer((host, 0), H) for _ in range(2)]
     for s in srvs:
-        threading.Thread(target=s.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=s.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
     d = tmp_path / "fakes"
     d.mkdir(parents=True)
     fake(d / "docker", 'import sys\nsys.stdout.write(\'{"ServerVersion": "29.0.0"}\')\n')

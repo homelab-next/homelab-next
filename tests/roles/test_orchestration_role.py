@@ -512,7 +512,9 @@ class Stand(http.server.ThreadingHTTPServer):
                 self._send(404)
 
         super().__init__((LOOP, free_port()), H)
-        threading.Thread(target=self.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+        ).start()
 
 
 @pytest.fixture

@@ -401,11 +401,23 @@ def split_manifest(shards=(1, 2, 3), total: int = 3, stem: str = "model-Q8_0") -
     return store
 
 
-def test_model_store_fetches_a_split_series_and_checks_only_the_entries_this_host_keeps(tmp_path):
+def _first_model_store_fetches_a_split_series_and_checks_only_the_entries_this_host_keeps(tmp_path):
     store = split_manifest()
     remote_tree(tmp_path, store)
     v = store_vars(tmp_path, store, model_store_fetch_ids=[SPLIT_ID])
-    r = run_role(tmp_path, "model_store", "main", v)
+    return {
+        "role": "model_store",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"store": store, "v": v},
+    }
+
+
+@first_run(_first_model_store_fetches_a_split_series_and_checks_only_the_entries_this_host_keeps)
+def test_model_store_fetches_a_split_series_and_checks_only_the_entries_this_host_keeps(first):
+    r, tmp_path = first
+    store = first.setup["store"]
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     (line,) = calls(tmp_path)  # one entry, its three shards in one download
     assert all(f"Q8_0/model-Q8_0-0000{n}-of-00003.gguf" in line for n in (1, 2, 3))
@@ -437,6 +449,13 @@ def test_model_store_fetches_a_split_series_and_checks_only_the_entries_this_hos
     assert linked.returncode != 0 and "(under Q8_0, a link)" in linked.stdout
 
 
+def _first_model_store_refuses_a_partial_or_mislabelled_split_series_before_fetching(
+    tmp_path, store, needle
+):
+    remote_tree(tmp_path, store)
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": store_vars(tmp_path, store)}
+
+
 @pytest.mark.parametrize(
     ("store", "needle"),
     [
@@ -445,11 +464,11 @@ def test_model_store_fetches_a_split_series_and_checks_only_the_entries_this_hos
         (split_manifest(stem="model-Q4_K_M"), "does not carry the quant q8_0"),
     ],
 )
+@first_run(_first_model_store_refuses_a_partial_or_mislabelled_split_series_before_fetching)
 def test_model_store_refuses_a_partial_or_mislabelled_split_series_before_fetching(
-    tmp_path, store, needle
+    first, store, needle
 ):
-    remote_tree(tmp_path, store)
-    r = run_role(tmp_path, "model_store", "main", store_vars(tmp_path, store))
+    r, tmp_path = first
     assert r.returncode != 0 and needle in r.stdout, r.stdout
     assert calls(tmp_path) == []
 
@@ -1692,9 +1711,7 @@ def _numbers() -> tuple[int, int]:
     return grp.getgrnam(GROUP).gr_gid, _ME.pw_uid
 
 
-@pytest.mark.parametrize("which", ["gid", "exports_gid", "uid"])
-def test_model_store_never_renumbers_an_existing_account(tmp_path, which):
-    """An existing account whose number differs from the fixed one is reported, never changed."""
+def _first_model_store_never_renumbers_an_existing_account(tmp_path, which):
     gid, uid = _numbers()
     right = {"gid": gid, "exports_gid": gid, "uid": uid}[which]
     var = {
@@ -1705,7 +1722,23 @@ def test_model_store_never_renumbers_an_existing_account(tmp_path, which):
     base = store_vars(
         tmp_path, manifest(), model_store_manage_accounts=True, model_store_fetch=False
     )
-    bad = run_role(tmp_path, "model_store", "accounts", {**base, var: str(right + 1)}, check=True)
+    return {
+        "role": "model_store",
+        "tasks_from": "accounts",
+        "extra_vars": {**base, var: str(right + 1)},
+        "check": True,
+        "setup": {"base": base, "right": right, "var": var},
+    }
+
+
+@pytest.mark.parametrize("which", ["gid", "exports_gid", "uid"])
+@first_run(_first_model_store_never_renumbers_an_existing_account)
+def test_model_store_never_renumbers_an_existing_account(first, which):
+    """An existing account whose number differs from the fixed one is reported, never changed."""
+    bad, tmp_path = first
+    base = first.setup["base"]
+    right = first.setup["right"]
+    var = first.setup["var"]
     assert bad.returncode != 0 and "never renumbers an account" in bad.stdout, bad.stdout
     ok = run_role(tmp_path, "model_store", "accounts", {**base, var: str(right)}, check=True)
     assert ok.returncode == 0, ok.stdout + ok.stderr

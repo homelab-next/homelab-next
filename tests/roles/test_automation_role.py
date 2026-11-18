@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_cases, run_role
+from rolerun import fake, first_run, run_cases, run_role
 
 from homelabnext.registry.model import secret_env_name
 
@@ -229,8 +229,16 @@ def test_main_renders_the_stack_pinned_contained_and_without_a_secret_in_the_com
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-def test_the_files_with_a_secret_in_them_are_owner_only_and_the_key_is_not_world_readable(tmp_path):
-    assert run_role(tmp_path, ROLE, "main", pv(tmp_path), env=SECRETS).returncode == 0
+def _first_the_files_with_a_secret_in_them_are_owner_only_and_the_key_is_not_world_readable(
+    tmp_path,
+):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": pv(tmp_path), "env": SECRETS}
+
+
+@first_run(_first_the_files_with_a_secret_in_them_are_owner_only_and_the_key_is_not_world_readable)
+def test_the_files_with_a_secret_in_them_are_owner_only_and_the_key_is_not_world_readable(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     data = tmp_path / "data"
     conf = next((data / "config").glob("*.user.conf")).read_text()
     assert SECRET_VALUES["mongo-password"] in conf and SECRET_VALUES["rabbitmq-password"] in conf
@@ -255,8 +263,14 @@ def test_the_files_with_a_secret_in_them_are_owner_only_and_the_key_is_not_world
     )
 
 
-def test_every_rule_is_staged_disabled_and_only_a_named_one_is_enabled(tmp_path):
-    assert run_role(tmp_path, ROLE, "main", pv(tmp_path), env=SECRETS).returncode == 0
+def _first_every_rule_is_staged_disabled_and_only_a_named_one_is_enabled(tmp_path):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": pv(tmp_path), "env": SECRETS}
+
+
+@first_run(_first_every_rule_is_staged_disabled_and_only_a_named_one_is_enabled)
+def test_every_rule_is_staged_disabled_and_only_a_named_one_is_enabled(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     rules = sorted((staged(tmp_path) / "homelabnext" / "rules").glob("*.yaml"))
     assert len(rules) == len(list((PACK_SRC / "homelabnext" / "rules").glob("*.yaml"))) >= 3
     assert {yaml.safe_load(p.read_text())["enabled"] for p in rules} == {False}
@@ -297,9 +311,15 @@ def test_a_changed_file_of_the_pack_is_a_new_release_and_the_old_one_is_kept(tmp
     assert f"{staged(tmp_path)}:{DEFAULTS_PACK_MOUNT}:ro" in mounted
 
 
-def test_the_rbac_definitions_bound_who_may_do_what(tmp_path):
+def _first_the_rbac_definitions_bound_who_may_do_what(tmp_path):
     kw = {v("operator_users"): ["pete"]}
-    assert run_role(tmp_path, ROLE, "main", pv(tmp_path, **kw), env=SECRETS).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": pv(tmp_path, **kw), "env": SECRETS}
+
+
+@first_run(_first_the_rbac_definitions_bound_who_may_do_what)
+def test_the_rbac_definitions_bound_who_may_do_what(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     rbac = tmp_path / "data" / "rbac"
     roles = {p.stem: yaml.safe_load(p.read_text()) for p in (rbac / "roles").glob("*.yaml")}
     assert sorted(roles) == ["hnx_bridge", "hnx_operator", "hnx_runner", "hnx_status"]
@@ -351,14 +371,26 @@ def _optional_on(tmp_path: Path) -> dict:
     )  # fmt: skip
 
 
-def test_main_refuses_an_unset_secret_naming_every_missing_reference_and_writes_nothing(tmp_path):
-    """Review Focus 3: a module deployed before its secret exists is refused, by name (the bridge's
-    and the forward's included when they are on); nothing is rendered or started."""
+def _first_main_refuses_an_unset_secret_naming_every_missing_reference_and_writes_nothing(tmp_path):
     unset = ("admin-password", "datastore-key", "events-password", "broker-ssh-key")
     env = {
         k: val for k, val in SECRETS.items() if k not in {secret_env_name(ref(n)) for n in unset}
     }
-    r = run_role(tmp_path, ROLE, "main", _optional_on(tmp_path), env=env)
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": _optional_on(tmp_path),
+        "env": env,
+        "setup": {"unset": unset},
+    }
+
+
+@first_run(_first_main_refuses_an_unset_secret_naming_every_missing_reference_and_writes_nothing)
+def test_main_refuses_an_unset_secret_naming_every_missing_reference_and_writes_nothing(first):
+    """Review Focus 3: a module deployed before its secret exists is refused, by name (the bridge's
+    and the forward's included when they are on); nothing is rendered or started."""
+    r, tmp_path = first
+    unset = first.setup["unset"]
     assert r.returncode != 0, r.stdout
     out = r.stdout + r.stderr
     assert all(ref(n) in out for n in unset), out
@@ -398,14 +430,26 @@ def test_main_refuses_bad_inputs_and_writes_nothing(tmp_path):
     assert not list((tmp_path / "data" / "config").glob("*.user.conf"))
 
 
-def test_a_pack_with_a_live_rule_is_refused_unless_the_site_says_so(tmp_path):
+def _first_a_pack_with_a_live_rule_is_refused_unless_the_site_says_so(tmp_path):
     src = tmp_path / "pack"
     shutil.copytree(PACK_SRC, src)
     prov = json.loads((src / "provenance.json").read_text())
     next(iter(prov["packs"].values()))["mode"] = "live"
     (src / "provenance.json").write_text(json.dumps(prov))
     kw = {v("pack_src"): str(src)}
-    r = run_role(tmp_path, ROLE, "main", pv(tmp_path, **kw), env=SECRETS)
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pv(tmp_path, **kw),
+        "env": SECRETS,
+        "setup": {"kw": kw},
+    }
+
+
+@first_run(_first_a_pack_with_a_live_rule_is_refused_unless_the_site_says_so)
+def test_a_pack_with_a_live_rule_is_refused_unless_the_site_says_so(first):
+    r, tmp_path = first
+    kw = first.setup["kw"]
     assert r.returncode != 0 and "shadow" in r.stdout + r.stderr
     assert not (tmp_path / "data" / "pack-releases").exists() or not any(
         (tmp_path / "data" / "pack-releases").iterdir()
@@ -456,18 +500,33 @@ def test_a_pin_set_to_live_under_a_provenance_saying_shadow_is_refused(tmp_path)
     assert ok.returncode == 0, ok.stdout + ok.stderr
 
 
-def test_a_pack_whose_config_names_another_broker_socket_is_refused(tmp_path):
+def _first_a_pack_whose_config_names_another_broker_socket_is_refused(tmp_path):
     src = tmp_path / "pack"
     shutil.copytree(PACK_SRC, src)
     cfg = src / "configs" / "homelabnext.yaml"
     cfg.write_text(cfg.read_text().replace("/run/hnx-broker/broker.sock", "/tmp/other.sock"))
-    r = run_role(tmp_path, ROLE, "main", pv(tmp_path, **{v("pack_src"): str(src)}), env=SECRETS)
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pv(tmp_path, **{v("pack_src"): str(src)}),
+        "env": SECRETS,
+    }
+
+
+@first_run(_first_a_pack_whose_config_names_another_broker_socket_is_refused)
+def test_a_pack_whose_config_names_another_broker_socket_is_refused(first):
+    r, _ = first
     assert r.returncode != 0 and "broker socket" in r.stdout + r.stderr
 
 
-def test_a_datastore_key_that_is_not_the_generated_json_is_refused(tmp_path):
+def _first_a_datastore_key_that_is_not_the_generated_json_is_refused(tmp_path):
     env = {**SECRETS, secret_env_name(ref("datastore-key")): '{"aesKey": "x"}'}
-    r = run_role(tmp_path, ROLE, "main", pv(tmp_path), env=env)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": pv(tmp_path), "env": env}
+
+
+@first_run(_first_a_datastore_key_that_is_not_the_generated_json_is_refused)
+def test_a_datastore_key_that_is_not_the_generated_json_is_refused(first):
+    r, tmp_path = first
     assert r.returncode != 0 and not (tmp_path / "data" / "keys").exists()
 
 
@@ -484,10 +543,22 @@ def test_the_memory_budget_fits_the_footprint_the_manifest_declares():
     assert "hnx_module_footprint" in DEFAULTS[v("footprint_memory_mb")]
 
 
-def test_the_memory_budget_follows_a_raised_placed_footprint(tmp_path):
+def _first_the_memory_budget_follows_a_raised_placed_footprint(tmp_path):
     big = {**DEFAULTS[v("mem_limit")], "mongo": "16g"}  # over the manifest's 6144, under a raise
     kw = {v("mem_limit"): big}
-    refused = run_role(tmp_path, ROLE, "main", pv(tmp_path, **kw), env=SECRETS)
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pv(tmp_path, **kw),
+        "env": SECRETS,
+        "setup": {"kw": kw},
+    }
+
+
+@first_run(_first_the_memory_budget_follows_a_raised_placed_footprint)
+def test_the_memory_budget_follows_a_raised_placed_footprint(first):
+    refused, tmp_path = first
+    kw = first.setup["kw"]
     assert refused.returncode != 0 and not (tmp_path / "data" / "keys").exists()
     raised = {"hnx_module_footprint": {"cpu": 8, "memory_mb": 24576, "disk_gb": 30}}
     ok = run_role(tmp_path, ROLE, "main", pv(tmp_path, **kw, **raised), env=SECRETS)
@@ -504,9 +575,15 @@ def test_the_memory_budget_follows_a_raised_placed_footprint(tmp_path):
 # ----------------------------------------------------------------------------- the slice
 
 
-def test_the_containers_join_the_role_slice_the_module_play_names(tmp_path):
+def _first_the_containers_join_the_role_slice_the_module_play_names(tmp_path):
     kw = {"hnx_module_slice": f"hnx-{ID}-server.slice"}
-    assert run_role(tmp_path, ROLE, "main", pv(tmp_path, **kw), env=SECRETS).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": pv(tmp_path, **kw), "env": SECRETS}
+
+
+@first_run(_first_the_containers_join_the_role_slice_the_module_play_names)
+def test_the_containers_join_the_role_slice_the_module_play_names(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     parents = {s["cgroup_parent"] for s in compose(tmp_path)["services"].values()}
     assert parents == {f"hnx-{ID}-server.slice"}
 
@@ -567,8 +644,18 @@ def test_the_bridge_unit_posts_to_loopback_and_carries_no_secret():
     assert "--events-ca-file" not in plain and "--events-api-prefix" not in plain
 
 
-def test_the_bridge_and_forward_inputs_are_required_when_they_are_on(tmp_path):
-    r = run_role(tmp_path, ROLE, "main", pv(tmp_path, **{v("bridge_enabled"): True}), env=SECRETS)
+def _first_the_bridge_and_forward_inputs_are_required_when_they_are_on(tmp_path):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pv(tmp_path, **{v("bridge_enabled"): True}),
+        "env": SECRETS,
+    }
+
+
+@first_run(_first_the_bridge_and_forward_inputs_are_required_when_they_are_on)
+def test_the_bridge_and_forward_inputs_are_required_when_they_are_on(first):
+    r, tmp_path = first
     assert r.returncode != 0 and "bridge" in r.stdout + r.stderr
     r = run_role(
         tmp_path, ROLE, "main", pv(tmp_path, **{v("broker_tunnel_enabled"): True}), env=SECRETS
@@ -658,13 +745,23 @@ def _docker_calls(tmp_path: Path) -> list[str]:
     return log.read_text().splitlines() if log.exists() else []
 
 
-def test_a_failed_restore_leaves_the_services_stopped_and_names_the_archive(tmp_path):
+def _first_a_failed_restore_leaves_the_services_stopped_and_names_the_archive(tmp_path):
     env = SECRETS | _fake_docker(tmp_path)
     src = _real_export(tmp_path)
     (tmp_path / "restore.fails").write_text("")
-    r = run_role(
-        tmp_path, ROLE, "restore", pv(tmp_path, **{v("restore_source"): str(src)}), env=env
-    )
+    return {
+        "role": ROLE,
+        "tasks_from": "restore",
+        "extra_vars": pv(tmp_path, **{v("restore_source"): str(src)}),
+        "env": env,
+        "setup": {"src": src},
+    }
+
+
+@first_run(_first_a_failed_restore_leaves_the_services_stopped_and_names_the_archive)
+def test_a_failed_restore_leaves_the_services_stopped_and_names_the_archive(first):
+    r, tmp_path = first
+    src = first.setup["src"]
     out = r.stdout + r.stderr
     assert r.returncode != 0 and "NOT started" in out and str(src) in out
     calls_ = _docker_calls(tmp_path)
@@ -675,10 +772,20 @@ def test_a_failed_restore_leaves_the_services_stopped_and_names_the_archive(tmp_
     assert not (tmp_path / "data/export/mongo/.restore.gz").exists()  # the staged copy is gone
 
 
-def test_a_successful_restore_starts_the_services_only_after_it(tmp_path):
+def _first_a_successful_restore_starts_the_services_only_after_it(tmp_path):
     env = SECRETS | _fake_docker(tmp_path)
     src = _real_export(tmp_path)
-    run_role(tmp_path, ROLE, "restore", pv(tmp_path, **{v("restore_source"): str(src)}), env=env)
+    return {
+        "role": ROLE,
+        "tasks_from": "restore",
+        "extra_vars": pv(tmp_path, **{v("restore_source"): str(src)}),
+        "env": env,
+    }
+
+
+@first_run(_first_a_successful_restore_starts_the_services_only_after_it)
+def test_a_successful_restore_starts_the_services_only_after_it(first):
+    _result, tmp_path = first
     calls_ = _docker_calls(tmp_path)
     restored = [i for i, c in enumerate(calls_) if "mongorestore" in c]
     ups = [i for i, c in enumerate(calls_) if " up " in f" {c} " and "--remove-orphans" in c]
@@ -709,6 +816,15 @@ def test_the_export_keeps_the_previous_archive_and_refuses_an_empty_new_one(tmp_
     assert (mongo / ARCHIVE).read_bytes().startswith(b"gen2")
 
 
+def _first_upgrade_refuses_what_is_not_one_pinned_bump(tmp_path, case):
+    return {
+        "role": ROLE,
+        "tasks_from": "upgrade",
+        "extra_vars": pv(tmp_path, **case),
+        "env": SECRETS,
+    }
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -734,21 +850,28 @@ def test_the_export_keeps_the_previous_archive_and_refuses_an_empty_new_one(tmp_
     ],
     ids=lambda c: ",".join(k.split("_", 1)[1] for k in c) or "nothing",
 )
-def test_upgrade_refuses_what_is_not_one_pinned_bump(tmp_path, case):
-    r = run_role(tmp_path, ROLE, "upgrade", pv(tmp_path, **case), env=SECRETS)
+@first_run(_first_upgrade_refuses_what_is_not_one_pinned_bump)
+def test_upgrade_refuses_what_is_not_one_pinned_bump(first, case):
+    r, tmp_path = first
     assert r.returncode != 0 and not (tmp_path / "app" / "pending-upgrade.json").exists()
 
 
-def test_upgrade_records_a_patch_bump_of_the_whole_stack_and_a_pinned_data_store_bump(tmp_path):
+def _first_upgrade_records_a_patch_bump_of_the_whole_stack_and_a_pinned_data_store_bump(tmp_path):
     digests = dict.fromkeys(DEFAULTS[v("release_digests")], "sha256:" + "b" * 64)
     (tmp_path / "app").mkdir()
-    r = run_role(
-        tmp_path,
-        ROLE,
-        "upgrade",
-        pv(tmp_path, **{v("target_release_tag"): "3.9.1", v("target_release_digests"): digests}),
-        env=SECRETS,
-    )
+    return {
+        "role": ROLE,
+        "tasks_from": "upgrade",
+        "extra_vars": pv(
+            tmp_path, **{v("target_release_tag"): "3.9.1", v("target_release_digests"): digests}
+        ),
+        "env": SECRETS,
+    }
+
+
+@first_run(_first_upgrade_records_a_patch_bump_of_the_whole_stack_and_a_pinned_data_store_bump)
+def test_upgrade_records_a_patch_bump_of_the_whole_stack_and_a_pinned_data_store_bump(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     redis = DEFAULTS[v("redis_image")].split("@")[0].rsplit(":", 1)[0]
     r = run_role(

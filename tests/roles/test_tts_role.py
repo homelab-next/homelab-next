@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_role
+from rolerun import fake, first_run, run_role
 
 from tests.modules.tts_front import REFS, Server
 
@@ -75,9 +75,15 @@ def compose(tmp_path: Path) -> dict:
     return yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]["tts"]
 
 
-def test_main_renders_read_only_weights_and_voice_one_state_and_no_secrets(tmp_path):
+def _first_main_renders_read_only_weights_and_voice_one_state_and_no_secrets(tmp_path):
     v = tts_vars(tmp_path)
-    r = run_role(tmp_path, ROLE, "main", v)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first_main_renders_read_only_weights_and_voice_one_state_and_no_secrets)
+def test_main_renders_read_only_weights_and_voice_one_state_and_no_secrets(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     svc = compose(tmp_path)
     assert svc["image"] == IMAGE and "@sha256:" in svc["image"]
@@ -108,14 +114,20 @@ def test_main_renders_read_only_weights_and_voice_one_state_and_no_secrets(tmp_p
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-def test_the_state_belongs_to_the_container_and_the_voice_is_never_its_to_write(tmp_path):
-    assert run_role(tmp_path, ROLE, "main", tts_vars(tmp_path)).returncode == 0
+def _first_the_state_belongs_to_the_container_and_the_voice_is_never_its_to_write(tmp_path):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": tts_vars(tmp_path)}
+
+
+@first_run(_first_the_state_belongs_to_the_container_and_the_voice_is_never_its_to_write)
+def test_the_state_belongs_to_the_container_and_the_voice_is_never_its_to_write(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     mode = lambda p: oct((tmp_path / p).stat().st_mode & 0o777)  # noqa: E731
     assert mode("data/state") == "0o700" and mode("data/export") == "0o700"
     assert mode("data/voice") == "0o750"
 
 
-def test_a_cuda_backend_hands_over_the_card_by_its_device_and_unloads_when_idle(tmp_path):
+def _first_a_cuda_backend_hands_over_the_card_by_its_device_and_unloads_when_idle(tmp_path):
     v = tts_vars(
         tmp_path,
         tts_backend="cuda",
@@ -123,7 +135,13 @@ def test_a_cuda_backend_hands_over_the_card_by_its_device_and_unloads_when_idle(
         tts_gpu_index=2,
         tts_power_cap_max_watts=180,
     )
-    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first_a_cuda_backend_hands_over_the_card_by_its_device_and_unloads_when_idle)
+def test_a_cuda_backend_hands_over_the_card_by_its_device_and_unloads_when_idle(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     svc = compose(tmp_path)
     assert svc["devices"] == ["nvidia.com/gpu=2"]
     env = svc["environment"]
@@ -132,16 +150,32 @@ def test_a_cuda_backend_hands_over_the_card_by_its_device_and_unloads_when_idle(
     assert env["TTS_POWER_CAP_MAX_WATTS"] == "180"
 
 
-def test_the_idle_timeout_can_be_set(tmp_path):
+def _first_the_idle_timeout_can_be_set(tmp_path):
     v = tts_vars(tmp_path, tts_idle_unload_s=30)
-    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first_the_idle_timeout_can_be_set)
+def test_the_idle_timeout_can_be_set(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     assert compose(tmp_path)["environment"]["TTS_IDLE_UNLOAD_S"] == "30"
 
 
-def test_the_container_joins_the_role_slice_the_module_play_names(tmp_path):
+def _first_the_container_joins_the_role_slice_the_module_play_names(tmp_path):
     v = tts_vars(tmp_path, hnx_module_slice="hnx-tts-server.slice")
-    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first_the_container_joins_the_role_slice_the_module_play_names)
+def test_the_container_joins_the_role_slice_the_module_play_names(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     assert compose(tmp_path)["cgroup_parent"] == "hnx-tts-server.slice"
+
+
+def _first_main_refuses_bad_inputs(tmp_path, over):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": tts_vars(tmp_path, **over)}
 
 
 @pytest.mark.parametrize(
@@ -178,8 +212,9 @@ def test_the_container_joins_the_role_slice_the_module_play_names(tmp_path):
         {"tts_check_min_seconds": 9, "tts_check_max_seconds": 2},
     ],
 )
-def test_main_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, ROLE, "main", tts_vars(tmp_path, **over))
+@first_run(_first_main_refuses_bad_inputs)
+def test_main_refuses_bad_inputs(first, over):
+    r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
@@ -192,37 +227,62 @@ def test_main_refuses_an_image_that_is_not_set(tmp_path):
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_main_refuses_a_data_root_inside_the_model_store(tmp_path):
+def _first_main_refuses_a_data_root_inside_the_model_store(tmp_path):
     v = tts_vars(tmp_path, tts_data_root=str(tmp_path / "store" / "hf" / "data"))
-    r = run_role(tmp_path, ROLE, "main", v)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first_main_refuses_a_data_root_inside_the_model_store)
+def test_main_refuses_a_data_root_inside_the_model_store(first):
+    r, tmp_path = first
     assert r.returncode != 0 and not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_main_refuses_when_the_weights_are_not_in_the_store(tmp_path):
-    r = run_role(tmp_path, ROLE, "main", tts_vars(tmp_path, store=False))
+def _first_main_refuses_when_the_weights_are_not_in_the_store(tmp_path):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": tts_vars(tmp_path, store=False)}
+
+
+@first_run(_first_main_refuses_when_the_weights_are_not_in_the_store)
+def test_main_refuses_when_the_weights_are_not_in_the_store(first):
+    r, tmp_path = first
     assert r.returncode != 0 and not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_main_refuses_when_the_listing_is_not_in_the_store(tmp_path):
+def _first_main_refuses_when_the_listing_is_not_in_the_store(tmp_path):
     v = tts_vars(tmp_path)
     (tmp_path / "store" / "manifests" / "listings" / "xtts-v2.sha256").unlink()
-    r = run_role(tmp_path, ROLE, "main", v)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first_main_refuses_when_the_listing_is_not_in_the_store)
+def test_main_refuses_when_the_listing_is_not_in_the_store(first):
+    r, tmp_path = first
     assert r.returncode != 0 and not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_main_refuses_to_start_without_the_voice(tmp_path):
-    """A service started without the recordings answers 503 to every job."""
+def _first_main_refuses_to_start_without_the_voice(tmp_path):
     v = tts_vars(tmp_path, tts_start=True)
     (tmp_path / "data" / "voice" / "ref3.wav").unlink()
-    r = run_role(tmp_path, ROLE, "main", v)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first_main_refuses_to_start_without_the_voice)
+def test_main_refuses_to_start_without_the_voice(first):
+    """A service started without the recordings answers 503 to every job."""
+    r, tmp_path = first
     assert r.returncode != 0 and "ref3.wav" in r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_main_refuses_to_start_on_an_empty_recording(tmp_path):
+def _first_main_refuses_to_start_on_an_empty_recording(tmp_path):
     v = tts_vars(tmp_path, tts_start=True)
     (tmp_path / "data" / "voice" / "ref2.wav").write_bytes(b"")
-    r = run_role(tmp_path, ROLE, "main", v)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first_main_refuses_to_start_on_an_empty_recording)
+def test_main_refuses_to_start_on_an_empty_recording(first):
+    r, _ = first
     assert r.returncode != 0 and "ref2.wav" in r.stdout
 
 
@@ -255,27 +315,57 @@ def _fake_docker_image(tmp_path: Path, loads: bool) -> dict:
     return {"PATH": f"{bindir}:{os.environ['PATH']}"}
 
 
-def test_the_image_is_loaded_from_its_archive_when_the_daemon_lacks_it(tmp_path):
+def _first_the_image_is_loaded_from_its_archive_when_the_daemon_lacks_it(tmp_path):
     archive = tmp_path / "hnx-tts.tar"
     archive.write_bytes(b"x")
     v = tts_vars(tmp_path, tts_image_archive=str(archive))
-    r = run_role(tmp_path, ROLE, "main", v, env=_fake_docker_image(tmp_path, True))
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": _fake_docker_image(tmp_path, True),
+    }
+
+
+@first_run(_first_the_image_is_loaded_from_its_archive_when_the_daemon_lacks_it)
+def test_the_image_is_loaded_from_its_archive_when_the_daemon_lacks_it(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert (tmp_path / "loaded").exists()
 
 
-def test_main_refuses_when_the_archive_does_not_hold_the_pinned_digest(tmp_path):
+def _first_main_refuses_when_the_archive_does_not_hold_the_pinned_digest(tmp_path):
     archive = tmp_path / "hnx-tts.tar"
     archive.write_bytes(b"x")
     v = tts_vars(tmp_path, tts_image_archive=str(archive))
-    r = run_role(tmp_path, ROLE, "main", v, env=_fake_docker_image(tmp_path, False))
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": _fake_docker_image(tmp_path, False),
+    }
+
+
+@first_run(_first_main_refuses_when_the_archive_does_not_hold_the_pinned_digest)
+def test_main_refuses_when_the_archive_does_not_hold_the_pinned_digest(first):
+    r, _ = first
     assert r.returncode != 0 and "The pinned digest is there now" in r.stdout
 
 
-def test_main_refuses_an_archive_that_is_not_a_file(tmp_path):
+def _first_main_refuses_an_archive_that_is_not_a_file(tmp_path):
     (tmp_path / "an-archive").mkdir()
     v = tts_vars(tmp_path, tts_image_archive=str(tmp_path / "an-archive"))
-    r = run_role(tmp_path, ROLE, "main", v, env=_fake_docker_image(tmp_path, True))
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": _fake_docker_image(tmp_path, True),
+    }
+
+
+@first_run(_first_main_refuses_an_archive_that_is_not_a_file)
+def test_main_refuses_an_archive_that_is_not_a_file(first):
+    r, _ = first
     assert r.returncode != 0 and "is not a regular file" in r.stdout
 
 
@@ -399,13 +489,20 @@ def _state(root: Path) -> None:
     (root / "state" / "latents-0123.pt").write_bytes(b"embedding")
 
 
-def test_export_archives_the_voice_and_the_embeddings_and_restore_checks_it(tmp_path):
+def _first_export_archives_the_voice_and_the_embeddings_and_restore_checks_it(tmp_path):
     v = tts_vars(tmp_path)
     _state(tmp_path / "data")
     (tmp_path / "cache").mkdir()
     (tmp_path / "cache" / "scratch").write_text("noise")
     log = _docker_log(tmp_path)
-    r = run_role(tmp_path, ROLE, "export", v)
+    return {"role": ROLE, "tasks_from": "export", "extra_vars": v, "setup": {"log": log, "v": v}}
+
+
+@first_run(_first_export_archives_the_voice_and_the_embeddings_and_restore_checks_it)
+def test_export_archives_the_voice_and_the_embeddings_and_restore_checks_it(first):
+    r, tmp_path = first
+    log = first.setup["log"]
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     export = tmp_path / "data" / "export"
     with tarfile.open(export / "tts-data.tar.gz") as t:
@@ -510,9 +607,15 @@ def test_restore_refuses_members_outside_the_data(tmp_path, name):
     assert not log.exists()
 
 
-def test_the_text_limit_and_the_job_timeout_reach_the_container(tmp_path):
+def _first_the_text_limit_and_the_job_timeout_reach_the_container(tmp_path):
     v = tts_vars(tmp_path, tts_max_text_chars=5000, tts_job_timeout_s=0)
-    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first_the_text_limit_and_the_job_timeout_reach_the_container)
+def test_the_text_limit_and_the_job_timeout_reach_the_container(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     env = compose(tmp_path)["environment"]
     assert env["TTS_MAX_TEXT_CHARS"] == "5000" and env["TTS_JOB_TIMEOUT_S"] == "0"
 
@@ -568,8 +671,14 @@ def test_restore_refuses_to_move_the_live_data_over_an_earlier_aside(tmp_path):
     assert (tmp_path / "data" / "voice" / "ref1.wav").read_bytes() == b"RIFFref1.wav"
 
 
-def test_backup_names_the_data_root_not_the_weights(tmp_path):
-    assert run_role(tmp_path, ROLE, "backup", tts_vars(tmp_path)).returncode == 0
+def _first_backup_names_the_data_root_not_the_weights(tmp_path):
+    return {"role": ROLE, "tasks_from": "backup", "extra_vars": tts_vars(tmp_path)}
+
+
+@first_run(_first_backup_names_the_data_root_not_the_weights)
+def test_backup_names_the_data_root_not_the_weights(first):
+    first_result, tmp_path = first
+    assert first_result.returncode == 0
     manifest = json.loads((tmp_path / "app" / "backup-manifest.json").read_text())
     assert manifest == {"app": "tts", "paths": [str(tmp_path / "data")]}
 
@@ -577,9 +686,16 @@ def test_backup_names_the_data_root_not_the_weights(tmp_path):
 # ----------------------------------------------------------------------------- upgrade
 
 
-def test_upgrade_refuses_an_unpinned_target_and_records_a_pinned_one(tmp_path):
+def _first_upgrade_refuses_an_unpinned_target_and_records_a_pinned_one(tmp_path):
     v = tts_vars(tmp_path)
-    assert run_role(tmp_path, ROLE, "main", v).returncode == 0
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first_upgrade_refuses_an_unpinned_target_and_records_a_pinned_one)
+def test_upgrade_refuses_an_unpinned_target_and_records_a_pinned_one(first):
+    first_result, tmp_path = first
+    v = first.setup["v"]
+    assert first_result.returncode == 0
     new = "b" * 64
     for bad in (
         f"{REPO}:0.2.0-x-cpu",  # no digest
