@@ -859,6 +859,8 @@ def test_check_mode_on_a_running_service_still_waits_and_reads(tmp_path):
         banner = Banner()
         env = _env(tmp_path, users="ID\tUsername\n1\tadmin\n")
         v = _live(tmp_path, front, banner)
+        (tmp_path / "app" / "tls").mkdir(parents=True)  # an installed service has its CA on disk
+        (tmp_path / "app" / "tls" / "ca.pem").write_text(PKI[2])
         r = run_role(tmp_path, ROLE, "main", v, env=env, check=True)
         assert r.returncode == 0, r.stdout + r.stderr
         assert any("admin user list" in c for c in calls(tmp_path))
