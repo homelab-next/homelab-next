@@ -62,6 +62,8 @@
       # at most the batch: the one set, or llama-server's default -b of 2048
       - llamacpp_extra_args.ubatch_size is not defined or llamacpp_extra_args.ubatch_size <= (llamacpp_extra_args.batch_size | default(llamacpp_default_batch_size))
       - llamacpp_extra_args.kv_unified is not defined or llamacpp_extra_args.kv_unified is boolean
+      - llamacpp_extra_args.threads is not defined or (llamacpp_extra_args.threads is integer and llamacpp_extra_args.threads is not boolean and llamacpp_extra_args.threads >= 1 and llamacpp_extra_args.threads <= llamacpp_threads_max)
+      - llamacpp_extra_args.threads_batch is not defined or (llamacpp_extra_args.threads_batch is integer and llamacpp_extra_args.threads_batch is not boolean and llamacpp_extra_args.threads_batch >= 1 and llamacpp_extra_args.threads_batch <= llamacpp_threads_max)
       - llamacpp_extra_args.split_mode is not defined or (llamacpp_extra_args.split_mode is string and llamacpp_extra_args.split_mode in llamacpp_split_modes)
       - >-
         llamacpp_extra_args.tensor_split is not defined
@@ -88,7 +90,8 @@
       (renderD<NNN>), cuda cards as "all" or a list of distinct indices 0 to 15 (cuda only),
       llamacpp_extra_args with only batch_size and ubatch_size (integers, ubatch at most batch),
       kv_unified (a boolean), split_mode (none, layer or row) and tensor_split (a list of 1 to 16
-      finite non-negative numbers, one per card when the cards are listed), the first three in generate mode only and the last two on a GPU
+      finite non-negative numbers, one per card when the cards are listed), threads and threads_batch
+      (integers 1 to 256), batch_size, ubatch_size and kv_unified in generate mode only and split_mode and tensor_split on a GPU
       backend only, group ids that are not 0, a power limit of 200 W at most (the operator's rule: a setting can only tighten it) and the hwmon attributes
       that carry it
   tags: [health, backup, restore, export, upgrade]

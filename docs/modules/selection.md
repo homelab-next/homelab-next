@@ -21,11 +21,11 @@ changes far more often than the site). Shape, as in the three profiles:
 profile: full
 hosts:      {<name>: {guest: guest:<id>, isolated, resources: [{name: gpu0, kind: gpu}], headroom: {memory_mb}}}   # a guest record (below)
             # or a stand-in: {<name>: {kind, isolated, capacity: {cpu, memory_mb, disk_gb, gpu_memory_mb}, addresses, resources, headroom}}
-slots:      {<slot>: [{provider, instance, placement: {<host role>: <host>}}] | none | pass-through}
+slots:      {<slot>: [{provider, instance, placement: {<host role>: <host>}, footprint: {<host role>: {cpu, memory_mb, disk_gb}}}] | none | pass-through}
 incumbents: {<slot>: {service: <core registry row>, why}}   # served outside modules (below)
 planned:    {<slot>: {why, review_by: "YYYY-MM-DD"}}       # a required core slot not served yet
-features:   {<module>: {placement, config, agents: {<key>: {lanes: {real: <orchestration instance>, shadow: ...}}}}}
-core:       {<module>: {placement, config, agents: {...}}}   # core modules are always selected
+features:   {<module>: {placement, footprint, config, agents: {<key>: {lanes: {real: <orchestration instance>, shadow: ...}}}}}
+core:       {<module>: {placement, footprint, config, agents: {...}}}   # core modules are always selected
 providers:  {<module>: {agents: {...}}}             # a provider's agents (placement and config are per instance)
 grants:     {publish: [...], egress: {<module>: {<host role>: [internet|external|svc:...]}},
              internet_facing: {<module>: [<host role>]}, secrets: {<reader>: [secret:...]},

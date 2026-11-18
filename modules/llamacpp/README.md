@@ -113,7 +113,10 @@ address, VM id or secret value.
   of it, which `/v1/models` reports as a slot's `n_ctx`, so health's comparison is unchanged);
   `split_mode` (`-sm`: `none`, `layer` or `row`; b12033's cuda build does not support `row`) and
   `tensor_split` (`-ts`: 1 to 16 finite non-negative numbers, not all 0, the per-card proportions;
-  one per card when `llamacpp_gpu_indices` is a list).
+  one per card when `llamacpp_gpu_indices` is a list); `threads` and `threads_batch` (`-t` and
+  `-tb`, the CPU threads for generation and for prompt processing, integers 1 to 256, any mode
+  and backend: without them llama-server picks its own count from the cores it sees, which in a
+  container is the guest's, not the slice's quota).
   Any other key, a wrong type (a string for a number, a boolean for a count) is refused;
   `batch_size`, `ubatch_size` and `kv_unified` are refused in decision mode (it fixes them), and
   `split_mode`/`tensor_split` on the cpu backend. For example, one 128k cache shared by 16 slots
@@ -126,6 +129,27 @@ address, VM id or secret value.
   llamacpp_parallel: 16
   llamacpp_extra_args: {batch_size: 4096, ubatch_size: 2048, kv_unified: true}
   ```
+
+- **Footprint, per placement.** The manifest's `server` footprint (8 vCPU, 16 GiB, 20 GB) is
+  the module's **minimum**, and by default its slice: `hnx-llamacpp-server.slice` with
+  `CPUQuota=800%`, `MemoryHigh=14745M`, `MemoryMax=16384M`, the container's cgroup parent. A
+  model bigger than that (a split GGUF whose token-embedding tables stay mapped in host memory,
+  the CUDA pinned host buffers, a thread per core) raises it in the site selection, beside the
+  placement, never in this module:
+
+  ```yaml
+  slots:
+    inference:
+      - provider: llamacpp
+        instance: big-model
+        placement: {server: gpu-guest}
+        footprint: {server: {cpu: 48, memory_mb: 245760}}
+  ```
+
+  `cpu`, `memory_mb` and `disk_gb` may be raised (GPU memory and the exclusive GPU claim stay
+  the manifest's); a value below the manifest's is refused, and the raised footprint is what the
+  loader judges against the guest alone and against the guest's sum over every placement on it,
+  and what the slice takes as its limits. Set `threads` (above) to at most the raised `cpu`.
 
 ## The contract the gateway needs
 

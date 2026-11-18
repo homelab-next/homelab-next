@@ -72,6 +72,18 @@ claim takes one of the host's named resources (`gpu0`) to itself, so two exclusi
 card are refused, and so is a shared user of a card someone holds exclusively. Every selected
 module needs a manifest; nothing is exempt.
 
+**A placement's footprint, raised by the site.** A manifest's footprint is the module's
+minimum, the same on every lab. A placement that needs more (a bigger model on the same
+inference provider) raises it in the selection, beside its placement:
+`footprint: {<host role>: {cpu, memory_mb, disk_gb}}` on a slot choice, a feature or a core entry.
+Each given dimension replaces the declared one for that placement only (`count` still multiplies
+it); GPU memory and the resource claims stay the manifest's. The loader refuses a value below the
+module's own (never rendered below it either), a host role that entry's instance does not place,
+and one placement raised twice to different values; everything else reads the raised footprint
+(`homelabnext.modules.rules._placed`): the guest alone, the host's sum over every placement on
+it, and the slice's limits, so the accounting stays one sum and a raise takes room from nobody
+unseen.
+
 **Footprints as limits** (follow-up 8, implemented for fleet units and data roots):
 `homelabnext.modules.limits.render(site, modules, units)` turns every placement inside the lab into
 limits, so an understated footprint starves its own module, not its neighbours. Per placed host it
