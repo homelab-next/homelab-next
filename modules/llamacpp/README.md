@@ -3,7 +3,8 @@
 
 A provider module ([module manifest](../../docs/modules.md), draft, ADR-0027 proposed) that fills
 the `inference` slot with [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`, which
-serves **one GGUF model on one GPU** through an OpenAI-compatible API. It is the engine the
+serves **one GGUF model** (a single file or a split series) **on one GPU**, or on several NVIDIA
+GPUs of one guest, through an OpenAI-compatible API. It is the engine the
 [model serving plan](../../docs/model-serving.md) names for GGUF-only models (`engine:
 llama-server`), and what the [model gateway](../../docs/llm-gateway.md) routes a role such as
 `mdl:fast-classifier` to. It is a **service, not a machine**: the guest is the site's guest file,
@@ -15,7 +16,7 @@ address, VM id or secret value.
 | Slot | `inference` (contract `conformance/protocols/inference.py`), stateless |
 | Adapter | the shared `homelabnext.conform.adapters.inference_server:make`, feature `streaming` |
 | Product | llama.cpp build b12033 (product version `0.12033.0`: `0.<build>.0`), `ghcr.io/ggml-org/llama.cpp` pinned by tag and digest |
-| Host role | `server`: kind `vm`, baseline `server` (the site adds `model-runtime`), footprint 8 vCPU, 16 GiB, 20 GB and one exclusive GPU (VRAM is not counted: a guest record declares none yet) |
+| Host role | `server`: kind `vm`, baseline `server` (the site adds `model-runtime`), footprint 8 vCPU, 16 GiB, 20 GB and one exclusive GPU resource (VRAM is not counted: a guest record declares none yet; a multi-GPU guest declares its pool as that one resource) |
 | Role | `llamacpp` (role interface v1), a wrapper of the core `compose_app` |
 | Requires | the weights in the model store (role `model_store`), the container engine, the GPU passed through |
 | Egress | none (the guest is a model runtime: default-deny, see below) |
@@ -33,21 +34,29 @@ address, VM id or secret value.
   (vulkan, sycl) it reads each hwmon attribute of `llamacpp_power_cap_attrs` (default
   `power1_cap`, microwatts) under `/sys/class/drm/<render node>/device/hwmon/hwmon*/`; **absent,
   unreadable or 0 refuses** (0 means no limit is set: an unlimited card is not within 200 W). On
-  NVIDIA (cuda) it reads `nvidia-smi -i <index> --query-gpu=power.limit`. A cpu backend has no
+  NVIDIA (cuda) it reads `nvidia-smi --query-gpu=index,power.limit,enforced.power.limit` and
+  holds **every card the container gets** to the limit, both the limit set and the one the card
+  enforces (`llamacpp_gpu_indices: all`: every card nvidia-smi lists, at least one; a list: each
+  index, and one that nvidia-smi does not list refuses; `[N/A]` refuses). A cpu backend has no
   card and passes. The health hook runs the same rule (`--power-only`), so a cap raised after
   the start turns the service red. Setting the cap is not this module's job (the baseline or a
   udev rule does it); this module only refuses to load without it.
 - **The bytes are checked, not trusted.** The same script checks, before every start, that the
   model store's listing (`manifests/listings/<store id>.sha256`) hashes to the pinned
   `llamacpp_model_digest` and that every file in it matches (`sha256sum --check --strict`), as
-  `vllm_server` does for vLLM. Weights are fetched only by `model_store`, at a pinned revision
+  `vllm_server` does for vLLM. The served file must be listed; for a split model every shard of
+  its series must be (llama-server opens them all), and every listed file must resolve inside the
+  entry's directory (a shard, or the quant subdirectory, that links out of it refuses). Weights are fetched only by `model_store`, at a pinned revision
   and a pinned sha256 per file, never at container start; the container mounts the entry's
   directory read-only and runs `--offline`.
 - **GPU passthrough into the container.** `compose_app` gained two optional service keys for it
   (`devices` and `group_add`; docs/role-interface.md): `vulkan` and `sycl` pass
   `/dev/dri/<render node>` (default `renderD128`) and add the **render node's group** by number
-  (read from the node, or `llamacpp_render_gid`); `cuda` passes the CDI device
-  `nvidia.com/gpu=<index>` (the container toolkit's CDI spec must exist on the guest). Nothing
+  (read from the node, or `llamacpp_render_gid`); `cuda` passes CDI devices: one card
+  `nvidia.com/gpu=<llamacpp_gpu_index>` by default, `nvidia.com/gpu=all` with
+  `llamacpp_gpu_indices: all`, or one device per index with a list (`[0, 1, 2, 3]`). The container
+  toolkit's CDI spec must exist on the guest (role `nvidia_container_toolkit` writes
+  `/etc/cdi/nvidia.yaml`). Nothing
   else is a device (a disk, `/dev/mem` and the card node are refused), the container is not
   privileged, has no capability and `no-new-privileges`, and runs as an id of its own
   (`llamacpp_uid`) in the **model store's group** (read from the model directory, or
@@ -81,7 +90,39 @@ address, VM id or secret value.
   `sha256:e29796ca...`), `llamacpp_served_model_name` is the id `/v1/models` lists (the role
   table's model id for this backend), `llamacpp_context_size` is the context **each slot** gets
   (the server is started with `-c` = that times `llamacpp_parallel`, with `--no-kv-unified`, so
-  a slot's share is fixed), `llamacpp_n_gpu_layers` is a count, `all` or `auto` (default 99).
+  a slot's share is fixed; see `kv_unified` below for one shared cache), `llamacpp_n_gpu_layers`
+  is a count, `all` or `auto` (default 99).
+- **A split model, in a subdirectory.** `llamacpp_model_file` is a path relative to the entry's
+  directory (`<store>/gguf/<repo>/`), so it may sit in a subdirectory of the repository
+  (`unsloth-Q8_0/...`, at most four deep); an absolute path, a `.` or `..` segment and an empty
+  segment are refused. A split GGUF (the store's complete series, docs/model-serving.md) is named
+  by its **first shard**, `<stem>-00001-of-0000M.gguf` (naming a later shard is refused);
+  llama-server opens the other shards beside it. `main` and `readiness` require every shard to be
+  a regular file and every directory on the way to be a real directory (not a link), and the unit's
+  check pins every shard (above). The mount is still the entry's directory, read-only.
+- **Several GPUs (cuda).** `llamacpp_gpu_indices` (default `[]`: the one card
+  `llamacpp_gpu_index`) is `all` or a list of distinct indices 0 to 15; anything else, or a
+  non-empty value on another backend, is refused. llama.cpp spreads the layers over every card it
+  sees (`-sm layer` is its default with several GPUs); the power-cap check covers each card.
+- **Throughput settings.** `llamacpp_extra_args` (default `{}`) takes named settings only, never
+  a raw flag: `batch_size` (`-b`), `ubatch_size` (`-ub`, at most `batch_size`), integers 1 to
+  131072; `kv_unified` (a boolean: `true` gives the slots ONE shared KV cache of
+  `llamacpp_context_size` tokens: `-c` is that total, `--kv-unified`, and each slot may use all
+  of it, which `/v1/models` reports as a slot's `n_ctx`, so health's comparison is unchanged);
+  `split_mode` (`-sm`: `none`, `layer` or `row`; b12033's cuda build does not support `row`) and
+  `tensor_split` (`-ts`: 1 to 16 non-negative numbers, not all 0, the per-card proportions).
+  Any other key, a wrong type (a string for a number, a boolean for a count) is refused;
+  `batch_size`, `ubatch_size` and `kv_unified` are refused in decision mode (it fixes them), and
+  `split_mode`/`tensor_split` on the cpu backend. For example, one 128k cache shared by 16 slots
+  across four cards:
+
+  ```yaml
+  llamacpp_backend: cuda
+  llamacpp_gpu_indices: all
+  llamacpp_context_size: 131072
+  llamacpp_parallel: 16
+  llamacpp_extra_args: {batch_size: 4096, ubatch_size: 2048, kv_unified: true}
+  ```
 
 ## The contract the gateway needs
 

@@ -20,7 +20,11 @@
         [llamacpp_dir, llamacpp_data_root, llamacpp_store_root, llamacpp_precheck_bin, llamacpp_unit_dir,
         llamacpp_sysfs_root, llamacpp_dev_root] | reject('match', llamacpp_path_pattern) | list | length == 0
       - llamacpp_model_repo is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}\Z')
-      - llamacpp_model_file is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}[.]gguf\Z')
+      # a relative path inside the store entry: no absolute path, no . or .. segment, no //
+      - llamacpp_model_file is string and llamacpp_model_file is match(llamacpp_model_file_pattern)
+      - llamacpp_model_file | length <= 255
+      # a split model is named by its FIRST shard, of a series the role can enumerate
+      - llamacpp_split | length == 0 or (llamacpp_split[1] == '00001' and llamacpp_split[2] | int >= 1 and llamacpp_split[2] | int <= llamacpp_shards_max)
       - llamacpp_model_store_id is match('^[a-z][a-z0-9]*([-.][a-z0-9]+)*\Z')
       - llamacpp_model_digest is match(llamacpp_digest_pattern)
       - llamacpp_served_model_name is match('^[A-Za-z0-9._:/-]{1,128}\Z')
@@ -34,6 +38,15 @@
       - llamacpp_render_gid | string == '' or llamacpp_render_gid | int <= llamacpp_gid_max
       - llamacpp_models_gid | string == '' or llamacpp_models_gid | int <= llamacpp_gid_max
       - llamacpp_gpu_index | int >= 0 and llamacpp_gpu_index | int <= 15
+      # "all", or a list of distinct card indices 0 to 15 (integers, not strings or booleans); cuda only
+      - >-
+        llamacpp_gpu_indices == 'all'
+        or (llamacpp_gpu_indices is sequence and llamacpp_gpu_indices is not string and llamacpp_gpu_indices is not mapping
+            and llamacpp_gpu_indices | reject('integer') | list | length == 0
+            and llamacpp_gpu_indices | select('lt', 0) | list | length == 0
+            and llamacpp_gpu_indices | select('gt', 15) | list | length == 0
+            and llamacpp_gpu_indices | unique | list | length == llamacpp_gpu_indices | length)
+      - llamacpp_backend == 'cuda' or (llamacpp_gpu_indices is not string and llamacpp_gpu_indices | length == 0)
       - llamacpp_power_cap_max_watts | int >= 1 and llamacpp_power_cap_max_watts | int <= llamacpp_power_cap_ceiling_watts | int
       - llamacpp_power_cap_attrs is sequence and llamacpp_power_cap_attrs is not string
       - llamacpp_power_cap_attrs | length > 0
@@ -41,13 +54,35 @@
       - llamacpp_power_cap_attrs | reject('match', '^power[0-9]+_[a-z]+\Z') | list | length == 0
       - llamacpp_unit_name is match('^[A-Za-z0-9@._-]+[.]service\Z')
       - llamacpp_start_timeout_s | int >= 60 and llamacpp_start_timeout_s | int <= 86400
+      # the throughput settings: named keys of the allow-list only, each of its own type
+      - llamacpp_extra_args is mapping
+      - llamacpp_extra_args.keys() | list | difference(llamacpp_extra_flags.keys() | list) | length == 0
+      - llamacpp_extra_args.batch_size is not defined or (llamacpp_extra_args.batch_size is integer and llamacpp_extra_args.batch_size >= 1 and llamacpp_extra_args.batch_size <= 131072)
+      - llamacpp_extra_args.ubatch_size is not defined or (llamacpp_extra_args.ubatch_size is integer and llamacpp_extra_args.ubatch_size >= 1 and llamacpp_extra_args.ubatch_size <= 131072)
+      - llamacpp_extra_args.ubatch_size is not defined or llamacpp_extra_args.batch_size is not defined or llamacpp_extra_args.ubatch_size <= llamacpp_extra_args.batch_size
+      - llamacpp_extra_args.kv_unified is not defined or llamacpp_extra_args.kv_unified is boolean
+      - llamacpp_extra_args.split_mode is not defined or (llamacpp_extra_args.split_mode is string and llamacpp_extra_args.split_mode in llamacpp_split_modes)
+      - >-
+        llamacpp_extra_args.tensor_split is not defined
+        or (llamacpp_extra_args.tensor_split is sequence and llamacpp_extra_args.tensor_split is not string and llamacpp_extra_args.tensor_split is not mapping
+            and llamacpp_extra_args.tensor_split | length >= 1 and llamacpp_extra_args.tensor_split | length <= 16
+            and llamacpp_extra_args.tensor_split | reject('integer') | reject('float') | list | length == 0
+            and llamacpp_extra_args.tensor_split | select('lt', 0) | list | length == 0
+            and llamacpp_extra_args.tensor_split | sum > 0)
+      - llamacpp_mode == 'generate' or llamacpp_extra_args.keys() | list | intersect(llamacpp_generate_only_args) | length == 0
+      - llamacpp_backend in llamacpp_gpu_backends or llamacpp_extra_args.keys() | list | intersect(llamacpp_gpu_only_args) | length == 0
     fail_msg: >-
       llamacpp: a registry id, a mode (generate or decision), a backend (vulkan, sycl, cuda or cpu) with that backend's image
       pinned by tag (server-vulkan-b<N>, server-intel-b<N>, server-cuda-b<N>, server-b<N>) and
       digest, the guest's IPv4 address to publish on (not all interfaces), an unprivileged port,
       a container uid and gid of 1000 or more, canonical absolute paths, a model repository, a
-      .gguf file, a store id and the entry's sha256 digest, a served model id, a context of 256
+      .gguf file relative to the entry (a subdirectory allowed; no absolute path, no . or .. segment;
+      a split model by its first shard -00001-of-0000M), a store id and the entry's sha256 digest, a served model id, a context of 256
       tokens or more per slot, 1 to 32 slots, layers as a count, all or auto, a render node
-      (renderD<NNN>), group ids that are not 0, a power limit of 200 W at most (the operator's rule: a setting can only tighten it) and the hwmon attributes
+      (renderD<NNN>), cuda cards as "all" or a list of distinct indices 0 to 15 (cuda only),
+      llamacpp_extra_args with only batch_size and ubatch_size (integers, ubatch at most batch),
+      kv_unified (a boolean), split_mode (none, layer or row) and tensor_split (a list of 1 to 16
+      non-negative numbers), the first three in generate mode only and the last two on a GPU
+      backend only, group ids that are not 0, a power limit of 200 W at most (the operator's rule: a setting can only tighten it) and the hwmon attributes
       that carry it
   tags: [health, backup, restore, export, upgrade]
