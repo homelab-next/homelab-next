@@ -11,10 +11,26 @@ model_store_group: models
 # exports/ alone is writable by the trainers' group (Unsloth Studio writes fine-tune exports
 # there); an export is served only after it is promoted into the manifest with its hashes.
 model_store_exports_group: model-trainers
+# Create model_store_owner (a system user, primary group model_store_group, nologin, no home) and
+# the two groups when absent. false for a site that manages accounts centrally: then all three must
+# exist before the role runs, or its chown fails.
+model_store_manage_accounts: true
+# Optional fixed numeric ids ("" lets the system pick), for a consumer that needs the number rather
+# than the name. Consumers that look the group up by name (vllm_server: group models) or read the
+# store directory's gid (llamacpp, unless llamacpp_models_gid is set) keep working without them.
+model_store_uid: ""
+model_store_gid: ""
+model_store_exports_gid: ""
 model_store_fetch: true
 # fetch only these entry ids (empty: every hf and gguf entry of the manifest)
 model_store_fetch_ids: []
-model_store_hf_cli: hf
+# Install the hf CLI (huggingface_hub, pinned by version and installed by hash from this role's
+# hf_requirements.txt) into a virtualenv at model_store_hf_venv. false: the site provides the CLI
+# (put it on the path or set model_store_hf_cli).
+model_store_hf_install: true
+model_store_hf_venv: /opt/hnx/model-store/venv
+# The managed CLI's path; with model_store_hf_install false the bare name `hf` (the PATH's).
+model_store_hf_cli: "{{ (model_store_hf_venv ~ '/bin/hf') if (model_store_hf_install | bool) else 'hf' }}"
 # A hub mirror (an https URL; on a default-deny host, one its outbound_allow reaches, never the
 # public hub itself) instead of the public hub; empty: the hub.
 model_store_hf_endpoint: ""

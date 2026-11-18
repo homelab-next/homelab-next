@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (module context, role context); local changes are overwritten.
+[Unit]
+Description=Context index, on its calendar (fetch every source, index what changed)
+
+[Timer]
+OnCalendar={{ context_reindex_schedule }}
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

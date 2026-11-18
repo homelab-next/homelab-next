@@ -114,6 +114,37 @@ SOURCES: dict[str, tuple[str, str]] = {
         "PostgreSQL release page by hand, within the pinned major version",
     ),
     "role:media/media_image": ("github", "jellyfin/jellyfin"),
+    "role:media_automation/media_automation_gluetun_image": ("github", "qdm12/gluetun"),
+    "role:media_automation/media_automation_qbittorrent_image": (
+        "none",
+        "an image (modules/media-automation) whose build tag (upstream version plus a -lsNNN build counter) the github source does not parse: compare with qbittorrent/qBittorrent's releases by hand",
+    ),
+    "role:media_automation/media_automation_nzbget_image": (
+        "none",
+        "an image (modules/media-automation) whose build tag (upstream version plus a -lsNNN build counter) the github source does not parse: compare with nzbgetcom/nzbget's releases by hand",
+    ),
+    "role:media_automation/media_automation_prowlarr_image": (
+        "none",
+        "an image (modules/media-automation) whose build tag (upstream version plus a -lsNNN build counter) the github source does not parse: compare with Prowlarr/Prowlarr's releases by hand",
+    ),
+    "role:media_automation/media_automation_flaresolverr_image": (
+        "github",
+        "FlareSolverr/FlareSolverr",
+    ),
+    "role:media_automation/media_automation_sonarr_image": (
+        "none",
+        "an image (modules/media-automation) whose build tag (upstream version plus a -lsNNN build counter) the github source does not parse: compare with Sonarr/Sonarr's releases by hand",
+    ),
+    "role:media_automation/media_automation_radarr_image": (
+        "none",
+        "an image (modules/media-automation) whose build tag (upstream version plus a -lsNNN build counter) the github source does not parse: compare with Radarr/Radarr's releases by hand",
+    ),
+    "role:media_automation/media_automation_lidarr_image": (
+        "none",
+        "an image (modules/media-automation) whose build tag (upstream version plus a -lsNNN build counter) the github source does not parse: compare with Lidarr/Lidarr's releases by hand",
+    ),
+    "role:media_automation/media_automation_seerr_image": ("github", "seerr-team/seerr"),
+    "role:media_automation/media_automation_tdarr_image": ("github", "HaveAGitGat/Tdarr"),
     "role:nifi/nifi_image": ("github", "apache/nifi"),
     "role:ntfy/ntfy_image": ("github", "binwiederhier/ntfy"),
     "role:llamacpp/llamacpp_image": (
@@ -201,6 +232,46 @@ NOTES: dict[str, str] = {
         "an image (modules/keycloak): the tag and its digest together, a minor version only "
         "(a major one is a dump and a restore)"
     ),
+    "role:media_automation/media_automation_gluetun_image": (
+        "an image (modules/media-automation): bump the tag and its digest together, one app at a time "
+        "with the upgrade playbook (the config is exported first; a library manager migrates its database on first start and cannot go back)"
+    ),
+    "role:media_automation/media_automation_qbittorrent_image": (
+        "an image (modules/media-automation): bump the tag and its digest together, one app at a time "
+        "with the upgrade playbook (the config is exported first; a library manager migrates its database on first start and cannot go back)"
+    ),
+    "role:media_automation/media_automation_nzbget_image": (
+        "an image (modules/media-automation): bump the tag and its digest together, one app at a time "
+        "with the upgrade playbook (the config is exported first; a library manager migrates its database on first start and cannot go back)"
+    ),
+    "role:media_automation/media_automation_prowlarr_image": (
+        "an image (modules/media-automation): bump the tag and its digest together, one app at a time "
+        "with the upgrade playbook (the config is exported first; a library manager migrates its database on first start and cannot go back)"
+    ),
+    "role:media_automation/media_automation_flaresolverr_image": (
+        "an image (modules/media-automation): bump the tag and its digest together, one app at a time "
+        "with the upgrade playbook (the config is exported first; a library manager migrates its database on first start and cannot go back)"
+    ),
+    "role:media_automation/media_automation_sonarr_image": (
+        "an image (modules/media-automation): bump the tag and its digest together, one app at a time "
+        "with the upgrade playbook (the config is exported first; a library manager migrates its database on first start and cannot go back)"
+    ),
+    "role:media_automation/media_automation_radarr_image": (
+        "an image (modules/media-automation): bump the tag and its digest together, one app at a time "
+        "with the upgrade playbook (the config is exported first; a library manager migrates its database on first start and cannot go back)"
+    ),
+    "role:media_automation/media_automation_lidarr_image": (
+        "an image (modules/media-automation): bump the tag and its digest together, one app at a time "
+        "with the upgrade playbook (the config is exported first; a library manager migrates its database on first start and cannot go back)"
+    ),
+    "role:media_automation/media_automation_seerr_image": (
+        "an image (modules/media-automation): bump the tag and its digest together, one app at a time "
+        "with the upgrade playbook (the config is exported first; a library manager migrates its database on first start and cannot go back)"
+    ),
+    "role:media_automation/media_automation_tdarr_image": (
+        "an image (modules/media-automation): bump the tag and its digest together, one app at a time "
+        "with the upgrade playbook (the config is exported first; a library manager migrates its database on first start and cannot go back)"
+    ),
     "role:documents/documents_image": (
         "an image (modules/documents): bump the tag and its digest together, with product.version in "
         "modules/documents/module.yml and the lab registry's version; the same or a newer version only "
@@ -213,8 +284,10 @@ NOTES: dict[str, str] = {
     ),
     "role:media/media_image": (
         "an image (modules/media): bump the tag and its digest together, with product.version in "
-        "modules/media/module.yml and the lab registry's version; a newer server migrates its own "
-        "databases on first start, so export the config first (the upgrade playbook does)"
+        "modules/media/module.yml and the lab registry's version, and regenerate "
+        "modules/media/known-migrations.json for it (the media importer's known-migrations command); "
+        "a newer server migrates its own databases on first start and an older one cannot open "
+        "them, so export the config first (the upgrade playbook does) and never go below the data"
     ),
     "role:garage/garage_image": (
         "an image (modules/garage): bump the tag and its digest together, with product.version in "

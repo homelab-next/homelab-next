@@ -1,0 +1,13 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role media_automation). Do not edit.
+[Unit]
+Description=media-automation helper timer: remove and re-search torrents with no progress
+
+[Timer]
+OnCalendar=*-*-* *:17:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+Unit=hnx-media-automation-stalled-repair.service
+
+[Install]
+WantedBy=timers.target

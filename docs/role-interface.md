@@ -194,6 +194,19 @@ first on a `compose_app` module's host.
   device is refused. `group_add` lists supplementary groups by number (the render group's id on
   the host, which does not resolve by name inside an image), never 0. A GPU container still gets
   `cap_drop: [ALL]` and `no-new-privileges`.
+* `tmpfs` is a list of RAM-backed mounts, `[{target, size_bytes, mode}]`, rendered in the compose
+  long syntax (`type: tmpfs`, `tmpfs: {size, mode}`) after the service's `volumes`. `target` is an
+  absolute, canonical container path (not `/`) that equals, lies inside or contains no other mount
+  of the service (a volume's container path, an anonymous volume, another tmpfs); `size_bytes` is an
+  integer from 4096 to 1 TiB; `mode` is optional, a quoted string of three octal digits with an optional leading 0 or
+  1 (`"1777"`, docker's default, `"0700"`, `"755"`; a bare number is refused, YAML would read it as decimal;
+  setuid and setgid bits and a mode of 000 are refused). A target may not be `/proc`, `/sys`, `/dev`,
+  `/etc`, `/bin`, `/sbin`, `/lib`, `/lib32`, `/lib64`, `/libx32`, `/usr`, `/run`, `/var/run`, `/boot` or lie under them
+  (`/dev/shm` itself is allowed). The
+  template writes the mode with a leading 0 because compose reads the number itself. The pages
+  live in the container's memory cgroup, so a `mem_limit` must leave room for them, and a full
+  tmpfs fails the writer, not the host. This is what lets a service run with `read_only: true`:
+  its scratch directories (`/tmp`) are tmpfs mounts. Output is byte-identical without it.
 * Ports are always `host_ip:host_port:container_port`; nothing binds all interfaces
   by omission.
 * Secrets never go in `environment` (a secret-looking key is refused unless it ends
@@ -236,6 +249,13 @@ first on a `compose_app` module's host.
   `compose_app_allow_privileged`, `compose_app_allow_docker_socket` or
   `compose_app_allow_root` is set. A service with no `user:` runs as its image's default user,
   often root: set `user:` to a non-root id.
+* A service may share another service's network namespace (`network_mode: service:<name>`, the only
+  accepted form, naming a service of the same spec that has no `network_mode` of its own): the sharer must
+  list that service in `depends_on` (it starts only once the owner is healthy) and publishes no `ports`
+  (the owner does), so with the owner down it has no route at all (a VPN client's kill-switch). `init`
+  (boolean) runs a minimal init as PID 1. The `devices` allowlist also admits the tunnel node
+  `/dev/net/tun`, and `compose_app_allow_net_admin` permits `NET_ADMIN` in `cap_add`, and no other capability
+  the dangerous list refuses (that one is `compose_app_allow_privileged`).
 * `compose_app_allow_docker_socket` by itself lets through only the docker socket
   (`/var/run/docker.sock`, `/run/docker.sock`). Another runtime's socket or state directory
   (containerd, podman, a rootless `/run/user/<uid>/docker.sock`, `/var/lib/docker`) needs the

@@ -107,10 +107,16 @@ class Host:
         self.change_correspondent_on_import = False
         self.links: dict[str, str] = {}  # path -> what readlink -f says
         self.extra_member: tuple[str, bytes] | None = None
+        self.note_on: list[int] = []  # the document each note belongs to (default: document 1)
+        # (from, to): a note lands on the twin instead
+        self.move_note_on_import: tuple[int, int] | None = None
+        self.change_owner_on_import = False
 
-    def add_doc(self, pk, algo="sha256", archive=True):
-        orig = f"original {pk}".encode() * 20
-        arch = f"archive {pk}".encode() * 20 if archive else None
+    def add_doc(self, pk, algo="sha256", archive=True, same_as=None):
+        """A document; ``same_as`` names an earlier one whose files (and so checksums) it shares."""
+        seed = pk if same_as is None else same_as
+        orig = f"original {seed}".encode() * 20
+        arch = f"archive {seed}".encode() * 20 if archive else None
         self.docs[pk] = {
             "orig": orig, "arch": arch, "algo": algo,
             "checksum": digest(orig, algo), "archive_checksum": digest(arch, algo) if arch else None,
@@ -150,6 +156,7 @@ class Host:
                 "tags": [1] if self.others["tags"] else [],
                 "correspondent": 1 if self.others["correspondents"] else None,
                 "document_type": None, "storage_path": None,
+                "owner": 1 if self.others["users"] else None,
             }  # fmt: skip
             rec = {"model": "documents.document", "pk": pk, "fields": {"checksum": d["checksum"], "archive_checksum": d["archive_checksum"], **rel},
                    mt.FILE_KEY: f"{pk:07}.pdf", mt.THUMB_KEY: f"{pk:07}-thumbnail.webp"}  # fmt: skip
@@ -176,10 +183,12 @@ class Host:
             tree[self.extra_member[0]] = self.extra_member[1]
         return tree
 
-    @staticmethod
-    def _fields(key, i):
+    def _fields(self, key, i):
         if key == "notes":
-            return {"document": 1, "note": f"note {i}", "created": "2026-01-01T00:00:00Z"}
+            on = self.note_on[i - 1] if i <= len(self.note_on) else 1
+            return {"document": on, "note": f"note {i}", "created": "2026-01-01T00:00:00Z"}
+        if key == "users":
+            return {"username": f"user{i}"}
         if key == "custom_field_instances":
             return {"document": 1, "field": 1, "value_text": f"value {i}"}
         return {"name": f"{key} {i}"}
@@ -312,6 +321,13 @@ class Host:
             docs[0]["fields"]["correspondent"] = 2
         if docs and self.lose_thumbnail_on_import:
             del docs[0][mt.THUMB_KEY]
+        if docs and self.change_owner_on_import:
+            docs[0]["fields"]["owner"] = 2
+        if self.move_note_on_import:
+            src, dst = self.move_note_on_import
+            for r in records:
+                if r["model"] == "documents.note" and r["fields"]["document"] == src:
+                    r["fields"]["document"] = dst
         self.imported = [r for r in records if r["model"] != "documents.document" or r in docs]
         self.docs = {}
         for r in docs:
@@ -627,7 +643,7 @@ def test_relations_are_by_name_so_a_moved_id_is_not_a_difference_but_a_changed_n
             rec("documents.document", 1, checksum="c" * 64, tags=[tag_pk], title="t", content="x"),
         ]
 
-    assert mt._relations(lib(1, "tax")) == mt._relations(lib(7, "tax")) | {"c" * 64: {**mt._relations(lib(7, "tax"))["c" * 64], "pk": 1}}  # fmt: skip
+    assert mt._relations(lib(1, "tax")) == mt._relations(lib(7, "tax"))
     a, b = mt._relations(lib(1, "tax")), mt._relations(lib(1, "legal"))
     assert mt._relation_differences(a, b) == ["document 1: tags differ"]
     assert mt._relation_differences(a, {}) == ["document 1 is missing on the target"]
@@ -688,6 +704,81 @@ def test_an_older_dump_without_the_sources_sanity_findings_is_refused(private):
     (out / "dump-manifest.json").write_text(json.dumps(manifest))
     with pytest.raises(mt.MigrateError, match="dump again"):
         mt.restore(dst_ep(), out, _ctx=ctx_for(_fresh_target()))
+
+
+# ----------------------------------------------------------------------------- duplicates
+# The product lets two documents carry the same original (one consumed twice and kept), each with
+# its own notes, tags, owner and field values; its importer writes each under its id.  The migration
+# carries every one of them and proves each by its id, never merging or dropping one.
+
+
+def _twins_host():
+    """Eight documents in four pairs that share a file; one of the last pair has a note its twin
+    lacks (the pair that differs only by a note)."""
+    host = Host(documents=0, others={"notes": 2})
+    for pk in (1, 2, 3, 4):
+        host.add_doc(pk)
+    for pk, twin in ((5, 1), (6, 2), (7, 3), (8, 4)):
+        host.add_doc(pk, same_as=twin)
+    host.note_on = [1, 4]  # note 1 on document 1, note 2 only on document 4 (not on its twin 8)
+    return host
+
+
+def test_a_dump_carries_every_document_that_shares_a_checksum_and_lists_them(private):
+    host = _twins_host()
+    assert host.docs[4]["checksum"] == host.docs[8]["checksum"]
+    _, out, manifest = made_dump(private, host)
+    assert manifest["counts"]["documents"] == 8 and manifest["archives"] == 8
+    assert manifest["duplicate_checksums"] == [[1, 5], [2, 6], [3, 7], [4, 8]]
+    rel = mt.scan_export(out / "export.tar")["relations"]
+    assert sorted(rel) == list(range(1, 9))  # every document, by its id
+    assert rel[4]["checksum"] == rel[8]["checksum"] and rel[4]["notes"] != rel[8]["notes"]
+
+
+def test_a_library_without_duplicates_lists_none(private):
+    _, _, manifest = made_dump(private)
+    assert manifest["duplicate_checksums"] == []
+
+
+def test_restore_carries_and_proves_each_duplicate_on_its_own(private):
+    _, out, manifest = made_dump(private, _twins_host())
+    target = _fresh_target()
+    report = mt.restore(dst_ep(), out, expect_counts=manifest["counts"], _ctx=ctx_for(target))
+    assert report["documents_verified"] == 8 and report["relationships_verified"] == 8
+    assert report["duplicate_checksums"] == [[1, 5], [2, 6], [3, 7], [4, 8]]
+    assert sorted(target.disk) == list(range(1, 9))
+    assert target.disk[4] == target.disk[8]  # the same bytes, twice: nothing was merged
+
+
+def test_restore_fails_when_a_note_lands_on_the_twin_instead(private):
+    _, out, _ = made_dump(private, _twins_host())
+    target = _fresh_target()
+    target.move_note_on_import = (4, 8)  # counts and files equal; only the note moved
+    with pytest.raises(
+        mt.VerifyMismatch, match=r"document 4: notes differ; document 8: notes differ"
+    ):
+        mt.restore(dst_ep(), out, _ctx=ctx_for(target))
+
+
+def test_restore_fails_when_a_documents_owner_changed(private):
+    _, out, _ = made_dump(private)
+    target = _fresh_target()
+    target.change_owner_on_import = True
+    with pytest.raises(mt.VerifyMismatch, match="document 1: owner differ"):
+        mt.restore(dst_ep(), out, _ctx=ctx_for(target))
+
+
+def test_a_twin_whose_file_does_not_hash_to_its_checksum_is_still_refused(private):
+    host = _twins_host()
+    host.corrupt_export = "0000008.pdf"  # its twin 4 is intact: corruption is caught per document
+    with pytest.raises(mt.VerifyMismatch, match=r"document 8.*0000008\.pdf"):
+        mt.dump(src_ep(), private / "d", _ctx=ctx_for(host))
+
+
+def test_an_export_that_holds_one_document_id_twice_is_refused():
+    rec = {"model": "documents.document", "pk": 3, "fields": {"checksum": "c" * 64}}
+    with pytest.raises(mt.MigrateError, match="document 3 twice"):
+        mt._relations([rec, rec])
 
 
 # ----------------------------------------------------------------------------- robustness

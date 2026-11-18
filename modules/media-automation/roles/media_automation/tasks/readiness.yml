@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# The stack's dependencies are the container engine (docker_engine, applied to the guest before
+# this module), the library mount on the guest, and four secrets in the store.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The library is mounted
+      ansible.builtin.include_tasks: library.yml
+    - name: Every credential resolves
+      ansible.builtin.include_tasks: credentials.yml
+    - name: The tunnel device exists on the guest
+      ansible.builtin.stat:
+        path: /dev/net/tun
+      register: media_automation_tun
+      check_mode: false
+    - name: Refuse a guest with no tunnel device
+      ansible.builtin.assert:
+        that: media_automation_tun.stat.exists | default(false)
+        fail_msg: "media-automation: /dev/net/tun is missing on the guest (the VPN client needs it; load the tun module)"
+      when: media_automation_start | bool
+  tags: [readiness]

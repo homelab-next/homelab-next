@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes, keyed by the slot and renamed to the
+# instance the site selects; version is product.version (never repeated here), host is the module's
+# host role, which the site places on a guest. The lab registry (lab/services.yml) must carry it exactly
+# as bound (hnx modules check, docs/modules/registry-rows.md). Internal only: no public_hostname and
+# no public route. The API is bearer-token authenticated per caller (auth: own), each caller held to
+# its TLP ceiling; /health and /ready carry no content.
+services:
+  context:
+    capability: context
+    impl: hnx-context-service
+    host: server
+    protocol: http
+    port: 8094
+    health: {kind: http, path: /ready, expect_status: 200}
+    owner: operator
+    tls: none
+    auth: own
+    tags: [agents, knowledge]
+    description: "Retrieval of the lab's own knowledge by meaning (POST /v1/query at the caller's TLP ceiling; POST /v1/reindex, the automation hook). No public route."

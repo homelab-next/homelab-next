@@ -20,6 +20,12 @@ services:
 {% if svc.user is defined %}
     user: {{ q(svc.user) }}
 {% endif %}
+{% if svc.network_mode is defined %}
+    network_mode: {{ q(svc.network_mode) }}
+{% endif %}
+{% if svc.init is defined %}
+    init: {{ svc.init | bool | to_json }}
+{% endif %}
 {% if compose_app_cgroup_parent | length > 0 %}
     cgroup_parent: {{ q(compose_app_cgroup_parent) }}
 {% endif %}
@@ -61,10 +67,21 @@ services:
       - {{ q(p) }}
 {% endfor %}
 {% endif %}
-{% if svc.volumes | default([]) | length > 0 %}
+{% if svc.volumes | default([]) | length > 0 or svc.tmpfs | default([]) | length > 0 %}
     volumes:
-{% for v in svc.volumes %}
+{% for v in svc.volumes | default([]) %}
       - {{ q(v) }}
+{% endfor %}
+{# a tmpfs mount is the long syntax: compose reads `mode` as a number, so an octal mode is written
+   with a leading 0 (01777), which is validated to be octal digits only and so cannot add YAML #}
+{% for t in svc.tmpfs | default([]) %}
+      - type: "tmpfs"
+        target: {{ q(t.target) }}
+        tmpfs:
+          size: {{ t.size_bytes | int }}
+{% if t.mode is defined %}
+          mode: 0{{ t.mode }}
+{% endif %}
 {% endfor %}
 {% endif %}
 {% if svc.depends_on | default([]) | length > 0 %}

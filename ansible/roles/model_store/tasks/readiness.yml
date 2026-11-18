@@ -2,6 +2,17 @@
 - name: The hf CLI runs (it fetches by manifest; without fetching there is no dependency)
   ansible.builtin.command:
     argv: ["{{ model_store_hf_cli }}", version]
+  register: model_store_hf_version_out
+  check_mode: false
   changed_when: false
+  when: model_store_fetch | bool
+  tags: [readiness]
+
+- name: Report the hf CLI's version (its last word, an exact match, never a substring), and refuse another than the pinned one when this role installed it
+  ansible.builtin.assert:
+    that:
+      - not (model_store_hf_install | bool) or (model_store_hf_version_out.stdout | trim | split | last) == model_store_hf_version
+    success_msg: "hf CLI {{ model_store_hf_version_out.stdout | trim }}"
+    fail_msg: "model_store: the hf CLI reports {{ model_store_hf_version_out.stdout | trim }}, not the pinned {{ model_store_hf_version }}"
   when: model_store_fetch | bool
   tags: [readiness]

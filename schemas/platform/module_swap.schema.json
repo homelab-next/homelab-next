@@ -276,7 +276,7 @@
       "items": {
         "$ref": "#/$defs/model_role_leg"
       },
-      "description": "model roles the swap rebinds on a moving inference slot instance: each names the role, its outgoing and incoming binding and the pinned evaluation report for the role table after the rebind, which must pass the pin gate (hnx golden pins check) with the new binding's egress canary entry, live when require_live; checked against both role tables and the reports by homelabnext.modules.swap.model_role_problems. Calibration refit has no field here and is not enforced"
+      "description": "model roles the swap rebinds, adds or removes on a moving inference slot instance: each names the role, its change (rebind by default, add or remove), its outgoing binding (rebind, remove) and incoming binding (rebind, add) and the pinned evaluation report for the role table after the rebind, which must pass the pin gate (hnx golden pins check) with the new binding's egress canary entry, live when require_live; checked against both role tables and the reports by homelabnext.modules.swap.model_role_problems. Calibration refit has no field here and is not enforced"
     }
   },
   "not": {
@@ -464,8 +464,6 @@
         "slot",
         "instance",
         "role",
-        "from",
-        "to",
         "evaluation"
       ],
       "properties": {
@@ -481,13 +479,22 @@
           "maxLength": 68,
           "pattern": "^mdl:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
         },
+        "change": {
+          "enum": [
+            "rebind",
+            "add",
+            "remove"
+          ],
+          "default": "rebind",
+          "description": "what the leg does to the role: rebind (the default) moves one binding of a role both tables have, naming from and to; add brings a role only the table after has, with its one binding (to, no from); remove drops a role only the table before has (from, no to). Every kind pins the evaluation report for the table after, which must pass hnx golden pins check, live as the policy says; homelabnext.modules.swap.model_role_problems holds each kind to its fields"
+        },
         "from": {
           "$ref": "#/$defs/binding_ref",
-          "description": "the binding in the role table the swap starts from"
+          "description": "the binding in the role table the swap starts from (rebind, remove)"
         },
         "to": {
           "$ref": "#/$defs/binding_ref",
-          "description": "the binding in the role table after the rebind"
+          "description": "the binding in the role table after the swap (rebind, add)"
         },
         "evaluation": {
           "type": "object",

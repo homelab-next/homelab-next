@@ -1,0 +1,4 @@
+*
+!modules/context/image/requirements.txt
+!homelabnext
+**/__pycache__

@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). The container runs
+# as an id of its own; its only writable path is the data root (the checkouts, the last reindex's
+# record, the libraries' scratch); the configuration is read-only. compose_app gives it no capability
+# and never privileged. CONTEXT_CONFIG_SHA makes a changed configuration recreate the container.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    context_app:
+      compose_app_name: context
+      compose_app_dir: "{{ context_dir }}"
+      compose_app_data_dir: "{{ context_data_root }}"
+      compose_app_export_dir: "{{ context_data_root }}/export"
+      compose_app_owner: "{{ context_owner }}"
+      compose_app_group: "{{ context_gid }}"
+      compose_app_start: "{{ context_start }}"
+      compose_app_validate_with_docker: "{{ context_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          context:
+            image: "{{ context_repository }}"
+            tag: "{{ context_tag }}"
+            digest: "{{ context_digest }}"
+            user: "{{ context_uid | int }}:{{ context_gid | int }}"
+            environment:
+              CONTEXT_CONFIG: "{{ context_container_config }}"
+              CONTEXT_CONFIG_SHA: "{{ (context_config | default({})) | to_json | hash('sha256') }}"
+            ports: ["{{ context_bind }}:{{ context_port | int }}:{{ context_container_port }}"]
+            volumes:
+              - "{{ context_dir }}/config.json:{{ context_container_config }}:ro"
+              - "{{ context_data_root }}:{{ context_container_data }}"
+            mem_limit: "{{ context_mem_limit }}"
+            healthcheck:
+              test: [CMD, python, -c, "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:{{ context_container_port }}/health', timeout=5).status == 200 else 1)"]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 60s
+  tags: [health, backup, restore, export, upgrade]

@@ -39,6 +39,14 @@ commands run as; nothing here names a host, an address, a path of the product or
 * :func:`stop` / :func:`start` -- stop (or start) the named containers of an endpoint; the only write
   this tool makes to a source, done in the cutover window after the final dump.
 
+**Duplicates.** The product lets two documents carry the same original (same checksum, each with
+its own notes, tags, owner and custom fields; its importer writes every document under its id and
+puts no constraint on the checksum).  So a document is identified by its id from dump to restore to
+verification, never by its checksum: every one of them is carried and compared on its own, and the
+groups that share a checksum are listed (``duplicate_checksums`` in the dump manifest and the restore
+report), not merged and not dropped.  Corruption is still caught per document: each file must hash to
+the checksum its own record carries.
+
 **The final copy.** The importer does not merge, so a rehearsal and the cutover are separate
 restores onto separate empty targets: ``dump`` (callers of the source disabled), ``dump`` again,
 ``restore(require_quiescent=True, expect_counts=<what counts printed>)``, then ``stop`` the source.
@@ -80,6 +88,7 @@ __all__ = [
     "VerifyMismatch",
     "counts",
     "dump",
+    "duplicate_checksums",
     "restore",
     "scan_export",
     "start",
@@ -433,18 +442,23 @@ def _member_name(name: str) -> str:
     return "/".join(x for x in p.parts if x != ".")
 
 
-def _relations(records: list[dict]) -> dict[str, dict]:
-    """Per document, keyed by its checksum, what makes the library worth having: its title, date and
-    text (digested), its tags, correspondent, document type and storage path *by name*, its custom
-    field values and its notes, all read out of the export's own manifest.  Names, not ids: two
-    exports of the same library are equal even if an id moved."""
+def _relations(records: list[dict]) -> dict[int, dict]:
+    """Per document, keyed by its **id**, what makes the library worth having: its checksums, title,
+    date and text (digested), its owner, tags, correspondent, document type and storage path *by
+    name*, its custom field values and its notes, all read out of the export's own manifest.
+
+    By id, not by checksum: the product lets two documents carry the same file (a duplicate it was
+    told to keep), each with its own notes, tags and owner, and the importer writes every document
+    under the id the export gives it, so the id is the one key that names a document on both sides.
+    The checksums are compared as attributes (a document whose file changed differs).  Related rows
+    by name, not id: two exports of the same library are equal even if a tag's id moved."""
     named: dict[str, dict[int, dict]] = {}
     per_doc: dict[int, dict[str, list]] = {}
     for r in records:
         model, pk, f = r.get("model"), r.get("pk"), r.get("fields") or {}
         if model in (
             "documents.tag", "documents.correspondent", "documents.documenttype",
-            "documents.storagepath", "documents.customfield",
+            "documents.storagepath", "documents.customfield", "auth.user",
         ):  # fmt: skip
             named.setdefault(model, {})[pk] = f
         elif model in ("documents.customfieldinstance", "documents.note"):
@@ -457,10 +471,10 @@ def _relations(records: list[dict]) -> dict[str, dict]:
         if f is None:
             raise MigrateError(f"the export names {model} {pk}, which it does not hold")
         return json.dumps(
-            {k: f[k] for k in ("name", "path", "data_type") if k in f}, sort_keys=True
+            {k: f[k] for k in ("name", "username", "path", "data_type") if k in f}, sort_keys=True
         )
 
-    out: dict[str, dict] = {}
+    out: dict[int, dict] = {}
     for r in records:
         if r.get("model") != "documents.document":
             continue
@@ -468,9 +482,12 @@ def _relations(records: list[dict]) -> dict[str, dict]:
         mine = per_doc.get(r["pk"], {})
         rel = {
             "pk": r["pk"],
+            "checksum": f.get("checksum"),
+            "archive_checksum": f.get("archive_checksum") or "",
             "title": f.get("title"),
             "created": f.get("created"),
             "content": hashlib.sha256((f.get("content") or "").encode()).hexdigest(),
+            "owner": name("auth.user", f.get("owner")),
             "tags": sorted(name("documents.tag", t) for t in f.get("tags") or []),
             "correspondent": name("documents.correspondent", f.get("correspondent")),
             "document_type": name("documents.documenttype", f.get("document_type")),
@@ -490,25 +507,33 @@ def _relations(records: list[dict]) -> dict[str, dict]:
                 for n in mine.get("documents.note", [])
             ),
         }
-        if f["checksum"] in out:
-            raise MigrateError(f"two documents carry the checksum {f['checksum']}")
-        out[f["checksum"]] = rel
+        if r["pk"] in out:
+            raise MigrateError(f"the export holds document {r['pk']} twice")
+        out[r["pk"]] = rel
     return out
 
 
-def _relation_differences(want: Mapping[str, dict], got: Mapping[str, dict]) -> list[str]:
-    """Which documents (by id in ``want``) differ, and in what: a missing or extra document, or the
-    names of the attributes that differ."""
+def duplicate_checksums(relations: Mapping[int, dict]) -> list[list[int]]:
+    """The documents that share an original's checksum, as sorted id groups (sorted by first id):
+    what the product allowed to exist and the migration carries as it is, every one of them."""
+    by_sum: dict[str, list[int]] = {}
+    for pk, rel in relations.items():
+        by_sum.setdefault(rel["checksum"], []).append(pk)
+    return sorted(sorted(g) for g in by_sum.values() if len(g) > 1)
+
+
+def _relation_differences(want: Mapping[int, dict], got: Mapping[int, dict]) -> list[str]:
+    """Which documents (by id) differ, and in what: a missing or extra document, or the names of
+    the attributes that differ."""
     diff = []
     for key in sorted(set(want) | set(got)):
         a, b = want.get(key), got.get(key)
         if a is None or b is None:
-            who = (a or b)["pk"]
-            diff.append(f"document {who} is {'missing' if b is None else 'extra'} on the target")
+            diff.append(f"document {key} is {'missing' if b is None else 'extra'} on the target")
             continue
         apart = [k for k in a if k != "pk" and a[k] != b.get(k)]
         if apart:
-            diff.append(f"document {a['pk']}: {', '.join(apart)} differ")
+            diff.append(f"document {key}: {', '.join(apart)} differ")
     return diff
 
 
@@ -601,6 +626,7 @@ def scan_export(path: str | os.PathLike) -> dict:
             version = str(json.loads(metadata_raw).get("version", ""))
         except ValueError:
             version = ""
+    relations = _relations(records)
     return {
         "counts": counted,
         "digest": digest,
@@ -609,7 +635,8 @@ def scan_export(path: str | os.PathLike) -> dict:
         "thumbnails": thumbnails,
         "files": len(hashes),
         "version": version,
-        "relations": _relations(records),
+        "relations": relations,
+        "duplicates": duplicate_checksums(relations),
         "egress": egress,
     }
 
@@ -765,6 +792,7 @@ def dump(
         "quiescent": before == after,
         "sanity": [list(r) for r in sanity],
         "egress": scan["egress"],
+        "duplicate_checksums": scan["duplicates"],
         "stale_swept": swept,
     }
     (out / MANIFEST).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -943,6 +971,7 @@ def restore(
         "thumbnails": scan["thumbnails"],
         "digest": scan["digest"],
         "relationships_verified": len(scan["relations"]),
+        "duplicate_checksums": scan["duplicates"],
         "sanity_known_from_source": sum(known.values()),
         "egress": egress,
     }

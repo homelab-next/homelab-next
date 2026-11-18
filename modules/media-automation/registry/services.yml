@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes, keyed by the slot and renamed to
+# the instance the site selects; version is product.version (never repeated here), host is the
+# module's host role. The lab registry (lab/services.yml) must carry it exactly as bound
+# (hnx modules check, docs/modules/registry-rows.md). The row is the request app (the stack's
+# front door); the other web interfaces are the stack's own and are reached by their ports on the
+# same guest. Internal only: no public_hostname and no public route (an edge route for the request
+# app is a later change to this row, with the overlay's grant); every interface has its own login.
+services:
+  media-automation:
+    capability: media-automation
+    impl: seerr
+    host: server
+    protocol: http
+    port: 5055
+    health: {kind: http, path: /api/v1/status, expect_status: 200}
+    owner: operator
+    tls: none
+    auth: own
+    tags: [media]
+    description: The request app of the media automation stack (library managers, download clients behind the VPN client, transcode); every web interface is internal with its own login.
