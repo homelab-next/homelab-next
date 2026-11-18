@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from homelabnext.modules.limits import DATA_ROOT, slice_name
-from homelabnext.modules.rules import us
+from homelabnext.modules.rules import _placed, us
 
 Doc = dict[str, Any]
 
@@ -59,6 +59,10 @@ QUOTA_TAG = "hnx_quota"
 #: the play variable naming a module play's role slice (compose_app reads it as the containers'
 #: cgroup parent, ``compose_app_cgroup_parent``)
 SLICE_VAR = "hnx_module_slice"
+#: the play variable carrying the role's footprint AS PLACED (the manifest's, or the site's raise
+#: of it): a flow mapping of cpu, memory_mb and disk_gb.  A role that checks its own budgets
+#: against the footprint defaults to it instead of keeping a copy that cannot follow a raise.
+FOOTPRINT_VAR = "hnx_module_footprint"
 #: the tag every limits play carries (not ``mod_``: a module named ``limits`` would share it)
 LIMITS_TAG = "hnx_limits"
 #: the install playbook ``hnx modules render`` writes, and the directory of the check playbooks
@@ -357,6 +361,29 @@ def _plays(site: Mapping[str, Any], sel: Mapping[str, Doc]) -> dict[str, list[tu
     return out
 
 
+def _footprints(site: Mapping[str, Any], sel: Mapping[str, Doc]) -> dict[tuple[str, str], str]:
+    """(module, host role) -> the flow mapping of the footprint the module's play runs under: the
+    manifest's cpu, memory_mb and disk_gb, each raised by the selection where a placement raised
+    it (:func:`homelabnext.modules.rules._placed`, the one every rule and the limits slices read).
+    A role placed by several instances (they share one group and one slice) gets, per dimension,
+    the largest of them."""
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for mod, _inst, role, h, _host in _placed(site, sel):
+        fp = (h or {}).get("footprint") or {}
+        cur = out.setdefault((mod, role), {})
+        for dim in ("cpu", "memory_mb", "disk_gb"):
+            v = fp.get(dim)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                cur[dim] = max(cur.get(dim, v), v)
+    return {
+        k: "{"
+        + ", ".join(f"{d}: {int(v) if float(v).is_integer() else v}" for d, v in sorted(fp.items()))
+        + "}"
+        for k, fp in out.items()
+        if fp
+    }
+
+
 def render(
     site: Mapping[str, Any],
     sel: Mapping[str, Doc],
@@ -377,6 +404,7 @@ def render(
     if clashes:
         raise ApplyError("; ".join(clashes))
     order = install_order(site, sel)
+    footprints = _footprints(site, sel)
     head = [
         f"# {HEADER}",
         "# Installs each placed module on the inventory group of each of its host roles",
@@ -430,6 +458,8 @@ def render(
                 "  vars:",
                 f"    {SLICE_VAR}: {_q(slice_name(mod, role))}",
             ]
+            if (mod, role) in footprints:
+                L.append(f"    {FOOTPRINT_VAR}: {footprints[mod, role]}")
             if pre:
                 L.append("  pre_tasks:")
                 for path, hook in pre:

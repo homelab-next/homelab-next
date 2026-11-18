@@ -95,3 +95,20 @@
       backend only, group ids that are not 0, a power limit of 200 W at most (the operator's rule: a setting can only tighten it) and the hwmon attributes
       that carry it
   tags: [health, backup, restore, export, upgrade]
+
+# Advisory, never an error: more threads than the placement's vCPUs only contend inside the module's own
+# slice.  The placed footprint is what the module play passes (hnx_module_footprint: the manifest's cpu,
+# or the site's raise of it); outside a module play there is nothing to compare with.
+- name: The throughput threads do not exceed the placement's vCPUs (advisory)
+  ansible.builtin.debug:
+    msg: >-
+      WARNING llamacpp: the larger of threads and threads_batch ({{ llamacpp_threads_set }}) exceeds the placement's cpu
+      ({{ hnx_module_footprint.cpu }}): raise the placement's footprint cpu in the site's selection
+      or lower the threads (it only contends inside the module's own slice)
+  vars:
+    llamacpp_threads_set: "{{ [llamacpp_extra_args.threads | default(0), llamacpp_extra_args.threads_batch | default(0)] | max | int }}"
+  when:
+    - hnx_module_footprint is defined and hnx_module_footprint.cpu is defined
+    - llamacpp_extra_args.threads | default(0) | int > hnx_module_footprint.cpu | float
+      or llamacpp_extra_args.threads_batch | default(0) | int > hnx_module_footprint.cpu | float
+  tags: [health, backup, restore, export, upgrade]

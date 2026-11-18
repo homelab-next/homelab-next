@@ -158,8 +158,9 @@ argument_specs:
       stackstorm_footprint_memory_mb: &id033
         type: int
         description: The memory the module's role slice is given (its footprint); the per-service limits
-          must fit in it.
-        default: 6144
+          must fit in it. Defaults to the memory_mb of hnx_module_footprint, the footprint the module play
+          runs under (the manifest's, or the site's per-placement raise of it), and to 6144 outside a play.
+        default: "{{ (hnx_module_footprint | default({})).memory_mb | default(6144) }}"
       stackstorm_mem_limit: &id034
         type: dict
         description: Container memory limit per service (a number and m or g).

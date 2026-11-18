@@ -66,9 +66,11 @@ stackstorm_ready_timeout: 300
 # Sized for a guest that also runs other services; the official production minimum is 16 GB and
 # 4 cores for a busy install, this budget is for a handful of rules and a few runs a day.
 # stackstorm_mem_limit is read per service; the sum must stay under the footprint's memory.
-# the memory the module's role slice is given (module.yml requires.hosts[server].footprint.memory_mb;
-# a site that raises the footprint in its selection raises this to match)
-stackstorm_footprint_memory_mb: 6144
+# the memory the module's role slice is given: the footprint AS PLACED, which the module play passes
+# as hnx_module_footprint (module.yml requires.hosts[server].footprint, or the site's per-placement
+# raise of it in its selection), so a raise grows this budget with the slice.  6144 is the manifest's
+# own memory_mb, used when the role runs outside a module play; setting the variable overrides both.
+stackstorm_footprint_memory_mb: "{{ (hnx_module_footprint | default({})).memory_mb | default(6144) }}"
 stackstorm_mem_limit:
   st2api: 512m
   st2auth: 192m
