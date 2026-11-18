@@ -13,6 +13,14 @@
     name: gpg
     state: present
 
+# docker-ce Recommends these and the packages below install without recommends (the unpinned
+# rootless extras would come with them), so they are named here: apparmor loads the docker-default
+# profile containers run under, ca-certificates is what registry TLS is verified against.
+- name: Install what docker-ce recommends and the engine needs (apparmor, ca-certificates)
+  ansible.builtin.apt:
+    name: "{{ docker_engine_prerequisites }}"
+    state: present
+
 - name: Fetch the vendor signing key and check it against the pinned fingerprints
   ansible.builtin.include_tasks: signing_key.yml
 
