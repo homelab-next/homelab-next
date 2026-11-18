@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from homelabnext.cli import main as hnx
+from homelabnext.golden.cli import EvaluationResolver
 from homelabnext.registry import bindings as bd
 from homelabnext.registry.dns import FakeDNS
 from homelabnext.registry.model import RegistryError, build_registry, load
@@ -708,7 +709,11 @@ def test_only_the_egress_canary_runner_passes_allow_eval():
     for p in sorted((ROOT / "homelabnext").rglob("*.py")):
         tree = ast.parse(p.read_text(encoding="utf-8"))
         found += [(p.relative_to(ROOT).as_posix(), f) for f, _line in _allow_eval_uses(tree)]
-    assert found == [("homelabnext/golden/cli.py", "_binding_completer")]
+    # the egress canary runner, and the evaluation resolver `hnx golden pins report` builds
+    assert found == [
+        ("homelabnext/golden/cli.py", "resolve"),
+        ("homelabnext/golden/cli.py", "_binding_completer"),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -737,6 +742,60 @@ def test_a_truthy_stand_in_for_allow_eval_grants_nothing(tmp_path, value):
     role = next(iter(mr.table.roles))
     with pytest.raises(NonPrimaryBinding):
         mr.resolve_binding(role, mr.table.get(role).bindings[0], allow_eval=value)
+
+
+# ------------------------------------------- evaluation reaches an eval binding, serving never
+
+
+def _evaluating(tmp_path: Path, tier: str, backend: str) -> EvaluationResolver:
+    mr = _resolver(tmp_path, tier, backend)
+    return EvaluationResolver(mr.registry, mr.table, mr.resolver)
+
+
+def test_the_evaluation_resolver_reaches_an_eval_binding_by_its_row_name(tmp_path):
+    ev = _evaluating(tmp_path, "eval", f"svc:{CANDIDATE}")
+    role = next(iter(ev.table.roles))
+    assert ev.resolve(role).endpoint.url == _url("candidate", 8001)
+    ev.resolver.environ = {"HNX_ENDPOINT_INFERENCE": _url("inference", 8000)}
+    with pytest.raises(ResolutionError, match="inference-candidate"):
+        ev.resolve(role)  # the capability's variable is not used
+
+
+@pytest.mark.parametrize("tier", NON_PRIMARY)
+def test_the_serving_resolver_still_refuses_every_non_primary_binding(tmp_path, tier):
+    """Serving: ``ModelResolver.resolve`` is unchanged (ADR-0039 decision 3)."""
+    mr = _resolver(tmp_path, tier, f"svc:{CANDIDATE}")
+    role = next(iter(mr.table.roles))
+    with pytest.raises(NonPrimaryBinding):
+        mr.resolve(role)
+
+
+@pytest.mark.parametrize("tier", ["retiring", "legacy"])
+def test_the_evaluation_resolver_reaches_no_retiring_or_legacy_row(tmp_path, tier):
+    ev = _evaluating(tmp_path, tier, f"svc:{CANDIDATE}")
+    with pytest.raises(NonPrimaryBinding):
+        ev.resolve(next(iter(ev.table.roles)))
+
+
+def test_the_evaluation_resolver_leaves_a_primary_binding_as_it_was(tmp_path):
+    mr = _resolver(tmp_path, "eval", "svc:inference")
+    ev = EvaluationResolver(mr.registry, mr.table, mr.resolver)
+    role = next(iter(mr.table.roles))
+    mr.resolver.environ = {"HNX_ENDPOINT_INFERENCE": _url("inference", 8000)}
+    assert ev.resolve(role) == mr.resolve(role)
+
+
+def test_the_evaluation_resolver_never_walks_to_a_fallback(tmp_path):
+    """The serving resolver falls back past an unresolved binding; an evaluation refuses, so a
+    report never carries another role's model under this role's name."""
+    mr = _resolver(tmp_path, "eval", "svc:inference")
+    ev = EvaluationResolver(mr.registry, mr.table, mr.resolver)
+    name = next(n for n, r in mr.table.roles.items() if r.fallback)
+    mr.resolver.environ = {"HNX_ENDPOINT_INFERENCE": _url("inference", 8000)}
+    assert ev.resolve(name).role == name
+    mr.resolver.environ = {}
+    with pytest.raises(ResolutionError, match="no fallback"):
+        ev.resolve(name)
 
 
 # ---------------------------------------------------------------- consumers of an old id

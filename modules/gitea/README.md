@@ -92,7 +92,7 @@ All by reference, in OpenBao KV v2 (`secret/data/<name>`, field `value`):
 
 | Reference | What | New install | **Migration: COPY from the source** |
 |---|---|---|---|
-| `gitea/secret-key` | `SECRET_KEY` (two-factor seeds, stored credentials) | 64 random chars: `openssl rand -hex 32` | **yes**: `[security] SECRET_KEY` in the source's `app.ini` |
+| `gitea/secret-key` | `SECRET_KEY` (two-factor seeds, stored credentials) | 64 random chars: `openssl rand -hex 32` | **yes**: `[security] SECRET_KEY` in the source's `app.ini`; **only** when the source never set one (the built-in default, proved unused by the dump): a fresh generated key with `gitea_app_key_origin: generated` (below) |
 | `gitea/internal-token` | `INTERNAL_TOKEN` (the git hooks' call back into Gitea) | `docker run --rm --entrypoint gitea <image> generate secret INTERNAL_TOKEN` | **yes**: `[security] INTERNAL_TOKEN` |
 | `gitea/jwt-secret` | the OAuth2 `JWT_SECRET` | `docker run --rm --entrypoint gitea <image> generate secret JWT_SECRET` | **yes**: `[oauth2] JWT_SECRET` |
 | `gitea/admin-password` | the administrator's password | 16+ chars of `A-Z a-z 0-9 . _ ~ -` | the source administrator's password, or set `gitea_admin_password_sync: true` once |
@@ -102,8 +102,9 @@ All by reference, in OpenBao KV v2 (`secret/data/<name>`, field `value`):
 | `gitea/registry-pull-token` | a `read:package` token of the registry pull account | only with `gitea_registry_pull_user` | no |
 
 **The first three must be the source's on a migration.** Gitea encrypts what it stores with
-`SECRET_KEY` (two-factor seeds, OAuth client secrets, access-token verification) and refuses to
-decrypt it with another; `INTERNAL_TOKEN` and `JWT_SECRET` are checked or derived from at start. A
+`SECRET_KEY` (at 28.4: two-factor seeds, Actions secrets, webhook authorization headers, LDAP bind
+passwords and the credentials of migration tasks; access tokens and OAuth2 application secrets are
+hashed, not encrypted) and refuses to decrypt it with another; `INTERNAL_TOKEN` and `JWT_SECRET` are checked or derived from at start. A
 restored database under new values opens, and then silently has accounts that cannot use their
 second factor and tokens that fail. The values are read from the source instance, by name, into
 the secret store and never printed (read the key names first: `sudo docker exec <container> sed -n
@@ -156,6 +157,44 @@ value and neither the tool nor the role prints a secret). Then:
   fingerprint, naming the secret, and refuses a manifest with no fingerprints;
 - **`forge.py verify` refuses** (exit 1) when the target's own configuration file does not
   produce them.
+
+### A source that never set `SECRET_KEY` (the built-in default)
+
+When `[security] SECRET_KEY` is empty (and no `SECRET_KEY_URI` is set), Gitea runs on a fixed key
+published in its own source (`modules/setting/security.go`, kept until it can rotate a key, upstream
+issue 16832). That key cannot be carried: the role's rule (16 to 512 of `A-Z a-z 0-9 . _ ~ -`)
+refuses it, and a key every reader of the source knows is not one to keep. A new key cannot read
+what the old one encrypted, so the module allows a **fresh** key for exactly one case, proved, never
+assumed:
+
+1. `forge.py dump` sees the empty key (or the default value written out) and counts, **in the
+   database the export holds** (not a live query), the rows of every table Gitea 28.4 encrypts with
+   `SECRET_KEY`: `two_factor` (every row), `secret` (Actions secrets, every row),
+   `webhook.header_authorization_encrypted` (set), `login_source.cfg` (an LDAP source's
+   `BindPasswordEncrypt`; a `cfg` that is not JSON counts) and `task.payload_content` (a migration
+   task's `*_encrypted` fields). The list was read from every caller of `secret.EncryptSecret` /
+   `AesEncrypt` with `setting.SecretKey` in the 28.4.0 source; a table or column missing is an
+   unknown schema and a refusal, never a zero. Any such row: the dump **refuses** (exit 1) and names
+   the tables and counts. Otherwise the manifest records the key's source (`secret_key_source`) as `builtin-default`,
+   `secret_key_unused_proof` (`rules: 28.4.0` and the per-table zeros) and fingerprints of the other
+   two secrets only (the default has none: it is not carried).
+2. The site declares the fresh key: `gitea/secret-key` is a **generated** secret (not a copy) and
+   `gitea_app_key_origin: generated`.
+3. The role's **`restore` refuses** (before stopping anything) `generated` for an export of a source
+   with its own key, an export on the default key unless the origin is `generated`, a proof that is
+   absent, of another rules version, incomplete or not zero, and an archive that holds such a row
+   (it counts them again in `dump.zip` itself); and the other two secrets must still be the
+   source's.
+4. **`forge.py verify`** applies the same rules to the target: a set key of its own (not the
+   default), the proof valid, the archive clean, `INTERNAL_TOKEN` and `JWT_SECRET` the source's.
+
+If the dump refuses because rows exist, there is no honest fresh-key path: those rows (two-factor
+enrolments, Actions secrets, webhook authorization headers, LDAP bind passwords, finished migration
+tasks) are removed on the source and their owners set them again on the target, then the source is
+dumped again. Nothing in the tool or the role ever writes a key that claims to be the source's.
+After the migration the fresh key **is** the instance's key: later exports record its fingerprint
+and are restored by copying it (`gitea_app_key_origin: source`). Sessions and remember-me cookies
+of the old instance do not survive the move either way (users sign in again).
 
 ## The registry (your own images by digest)
 
