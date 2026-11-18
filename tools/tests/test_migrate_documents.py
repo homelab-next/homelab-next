@@ -1054,3 +1054,46 @@ def test_cli_passes_source_version_and_the_refusal_exits_2(private, capsys):
             "--dir", str(out), "--source-version", "3.5.1"]  # fmt: skip
     assert mt.main(argv) == 2
     assert "newer than" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("recorded", ["v3.9.0", "3.5.1-rc1", "3.5.1rc1", " 3.5.1 ", "V3.5.1+build7"])
+@pytest.mark.parametrize("given", [None, "3.4.2"])
+def test_a_newer_recorded_version_in_any_spelling_is_refused_and_never_overridden(
+    private, recorded, given
+):
+    out, _ = _from_version(private, recorded)
+    target = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
+    with pytest.raises(mt.MigrateError, match=r"newer than the target 3\.4\.2"):
+        mt.restore(dst_ep(), out, source_version=given, _ctx=ctx_for(target))
+    assert target.log == []
+
+
+@pytest.mark.parametrize("recorded", ["v3.4.2", "3.4.2-rc1", " 3.4.1 "])
+def test_an_older_or_equal_recorded_version_in_any_spelling_is_accepted(private, recorded):
+    out, _ = _from_version(private, recorded)
+    target = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
+    assert mt.restore(dst_ep(), out, _ctx=ctx_for(target))["documents_verified"] == 3
+
+
+@pytest.mark.parametrize("recorded", ["latest", "3.x", "garbage", "3..4", "-3.5.1"])
+@pytest.mark.parametrize("given", [None, "3.4.2"])
+def test_an_unparseable_recorded_version_is_refused_with_an_accurate_message(
+    private, recorded, given
+):
+    out, _ = _from_version(private, recorded)
+    target = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
+    with pytest.raises(mt.MigrateError, match=r"cannot read the version.*recorded") as e:
+        mt.restore(dst_ep(), out, source_version=given, _ctx=ctx_for(target))
+    assert "records no version" not in str(e.value) and target.log == []
+
+
+def test_source_version_is_stripped_and_may_carry_a_v_prefix(private):
+    out, _ = _from_version(private, "3.4.2")
+    ok = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
+    assert mt.restore(dst_ep(), out, source_version=" v3.4.2 ", _ctx=ctx_for(ok))["source_version"] == "3.4.2"  # fmt: skip
+
+
+def test_a_pre_release_pin_is_read_as_its_base_version(tmp_path):
+    (tmp_path / "module.yml").write_text("product:\n  name: x\n  version: 3.5.1-rc1\nother: 1\n")
+    assert mt.pinned_version(tmp_path) == "3.5.1-rc1"
+    assert mt._version_key("3.5.1-rc1") == (3, 5, 1, 0)
