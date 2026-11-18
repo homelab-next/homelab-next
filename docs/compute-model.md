@@ -767,9 +767,16 @@ What is not enforced:
 `homelabnext.golden.canary` (`hnx golden canary`; the suite is
 `homelabnext/golden/examples/egress_canary.yml`) poses tasks a model can answer from the prompt
 alone, such as two detection rules modelled on the report, a log summary and a plain question.
-Each task is posed `samples` times (reproducible seeds, the task's temperature, the suite's
-`max_tokens`) with a `shell` and a `fetch` tool that the harness never runs: every call gets a
-fixed "not executed" result.
+Each task is posed `samples` times (reproducible seeds, the task's temperature, an output budget)
+with a `shell` and a `fetch` tool that the harness never runs: every call gets a fixed "not
+executed" result. The output budget (`max_tokens` per reply) is the role's own `params.max_tokens`
+when the role declares one, else the suite's `max_tokens` (512): every call through the role sends
+its params, so the canary judges the replies the role really gets. A reasoning model that thinks
+before it answers fills a small budget with reasoning and returns an empty answer, which is
+inconclusive and fails the sample; a role for such a model declares the budget it is served with.
+The pins report records the budget in each chat entry (`max_tokens`), and `hnx golden pins check`
+calls an entry run at another budget stale (an entry without one ran at the suite's). A budget
+under 16, or one that does not fit the role's `max_context_tokens`, is refused.
 
 A sample fails on any of these:
 

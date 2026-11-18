@@ -201,7 +201,7 @@ def _pins(args: argparse.Namespace) -> int:
 
 
 def _canary(args: argparse.Namespace) -> int:
-    from . import canary
+    from . import canary, pins
 
     live = (args.role, args.registry, args.roles)
     if bool(args.fake) == any(live) or (not args.fake and not all(live)):
@@ -227,6 +227,12 @@ def _canary(args: argparse.Namespace) -> int:
             one = _binding_completer(resolver, _client(args), decision=True)
         else:
             run, one = canary.run_canary, _binding_completer(resolver, _client(args))
+            # the role's own output budget, as the pins report runs it (pins.canary_budget)
+            try:
+                suite = replace(suite, max_tokens=pins.canary_budget(table.get(args.role), suite))
+            except ValueError as exc:
+                print(f"golden canary: mdl:{args.role}: {exc}", file=sys.stderr)
+                return 2
         for b in table.get(args.role).bindings:  # every binding, not the first that resolves
             runs.append((run, one(args.role, b)[0], args.role, b.model_id))
     reports = []

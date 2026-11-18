@@ -5,6 +5,7 @@
         {
           "backend": "svc:inference",
           "kind": "chat",
+          "max_tokens": 256,
           "mode": "fake",
           "params": {
             "max_tokens": 256,
@@ -73,6 +74,7 @@
         {
           "backend": "svc:inference",
           "kind": "chat",
+          "max_tokens": 512,
           "mode": "fake",
           "params": {},
           "pin": "sha256:dd76f4571d69c66d02a7d0a729798da9ea60620501005dffa04c574555179431",
