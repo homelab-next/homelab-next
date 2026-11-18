@@ -156,6 +156,14 @@ argument_specs:
         type: int
         description: Seconds the one warm-up request health sends before its timed probes waits (the first request after a cold load is slow).
         default: 180
+      llamacpp_load_timeout: &a_load_timeout
+        type: int
+        description: Seconds health waits, for /health and for the containers each, for the model to finish loading after a (re)start before it fails naming the last status.
+        default: 900
+      llamacpp_load_poll_s: &a_load_poll
+        type: int
+        description: Seconds between the readiness retries (at least 1).
+        default: 5
   health:
     short_description: Fail unless the unit is active, the power cap holds, the model is loaded with its context and one token comes back.
     options:
@@ -197,6 +205,8 @@ argument_specs:
       llamacpp_validate_with_docker: *a_validate_with_docker
       llamacpp_health_timeout: *a_health_timeout
       llamacpp_first_request_timeout: *a_first_request_timeout
+      llamacpp_load_timeout: *a_load_timeout
+      llamacpp_load_poll_s: *a_load_poll
   readiness:
     short_description: Fail unless the container engine is ready, the weights and their listing are in the store and the render node is there.
     options:
@@ -238,6 +248,8 @@ argument_specs:
       llamacpp_validate_with_docker: *a_validate_with_docker
       llamacpp_health_timeout: *a_health_timeout
       llamacpp_first_request_timeout: *a_first_request_timeout
+      llamacpp_load_timeout: *a_load_timeout
+      llamacpp_load_poll_s: *a_load_poll
   backup:
     short_description: Nothing to back up; the weights are the model store's.
     options: {}
@@ -288,6 +300,8 @@ argument_specs:
       llamacpp_validate_with_docker: *a_validate_with_docker
       llamacpp_health_timeout: *a_health_timeout
       llamacpp_first_request_timeout: *a_first_request_timeout
+      llamacpp_load_timeout: *a_load_timeout
+      llamacpp_load_poll_s: *a_load_poll
       llamacpp_target_image:
         type: str
         description: "repository:tag@sha256:<digest> of the build to move to (same backend, a newer b<N>)."
