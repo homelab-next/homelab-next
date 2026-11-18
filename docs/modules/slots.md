@@ -78,11 +78,16 @@ inference provider) raises it in the selection, beside its placement:
 `footprint: {<host role>: {cpu, memory_mb, disk_gb}}` on a slot choice, a feature or a core entry.
 Each given dimension replaces the declared one for that placement only (`count` still multiplies
 it); GPU memory and the resource claims stay the manifest's. The loader refuses a value below the
-module's own (never rendered below it either), a host role that entry's instance does not place,
+module's own (never rendered below it either), a host role that entry's instance does not place (the raise may sit on any entry of the same
+instance, not only the one that carries the placement: a query entry may raise the role its
+catalog entry places),
 and one placement raised twice to different values; everything else reads the raised footprint
 (`homelabnext.modules.rules._placed`): the guest alone, the host's sum over every placement on
 it, and the slice's limits, so the accounting stays one sum and a raise takes room from nobody
-unseen.
+unseen. The module play also runs under the footprint as placed (`hnx_module_footprint: {cpu,
+memory_mb, disk_gb}`, the largest of the instances sharing the group and slice): a role that checks
+its own budget defaults to it (the automation provider's memory budget, the inference provider's
+threads advisory) instead of keeping a copy that cannot follow a raise.
 
 **Footprints as limits** (follow-up 8, implemented for fleet units and data roots):
 `homelabnext.modules.limits.render(site, modules, units)` turns every placement inside the lab into
