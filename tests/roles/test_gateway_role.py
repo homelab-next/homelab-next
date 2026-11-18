@@ -760,6 +760,10 @@ def test_a_restore_source_that_is_not_a_canonical_absolute_path_is_refused(first
     assert r.returncode != 0
 
 
+def _cwd_free_env() -> dict:
+    return {"PYTHONPATH": str(Path(__file__).resolve().parents[2])}  # the generator, from any cwd
+
+
 def _spec_with_table_above(tmp_path: Path) -> tuple[Path, Path]:
     """A site checkout whose spec names a role table above its own directory; the play's working
     directory (tmp_path) is outside the checkout, as a deploy directory is."""
@@ -775,7 +779,7 @@ def _spec_with_table_above(tmp_path: Path) -> tuple[Path, Path]:
 
 def test_main_renders_a_spec_whose_role_table_is_above_it_when_given_the_checkout_root(tmp_path):
     site, spec = _spec_with_table_above(tmp_path)
-    env = {"PYTHONPATH": str(Path(__file__).resolve().parents[2])}  # the generator, from any cwd
+    env = _cwd_free_env()
     r, _ = main(tmp_path, env=env, gateway_spec=spec)
     assert r.returncode != 0  # the default root is the spec's own directory
     assert "outside the root" in " ".join((r.stdout + r.stderr).split())
@@ -784,9 +788,17 @@ def test_main_renders_a_spec_whose_role_table_is_above_it_when_given_the_checkou
     assert (tmp_path / "data" / "config" / "gateway.json").exists()
 
 
-@pytest.mark.parametrize("root", ["relative/dir", "/srv/../etc"])
+@pytest.mark.parametrize("root", ["relative/dir", "/srv/../etc", "/srv/site/", "/srv//site"])
 def test_main_refuses_a_spec_root_that_is_not_canonical(tmp_path, root):
-    _, spec = _spec_with_table_above(tmp_path)
-    r, _ = main(tmp_path, gateway_spec=spec, gateway_spec_root=root)
+    # the role table is inside the spec's own directory: a valid root (or none) renders, so only
+    # the role's validation can be what refuses these
+    spec = spec_dir(tmp_path)
+    ok, _ = main(
+        tmp_path, env=_cwd_free_env(), gateway_spec=spec, gateway_spec_root=str(spec.parent)
+    )
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    (tmp_path / "data" / "config" / "gateway.json").unlink()
+    r, _ = main(tmp_path, env=_cwd_free_env(), gateway_spec=spec, gateway_spec_root=root)
     assert r.returncode != 0
+    assert "the spec's checkout root" in " ".join((r.stdout + r.stderr).split())
     assert not (tmp_path / "data" / "config" / "gateway.json").exists()
