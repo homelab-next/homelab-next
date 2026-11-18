@@ -19,6 +19,7 @@ import hashlib
 import os
 import pwd
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -869,8 +870,8 @@ def test_health_passes_when_every_check_holds(tmp_path):
         r = run_role(tmp_path, ROLE, "health", health_vars(tmp_path, srv), env=env)
         paths = [p for _, p in srv.requests]
     assert r.returncode == 0, r.stdout + r.stderr
-    # the warm-up request comes first, then the timed probe
-    assert paths == ["/health", "/v1/models", "/metrics"] + ["/v1/chat/completions"] * 2
+    # the readiness wait's /health comes first, then the checks, the warm-up and the timed probe
+    assert paths == ["/health", "/health", "/v1/models", "/metrics"] + ["/v1/chat/completions"] * 2
 
 
 def test_health_survives_a_cold_first_request_slower_than_the_steady_state_timeout(tmp_path):
@@ -899,6 +900,54 @@ def test_health_fails_when_the_warm_up_itself_outlasts_its_timeout(tmp_path):
         v = health_vars(tmp_path, srv, health_timeout=1, first_request_timeout=1)
         r = run_role(tmp_path, ROLE, "health", v, env=env)
     assert r.returncode != 0
+
+
+def test_health_waits_for_a_model_that_is_still_loading(tmp_path):
+    """The unit is active once the container starts, but the model loads for a while longer: health
+    retries /health until it answers 200 instead of failing on the first 503."""
+    env = _fakes(tmp_path)
+    with engine(loading_for=2.5) as srv:
+        v = health_vars(tmp_path, srv, load_timeout=30, load_poll_s=1)
+        r = run_role(tmp_path, ROLE, "health", v, env=env)
+        health_calls = [p for _, p in srv.requests if p == "/health"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert len(health_calls) >= 3  # at least one 503 was retried, then the 200 and the final check
+
+
+def test_health_fails_naming_loading_when_the_model_never_loads_in_time(tmp_path):
+    env = _fakes(tmp_path)
+    with engine(loading=True) as srv:
+        v = health_vars(tmp_path, srv, load_timeout=2, load_poll_s=1)
+        r = run_role(tmp_path, ROLE, "health", v, env=env)
+        calls = [p for _, p in srv.requests]
+    out = r.stdout + r.stderr
+    assert r.returncode != 0
+    assert "still loading" in out and "503" in out and "_load_timeout" in out, out[-2000:]
+    assert "/v1/models" not in calls  # nothing after the wait ran
+
+
+def test_health_waits_for_containers_that_are_still_starting(tmp_path):
+    """A container whose healthcheck has not passed yet fails the unchanged strict check once the
+    wait ends, naming the container's state."""
+    env = _fakes(tmp_path, health="starting")
+    with engine() as srv:
+        v = health_vars(tmp_path, srv, load_timeout=2, load_poll_s=1)
+        r = run_role(tmp_path, ROLE, "health", v, env=env)
+    assert r.returncode != 0 and "starting" in r.stdout + r.stderr
+
+
+def test_health_in_check_mode_does_not_wait_out_the_load_timeout(tmp_path):
+    """The containers' wait runs under --check (read-only), and a first install has none that are
+    healthy: it makes one attempt and the strict check reports, instead of stalling for
+    llamacpp_load_timeout."""
+    env = _fakes(tmp_path, health="starting")
+    with engine() as srv:
+        v = health_vars(tmp_path, srv, load_timeout=900, load_poll_s=5)
+        t0 = time.monotonic()
+        r = run_role(tmp_path, ROLE, "health", v, env=env, check=True)
+        took = time.monotonic() - t0
+    assert took < 60, took
+    assert r.returncode != 0 and "starting" in r.stdout + r.stderr
 
 
 def test_main_in_check_mode_on_a_first_install_reports_instead_of_failing(tmp_path):
@@ -932,7 +981,9 @@ def test_health_fails_for_each_thing_it_checks(tmp_path, what, srv_kw, fakes_kw,
     kw = {"model": DEFAULTS[f"{MID}_served_model_name"], "n_ctx": CTX, "metric_prefix": MID}
     kw.update(srv_kw)
     with SingleModelServer(**kw) as srv:
-        v = health_vars(tmp_path, srv, sysfs_root=str(sysfs(tmp_path, power)))
+        v = health_vars(
+            tmp_path, srv, sysfs_root=str(sysfs(tmp_path, power)), load_timeout=1, load_poll_s=1
+        )
         r = run_role(tmp_path, ROLE, "health", v, env=env)
     assert r.returncode != 0, what
 

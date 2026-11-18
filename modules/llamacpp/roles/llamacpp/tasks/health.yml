@@ -9,7 +9,11 @@
 # llamacpp_first_request_timeout comes first; the timed probes after it, at llamacpp_health_timeout,
 # then measure a warm server (the steady-state timeout is not inflated). The completion is the one
 # deviation from role interface v1's "health does not mutate the service": it leaves one short
-# prompt in a slot's cache.
+# prompt in a slot's cache. Before any of that, health WAITS for readiness: the unit is Type=simple,
+# so it is active as soon as the precheck ends and the container starts, while the model loads for
+# another ~90 s (177B on 4 GPUs). /health (200) and the containers' health are retried every
+# llamacpp_load_poll_s seconds for up to llamacpp_load_timeout seconds each, then fail naming the
+# last status; a server that is up but never loads fails there instead of on a bare 503.
 - block:
     - name: Validate the inputs
       ansible.builtin.include_tasks: validate.yml
@@ -25,6 +29,46 @@
       ansible.builtin.command:
         argv: "{{ [llamacpp_precheck_bin] + llamacpp_precheck_power + ['--power-only'] }}"
       changed_when: false
+    - name: Wait for the server to finish loading the model (/health answers 200)
+      ansible.builtin.uri:
+        url: "http://{{ llamacpp_bind }}:{{ llamacpp_port | int }}/health"
+        return_content: true
+        status_code: [-1, 200, 500, 503]
+        timeout: "{{ llamacpp_health_timeout | int }}"
+      register: llamacpp_wait_loaded
+      changed_when: false
+      failed_when: false  # judged by the assert below, with the last status in its message
+      until: >-
+        llamacpp_wait_loaded.status | default(-1) | int == 200
+        and (llamacpp_wait_loaded.json.status | default('')) == 'ok'
+      # one attempt under --check: a first install has no server to wait for, and --check must report promptly
+      retries: "{{ 1 if ansible_check_mode else [((llamacpp_load_timeout | int) / (llamacpp_load_poll_s | int)) | round(0, 'ceil') | int, 1] | max }}"
+      delay: "{{ llamacpp_load_poll_s | int }}"
+    - name: The model finished loading within llamacpp_load_timeout
+      when: not ansible_check_mode  # the wait's uri is skipped under --check, so there is no status to judge
+      ansible.builtin.assert:
+        that:
+          - llamacpp_wait_loaded.status | default(-1) | int == 200
+          - (llamacpp_wait_loaded.json.status | default('')) == 'ok'
+        fail_msg: >-
+          llamacpp: the server was still loading the model after {{ llamacpp_load_timeout }} s
+          (llamacpp_load_timeout); last /health status {{ llamacpp_wait_loaded.status | default('unknown') }},
+          {{ llamacpp_wait_loaded.msg | default(llamacpp_wait_loaded.content | default('no body')) }}
+    - name: Wait for every container to be running and healthy
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ llamacpp_app.compose_app_dir }}/docker-compose.yml", ps, --all, --format, json]
+      register: llamacpp_wait_containers
+      changed_when: false
+      check_mode: false  # read-only: it runs in --check too
+      failed_when: false  # the strict check after this names what is wrong
+      until: >-
+        llamacpp_wait_containers.rc == 0
+        and llamacpp_wait_containers.stdout is search('"State":\\s*"running"')
+        and llamacpp_wait_containers.stdout is not search('"State":\\s*"(?!running")')
+        and llamacpp_wait_containers.stdout is not search('"Health":\\s*"(?!healthy")')
+      # one attempt under --check: a first install has no server to wait for, and --check must report promptly
+      retries: "{{ 1 if ansible_check_mode else [((llamacpp_load_timeout | int) / (llamacpp_load_poll_s | int)) | round(0, 'ceil') | int, 1] | max }}"
+      delay: "{{ llamacpp_load_poll_s | int }}"
     - name: Every container of the spec is running and healthy
       ansible.builtin.include_role:
         name: compose_app
