@@ -38,6 +38,7 @@ from homelabnext.generators import generate
 from homelabnext.modules import cli as mcli
 from homelabnext.modules import loader as ld
 from homelabnext.registry import load as load_registry
+from tests.modules.play_vars import without_footprint
 from tests.suite_policy import require_tool
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -212,7 +213,7 @@ def test_an_overlay_placing_caddy_on_a_guest_checks_clean_and_renders(tmp_path, 
     assert [(p["name"].rsplit("/", 1)[1], p["tasks_from"]) for p in pre] == [
         ("caddy", "readiness"), ("caddy_auth_proxy", "readiness")
     ]  # fmt: skip
-    assert play["vars"] == {"hnx_module_slice": "hnx-caddy-edge.slice"}
+    assert without_footprint(play["vars"]) == {"hnx_module_slice": "hnx-caddy-edge.slice"}
     assert (dest / "checks" / "caddy.yml").is_file()
 
 

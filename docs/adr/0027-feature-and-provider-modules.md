@@ -21,6 +21,9 @@ summary_of: outline:sha256:e2334f5f35796d84
   reference their guest records (modules plan H2)
 - **Amended:** 2026-11-13, in place while proposed (operator-approved): decision 9's selection
   may plan a required core slot it does not serve yet, with a `review_by` a deploy enforces
+- **Amended:** 2026-11-18, in place while proposed: decision 9's selection may raise a placement's
+  footprint (cpu, memory_mb, disk_gb; never below the manifest's, never GPU memory or the exclusive
+  GPU claim), and decision 4's declared footprint is the module's minimum
 - **Amended-by:** ADR-0040
 
 ## Context
@@ -64,7 +67,10 @@ says what selecting someone else's module grants it.
    - a **core** module (`core-*`) is always installed and never removed; it is the home of the staff
      agents and of the core consumers, so a swap's dependants re-check sees them.
 4. **Dependencies are declared, hard or soft**, by slot, model role, interface and host role, with
-   footprints over cpu, memory, disk and GPU memory (enforced as limits) and named exclusive
+   footprints over cpu, memory, disk and GPU memory (enforced as limits; the declared footprint is
+   the module's MINIMUM: a site's selection may raise cpu, memory_mb and disk_gb per placement,
+   never GPU memory or the exclusive GPU claim, checked against the guest's capacity and the other
+   placements) and named exclusive
    resources. A soft dependency names its fallback, and a dataset bound to that slot moves with the
    fallback (with its own retention and formats there).
 5. **Interfaces have one owner.** An interface (id and version, kind, item schema) is defined once,
@@ -87,7 +93,8 @@ says what selecting someone else's module grants it.
    **incumbent** for a slot served outside modules
    ([selection](../modules/selection.md#incumbents-slots-served-outside-modules)), a **planned**
    required core slot not served yet, a warning until its dated review, which a deploy enforces
-   ([planned](../modules/planned.md)), placement
+   ([planned](../modules/planned.md)), a placement's raised footprint
+   ([slots](../modules/slots.md#footprint-and-resources)), placement
    on hosts that reference their guest records, whose kind, capacity and addresses the loader
    reads and judges each placed role against
    ([selection](../modules/selection.md#hosts-that-are-guests)),

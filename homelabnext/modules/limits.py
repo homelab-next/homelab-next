@@ -322,6 +322,32 @@ def _bound(unit: str, mod: str, ids: set[str]) -> bool:
     return not any(len(o) > len(mod) and (unit == o or unit.startswith(o + "-")) for o in ids)
 
 
+def placed_use(placed, hosts: Doc) -> tuple[dict[tuple[str, str, str], Doc], list[str]]:
+    """(host, module, role) -> the summed footprint, and the placements on external hosts.  The one
+    accounting of what a host role takes on a host: two instances of one provider on one host
+    share the role's slice, as ``rules.footprint_problems`` sums them (each footprint times its
+    count).  The slices, the quota caps and the apply's ``hnx_module_footprint`` all read it."""
+    use: dict[tuple[str, str, str], Doc] = {}
+    external: list[str] = []
+    for mod, _inst, role, h, host in placed:
+        _checked("module id", mod)
+        if h is None:
+            raise LimitsError(f"{mod}: placement names {role}, not one of its host roles")
+        if host not in hosts or not isinstance(hosts[host], dict):
+            raise LimitsError(f"{mod}: placed on unknown host {host!r:.80}")
+        _checked("host", host)
+        fp, n = _footprint(f"{mod}/{role}", h)
+        if hosts[host].get("kind") == "external":
+            external.append(f"{mod}/{role} on {host}")
+            continue
+        u = use.setdefault(
+            (host, mod, role), dict.fromkeys(("cpu", "memory_mb", "disk_gb", "gpu_memory_mb"), 0)
+        )
+        for k in u:
+            u[k] += fp[k] * n
+    return use, external
+
+
 def render(
     site: Doc,
     mods: dict[str, Doc],
@@ -341,26 +367,7 @@ def render(
     files: dict[str, str] = {}
     caps: dict[str, dict[str, int]] = {}
     roles_of: dict[str, list[tuple[str, str]]] = {}
-    #: (host, module, role) -> summed footprint: two instances of one provider on one host share
-    #: the role's slice, as rules.footprint_problems sums them
-    use: dict[tuple[str, str, str], Doc] = {}
-    external: list[str] = []
-    for mod, _inst, role, h, host in placed:
-        _checked("module id", mod)
-        if h is None:
-            raise LimitsError(f"{mod}: placement names {role}, not one of its host roles")
-        if host not in hosts or not isinstance(hosts[host], dict):
-            raise LimitsError(f"{mod}: placed on unknown host {host!r:.80}")
-        _checked("host", host)
-        fp, n = _footprint(f"{mod}/{role}", h)
-        if hosts[host].get("kind") == "external":
-            external.append(f"{mod}/{role} on {host}")
-            continue
-        u = use.setdefault(
-            (host, mod, role), dict.fromkeys(("cpu", "memory_mb", "disk_gb", "gpu_memory_mb"), 0)
-        )
-        for k in u:
-            u[k] += fp[k] * n
+    use, external = placed_use(placed, hosts)
     rows = []
     for (host, mod, role), fp in sorted(use.items()):
         sl = slice_name(mod, role)

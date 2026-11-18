@@ -18,6 +18,9 @@
   hosts: mod_example_agent_runtime_runtime
   become: true
   gather_facts: false
+  vars:
+    hnx_module_slice: "hnx-example_agent_runtime-runtime.slice"
+    hnx_module_footprint: {cpu: 1, disk_gb: 20, memory_mb: 512}
   tasks:
     - name: "readiness: example_agent_runtime"
       ansible.builtin.include_role:

@@ -433,6 +433,26 @@ REFUSED = {
 }
 
 
+def test_main_warns_but_does_not_refuse_threads_above_the_placed_cpu(tmp_path):
+    extra = {"threads": 8, "threads_batch": 2}
+    placed = {"hnx_module_footprint": {"cpu": 4, "memory_mb": 8192, "disk_gb": 50}}
+    r = run_role(tmp_path, ROLE, "main", {**role_vars(tmp_path, extra_args=extra), **placed})
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = r.stdout + r.stderr
+    assert "exceeds the placement's cpu" in out and "(8)" in out and "cpu" in out
+    # a raise that covers the threads, threads within the cpu, no threads, and no placed footprint: silent
+    for name, ex, fp in [
+        ("raised", extra, {"cpu": 8}),
+        ("within", {"threads": 4, "threads_batch": 4}, {"cpu": 4}),
+        ("unset", {}, {"cpu": 1}),
+    ]:
+        v = {**role_vars(tmp_path, extra_args=ex), "hnx_module_footprint": fp}
+        r = run_role(tmp_path, ROLE, "main", v)
+        assert r.returncode == 0 and "exceeds the placement's cpu" not in r.stdout + r.stderr, name
+    r = run_role(tmp_path, ROLE, "main", role_vars(tmp_path, extra_args=extra))
+    assert r.returncode == 0 and "exceeds the placement's cpu" not in r.stdout + r.stderr
+
+
 @pytest.mark.parametrize("case", sorted(REFUSED))
 def test_main_refuses_bad_inputs_before_writing_anything(tmp_path, case):
     r = run_role(tmp_path, ROLE, "main", role_vars(tmp_path, **REFUSED[case]))

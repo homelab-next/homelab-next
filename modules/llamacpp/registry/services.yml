@@ -20,4 +20,4 @@ services:
     tls: none
     auth: none
     tags: [compute, inference]
-    description: llama-server on one GPU, one GGUF model, OpenAI-compatible /v1 for the model gateway. No public route, no web UI, no egress.
+    description: llama-server on the placement's GPU(s), one GGUF model, OpenAI-compatible /v1 for the model gateway. No public route, no web UI, no egress.

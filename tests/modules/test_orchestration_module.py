@@ -36,6 +36,7 @@ from homelabnext.conform.target import load_target, make_factory
 from homelabnext.modules import cli as mcli
 from homelabnext.modules import loader as ld
 from tests.conform.controller_rig import controller_binary, live_controller
+from tests.modules.play_vars import without_footprint
 
 __all__ = ["controller_binary"]  # the session fixture, imported for its test
 
@@ -204,7 +205,9 @@ def test_an_overlay_placing_the_module_on_a_guest_checks_clean_and_renders(tmp_p
     assert plays[0]["roles"][0]["role"].endswith("modules/orchestration/roles/orchestration")
     assert plays[0]["pre_tasks"][0]["ansible.builtin.include_role"]["tasks_from"] == "readiness"
     # the unit joins the role's slice (the template reads the play variable)
-    assert plays[0]["vars"] == {"hnx_module_slice": "hnx-orchestration-server.slice"}
+    assert without_footprint(plays[0]["vars"]) == {
+        "hnx_module_slice": "hnx-orchestration-server.slice"
+    }
     assert (dest / "limits" / "agents" / "hnx-orchestration-server.slice").is_file()
 
 

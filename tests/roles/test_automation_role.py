@@ -478,7 +478,27 @@ def test_the_memory_budget_fits_the_footprint_the_manifest_declares():
     footprint = yaml.safe_load((MODULE / "module.yml").read_text())["requires"]["hosts"][0][
         "footprint"
     ]
-    assert total <= footprint["memory_mb"] == DEFAULTS[v("footprint_memory_mb")]
+    # the role's copy is the manifest's number only as the fallback of the placed footprint
+    assert total <= footprint["memory_mb"]
+    assert DEFAULTS[v("footprint_memory_mb")].endswith(f"default({footprint['memory_mb']}) }}}}")
+    assert "hnx_module_footprint" in DEFAULTS[v("footprint_memory_mb")]
+
+
+def test_the_memory_budget_follows_a_raised_placed_footprint(tmp_path):
+    big = {**DEFAULTS[v("mem_limit")], "mongo": "16g"}  # over the manifest's 6144, under a raise
+    kw = {v("mem_limit"): big}
+    refused = run_role(tmp_path, ROLE, "main", pv(tmp_path, **kw), env=SECRETS)
+    assert refused.returncode != 0 and not (tmp_path / "data" / "keys").exists()
+    raised = {"hnx_module_footprint": {"cpu": 8, "memory_mb": 24576, "disk_gb": 30}}
+    ok = run_role(tmp_path, ROLE, "main", pv(tmp_path, **kw, **raised), env=SECRETS)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    # a raise too small for the limits still refuses, and an explicit variable beats the placed one
+    small = {"hnx_module_footprint": {"memory_mb": 8192}}
+    assert (
+        run_role(tmp_path, ROLE, "main", pv(tmp_path, **kw, **small), env=SECRETS).returncode != 0
+    )
+    both = {**raised, v("footprint_memory_mb"): 8192}
+    assert run_role(tmp_path, ROLE, "main", pv(tmp_path, **kw, **both), env=SECRETS).returncode != 0
 
 
 # ----------------------------------------------------------------------------- the slice

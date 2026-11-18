@@ -18,6 +18,9 @@
   hosts: mod_external_collector_receiver
   become: true
   gather_facts: false
+  vars:
+    hnx_module_slice: "hnx-external_collector-receiver.slice"
+    hnx_module_footprint: {cpu: 1, disk_gb: 10, memory_mb: 384}
   tasks:
     - name: "readiness: external_collector_receiver"
       ansible.builtin.include_role:

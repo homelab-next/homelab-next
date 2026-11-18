@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# llama-server, the inference provider that serves one GGUF model on one GPU (modules/llamacpp): one
+# llama-server, the inference provider that serves one GGUF model on its placement's GPU(s) (modules/llamacpp): one
 # compose_app container started by a systemd unit, so a power-cap check and a byte check of the
 # weights run before every start. The weights come from the model store (role model_store, a pinned
 # sha256 per file) and are mounted read-only; nothing is downloaded at start.

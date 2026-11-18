@@ -27,6 +27,7 @@ import yaml
 
 from homelabnext.modules import cli as mcli
 from homelabnext.modules import loader as ld
+from tests.modules.play_vars import without_footprint
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / "modules" / "openproject"
@@ -192,7 +193,9 @@ def test_an_overlay_placing_the_module_on_a_guest_checks_clean_and_renders(tmp_p
     assert len(plays) == 1 and plays[0]["become"] is True
     assert plays[0]["roles"][0]["role"].endswith("modules/openproject/roles/openproject")
     assert plays[0]["pre_tasks"][0]["ansible.builtin.include_role"]["tasks_from"] == "readiness"
-    assert plays[0]["vars"] == {"hnx_module_slice": "hnx-openproject-server.slice"}
+    assert without_footprint(plays[0]["vars"]) == {
+        "hnx_module_slice": "hnx-openproject-server.slice"
+    }
     assert (dest / "checks" / "openproject.yml").is_file()
 
 

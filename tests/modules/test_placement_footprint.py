@@ -120,6 +120,175 @@ def test_the_placed_rows_carry_the_declared_role_when_nothing_is_raised(tree):
         assert h is declared
 
 
+# ----------------------------------------------------------------------------- the play
+
+
+def _play_footprints(tree, site) -> dict[str, str]:
+    """module play name -> its ``hnx_module_footprint`` line, from the rendered install playbook."""
+    from homelabnext.modules import apply
+
+    sel = mr.selected(site, tree.mods)
+    books = apply.render(site, sel, {m: f"../{m}" for m in sel}, _render(tree, _check(tree, site)))
+    out: dict[str, str] = {}
+    name = ""
+    for line in books[apply.PLAYBOOK].splitlines():
+        if line.startswith("- name:"):
+            name = line
+        if f"{apply.FOOTPRINT_VAR}:" in line:
+            out[name] = line.split(":", 1)[1].strip()
+    return out
+
+
+def test_the_module_play_carries_the_footprint_as_placed(tree):
+    base = _play_footprints(tree, ld.load_yaml(SMALL_LAB))
+    lake = next(k for k in base if "example-lake" in k)
+    declared = base[lake]
+    raised = _play_footprints(tree, _raised(SMALL_LAB, {"memory_mb": 24576, "cpu": 6}))
+    assert (
+        raised[lake] != declared and "memory_mb: 24576" in raised[lake] and "cpu: 6" in raised[lake]
+    )
+    assert {k: v for k, v in raised.items() if k != lake} == {
+        k: v for k, v in base.items() if k != lake
+    }
+    # a raise below the floor is never carried below it
+    low = _play_footprints(tree, _raised(SMALL_LAB, {"memory_mb": 16}))
+    assert low[lake] == declared
+
+
+def _two_instances(second_host: str, first: dict, second: dict) -> dict:
+    """The small lab with a second instance of the lake provider, each with its own raise."""
+    site = ld.load_yaml(SMALL_LAB)
+    _lake_entry(site)["footprint"] = {"lake": first}
+    site["slots"]["lake-catalog"].append(
+        {
+            "provider": "example-lake",
+            "instance": "lake2",
+            "placement": {"lake": second_host},
+            "footprint": {"lake": second},
+        }
+    )
+    return site
+
+
+def _books(tree, site) -> dict[str, str]:
+    from homelabnext.modules import apply
+
+    sel = mr.selected(site, tree.mods)
+    return apply.render(site, sel, {m: f"../{m}" for m in sel}, _render(tree, _check(tree, site)))
+
+
+def _lake_plays(tree, site) -> list[tuple[str, str]]:
+    """(hosts pattern, footprint) of every play of the lake provider's host role."""
+    from homelabnext.modules import apply
+
+    got, cur = [], {}
+    for line in _books(tree, site)[apply.PLAYBOOK].splitlines():
+        if line.startswith("- name:"):
+            cur = {"name": line}
+        elif line.startswith("  hosts:"):
+            cur["hosts"] = line.split(":", 1)[1].strip()
+        elif f"{apply.FOOTPRINT_VAR}:" in line and "example-lake" in cur.get("name", ""):
+            got.append((cur["hosts"], line.split(":", 1)[1].strip()))
+    return got
+
+
+def test_instances_on_different_hosts_each_get_their_own_host_s_footprint(tree):
+    """The group holds both hosts; one footprint for it would hand the small host the large one's."""
+    site = _two_instances("core", {"memory_mb": 4096, "cpu": 2}, {"memory_mb": 12288, "cpu": 6})
+    got = _lake_plays(tree, site)
+    assert [h for h, _ in got] == [
+        "mod_example_lake_lake:&modhost_core",
+        "mod_example_lake_lake:&modhost_data",
+    ]
+    by = dict(got)
+    assert "memory_mb: 12288" in by["mod_example_lake_lake:&modhost_core"]
+    assert "memory_mb: 4096" in by["mod_example_lake_lake:&modhost_data"]
+    # each equals what that host's slice is given
+    files = _render(tree, _check(tree, site))
+    for host, fp in (("core", "12288"), ("data", "4096")):
+        slice_ = next(
+            v for k, v in files.items() if k == f"{host}/{ml.slice_name('example-lake', 'lake')}"
+        )
+        assert f"MemoryMax={fp}M" in slice_ or fp in slice_
+
+
+def test_instances_on_one_host_get_the_sum_their_shared_slice_is_given(tree):
+    site = _two_instances("data", {"memory_mb": 4096}, {"memory_mb": 6144})
+    got = _lake_plays(tree, site)
+    assert [h for h, _ in got] == ["mod_example_lake_lake"]  # one host: one play
+    assert "memory_mb: 10240" in got[0][1]
+    files = _render(tree, _check(tree, site))
+    assert "10240" in files[f"data/{ml.slice_name('example-lake', 'lake')}"]
+
+
+def test_the_split_plays_keep_the_tag_and_cover_each_host_once(tree):
+    from homelabnext.modules import apply
+
+    site = _two_instances("core", {"memory_mb": 4096}, {"memory_mb": 12288})
+    text = _books(tree, site)[apply.PLAYBOOK]
+    plays = [p for p in text.split("\n- name: ")[1:] if "example-lake" in p.splitlines()[0]]
+    assert len(plays) == 2
+    assert all("tags: [mod_example_lake]" in p and "roles:" in p for p in plays)
+    # the guard asserts the host groups the split plays intersect with
+    loop = next(line for line in text.splitlines() if line.strip().startswith("loop: ["))
+    assert "modhost_core" in loop and "modhost_data" in loop
+
+
+def _checks_text(tree, site, module: str = "example-lake") -> str:
+    from homelabnext.modules import apply
+
+    return _books(tree, site)[f"{apply.CHECKS_DIR}/{module}.yml"]
+
+
+def test_the_check_plays_carry_the_raised_footprint_and_the_slice(tree):
+    """A role's validate runs in readiness and health: against the role's own default budget a
+    raised placement the install accepted would fail its check."""
+    from homelabnext.modules import apply
+
+    text = _checks_text(tree, _raised(SMALL_LAB, {"memory_mb": 24576}))
+    assert "    hnx_module_footprint: {cpu: 4, disk_gb: 500, memory_mb: 24576}" in text
+    assert f'    {apply.SLICE_VAR}: "hnx-example_lake-lake.slice"' in text
+
+
+def test_the_check_plays_split_per_host_like_the_install_plays(tree):
+    site = _two_instances("core", {"memory_mb": 4096}, {"memory_mb": 12288})
+    text = _checks_text(tree, site)
+    plays = [p for p in text.split("\n- name: ")[1:] if "mod_example_lake_lake:&" in p]
+    assert [p.splitlines()[1].strip() for p in plays] == [
+        "hosts: mod_example_lake_lake:&modhost_core",
+        "hosts: mod_example_lake_lake:&modhost_data",
+    ]
+    assert "memory_mb: 12288" in plays[0] and "memory_mb: 4096" in plays[1]
+    # the guard asserts each intersection holds a host
+    assert "intersect" in text and "[mod_example_lake_lake, modhost_core]" in text
+
+
+def test_the_install_guard_asserts_each_split_intersection(tree):
+    from homelabnext.modules import apply
+
+    site = _two_instances("core", {"memory_mb": 4096}, {"memory_mb": 12288})
+    text = _books(tree, site)[apply.PLAYBOOK]
+    assert "[mod_example_lake_lake, modhost_core], [mod_example_lake_lake, modhost_data]" in text
+    # one footprint for the group: one play and no intersection to assert
+    assert "intersect" not in _books(tree, ld.load_yaml(SMALL_LAB))[apply.PLAYBOOK]
+
+
+def test_a_footprint_the_accounting_cannot_read_is_refused_by_name_not_dropped(tree):
+    import copy
+
+    from homelabnext.modules import apply
+
+    site = ld.load_yaml(SMALL_LAB)
+    sel = mr.selected(site, tree.mods)
+    bad = copy.deepcopy(sel)
+    bad["example-lake"]["requires"]["hosts"][0]["footprint"]["memory_mb"] = "lots"
+    with pytest.raises(apply.ApplyError, match=r"footprint: .*example-lake/lake.*memory_mb"):
+        apply.render(site, bad, {m: f"../{m}" for m in bad})
+    site["hosts"].pop("data")
+    with pytest.raises(apply.ApplyError, match=r"footprint: .*unknown host"):
+        apply.render(site, sel, {m: f"../{m}" for m in sel})
+
+
 # ----------------------------------------------------------------------------- refusals
 
 
@@ -197,4 +366,4 @@ def test_a_feature_placement_can_be_raised(tree):
 def test_the_schema_takes_only_cpu_memory_and_disk(tree, fp):
     site = _raised(SMALL_LAB, fp)
     got = _problems(tree, site)
-    assert got and all("footprint" in p or "lake" in p for p in got), got
+    assert got and all(p.startswith("schema:") for p in got), got
