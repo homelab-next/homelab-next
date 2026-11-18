@@ -32,25 +32,81 @@ llamacpp_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha25
 llamacpp_model_dir: "{{ llamacpp_store_root }}/gguf/{{ llamacpp_model_repo }}"
 llamacpp_listing: "{{ llamacpp_store_root }}/manifests/listings/{{ llamacpp_model_store_id }}.sha256"
 llamacpp_gpu_layers: "{{ (llamacpp_n_gpu_layers | string) if llamacpp_backend in llamacpp_gpu_backends else '0' }}"
+# The model file: a relative path inside the store entry (the store's own file-path grammar, at
+# most four directories deep), never absolute, never a "." or ".." segment (each segment starts
+# with a letter or digit). A split GGUF is named by its first shard (<stem>-00001-of-0000M.gguf);
+# llama-server opens the other shards beside it, so the role checks every one of them.
+llamacpp_model_file_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(/[A-Za-z0-9][A-Za-z0-9._-]{0,127}){0,4}[.]gguf\Z'
+llamacpp_shard_pattern: '^(.*)-([0-9]{5})-of-([0-9]{5})[.]gguf\Z'
+llamacpp_shards_max: 512
+# [stem, n, total] of a split model's file, or [] for a single file
+llamacpp_split: "{{ llamacpp_model_file | regex_findall(llamacpp_shard_pattern) | map('list') | first | default([]) }}"
+# every file llama-server opens: the one file, or every shard of the series (bounded by validate)
+llamacpp_model_files: "{{ llamacpp_model_files_json | from_json }}"
+llamacpp_model_files_json: >-
+  {%- if llamacpp_split | length == 3 and llamacpp_split[2] | int <= llamacpp_shards_max -%}
+  {%- set out = [] -%}
+  {%- for n in range(1, (llamacpp_split[2] | int) + 1) -%}{{ out.append('%s-%05d-of-%s.gguf' | format(llamacpp_split[0], n, llamacpp_split[2])) or '' }}{%- endfor -%}
+  {{ out | to_json }}
+  {%- else -%}
+  {{ [llamacpp_model_file] | to_json }}
+  {%- endif -%}
+# the directories between the entry and the file (a quant subdirectory): each must be a real
+# directory of the entry, never a link out of it
+llamacpp_model_subdirs: "{{ llamacpp_model_subdirs_json | from_json }}"
+llamacpp_model_subdirs_json: >-
+  {%- set parts = llamacpp_model_file.split('/')[:-1] -%}
+  {%- set out = [] -%}
+  {%- for i in range(1, parts | length + 1) -%}{{ out.append(parts[:i] | join('/')) or '' }}{%- endfor -%}
+  {{ out | to_json }}
+# cuda: the cards handed to the container, by CDI name. llamacpp_gpu_indices "all" is every card
+# the container toolkit's spec lists, a list is those indices, and empty keeps the one card
+# llamacpp_gpu_index; the pre-start check reads the power cap of the same cards.
+llamacpp_cuda_gpus: >-
+  {{ 'all' if llamacpp_gpu_indices == 'all'
+     else (llamacpp_gpu_indices | map('int') | map('string') | join(',')) if llamacpp_gpu_indices | length > 0
+     else (llamacpp_gpu_index | int | string) }}
+llamacpp_cuda_devices: "{{ llamacpp_cuda_gpus.split(',') | map('regex_replace', '^', 'nvidia.com/gpu=') | list }}"
+# llamacpp_extra_args: the throughput flags a site may set, by name (never a raw flag): each key's
+# flag, and the keys only generate mode takes (decision mode fixes -b, -ub and the per-slot cache)
+llamacpp_extra_flags:
+  batch_size: -b
+  ubatch_size: -ub
+  kv_unified: --kv-unified
+  split_mode: -sm
+  tensor_split: -ts
+llamacpp_generate_only_args: [batch_size, ubatch_size, kv_unified]
+llamacpp_gpu_only_args: [split_mode, tensor_split]
+llamacpp_split_modes: [none, layer, row]
+# llama-server's -b when none is given: the most a ubatch_size alone may be
+llamacpp_default_batch_size: 2048
+llamacpp_kv_unified: "{{ llamacpp_extra_args.kv_unified | default(false) is sameas true }}"
 # The server's whole command line (the image's entrypoint is llama-server): the weights from the
 # read-only mount, offline (nothing is fetched), no web UI, no slot-monitoring route, the
-# Prometheus route on. The context is per slot, so the server gets it times the slots, and a
-# slot's share is fixed (--no-kv-unified); its host and port are inside the container.
+# Prometheus route on. By default the context is per slot, so the server gets it times the slots,
+# and a slot's share is fixed (--no-kv-unified). With llamacpp_extra_args.kv_unified the slots
+# share one cache of llamacpp_context_size tokens (-c is that total, --kv-unified), and each slot
+# may use all of it. Its host and port are inside the container.
 llamacpp_command: >-
   {{ ['-m', llamacpp_container_models_dir ~ '/' ~ llamacpp_model_file,
       '-a', llamacpp_served_model_name,
       '--host', '0.0.0.0', '--port', llamacpp_container_port | string,
-      '-c', (llamacpp_context_size | int * llamacpp_parallel | int) | string,
-      '-np', llamacpp_parallel | string, '--no-kv-unified',
+      '-c', (llamacpp_context_size | int * (1 if llamacpp_kv_unified | bool else llamacpp_parallel | int)) | string,
+      '-np', llamacpp_parallel | string, '--kv-unified' if llamacpp_kv_unified | bool else '--no-kv-unified',
       '-ngl', llamacpp_gpu_layers, '-fa', llamacpp_flash_attn,
       '--metrics', '--no-webui', '--no-slots', '--offline']
-     + (['-b', llamacpp_context_size | string, '-ub', llamacpp_context_size | string] if llamacpp_mode == 'decision' else []) }}
+     + (['-b', llamacpp_context_size | string, '-ub', llamacpp_context_size | string] if llamacpp_mode == 'decision' else [])
+     + (['-b', llamacpp_extra_args.batch_size | string] if llamacpp_extra_args.batch_size is defined else [])
+     + (['-ub', llamacpp_extra_args.ubatch_size | string] if llamacpp_extra_args.ubatch_size is defined else [])
+     + (['-sm', llamacpp_extra_args.split_mode] if llamacpp_extra_args.split_mode is defined else [])
+     + (['-ts', llamacpp_extra_args.tensor_split | map('string') | join(',')] if llamacpp_extra_args.tensor_split is defined else []) }}
 # the precheck's arguments: the power rule alone (the health hook), and with the weights (the unit)
 llamacpp_precheck_power: >-
   {{ ['--backend', llamacpp_backend, '--max-watts', llamacpp_power_cap_max_watts | string]
      + (['--render-node', llamacpp_render_node, '--attrs', llamacpp_power_cap_attrs | join(','), '--sysfs-root', llamacpp_sysfs_root]
         if llamacpp_backend in llamacpp_render_backends else [])
-     + (['--gpu-index', llamacpp_gpu_index | string] if llamacpp_backend == 'cuda' else []) }}
+     + (['--gpu-index', llamacpp_cuda_gpus, '--proc-root', llamacpp_proc_root, '--dev-root', llamacpp_dev_root]
+        if llamacpp_backend == 'cuda' else []) }}
 llamacpp_precheck_full: >-
   {{ llamacpp_precheck_power + ['--model-file', llamacpp_model_file, '--listing', llamacpp_listing, '--digest', llamacpp_model_digest, '--model-dir', llamacpp_model_dir] }}
 # Where the render node and the hwmon power files are read: the guest's own /dev and /sys. Test seams
@@ -58,6 +114,8 @@ llamacpp_precheck_full: >-
 # (only an extra variable, which a test passes).
 llamacpp_dev_root: /dev
 llamacpp_sysfs_root: /sys
+# where the loaded kernel modules are listed (the cuda check runs nvidia-smi only when nvidia is loaded)
+llamacpp_proc_root: /proc
 # the operator's power rule: no setting raises it above this many watts
 llamacpp_power_cap_ceiling_watts: 200
 llamacpp_gid_max: 4294967295

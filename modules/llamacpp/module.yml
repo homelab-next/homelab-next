@@ -10,8 +10,9 @@ manifest_version: "1.0"
 id: llamacpp
 kind: provider
 title: Inference on llama.cpp
-description: Fills the inference slot with llama.cpp's llama-server, which serves one GGUF model on
-  one GPU through an OpenAI-compatible API, run as one compose_app container behind a unit that
+description: Fills the inference slot with llama.cpp's llama-server, which serves one GGUF model
+  (one file or a split series) on one GPU, or on several NVIDIA GPUs of one guest, through an
+  OpenAI-compatible API, run as one compose_app container behind a unit that
   checks the card's power cap and the weights before every start; proved by the inference
   conformance suite through the shared single-server adapter.
 owner: operator

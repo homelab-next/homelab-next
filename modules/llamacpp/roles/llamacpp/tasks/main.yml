@@ -8,10 +8,23 @@
 - name: Create the data directories
   ansible.builtin.include_tasks: dirs.yml
 
-- name: Refuse when the weights are not in the store (run model_store first)
+# Not followed: a directory on the way that is a link (a quant subdirectory pointing out of the
+# store) is refused, so the file the server loads is the entry's own.
+- name: Refuse a directory between the entry and the model file that is not a real directory
   ansible.builtin.stat:
-    path: "{{ llamacpp_model_dir }}/{{ llamacpp_model_file }}"
+    path: "{{ llamacpp_model_dir }}/{{ item }}"
     follow: false
+    get_checksum: false
+  loop: "{{ llamacpp_model_subdirs }}"
+  register: llamacpp_weights_dirs
+  failed_when: not (llamacpp_weights_dirs.stat.exists and llamacpp_weights_dirs.stat.isdir)
+
+- name: Refuse when the weights (every shard of a split model) are not in the store (run model_store first)
+  ansible.builtin.stat:
+    path: "{{ llamacpp_model_dir }}/{{ item }}"
+    follow: false
+    get_checksum: false
+  loop: "{{ llamacpp_model_files }}"
   register: llamacpp_weights
   failed_when: not (llamacpp_weights.stat.exists and llamacpp_weights.stat.isreg)
 

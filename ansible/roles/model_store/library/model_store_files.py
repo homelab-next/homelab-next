@@ -35,7 +35,8 @@ short_description: Stat (and optionally sha256) every file of one model-store en
 description:
   - For each manifest file, the followed stat (C(stat.exists), C(stat.size), C(stat.checksum))
     and the unfollowed one (C(link.exists), C(link.islnk), C(link.lnk_source)), with the same
-    meaning as M(ansible.builtin.stat) with C(follow=true) and C(follow=false).
+    meaning as M(ansible.builtin.stat) with C(follow=true) and C(follow=false), and C(link.via):
+    the first directory between the entry and the file that is a link, else null.
   - C(stat.checksum) is the sha256 of a readable regular file when I(checksum) is true, else
     null.  Files are hashed in blocks, never read whole into memory.
   - With I(walk), also C(strays), from a walk of the entry that never follows a link: the entry
@@ -105,7 +106,7 @@ results:
   contains:
     item: {description: The input file dict., type: dict}
     stat: {description: "Followed: exists, and when it exists size and checksum (sha256 or null).", type: dict}
-    link: {description: "Unfollowed: exists, and when it exists islnk and lnk_source (realpath, links only).", type: dict}
+    link: {description: "Unfollowed: exists, and when it exists islnk and lnk_source (realpath, links only); via, the first directory below the entry on the file's path that is a link (null when none).", type: dict}
 strays:
   description: >-
     With walk or lock, what the entry holds besides its listed regular files and their
@@ -164,9 +165,29 @@ def read_file(path: str, checksum: bool) -> dict:
     return out
 
 
+def linked_parent(directory: str, rel: str) -> str | None:
+    """The first directory between ``directory`` and the file ``rel`` (a split model's quant
+    subdirectory, say) that is a link, relative to ``directory``; None when there is none.  A file
+    under such a link is no link itself, yet its bytes live wherever the link points."""
+    parts = rel.split("/")[:-1]
+    for i in range(1, len(parts) + 1):
+        if parts[i - 1] in ("", "."):
+            continue  # an empty or "." component names the directory before it, already read
+        sub = "/".join(parts[:i])
+        st = _stat(f"{directory}/{sub}", follow=False)
+        if st is not None and stat.S_ISLNK(st.st_mode):
+            return sub
+    return None
+
+
 def read_entry(directory: str, files: list[dict], checksum: bool) -> list[dict]:
     # joined as the tasks did ("{{ dir }}/{{ path }}"): an absolute path never replaces dir
-    return [{"item": f, **read_file(f"{directory}/{f['path']}", checksum)} for f in files]
+    out = []
+    for f in files:
+        r = {"item": f, **read_file(f"{directory}/{f['path']}", checksum)}
+        r["link"]["via"] = linked_parent(directory, f["path"])
+        out.append(r)
+    return out
 
 
 def _listed(files: list[dict], listed: list[str] | None) -> set[str]:

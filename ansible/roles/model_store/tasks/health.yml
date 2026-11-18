@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-# Fast: every file of every entry is present with its size (`tasks_from: verify` is the sha256
+# Fast: every file of every entry this host keeps (model_store_fetch_ids; empty: every entry) is
+# present with its size (`tasks_from: verify` is the sha256
 # pass, minutes per hundred GB; run it after a fetch, a restore or a disk event).
 - block:
     - name: Read the store directories
@@ -11,9 +12,11 @@
       ansible.builtin.assert:
         that: model_store_dirs.results | rejectattr('stat.exists') | list | length == 0
         fail_msg: "model_store: {{ model_store_root }} lacks {{ model_store_dirs.results | rejectattr('stat.exists') | map(attribute='item') | join(', ') }} (run main)"
-    - name: Check every entry by size
+    - name: Refuse fetch ids that name no entry (an empty scope would pass vacuously)
+      ansible.builtin.include_tasks: scope.yml
+    - name: Check every entry this host keeps by size
       ansible.builtin.include_tasks: verify_entry.yml
-      loop: "{{ model_store_manifest.models | dict2items }}"
+      loop: "{{ model_store_manifest.models | dict2items | selectattr('key', 'in', model_store_scope) | list }}"
       loop_control:
         loop_var: model_store_entry
         label: "{{ model_store_entry.key }}"

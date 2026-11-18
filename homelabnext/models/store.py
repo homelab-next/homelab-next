@@ -6,7 +6,10 @@ under one root (``/srv/models`` by default), once per (source, revision, quant):
 
 * ``format: hf``     - a Hugging Face safetensors snapshot, fetched into the hub cache layout
   ``hf/hub/models--<org>--<name>/snapshots/<revision>/`` (``HF_HOME=<root>/hf``);
-* ``format: gguf``   - one single-file GGUF, under ``gguf/<org>/<name>/``;
+* ``format: gguf``   - one GGUF model under ``gguf/<org>/<name>/``: a single ``.gguf`` file, or one
+  complete split series (``<stem>-00001-of-0000M.gguf`` ... ``<stem>-0000M-of-0000M.gguf``, every
+  shard listed, in one directory, the stem carrying the entry's quant), which llama-server loads
+  from its first shard (:attr:`Entry.model_file`);
 * ``format: export`` - a fine-tune export (a merged LoRA, written by Unsloth Studio) under
   ``exports/<run>/``, with ``layout`` ``safetensors`` or ``gguf`` and the ``base`` entry it came
   from.
@@ -53,6 +56,8 @@ LICENSE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]{0,63}\Z")
 SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 FILE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*\Z")
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,128}\Z")
+#: a shard of a split GGUF (llama.cpp's gguf-split names): <stem>-<n>-of-<total>.gguf, five digits each
+SPLIT_RE = re.compile(r"^(?P<stem>.+)-(?P<n>[0-9]{5})-of-(?P<total>[0-9]{5})\.gguf\Z")
 FORMATS = ("hf", "gguf", "export")
 LAYOUTS = ("safetensors", "gguf")
 #: engine -> the (format, layout) pairs it may serve.  vLLM serves safetensors only: its GGUF
@@ -139,6 +144,16 @@ class Entry:
     @property
     def digest(self) -> str:
         return "sha256:" + hashlib.sha256(self.listing.encode("utf-8")).hexdigest()
+
+    @property
+    def model_file(self) -> str:
+        """The file a GGUF engine is given (``-m``): the entry's one ``.gguf``, or the first shard
+        of its split series (llama-server opens the other shards beside it); empty for
+        safetensors."""
+        if self.layout != "gguf":
+            return ""
+        ggufs = sorted(f.path for f in self.files if f.path.endswith(".gguf"))
+        return ggufs[0] if ggufs else ""
 
     @property
     def size(self) -> int:
@@ -269,12 +284,7 @@ def _entry(eid: str, raw: Any, problems: list[str]) -> Entry | None:
                 )
     files = _files(where, raw.get("files"), problems)
     if layout == "gguf":
-        ggufs = [f for f in files if f.path.endswith(".gguf")]
-        if len(ggufs) != 1:
-            problems.append(
-                f"{where}: a GGUF entry holds exactly one single-file .gguf (merge a split "
-                "model with gguf-split --merge first)"
-            )
+        problems += _gguf_problems(where, files, quant if isinstance(quant, str) else "")
     for e in engines:
         if layout and (fmt, layout) not in ENGINES[e]:
             problems.append(f"{where}: engine {e} cannot serve {fmt}/{layout}")
@@ -295,6 +305,63 @@ def _entry(eid: str, raw: Any, problems: list[str]) -> Entry | None:
         base=base,
         description=str(raw.get("description", "")),
     )
+
+
+def _gguf_problems(where: str, files: list[File], quant: str) -> list[str]:
+    """A GGUF entry is one model: a single ``.gguf``, or ONE complete split series.
+
+    A series is every shard ``<stem>-00001-of-0000M.gguf`` .. ``-0000M-of-0000M`` of one stem in
+    one directory: a partial set would load a truncated model (or fail mid-load hours into a
+    fetch), two stems or totals are two models (mixed quants) under one digest, and a stem that
+    does not carry the entry's quant names another quant than the entry says it is."""
+    ggufs = sorted(f.path for f in files if f.path.endswith(".gguf"))
+    one = (
+        f"{where}: a GGUF entry holds exactly one model: one single-file .gguf, or one complete "
+        "split series <stem>-00001-of-0000M.gguf .. <stem>-0000M-of-0000M.gguf in one directory"
+    )
+    if not ggufs:
+        return [one + " (it lists no .gguf)"]
+    shards = {p: SPLIT_RE.match(p.rsplit("/", 1)[-1]) for p in ggufs}
+    if len(ggufs) == 1 and shards[ggufs[0]] is None:
+        return []
+    single = [p for p, m in shards.items() if m is None]
+    if single:
+        return [f"{one} (single-file {', '.join(single)} beside other .gguf files)"]
+    series = {
+        (p.rsplit("/", 1)[0] if "/" in p else "", m["stem"], m["total"])
+        for p, m in shards.items()
+        if m is not None
+    }
+    if len(series) != 1:
+        names = ", ".join(
+            f"{d + '/' if d else ''}{stem}-*-of-{total}" for d, stem, total in sorted(series)
+        )
+        return [f"{one} (mixed quants or series: {names})"]
+    ((_, stem, total),) = series
+    have = sorted(int(m["n"]) for m in shards.values() if m is not None)
+    want = list(range(1, int(total) + 1))
+    problems: list[str] = []
+    if int(total) < 1 or have != want:
+        missing = sorted(set(want) - set(have))
+        extra = sorted(set(have) - set(want))
+        problems.append(
+            f"{one} (incomplete series {stem}-*-of-{total}: "
+            + "; ".join(
+                part
+                for part in (
+                    f"missing {', '.join(f'{n:05d}' for n in missing)}" if missing else "",
+                    f"out of range {', '.join(f'{n:05d}' for n in extra)}" if extra else "",
+                )
+                if part
+            )
+            + ")"
+        )
+    if quant and quant.casefold() not in stem.casefold():
+        problems.append(
+            f"{where}: the split series {stem} does not carry the entry's quant {quant!r} in its "
+            "name (another quant's shards?)"
+        )
+    return problems
 
 
 def _files(where: str, raw: Any, problems: list[str]) -> list[File]:
