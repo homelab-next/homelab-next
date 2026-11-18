@@ -847,15 +847,18 @@ def _read_manifest(dump_dir: Path) -> dict:
 MODULE_DIR = Path(__file__).resolve().parents[2] / "modules" / "documents"
 
 
-_VERSION = re.compile(r"[0-9]+(?:\.[0-9]+){0,3}")
+# 3.4.2, v3.4.2, 3.5.1-rc1, 3.5.1rc1, 3.5.1+build: the leading numbers are the version; a
+# pre-release or build suffix is read as its base version (the safe side: 3.5.1-rc1 is 3.5.1, so
+# it is refused against a 3.4.2 pin).  Anything else does not parse.
+_VERSION = re.compile(r"[vV]?([0-9]+(?:\.[0-9]+){0,3})(?:[-+_]?[A-Za-z][-+.\w]*)?")
 
 
 def _version_key(text: str) -> tuple[int, ...] | None:
-    """``3.4.2`` (up to four dotted parts) -> ``(3, 4, 2, 0)``; None for anything else."""
-    text = str(text).strip()
-    if not _VERSION.fullmatch(text):
+    """``3.4.2`` or ``v3.5.1-rc1`` -> ``(3, 4, 2, 0)`` / ``(3, 5, 1, 0)``; None for no version."""
+    found = _VERSION.fullmatch(str(text).strip())
+    if not found:
         return None
-    nums = [int(n) for n in text.split(".")]
+    nums = [int(n) for n in found.group(1).split(".")]
     return (*nums, *([0] * (4 - len(nums))))
 
 
@@ -877,12 +880,20 @@ def check_version(recorded: str, given: str | None, target: str) -> str:
 
     A newer application migrates its database and writes records an older one cannot open, so an
     export of a newer version is not restored into an older one.  The version is the one the
-    export recorded (its ``metadata.json``) and/or ``given`` (``--source-version``); when both are
-    present the newer decides.  No usable version at all is refused too: unknown is not "ok".
+    export recorded (its ``metadata.json``) and/or ``given`` (``--source-version``); the newer of
+    the two decides, so the flag can confirm or supply a version but never lower a recorded one.
+    A recorded version that does not parse is refused, never skipped; none recorded is refused
+    unless ``given`` supplies it.  A pre-release suffix counts as its base version.
     """
+    recorded = str(recorded or "").strip()
     if given is not None and _version_key(given) is None:
         raise MigrateError(f"--source-version {given!r}: not a version")
-    known = [v for v in (recorded, given) if v and _version_key(v) is not None]
+    if recorded and _version_key(recorded) is None:
+        raise MigrateError(
+            f"the dump's recorded source version {recorded!r}: cannot read the version it "
+            "recorded; refusing (a recorded version is never overridden by --source-version)"
+        )
+    known = [v for v in (recorded, given) if v]
     if not known:
         raise MigrateError(
             "the dump records no version of its source: pass --source-version (the source's "
@@ -891,10 +902,10 @@ def check_version(recorded: str, given: str | None, target: str) -> str:
     source = max(known, key=_version_key)
     if _version_key(source) > _version_key(target):
         raise MigrateError(
-            f"the source application is {source}, newer than the target {target}: restoring it "
-            "would be a downgrade; pin the module to the source's version or newer"
+            f"the source application is {source.strip()}, newer than the target {target}: "
+            "restoring it would be a downgrade; pin the module to the source's version or newer"
         )
-    return source
+    return source.strip().lstrip("vV")
 
 
 def restore(
@@ -910,7 +921,8 @@ def restore(
     """Import ``dump_dir`` into an empty ``target`` and verify it; return the report.
 
     Refused before anything is written: a source application newer than the module's pinned
-    version (a downgrade), or one that records no version (``--source-version`` supplies it); a dump whose tar is not what its manifest says, or not
+    version (a downgrade), or one that records no version (``--source-version`` supplies it) or
+    one that cannot be read; a dump whose tar is not what its manifest says, or not
     whole; a dump not taken from a source that stood still (``require_quiescent``); one that is not
     the state ``expect_counts`` names; a target that holds any document or account.  After the
     import the counts and the checksum of every file on disk must equal the dump's.  A failure

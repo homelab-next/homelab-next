@@ -159,8 +159,8 @@ command-line arguments.
    **No downgrade.** An application cannot open what a newer one migrated, so the restore reads the
    source's version (the export's own `metadata.json`, recorded in the dump manifest) and refuses,
    before it writes anything, a source newer than `product.version` of `module.yml` (the version the
-   image pin carries), naming both versions; a dump that records no version is refused too.
-   `--source-version <image tag>` supplies or confirms it (the newer of the two decides). The fix for
+   image pin carries), naming both versions; a dump that records no version, or one that does not parse, is refused too (a leading `v` is accepted; a pre-release or build suffix counts as its base version, so `3.5.1-rc1` is 3.5.1).
+   `--source-version <image tag>` supplies or confirms it (the newer of the two decides: it can supply a missing version, never lower a recorded one). The fix for
    a refusal is to pin the module to the source's version or newer, never to restore anyway.
 
    It refuses a target that holds any document or account before it writes, imports, then reads the

@@ -1056,7 +1056,9 @@ def test_cli_passes_source_version_and_the_refusal_exits_2(private, capsys):
     assert "newer than" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("recorded", ["v3.9.0", "3.5.1-rc1", "3.5.1rc1", " 3.5.1 ", "V3.5.1+build7"])
+@pytest.mark.parametrize(
+    "recorded", ["v3.9.0", "3.5.1-rc1", "3.5.1rc1", " 3.5.1 ", "V3.5.1+build7"]
+)
 @pytest.mark.parametrize("given", [None, "3.4.2"])
 def test_a_newer_recorded_version_in_any_spelling_is_refused_and_never_overridden(
     private, recorded, given
