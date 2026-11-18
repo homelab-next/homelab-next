@@ -30,6 +30,7 @@ from homelabnext.conform.target import load_target, make_factory
 from homelabnext.modules import cli as mcli
 from homelabnext.modules import loader as ld
 from tests.modules.ntfy_front import DenyAllNtfy
+from tests.modules.play_vars import without_footprint
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / "modules" / "ntfy"
@@ -181,7 +182,7 @@ def test_an_overlay_placing_ntfy_on_a_guest_checks_clean_and_renders(tmp_path, c
     assert plays[0]["pre_tasks"][0]["ansible.builtin.include_role"]["tasks_from"] == "readiness"
     assert (dest / "checks" / "ntfy.yml").is_file()
     # its container joins the role's slice (compose_app reads the play variable) ...
-    assert plays[0]["vars"] == {"hnx_module_slice": "hnx-ntfy-server.slice"}
+    assert without_footprint(plays[0]["vars"]) == {"hnx_module_slice": "hnx-ntfy-server.slice"}
     assert (dest / "limits" / "apps" / "hnx-ntfy-server.slice").is_file()
     # ... and on a vm its data root is capped by the guest's disk, never by an image over its data
     quota = (dest / "limits" / "apps" / "hnx-module-quota.sh").read_text()

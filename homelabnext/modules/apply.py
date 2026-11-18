@@ -39,8 +39,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from homelabnext.modules.limits import DATA_ROOT, slice_name
-from homelabnext.modules.rules import us
+from homelabnext.modules.limits import DATA_ROOT, LimitsError, placed_use, slice_name
+from homelabnext.modules.rules import _placed, us
 
 Doc = dict[str, Any]
 
@@ -59,6 +59,10 @@ QUOTA_TAG = "hnx_quota"
 #: the play variable naming a module play's role slice (compose_app reads it as the containers'
 #: cgroup parent, ``compose_app_cgroup_parent``)
 SLICE_VAR = "hnx_module_slice"
+#: the play variable carrying the role's footprint AS PLACED (the manifest's, or the site's raise
+#: of it): a flow mapping of cpu, memory_mb and disk_gb.  A role that checks its own budgets
+#: against the footprint defaults to it instead of keeping a copy that cannot follow a raise.
+FOOTPRINT_VAR = "hnx_module_footprint"
 #: the tag every limits play carries (not ``mod_``: a module named ``limits`` would share it)
 LIMITS_TAG = "hnx_limits"
 #: the install playbook ``hnx modules render`` writes, and the directory of the check playbooks
@@ -284,11 +288,26 @@ def _names_problems(
     return out
 
 
-def _guard(groups: list[str]) -> list[str]:
+def _guard(groups: list[str], pairs: list[tuple[str, str]] | None = None) -> list[str]:
     """The first play: every module group the playbook targets holds a host.  Without it a play
     on a group the inventory lacks (rendered without ``--selection``, or from another selection)
     is "skipping: no hosts matched", and ``ansible-playbook`` exits 0: a silent install or a
-    green check that ran nothing.  Tagged ``always``, so ``--tags`` keeps it."""
+    green check that ran nothing.  ``pairs`` are the (module group, host group) intersections a
+    per-host play targets (``<module group>:&<host group>``): each must hold a host too.  Tagged
+    ``always``, so ``--tags`` keeps it."""
+    pair_tasks = (
+        [
+            '    - name: "refuse a module group with no host on a host a play targets"',
+            "      ansible.builtin.assert:",
+            '        that: "(groups[item[0]] | default([])) | intersect(groups[item[1]] | default([])) | length > 0"',
+            '        fail_msg: "{{ item[0] }} holds no host of {{ item[1] }}: render the inventory '
+            'from the selection this playbook was rendered from"',
+            "        quiet: true",
+            f"      loop: [{', '.join(f'[{a}, {b}]' for a, b in pairs)}]",
+        ]
+        if pairs
+        else []
+    )
     return [
         '- name: "every module group is in the inventory"',
         "  hosts: localhost",
@@ -303,6 +322,7 @@ def _guard(groups: list[str]) -> list[str]:
         'rendered from)"',
         "        quiet: true",
         f"      loop: [{', '.join(groups)}]",
+        *pair_tasks,
     ]
 
 
@@ -357,6 +377,37 @@ def _plays(site: Mapping[str, Any], sel: Mapping[str, Doc]) -> dict[str, list[tu
     return out
 
 
+def footprint_flow(fp: Mapping[str, Any]) -> str:
+    """A footprint's cpu, memory_mb and disk_gb as the flow mapping a play variable carries."""
+    return (
+        "{"
+        + ", ".join(
+            f"{d}: {int(fp[d]) if float(fp[d]).is_integer() else fp[d]}"
+            for d in ("cpu", "disk_gb", "memory_mb")
+        )
+        + "}"
+    )
+
+
+def _footprints(
+    site: Mapping[str, Any], sel: Mapping[str, Doc]
+) -> dict[tuple[str, str], dict[str, str]]:
+    """(module, host role) -> {site host: the flow mapping of the footprint the role takes there}.
+    It is :func:`homelabnext.modules.limits.placed_use`, the sum the host role's slice is given
+    (the manifest's footprint, raised where the selection raised it, times its count, summed over
+    every instance placed on that host), so the variable and the slice always agree."""
+    try:
+        use, _external = placed_use(_placed(site, sel), site.get("hosts") or {})
+    except LimitsError as exc:
+        # a footprint or host the limits render cannot read: the apply refuses it by name rather
+        # than render plays that fall back to a role's own default budget
+        raise ApplyError(f"footprint: {exc}") from None
+    out: dict[tuple[str, str], dict[str, str]] = {}
+    for (host, mod, role), fp in use.items():
+        out.setdefault((mod, role), {})[host] = footprint_flow(fp)
+    return out
+
+
 def render(
     site: Mapping[str, Any],
     sel: Mapping[str, Doc],
@@ -377,6 +428,7 @@ def render(
     if clashes:
         raise ApplyError("; ".join(clashes))
     order = install_order(site, sel)
+    footprints = _footprints(site, sel)
     head = [
         f"# {HEADER}",
         "# Installs each placed module on the inventory group of each of its host roles",
@@ -387,6 +439,7 @@ def render(
     L: list[str] = []
     files: dict[str, str] = {}
     targets: list[str] = []
+    pairs: list[tuple[str, str]] = []
     plays = 0
     for mod in order:
         rows = placed.get(mod)
@@ -397,6 +450,7 @@ def render(
         L += ["", f"# ---- module {mod} ({doc['kind']}, {doc.get('version', '?')})"]
         check: list[str] = []
         mine: list[str] = []
+        mine_pairs: list[tuple[str, str]] = []
         for role, h in rows:
             group = module_group(mod, role)
             name = f"module {mod}: host role {role}"
@@ -417,46 +471,73 @@ def render(
             plays += 1
             targets.append(group)
             mine.append(group)
-            L += [
-                f"- name: {_q(name)}",
-                f"  hosts: {group}",
-                # a module's roles install packages, units and files: the play escalates
-                "  become: true",
-                # the module's tag only: a group tag could equal another module's tag
-                # (module a-b is mod_a_b; module a's host role b is mod_a_b too)
-                f"  tags: [{GROUP_PREFIX}{us(mod)}]",
-                # the role's slice (the limits play installs it): compose_app makes it each
-                # container's cgroup parent, so the slice's limits confine the containers too
-                "  vars:",
-                f"    {SLICE_VAR}: {_q(slice_name(mod, role))}",
-            ]
-            if pre:
-                L.append("  pre_tasks:")
-                for path, hook in pre:
-                    L += _include(path, hook, f"preflight {hook}: {path.rsplit('/', 1)[-1]}")
-            L.append("  roles:")
-            L += [f"    - role: {_q(p)}" for p in paths]
-            check += [
-                "",
-                f"- name: {_q(f'{name}: readiness, health')}",
-                f"  hosts: {group}",
-                "  become: true",
-                "  gather_facts: false",
-                "  tasks:",
-            ]
-            for hook in CHECK_HOOKS:
-                for p in paths:
-                    # a check playbook is one directory down (checks/): a role path relative
-                    # to the render directory is one more level up from it
-                    there = p if p.startswith("/") else f"../{p}"
-                    check += _include(there, hook, f"{hook}: {p.rsplit('/', 1)[-1]}")
+            # one play for the group; but when its hosts take different footprints (instances on
+            # different hosts with different raises) one play per host, on the group's
+            # intersection with that host's group (every host in exactly one play, so each task
+            # still runs once per host), each carrying what its own slice is given
+            fps = footprints.get((mod, role), {})
+            if len(set(fps.values())) > 1:
+                variants = [(f"{name} on {host}", f"{group}:&{host_group(host)}", fps[host])
+                            for host in sorted(fps)]  # fmt: skip
+                targets += [host_group(host) for host in sorted(fps)]
+                mine_pairs += [(group, host_group(host)) for host in sorted(fps)]
+                pairs += [(group, host_group(host)) for host in sorted(fps)]
+            else:
+                variants = [(name, group, next(iter(fps.values()), None))]
+
+            def play_vars(fp: str | None, role: str = role, mod: str = mod) -> list[str]:
+                """The variables of a play of this host role: its slice, its footprint on its hosts."""
+                return [
+                    "  vars:",
+                    f"    {SLICE_VAR}: {_q(slice_name(mod, role))}",
+                    *([f"    {FOOTPRINT_VAR}: {fp}"] if fp is not None else []),
+                ]
+
+            for vname, hosts_pat, fp in variants:
+                L += [
+                    f"- name: {_q(vname)}",
+                    f"  hosts: {hosts_pat}",
+                    # a module's roles install packages, units and files: the play escalates
+                    "  become: true",
+                    # the module's tag only: a group tag could equal another module's tag
+                    # (module a-b is mod_a_b; module a's host role b is mod_a_b too)
+                    f"  tags: [{GROUP_PREFIX}{us(mod)}]",
+                    # the role's slice (the limits play installs it): compose_app makes it each
+                    # container's cgroup parent, so the slice's limits confine the containers too
+                    *play_vars(fp),
+                ]
+                if pre:
+                    L.append("  pre_tasks:")
+                    for path, hook in pre:
+                        L += _include(path, hook, f"preflight {hook}: {path.rsplit('/', 1)[-1]}")
+                L.append("  roles:")
+                L += [f"    - role: {_q(p)}" for p in paths]
+            # the check plays run the same hooks (a role's validate runs in them) under the same
+            # variables, split the same way: a budget checked against the role's own default
+            # would fail a raised placement the install accepted
+            for vname, hosts_pat, fp in variants:
+                check += [
+                    "",
+                    f"- name: {_q(f'{vname}: readiness, health')}",
+                    f"  hosts: {hosts_pat}",
+                    "  become: true",
+                    "  gather_facts: false",
+                    *play_vars(fp),
+                    "  tasks:",
+                ]
+                for hook in CHECK_HOOKS:
+                    for p in paths:
+                        # a check playbook is one directory down (checks/): a role path relative
+                        # to the render directory is one more level up from it
+                        there = p if p.startswith("/") else f"../{p}"
+                        check += _include(there, hook, f"{hook}: {p.rsplit('/', 1)[-1]}")
         if mine:
             chead = [
                 f"# {HEADER}",
                 f"# The readiness and then the health hook of every role of module {mod}, on each",
                 "# group it is placed on. Read-only by the role interface v1 contract.",
                 "",
-                *_guard(mine),
+                *_guard(mine, mine_pairs),
             ]
             files[f"{CHECKS_DIR}/{mod}.yml"] = "\n".join(chead + check) + "\n"
     lim = _limits_plays(site, placed, limits_files or {})
@@ -471,7 +552,7 @@ def render(
         body = head + L
     else:
         groups = [*(host_group(h) for h in lim), *targets]
-        body = [*head, "", *_guard(groups)]
+        body = [*head, "", *_guard(groups, pairs)]
         for lines in lim.values():
             body += ["", *lines]
         body += L

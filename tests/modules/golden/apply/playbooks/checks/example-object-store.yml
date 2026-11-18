@@ -18,6 +18,9 @@
   hosts: mod_example_object_store_store
   become: true
   gather_facts: false
+  vars:
+    hnx_module_slice: "hnx-example_object_store-store.slice"
+    hnx_module_footprint: {cpu: 2, disk_gb: 200, memory_mb: 1024}
   tasks:
     - name: "readiness: example_object_store"
       ansible.builtin.include_role:

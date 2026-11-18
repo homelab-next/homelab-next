@@ -36,6 +36,7 @@ from homelabnext.conform.core import run_checks
 from homelabnext.conform.target import load_target, make_factory
 from homelabnext.modules import cli as mcli
 from homelabnext.modules import loader as ld
+from tests.modules.play_vars import without_footprint
 from tests.modules.single_model_server import SingleModelServer
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -242,7 +243,7 @@ def test_an_overlay_placing_the_module_on_a_gpu_guest_checks_clean_and_renders(t
     assert plays[0]["roles"][0]["role"].endswith(f"modules/{MID}/roles/{MID}")
     assert plays[0]["pre_tasks"][0]["ansible.builtin.include_role"]["tasks_from"] == "readiness"
     assert (dest / "checks" / f"{MID}.yml").is_file()
-    assert plays[0]["vars"] == {"hnx_module_slice": f"hnx-{MID}-server.slice"}
+    assert without_footprint(plays[0]["vars"]) == {"hnx_module_slice": f"hnx-{MID}-server.slice"}
 
 
 def test_a_registry_row_that_differs_is_named(tmp_path, capsys):

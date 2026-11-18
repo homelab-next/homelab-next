@@ -90,8 +90,9 @@ hashes from the package index's JSON API, and regenerate `roles/stackstorm/files
    `stackstorm_events_api_prefix` (the bridge account's import prefix, `JS.HNX.API` in the lab);
    `stackstorm_broker_host`, `stackstorm_broker_host_key` (the broker host's public key line,
    pinned), `stackstorm_broker_ssh_user`; `stackstorm_enabled_rules` (empty: all off);
-   `stackstorm_operator_users` as wanted. The memory budget below is the default; set
-   `stackstorm_footprint_memory_mb` and `stackstorm_mem_limit` together.
+   `stackstorm_operator_users` as wanted. The memory budget below is the default; the budget
+   follows the footprint the module play runs under (`hnx_module_footprint`, which includes a site's
+   per-placement raise), so raise `stackstorm_mem_limit` with the raise and nothing else.
 5. **Firewall**: the guest's own nftables and the per-VM `.fw` (three applies, README of the
    overlay's deploy flow): **9101/tcp** from the status hub and the operator's tooling only; the
    guest's egress for the interpreter and index (the grant above); SSH from the guest to the broker
@@ -149,7 +150,8 @@ runs a day, and is all variables:
 | st2actionrunner | 768m | RabbitMQ / Redis | 512m / 128m |
 
 Sum 4.7 GB; the module's footprint (`module.yml`) is **4 CPUs, 6 GB, 30 GB disk**, and the role
-refuses limits that add up to more than `stackstorm_footprint_memory_mb`. Garbage collection keeps
+refuses limits that add up to more than `stackstorm_footprint_memory_mb` (the placed footprint's
+memory, so a selection's raise raises it; explicitly set, the variable wins). Garbage collection keeps
 executions for 30 days (`stackstorm_retention_days`, 7 or more).
 
 ## Rules, shadow mode and going live

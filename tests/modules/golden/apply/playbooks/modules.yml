@@ -149,6 +149,7 @@
   tags: [mod_example_agent_runtime]
   vars:
     hnx_module_slice: "hnx-example_agent_runtime-runtime.slice"
+    hnx_module_footprint: {cpu: 1, disk_gb: 20, memory_mb: 512}
   pre_tasks:
     - name: "preflight readiness: example_agent_runtime"
       ansible.builtin.include_role:
@@ -166,6 +167,7 @@
   tags: [mod_example_inference]
   vars:
     hnx_module_slice: "hnx-example_inference-server.slice"
+    hnx_module_footprint: {cpu: 4, disk_gb: 60, memory_mb: 5120}
   pre_tasks:
     - name: "preflight readiness: example_inference"
       ansible.builtin.include_role:
@@ -183,6 +185,7 @@
   tags: [mod_example_platform]
   vars:
     hnx_module_slice: "hnx-example_platform-platform.slice"
+    hnx_module_footprint: {cpu: 2, disk_gb: 200, memory_mb: 3072}
   pre_tasks:
     - name: "preflight readiness: example_platform"
       ansible.builtin.include_role:
@@ -202,6 +205,7 @@
   tags: [mod_example_object_store]
   vars:
     hnx_module_slice: "hnx-example_object_store-store.slice"
+    hnx_module_footprint: {cpu: 2, disk_gb: 200, memory_mb: 1024}
   pre_tasks:
     - name: "preflight readiness: example_object_store"
       ansible.builtin.include_role:
@@ -219,6 +223,7 @@
   tags: [mod_example_lake]
   vars:
     hnx_module_slice: "hnx-example_lake-lake.slice"
+    hnx_module_footprint: {cpu: 4, disk_gb: 500, memory_mb: 4096}
   pre_tasks:
     - name: "preflight readiness: example_lake"
       ansible.builtin.include_role:
@@ -236,6 +241,7 @@
   tags: [mod_example_siem_suite]
   vars:
     hnx_module_slice: "hnx-example_siem_suite-suite.slice"
+    hnx_module_footprint: {cpu: 4, disk_gb: 250, memory_mb: 3072}
   pre_tasks:
     - name: "preflight readiness: example_siem_suite"
       ansible.builtin.include_role:
@@ -254,6 +260,7 @@
   tags: [mod_external_collector]
   vars:
     hnx_module_slice: "hnx-external_collector-receiver.slice"
+    hnx_module_footprint: {cpu: 1, disk_gb: 10, memory_mb: 384}
   pre_tasks:
     - name: "preflight readiness: external_collector_receiver"
       ansible.builtin.include_role:
