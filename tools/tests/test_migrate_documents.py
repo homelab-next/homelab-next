@@ -79,6 +79,7 @@ class Host:
             dict.fromkeys(OTHERS, 0) | {"users": 2, "tags": 4, "notes": 1} | (others or {})
         )
         self.version = 1
+        self.product_version = "3.4.2"
         for i in range(1, documents + 1):
             self.add_doc(i, algo)
         self.dirs: set[str] = set()
@@ -133,7 +134,7 @@ class Host:
     def _imported_tree(self):
         tree = {
             mt.EXPORT_MANIFEST: json.dumps(self.imported).encode(),
-            mt.EXPORT_METADATA: b'{"version": "3.4.2"}',
+            mt.EXPORT_METADATA: json.dumps({"version": self.product_version}).encode(),
         }
         for r in self.imported:
             if r["model"] != "documents.document":
@@ -170,7 +171,7 @@ class Host:
             ]
         tree = {
             mt.EXPORT_MANIFEST: json.dumps(records).encode(),
-            mt.EXPORT_METADATA: b'{"version": "3.4.2"}',
+            mt.EXPORT_METADATA: json.dumps({"version": self.product_version}).encode(),
         }
         for pk, d in self.docs.items():
             tree[f"{pk:07}.pdf"] = d["orig"]
@@ -980,3 +981,76 @@ def test_the_command_line_maps_failures_to_exit_codes(capsys, monkeypatch):
     code = mt.main(["dump", *argv[1:], "--dir", str(ROOT / "build" / "cli-dump")])
     assert code == 1 and "document 1" in capsys.readouterr().err
     shutil.rmtree(ROOT / "build" / "cli-dump", ignore_errors=True)
+
+
+# ----------------------------------------------------------------------------- no downgrade
+
+
+def _from_version(private, product_version):
+    host = Host()
+    host.product_version = product_version
+    _, out, manifest = made_dump(private, host)
+    return out, manifest
+
+
+def test_the_pinned_version_is_the_modules_product_version():
+    assert mt.pinned_version() == "3.4.2"
+
+
+@pytest.mark.parametrize("source", ["3.4.2", "3.4.1", "3.3.0", "2.20.13"])
+def test_restore_accepts_a_source_that_is_the_pinned_version_or_older(private, source):
+    out, manifest = _from_version(private, source)
+    assert manifest["version"] == source
+    target = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
+    report = mt.restore(dst_ep(), out, _ctx=ctx_for(target))
+    assert report["documents_verified"] == 3 and report["source_version"] == source
+    assert report["target_version"] == "3.4.2"
+
+
+@pytest.mark.parametrize("source", ["3.5.0", "3.5.1", "3.4.3", "4.0.0"])
+def test_restore_refuses_a_source_newer_than_the_pinned_version_before_writing(private, source):
+    out, _ = _from_version(private, source)
+    target = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
+    with pytest.raises(mt.MigrateError, match=rf"{source}.*newer than.*3\.4\.2.*downgrade"):
+        mt.restore(dst_ep(), out, _ctx=ctx_for(target))
+    assert target.log == []
+
+
+def test_restore_refuses_a_dump_that_records_no_usable_version(private):
+    out, _ = _from_version(private, "")
+    target = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
+    with pytest.raises(mt.MigrateError, match="records no version"):
+        mt.restore(dst_ep(), out, _ctx=ctx_for(target))
+    assert target.log == []
+
+
+def test_source_version_overrides_a_missing_record_and_can_refuse(private):
+    out, _ = _from_version(private, "")
+    ok = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
+    assert mt.restore(dst_ep(), out, source_version="3.4.2", _ctx=ctx_for(ok))["source_version"] == "3.4.2"  # fmt: skip
+    bad = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
+    with pytest.raises(mt.MigrateError, match="3.5.1.*newer"):
+        mt.restore(dst_ep(), out, source_version="3.5.1", _ctx=ctx_for(bad))
+    assert bad.log == []
+
+
+def test_source_version_that_is_not_a_version_is_refused(private):
+    out, _ = _from_version(private, "3.4.2")
+    with pytest.raises(mt.MigrateError, match="not a version"):
+        mt.restore(dst_ep(), out, source_version="latest", _ctx=ctx_for(Host(documents=0)))
+
+
+def test_the_newer_of_the_recorded_and_the_given_source_version_decides(private):
+    out, _ = _from_version(private, "3.5.1")
+    target = Host(documents=0, others=dict.fromkeys(OTHERS, 0))
+    with pytest.raises(mt.MigrateError, match="newer"):
+        mt.restore(dst_ep(), out, source_version="3.4.2", _ctx=ctx_for(target))
+    assert target.log == []
+
+
+def test_cli_passes_source_version_and_the_refusal_exits_2(private, capsys):
+    out, _ = _from_version(private, "3.5.1")
+    argv = ["restore", "--app-container", "c", "--src-dir", SRC_DIR, "--staging-dir", STAGING,
+            "--dir", str(out), "--source-version", "3.5.1"]  # fmt: skip
+    assert mt.main(argv) == 2
+    assert "newer than" in capsys.readouterr().err
