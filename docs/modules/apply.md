@@ -109,6 +109,7 @@ container's cgroup parent): a role that does not is not confined by it. Each mod
 either), and `compose_app` makes that every container's `cgroup_parent`
 (`compose_app_cgroup_parent`, which defaults to it; only a module role slice is accepted), so a
 `compose_app` module's containers run inside the slice and its CPU and memory limits confine them.
+Each module play also sets `hnx_module_footprint` (`{cpu, memory_mb, disk_gb}`) to the role's footprint as placed: the manifest's, or the site's per-placement raise of it (the largest across instances sharing the group and slice). A role that checks its own budget against the footprint defaults to it.
 In a module play `compose_app` accepts only that role's own slice. A role that runs its service
 some other way joins the slice itself (`Slice=` on its units); the variable alone confines
 nothing. Before starting, `compose_app` also refuses a slice with no unit file (the limits play
