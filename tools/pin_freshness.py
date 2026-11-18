@@ -87,6 +87,10 @@ SOURCES: dict[str, tuple[str, str]] = {
     "role:docker_engine/docker_engine_containerd_version": ("github", "containerd/containerd"),
     "role:docker_engine/docker_engine_buildx_version": ("github", "docker/buildx"),
     "role:docker_engine/docker_engine_compose_version": ("github", "docker/compose"),
+    "role:nvidia_container_toolkit/nvidia_container_toolkit_version": (
+        "github",
+        "NVIDIA/nvidia-container-toolkit",
+    ),
     "role:events_bus/events_bus_version": ("github", "nats-io/nats-server"),
     "role:example_service/example_service_version": ("none", "a fictitious example package"),
     "role:garage/garage_image": (
@@ -205,6 +209,9 @@ NOTES: dict[str, str] = {
     "ci:ZIZMOR_VERSION": "docs/private-overlay.md names it",
     "role:wazuh_agent/wazuh_agent_version": "never newer than the manager it reports to",
     "role:docker_engine/docker_engine_version": "docker-ce and docker-ce-cli move with it",
+    "role:nvidia_container_toolkit/nvidia_container_toolkit_version": (
+        "the four packages move together; the vendor's and the CUDA repository serve the same versions"
+    ),
     "role:open_webui/open_webui_image": "an image: bump the tag and its digest together",
     "role:openwebui/openwebui_image": (
         "an image (modules/openwebui): bump the tag and its digest together, in this role's default "

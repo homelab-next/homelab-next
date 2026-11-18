@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values become apt package versions, an apt source, paths and commands: refuse anything that is
+# not a plain token.
+- name: Validate the version, repository, channel, key fingerprints, paths, counts and commands
+  ansible.builtin.assert:
+    that:
+      - nvidia_container_toolkit_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - nvidia_container_toolkit_package_revision is match('^[0-9]+\Z')
+      - nvidia_container_toolkit_repository is string
+      - nvidia_container_toolkit_repository == '' or nvidia_container_toolkit_repository is match('^https://[A-Za-z0-9.-]+(?::[0-9]+)?(?:/[A-Za-z0-9._~-]+)*\Z')
+      - nvidia_container_toolkit_channel is match('^[a-z][a-z0-9-]{0,31}\Z')
+      - nvidia_container_toolkit_key_fingerprints is sequence
+      - nvidia_container_toolkit_key_fingerprints is not string
+      - nvidia_container_toolkit_repository == '' or nvidia_container_toolkit_key_fingerprints | length > 0
+      - nvidia_container_toolkit_key_fingerprints | select('match', '^[0-9A-F]{40}\Z') | list | length == nvidia_container_toolkit_key_fingerprints | length
+      - nvidia_container_toolkit_cdi_spec is match(nvidia_container_toolkit_path_pattern)
+      - nvidia_container_toolkit_state_dir is match(nvidia_container_toolkit_path_pattern)
+      - nvidia_container_toolkit_dev_root is match(nvidia_container_toolkit_path_pattern)
+      - nvidia_container_toolkit_expected_gpus is integer
+      - nvidia_container_toolkit_expected_gpus >= 0
+      - nvidia_container_toolkit_expected_gpus <= 16
+      - nvidia_container_toolkit_auto_refresh is boolean
+      - >-
+        [nvidia_container_toolkit_apt_get_cli, nvidia_container_toolkit_apt_mark_cli,
+        nvidia_container_toolkit_dpkg_query_cli, nvidia_container_toolkit_ctk_cli,
+        nvidia_container_toolkit_systemctl_cli] | select('match', '^[A-Za-z0-9_./-]+\Z') | list | length == 5
+    fail_msg: >-
+      nvidia_container_toolkit: a plain x.y.z version and numeric package revision, an https
+      repository (or "" for the host's own apt sources), a channel name, key fingerprints (40
+      upper-case hex digits), absolute paths, a GPU count of 0 to 16, a boolean auto_refresh and
+      plain command names

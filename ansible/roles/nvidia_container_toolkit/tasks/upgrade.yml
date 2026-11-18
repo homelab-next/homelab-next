@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# The bump path: validate the new pin, then set nvidia_container_toolkit_version (and the package
+# revision) and re-run main. The install releases only the toolkit packages and holds them again.
+- name: Refuse a downgrade, a no-op or a malformed version
+  ansible.builtin.assert:
+    that:
+      - nvidia_container_toolkit_target_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - nvidia_container_toolkit_target_version is version(nvidia_container_toolkit_version, '>')
+    fail_msg: "target {{ nvidia_container_toolkit_target_version }} is not a newer x.y.z than {{ nvidia_container_toolkit_version }}"
+  tags: [upgrade]

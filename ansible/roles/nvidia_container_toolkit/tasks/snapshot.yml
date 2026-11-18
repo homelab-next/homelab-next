@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Read every package's version and dpkg state, and keep what the role must be able to prove it did
+# not touch: the held packages, the "protected" packages (driver, libraries, CUDA, kernel; never
+# the four toolkit packages) and the toolkit packages' own state. Sets nvidia_container_toolkit_snap.
+- name: Read every installed package's version and selection
+  ansible.builtin.command:
+    argv: [ "{{ nvidia_container_toolkit_dpkg_query_cli }}", -W, -f, '${Package} ${Version} ${db:Status-Abbrev}\n' ]
+  register: nvidia_container_toolkit_dpkg_all
+  changed_when: false
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Keep the held, the protected and the toolkit packages' state
+  vars:
+    nvidia_container_toolkit_summary: >-
+      {%- set held = [] -%}
+      {%- set protected = [] -%}
+      {%- set toolkit = {} -%}
+      {%- for line in nvidia_container_toolkit_dpkg_all.stdout_lines -%}
+      {%- set f = line.split() -%}
+      {%- if f | length == 3 -%}
+      {%- if f[2] is match('^h') -%}{%- set _ = held.append(f[0]) -%}{%- endif -%}
+      {%- if f[0] in nvidia_container_toolkit_packages -%}
+      {%- set _ = toolkit.update({f[0]: f[1] ~ ' ' ~ f[2]}) -%}
+      {%- elif f[0] is match(nvidia_container_toolkit_protected_pattern) -%}
+      {%- set _ = protected.append(f | join(' ')) -%}
+      {%- endif -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ {'held': held | sort, 'protected': protected | sort, 'toolkit': toolkit} }}
+  ansible.builtin.set_fact:
+    nvidia_container_toolkit_snap: "{{ nvidia_container_toolkit_summary }}"

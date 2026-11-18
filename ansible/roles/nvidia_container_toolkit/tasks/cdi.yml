@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# The CDI spec: generated to a staging file OUTSIDE /etc/cdi (a half-written file is never loaded),
+# compared by digest with the live one and installed only when it differs. Nothing is restarted:
+# the container runtime reads /etc/cdi when a container asks for a device.
+- name: Make the state and spec directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ nvidia_container_toolkit_state_dir }}"
+    - "{{ nvidia_container_toolkit_cdi_spec | dirname }}"
+
+- name: Generate the spec to the staging file
+  ansible.builtin.command:
+    argv: ["{{ nvidia_container_toolkit_ctk_cli }}", cdi, generate, "--output={{ nvidia_container_toolkit_staged_spec }}"]
+  changed_when: false  # a scratch file; the live spec is compared below
+  check_mode: false
+
+- name: Read the staged and the live spec's digests
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop:
+    - "{{ nvidia_container_toolkit_staged_spec }}"
+    - "{{ nvidia_container_toolkit_cdi_spec }}"
+  register: nvidia_container_toolkit_spec_stat
+  check_mode: false
+
+- name: Refuse an empty or missing generated spec
+  ansible.builtin.assert:
+    that:
+      - nvidia_container_toolkit_spec_stat.results[0].stat.exists
+      - nvidia_container_toolkit_spec_stat.results[0].stat.size | default(0) > 0
+    fail_msg: "nvidia_container_toolkit: nvidia-ctk cdi generate wrote no spec to {{ nvidia_container_toolkit_staged_spec }}"
+
+- name: Install the spec when it differs from the live one
+  ansible.builtin.copy:
+    src: "{{ nvidia_container_toolkit_staged_spec }}"
+    dest: "{{ nvidia_container_toolkit_cdi_spec }}"
+    remote_src: true
+    mode: "0644"
+  when: >-
+    not nvidia_container_toolkit_spec_stat.results[1].stat.exists
+    or nvidia_container_toolkit_spec_stat.results[1].stat.checksum != nvidia_container_toolkit_spec_stat.results[0].stat.checksum
+
+- name: Remove the staging file
+  ansible.builtin.file:
+    path: "{{ nvidia_container_toolkit_staged_spec }}"
+    state: absent
+  changed_when: false  # scratch file only: a second run must report no change
+  check_mode: false
+
+- name: Check the runtime resolves the devices
+  ansible.builtin.include_tasks: cdi_check.yml

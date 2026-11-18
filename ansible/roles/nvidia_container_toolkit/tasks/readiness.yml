@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Ready: the nvidia-ctk CLI answers at the pinned version and the driver is there (its control
+# device exists). Nothing here talks to a GPU.
+- block:
+    - name: Ask the CLI for its version
+      ansible.builtin.command:
+        argv: ["{{ nvidia_container_toolkit_ctk_cli }}", --version]
+      register: nvidia_container_toolkit_ready_version
+      changed_when: false
+      failed_when: false
+      check_mode: false  # read-only: it runs in --check too
+    - name: Look for the driver's control device
+      ansible.builtin.stat:
+        path: "{{ nvidia_container_toolkit_dev_root }}/nvidiactl"
+      register: nvidia_container_toolkit_ready_dev
+      check_mode: false
+    - name: Fail unless the CLI is at the pin and the driver is present
+      ansible.builtin.assert:
+        that:
+          - nvidia_container_toolkit_ready_version.rc == 0
+          - nvidia_container_toolkit_ready_version.stdout is search('(?<![0-9.])' ~ (nvidia_container_toolkit_version | regex_escape) ~ '(?![0-9])(?!\.[0-9])')
+          - nvidia_container_toolkit_ready_dev.stat.exists
+        fail_msg: >-
+          nvidia_container_toolkit: nvidia-ctk exited {{ nvidia_container_toolkit_ready_version.rc }}
+          ({{ nvidia_container_toolkit_ready_version.stdout | default('') | trim | truncate(80) }}; pinned
+          {{ nvidia_container_toolkit_version }}); {{ nvidia_container_toolkit_dev_root }}/nvidiactl
+          {{ 'exists' if nvidia_container_toolkit_ready_dev.stat.exists else 'is missing: the driver is not loaded or the card is not passed through' }}
+  tags: [readiness]
