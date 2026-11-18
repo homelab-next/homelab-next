@@ -296,7 +296,8 @@ def test_main_hands_a_cuda_container_every_card_or_a_list_and_checks_each_cap(tm
 
 def test_main_passes_the_allow_listed_throughput_settings_by_name(tmp_path):
     extra = {"batch_size": 4096, "ubatch_size": 2048, "kv_unified": True,
-             "split_mode": "layer", "tensor_split": [1, 1, 1.5, 1]}  # fmt: skip
+             "split_mode": "layer", "tensor_split": [1, 1, 1.5, 1],
+             "threads": 48, "threads_batch": 48}  # fmt: skip
     v = role_vars(tmp_path, backend="cuda", image=image_for("cuda"), gpu_indices="all",
                   parallel=16, extra_args=extra)  # fmt: skip
     r = run_role(tmp_path, ROLE, "main", v)
@@ -308,12 +309,14 @@ def test_main_passes_the_allow_listed_throughput_settings_by_name(tmp_path):
     assert cmd[cmd.index("-b") + 1] == "4096" and cmd[cmd.index("-ub") + 1] == "2048"
     assert cmd[cmd.index("-sm") + 1] == "layer" and cmd[cmd.index("-ts") + 1] == "1,1,1.5,1"
     assert cmd.count("-b") == 1 and cmd.count("-ub") == 1
+    assert cmd[cmd.index("-t") + 1] == "48" and cmd[cmd.index("-tb") + 1] == "48"
     # kv_unified false is the default's per-slot cache
     v[f"{MID}_extra_args"] = {"kv_unified": False, "batch_size": 512}
     assert run_role(tmp_path, ROLE, "main", v).returncode == 0
     cmd = compose(tmp_path)["command"]
     assert cmd[cmd.index("-c") + 1] == str(CTX * 16) and "--no-kv-unified" in cmd
     assert cmd[cmd.index("-b") + 1] == "512" and "-ub" not in cmd and "-sm" not in cmd
+    assert "-t" not in cmd and "-tb" not in cmd  # llama-server's own count unless one is set
 
 
 def test_main_reads_the_groups_from_the_store_and_the_render_node(tmp_path):
@@ -392,7 +395,12 @@ REFUSED = {
     },
     "cards as a mapping": {"backend": "cuda", "image": image_for("cuda"), "gpu_indices": {"0": 1}},
     # the throughput settings: the allow-list's names and types only
-    "an extra flag that is not allow-listed": {"extra_args": {"threads": 4}},
+    "an extra flag that is not allow-listed": {"extra_args": {"mlock": True}},
+    "threads as a string": {"extra_args": {"threads": "48"}},
+    "threads that is a boolean": {"extra_args": {"threads": True}},
+    "no threads": {"extra_args": {"threads": 0}},
+    "more threads than a footprint has vCPUs": {"extra_args": {"threads": 257}},
+    "batch threads that are negative": {"extra_args": {"threads_batch": -1}},
     "an extra raw flag": {"extra_args": {"--mlock": True}},
     "extra arguments as a string": {"extra_args": "-b 4096"},
     "a batch size as a string": {"extra_args": {"batch_size": "4096"}},
