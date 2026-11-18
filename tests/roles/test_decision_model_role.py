@@ -181,7 +181,8 @@ def test_generate_health_passes_on_a_chat_token(tmp_path):
     with _Server() as s:
         r = _health(tmp_path, s)
     assert r.returncode == 0, r.stdout[-2500:]
-    assert [p for p, _ in s.seen] == ["/v1/chat/completions"]
+    # the warm-up, then the timed probe
+    assert [p for p, _ in s.seen] == ["/v1/chat/completions"] * 2
 
 
 @pytest.mark.parametrize("chat", [(501, REFUSED), (200, {}), (200, {"choices": []})])
@@ -196,8 +197,9 @@ def test_decision_health_passes_on_a_probability_and_never_calls_chat(tmp_path):
         r = _health(tmp_path, s, mode="decision")
     assert r.returncode == 0, r.stdout[-2500:]
     paths = [p for p, _ in s.seen]
-    assert paths == ["/v1/systemone", "/v1/systemone"]  # the tiny state, then the long one
-    tiny, long_ = (b for _, b in s.seen)
+    # the warm-up, the tiny state, then the long one
+    assert paths == ["/v1/systemone"] * 3
+    _warm, tiny, long_ = (b for _, b in s.seen)
     assert tiny["model"] == "clef" and list(tiny["questions"]) == ["hnx-health"]
     assert tiny["questions"]["hnx-health"]["type"] == "noul"
     assert len(long_["state"].split()) > FORCED_BATCH_TOKENS  # past the forced batch
@@ -207,7 +209,7 @@ def test_decision_health_skips_the_long_probe_when_a_slot_cannot_hold_it(tmp_pat
     with _Server(ctx=1024) as s:
         r = _health(tmp_path, s, mode="decision", context_size=1024)
     assert r.returncode == 0, r.stdout[-2500:]
-    assert len(s.seen) == 1
+    assert len(s.seen) == 2  # the warm-up and the tiny state
 
 
 def test_decision_health_fails_when_the_server_still_caps_the_batch(tmp_path):

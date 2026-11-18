@@ -152,6 +152,10 @@ argument_specs:
         type: int
         description: Seconds each health request waits.
         default: 20
+      llamacpp_first_request_timeout: &a_first_request_timeout
+        type: int
+        description: Seconds the one warm-up request health sends before its timed probes waits (the first request after a cold load is slow).
+        default: 180
   health:
     short_description: Fail unless the unit is active, the power cap holds, the model is loaded with its context and one token comes back.
     options:
@@ -192,10 +196,7 @@ argument_specs:
       llamacpp_start: *a_start
       llamacpp_validate_with_docker: *a_validate_with_docker
       llamacpp_health_timeout: *a_health_timeout
-      llamacpp_first_request_timeout:
-        type: int
-        description: Seconds the one warm-up request health sends before its timed probes waits (a cold first request is slow).
-        default: 180
+      llamacpp_first_request_timeout: *a_first_request_timeout
   readiness:
     short_description: Fail unless the container engine is ready, the weights and their listing are in the store and the render node is there.
     options:
@@ -236,6 +237,7 @@ argument_specs:
       llamacpp_start: *a_start
       llamacpp_validate_with_docker: *a_validate_with_docker
       llamacpp_health_timeout: *a_health_timeout
+      llamacpp_first_request_timeout: *a_first_request_timeout
   backup:
     short_description: Nothing to back up; the weights are the model store's.
     options: {}
@@ -285,6 +287,7 @@ argument_specs:
       llamacpp_start: *a_start
       llamacpp_validate_with_docker: *a_validate_with_docker
       llamacpp_health_timeout: *a_health_timeout
+      llamacpp_first_request_timeout: *a_first_request_timeout
       llamacpp_target_image:
         type: str
         description: "repository:tag@sha256:<digest> of the build to move to (same backend, a newer b<N>)."
