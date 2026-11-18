@@ -537,7 +537,7 @@ def test_a_real_run_is_not_guarded_and_the_guard_follows_the_repository_in_check
     expr = guard["ansible.builtin.set_fact"]["docker_engine_would_install"]
     (repo,) = [t for t in main if "ansible.builtin.deb822_repository" in t]
     assert repo["register"] == "docker_engine_repo"
-    env = jinja2.Environment()
+    env = jinja2.Environment(autoescape=True)  # the output is "True" or "False", never markup
     env.tests["changed"] = lambda r: bool(r.get("changed"))
 
     def ev(check, changed):
