@@ -869,7 +869,44 @@ def test_health_passes_when_every_check_holds(tmp_path):
         r = run_role(tmp_path, ROLE, "health", health_vars(tmp_path, srv), env=env)
         paths = [p for _, p in srv.requests]
     assert r.returncode == 0, r.stdout + r.stderr
-    assert paths == ["/health", "/v1/models", "/metrics", "/v1/chat/completions"]
+    # the warm-up request comes first, then the timed probe
+    assert paths == ["/health", "/v1/models", "/metrics"] + ["/v1/chat/completions"] * 2
+
+
+def test_health_survives_a_cold_first_request_slower_than_the_steady_state_timeout(tmp_path):
+    """A cold load makes the first request slow (25.5 s measured against a 20 s timeout). A
+    separate warm-up with its own timeout absorbs it; the timed probe then runs warm."""
+    env = _fakes(tmp_path)
+    with engine(first_chat_delay=3.0) as srv:
+        v = health_vars(tmp_path, srv, health_timeout=1, first_request_timeout=30)
+        r = run_role(tmp_path, ROLE, "health", v, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_health_still_fails_a_server_that_is_slow_on_every_request(tmp_path):
+    """The steady-state timeout is not loosened: a server slow on every call fails the timed probe
+    even though the warm-up allowed for its first."""
+    env = _fakes(tmp_path)
+    with engine(chat_delay=3.0) as srv:
+        v = health_vars(tmp_path, srv, health_timeout=1, first_request_timeout=30)
+        r = run_role(tmp_path, ROLE, "health", v, env=env)
+    assert r.returncode != 0
+
+
+def test_health_fails_when_the_warm_up_itself_outlasts_its_timeout(tmp_path):
+    env = _fakes(tmp_path)
+    with engine(first_chat_delay=4.0) as srv:
+        v = health_vars(tmp_path, srv, health_timeout=1, first_request_timeout=1)
+        r = run_role(tmp_path, ROLE, "health", v, env=env)
+    assert r.returncode != 0
+
+
+def test_main_in_check_mode_on_a_first_install_reports_instead_of_failing(tmp_path):
+    """Nothing wrote the compose file yet, so its checksum cannot be read: --check must say what
+    it would change, not fail on the missing file."""
+    r = run_role(tmp_path, ROLE, "main", role_vars(tmp_path), check=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
 @pytest.mark.parametrize(

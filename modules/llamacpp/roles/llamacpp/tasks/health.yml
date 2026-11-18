@@ -4,8 +4,12 @@
 # each slot has (K-14: the role table's max_context_tokens); /metrics answers; and one real token
 # comes back from a chat completion (mode generate) or, for a decision model (mode decision, which
 # refuses chat with 501), a probability in [0, 1] from /v1/systemone for a tiny state and for a state
-# past llama-server's forced 512-token batch. The completion is the one deviation from role interface v1's
-# "health does not mutate the service": it leaves one short prompt in a slot's cache.
+# past llama-server's forced 512-token batch. The first request after a cold load is slow (a
+# 177B split model on 4 GPUs took 25.5 s), so one warm-up request with its own generous
+# llamacpp_first_request_timeout comes first; the timed probes after it, at llamacpp_health_timeout,
+# then measure a warm server (the steady-state timeout is not inflated). The completion is the one
+# deviation from role interface v1's "health does not mutate the service": it leaves one short
+# prompt in a slot's cache.
 - block:
     - name: Validate the inputs
       ansible.builtin.include_tasks: validate.yml
@@ -67,6 +71,21 @@
       register: llamacpp_metrics
       changed_when: false
       failed_when: "'llamacpp:requests_processing' not in llamacpp_metrics.content"
+    - name: Warm the server with one request that may take as long as a cold first request does (generate mode)
+      ansible.builtin.uri:
+        url: "http://{{ llamacpp_bind }}:{{ llamacpp_port | int }}/v1/chat/completions"
+        method: POST
+        body_format: json
+        body:
+          model: "{{ llamacpp_served_model_name }}"
+          messages: [{role: user, content: ping}]
+          max_tokens: 1
+          temperature: 0
+        return_content: true
+        status_code: 200
+        timeout: "{{ llamacpp_first_request_timeout | int }}"
+      changed_when: false
+      when: llamacpp_mode == 'generate'
     - name: One token comes back from a chat completion (generate mode)
       ansible.builtin.uri:
         url: "http://{{ llamacpp_bind }}:{{ llamacpp_port | int }}/v1/chat/completions"
@@ -88,6 +107,12 @@
         or (llamacpp_completion.json.choices | default([])) | length != 1
         or (llamacpp_completion.json.usage.completion_tokens | default(0)) | int < 1
       when: llamacpp_mode == 'generate'
+    - name: Warm a decision model with one tiny state, allowing a cold first request its time (decision mode)
+      ansible.builtin.include_tasks: decision_probe.yml
+      vars:
+        llamacpp_probe_text: "{{ llamacpp_probe_state }}"
+        llamacpp_probe_timeout: "{{ llamacpp_first_request_timeout | int }}"
+      when: llamacpp_mode == 'decision'
     - name: A decision model answers a tiny state with a probability (decision mode)
       ansible.builtin.include_tasks: decision_probe.yml
       vars:

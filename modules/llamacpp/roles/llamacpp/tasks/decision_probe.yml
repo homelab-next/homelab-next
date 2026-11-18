@@ -14,7 +14,7 @@
           'questions': {llamacpp_probe_id: {'type': 'noul', 'instructions': llamacpp_probe_question}}} | to_json }}
     return_content: true
     status_code: [200, 400, 404, 500, 501, 503]
-    timeout: "{{ llamacpp_health_timeout | int }}"
+    timeout: "{{ (llamacpp_probe_timeout | default(llamacpp_health_timeout)) | int }}"
   register: llamacpp_decision
   changed_when: false
   failed_when: false
