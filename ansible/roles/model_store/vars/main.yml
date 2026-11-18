@@ -11,3 +11,6 @@ model_store_hf_version: "2.4.0"
 # The entries this host keeps (fetches, health and verify check): model_store_fetch_ids, or every
 # entry when it is empty (tasks/scope.yml refuses an id that names none).
 model_store_scope: "{{ model_store_fetch_ids or (model_store_manifest.models.keys() | list) }}"
+# Set by tasks/accounts.yml under --check when the owner or a group is still to be created (false
+# otherwise): the tasks that name them as owner wait for a real run.
+model_store_accounts_pending: false

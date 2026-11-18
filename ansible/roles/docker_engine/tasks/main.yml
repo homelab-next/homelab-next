@@ -33,6 +33,10 @@
     name: "{{ docker_engine_packages | map(attribute='name') | zip(docker_engine_packages | map(attribute='version')) | map('join', '=') | list }}"
     allow_change_held_packages: true
     update_cache: true
+    # docker-ce Recommends docker-ce-rootless-extras, which apt would take at the newest version
+    # (5:29.10.0 beside the pinned 29.9.2 engine). This role pins and holds exactly the packages
+    # in docker_engine_packages and installs nothing outside that list.
+    install_recommends: false
 
 - name: Hold the packages at their pins again
   ansible.builtin.dpkg_selections:
