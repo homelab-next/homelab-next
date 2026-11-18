@@ -847,27 +847,29 @@ def _read_manifest(dump_dir: Path) -> dict:
 MODULE_DIR = Path(__file__).resolve().parents[2] / "modules" / "documents"
 
 
+_VERSION = re.compile(r"[0-9]+(?:\.[0-9]+){0,3}")
+
+
 def _version_key(text: str) -> tuple[int, ...] | None:
     """``3.4.2`` (up to four dotted parts) -> ``(3, 4, 2, 0)``; None for anything else."""
-    parts = str(text).strip().split(".")
-    if not 1 <= len(parts) <= 4 or not all(p.isdigit() for p in parts):
+    text = str(text).strip()
+    if not _VERSION.fullmatch(text):
         return None
-    return tuple(int(p) for p in parts) + (0,) * (4 - len(parts))
+    nums = [int(n) for n in text.split(".")]
+    return (*nums, *([0] * (4 - len(nums))))
 
 
 def pinned_version(module_dir: Path = MODULE_DIR) -> str:
     """``product.version`` of the module's manifest (the version its image pin carries)."""
-    inside = False
-    for line in (module_dir / "module.yml").read_text(encoding="utf-8").splitlines():
-        if line.startswith("product:"):
-            inside = True
-        elif inside and line and not line[0].isspace():
-            break
-        elif inside and line.strip().startswith("version:"):
-            version = line.split(":", 1)[1].strip().strip("\"'")
-            if _version_key(version) is not None:
-                return version
-    raise MigrateError(f"{module_dir / 'module.yml'}: no product.version")
+    manifest = (module_dir / "module.yml").read_text(encoding="utf-8")
+    block = re.search(r"^product:\n((?:[ \t]+.*\n|\n)*)", manifest, re.MULTILINE)
+    found = (
+        re.search(r"^[ \t]+version:[ \t]*(\S+)", block.group(1), re.MULTILINE) if block else None
+    )
+    version = found.group(1).strip("\"'") if found else ""
+    if _version_key(version) is None:
+        raise MigrateError(f"{module_dir / 'module.yml'}: no product.version")
+    return version
 
 
 def check_version(recorded: str, given: str | None, target: str) -> str:
