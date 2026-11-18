@@ -189,3 +189,28 @@ def test_a_budget_the_canary_cannot_run_is_refused(budget):
     doc["roles"]["main-reasoner"]["max_context_tokens"] = 131072
     with pytest.raises(ValueError, match="max_tokens"):
         fresh(doc)
+
+
+# ---- a live run waits as long as the budget needs: the client timeout is a run option
+def test_live_runs_take_a_client_timeout_and_refuse_a_nonpositive_one(capsys, monkeypatch):
+    from homelabnext.golden import cli as gcli
+
+    seen = {}
+
+    def fake_live(registry, table, client_kwargs=None):
+        seen.update(client_kwargs or {})
+        raise ValueError("stop here")
+
+    monkeypatch.setattr(gcli, "_live", fake_live)
+    base = ["pins", "report", "--roles", str(ROLES), "--report", "/nonexistent/r.json"]
+    with pytest.raises(ValueError, match="stop here"):
+        golden_main([*base, "--registry", "services.yml", "--timeout", "900"])
+    assert seen["timeout"] == 900.0
+    seen.clear()
+    with pytest.raises(ValueError, match="stop here"):
+        golden_main([*base, "--registry", "services.yml"])
+    assert seen["timeout"] == 30.0  # the client's own default when none is given
+    for bad in ("0", "-5", "nan"):
+        with pytest.raises(SystemExit):
+            golden_main([*base, "--registry", "services.yml", "--timeout", bad])
+    capsys.readouterr()
