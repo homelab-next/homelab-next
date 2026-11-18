@@ -849,7 +849,9 @@ def test_check_mode_on_a_fresh_guest_reports_changes_and_waits_for_no_service(tm
     assert r.returncode == 0, r.stdout + r.stderr
     assert took < 20, took  # the wait would have used its 25 s
     assert not any(" exec " in c for c in calls(tmp_path))
-    assert "changed=" in r.stdout and "changed=0" not in r.stdout  # the dry run reports what it would do
+    assert (
+        "changed=" in r.stdout and "changed=0" not in r.stdout
+    )  # the dry run reports what it would do
 
 
 def test_check_mode_on_a_running_service_still_waits_and_reads(tmp_path):

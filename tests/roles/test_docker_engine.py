@@ -466,7 +466,9 @@ def _first_install_check(tmp_path):
         "role": ROLE,
         "tasks_from": "install",
         "check": True,
-        "extra_vars": base(docker_engine_would_install=True, docker_engine_packages=NOT_IN_ANY_REPO),
+        "extra_vars": base(
+            docker_engine_would_install=True, docker_engine_packages=NOT_IN_ANY_REPO
+        ),
     }
 
 
@@ -483,7 +485,9 @@ def _first_service_check(tmp_path):
         "role": ROLE,
         "tasks_from": "service",
         "check": True,
-        "extra_vars": base(docker_engine_would_install=True, docker_engine_service="hnx-test-no-such-unit"),
+        "extra_vars": base(
+            docker_engine_would_install=True, docker_engine_service="hnx-test-no-such-unit"
+        ),
     }
 
 
@@ -526,16 +530,20 @@ def test_a_real_run_is_not_guarded_and_the_guard_follows_the_repository_in_check
 
     main = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / "main.yml").read_text())
     (guard,) = [
-        t for t in main if "docker_engine_would_install" in (t.get("ansible.builtin.set_fact") or {})
+        t
+        for t in main
+        if "docker_engine_would_install" in (t.get("ansible.builtin.set_fact") or {})
     ]
     expr = guard["ansible.builtin.set_fact"]["docker_engine_would_install"]
     (repo,) = [t for t in main if "ansible.builtin.deb822_repository" in t]
     assert repo["register"] == "docker_engine_repo"
     env = jinja2.Environment()
     env.tests["changed"] = lambda r: bool(r.get("changed"))
-    ev = lambda check, changed: env.from_string(expr).render(  # noqa: E731
-        ansible_check_mode=check, docker_engine_repo={"changed": changed}
-    ).strip()
+
+    def ev(check, changed):
+        ctx = {"ansible_check_mode": check, "docker_engine_repo": {"changed": changed}}
+        return env.from_string(expr).render(**ctx).strip()
+
     assert [ev(False, True), ev(False, False), ev(True, False), ev(True, True)] == [
         "False", "False", "False", "True"]  # fmt: skip
     for hook in ("install", "service"):

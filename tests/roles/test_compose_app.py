@@ -164,9 +164,11 @@ def test_check_mode_on_a_fresh_guest_does_not_refuse_a_slice_the_limits_play_has
     r, tmp = first
     assert r.returncode == 0, r.stdout + r.stderr
     calls = (tmp / "docker.log").read_text().splitlines()
-    assert not any(c.startswith("compose ") and " up " in c for c in calls)  # --check starts nothing
+    assert not any(
+        c.startswith("compose ") and " up " in c for c in calls
+    )  # --check starts nothing
     assert "install the module limits first" not in r.stdout + r.stderr  # the refusal's own text
-    assert ("not installed yet" in r.stdout) is (unit == "missing"), r.stdout
+    assert ("a real run refuses to start" in r.stdout) is (unit == "missing"), r.stdout
 
 
 # ------------------------------------------------- the boot unit (opt-in): a container that did not
