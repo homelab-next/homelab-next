@@ -521,7 +521,7 @@
         "2": "usage error"
       },
       "id": "forge-helper",
-      "inputs": "wait | health | signin | dbcounts, with the settings as JSON on standard input (the credential is among them)",
+      "inputs": "wait | health | signin | dbcounts | strip | secretfp | appkey, with the settings as JSON on standard input (the credential is among them)",
       "kind": "tool",
       "language": "python",
       "outputs": "JSON of facts on stdout; a one-line reason on stderr",
@@ -944,6 +944,9 @@
         "timer:clamav/scan",
         "timer:context/reindex",
         "timer:lynis/scan",
+        "timer:media_automation/cleanup-downloads",
+        "timer:media_automation/rename-cleanup",
+        "timer:media_automation/stalled-repair",
         "timer:needrestart/check",
         "timer:needrestart/reboot",
         "timer:ntfy/deadman",
@@ -1107,6 +1110,44 @@
     {
       "exit": {
         "0": "imported and verified, or counts printed",
+        "1": "the import failed or its counts differ from the source (the partial tree is kept for inspection, the target untouched)"
+      },
+      "id": "media-automation-config-import",
+      "inputs": "a read-only source holding each app's config directory (a copy of the old volumes or an export) and an absent or empty target; --map old=new library path prefixes; --host-map old=new service host names",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "a JSON report of the counts at both ends and every change made beyond the copy (never a key, a password or a token); counts prints the counts of one source or one module config root",
+      "owner": "maintainers",
+      "path": "tools/migrate/media_automation.py",
+      "purpose": "Import the media automation stack's per-app config directories (library managers, indexer manager, torrent and usenet clients, request app, transcode server) into the module's config root, keeping API keys and settings, mapping library paths and host names, and checking the counts.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "ran (or skipped because the torrent client could not be asked, which fails closed)",
+        "2": "refused to run, the completed root is a link or lies outside downloads/"
+      },
+      "id": "media-cleanup-downloads",
+      "inputs": "the downloads directory and the library tree (read only), the torrent client web interface (QBIT_URL, login from the unit environment), the filename blacklist",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-media-cleanup-downloads",
+      "kind": "job",
+      "language": "python",
+      "outputs": "removals under downloads/ logged to the journal; nothing outside downloads/ is ever changed",
+      "owner": "operator",
+      "path": "modules/media-automation/roles/media_automation/files/cleanup-downloads.py",
+      "purpose": "Remove completed downloads whose data is already hardlinked into the library and not loaded in the torrent client, the filename-blacklisted executables and scripts, orphaned partfiles and empty directories, only under downloads/.",
+      "status": "active",
+      "trigger": [
+        "timer:media_automation/cleanup-downloads",
+        "role:media_automation"
+      ]
+    },
+    {
+      "exit": {
+        "0": "imported and verified, or counts printed",
         "1": "the import failed or its counts differ from the source (the target is kept for inspection)"
       },
       "id": "media-config-import",
@@ -1120,6 +1161,46 @@
       "status": "active",
       "trigger": [
         "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "ran",
+        "1": "a manager could not be asked (the renames of the other are not attempted)"
+      },
+      "id": "media-rename-cleanup",
+      "inputs": "the two library managers over their web interfaces (API keys read from each config.xml)",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-media-rename-cleanup",
+      "kind": "job",
+      "language": "python",
+      "outputs": "renames inside each series or movie folder of the library (a name that leaves its folder or a link is refused), rescan commands, and journal lines",
+      "owner": "operator",
+      "path": "modules/media-automation/roles/media_automation/files/rename_cleanup.py",
+      "purpose": "Rename release-style file names in the library to the library managers' own naming, then ask them to rescan.",
+      "status": "active",
+      "trigger": [
+        "timer:media_automation/rename-cleanup",
+        "role:media_automation"
+      ]
+    },
+    {
+      "exit": {
+        "0": "ran",
+        "2": "the torrent client could not be reached"
+      },
+      "id": "media-stalled-repair",
+      "inputs": "the torrent client and the two library managers over their web interfaces (their API keys read from each config.xml), the state file",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-media-stalled-repair",
+      "kind": "job",
+      "language": "python",
+      "outputs": "removals and re-searches through those interfaces, the state file, and journal lines",
+      "owner": "operator",
+      "path": "modules/media-automation/roles/media_automation/files/stalled-torrent-repair.py",
+      "purpose": "Remove and re-search a torrent whose progress has not moved for the stall window, and clear already-imported or unimportable queue items.",
+      "status": "active",
+      "trigger": [
+        "timer:media_automation/stalled-repair",
+        "role:media_automation"
       ]
     },
     {

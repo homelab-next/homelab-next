@@ -673,3 +673,81 @@ def test_restore_refuses_an_export_that_records_no_fingerprints(tmp_path):
     r = _restore(tmp_path, env, src)
     assert r.returncode != 0 and "no fingerprint" in r.stdout + r.stderr
     assert not any(" stop " in c for c in calls(tmp_path)[n:])
+
+
+# ----------------------------------------------------------------------------- a SECRET_KEY never set
+# An export of a source that ran on the product's built-in default SECRET_KEY (never set) carries no
+# fingerprint of it but the dump's proof that nothing is encrypted under it; such an export restores
+# only with a fresh key declared as such (app_key_origin: generated), and generated is refused for an
+# export of a source with its own key. Every refusal comes before the service is stopped.
+
+_ROWS = ("two_factor", "secret", "webhook", "login_source", "task")
+FRESH_KEY = {secret_env_name(f"secret:{MID}/secret-key"): "f" * 43}
+
+
+def _as_builtin(m: dict) -> None:
+    """What the migration tool's dump writes for a source on the built-in key."""
+    m["app_key_fingerprints"].pop("secret_key")
+    m["secret_key_source"] = "builtin-default"
+    m["secret_key_unused_proof"] = {
+        "rules": DEFAULTS[f"{P}_image"].split(":")[1].split("-")[0],
+        "encrypted_rows": dict.fromkeys(_ROWS, 0),
+    }
+
+
+def _builtin_export(tmp_path, **sql_kw):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    dump = make_dump(tmp_path / "source.zip", **sql_kw)
+    env = _env(tmp_path, dump=dump, repos_out=tsv())
+    (tmp_path / "data" / "export").mkdir(parents=True, exist_ok=True)
+    src = _export(tmp_path, env)
+    _relist(src, _as_builtin)
+    return env, src
+
+
+def test_restore_takes_a_fresh_key_for_an_export_that_proved_the_built_in_one_unused(tmp_path):
+    env, src = _builtin_export(tmp_path)
+    env = {**env, **FRESH_KEY}
+    with Front(PKI[0], PKI[1], tmp_path, password=ADMIN) as front:
+        banner = Banner()
+        installed = run_role(
+            tmp_path, ROLE, "main", _live(tmp_path, front, banner, start=False), env=env
+        )
+        assert installed.returncode == 0, installed.stdout[-2000:]
+        r = _restore(tmp_path, env, src, front, banner, start=True, app_key_origin="generated")
+        banner.close()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "f" * 43 not in r.stdout + r.stderr
+    assert (tmp_path / "data" / "data" / f"{P}.db").is_file()
+
+
+@pytest.mark.parametrize("builtin, origin, message", [
+    (True, "source", "cannot be carried"),  # the default: the operator must declare the fresh key
+    (False, "generated", "has its own SECRET_KEY"),  # a key of its own is always copied
+])  # fmt: skip
+def test_restore_refuses_a_key_origin_that_does_not_fit_the_export_before_stopping(
+    tmp_path, builtin, origin, message
+):
+    if builtin:
+        env, src = _builtin_export(tmp_path)
+    else:
+        env = _stood(tmp_path)
+        src = _export(tmp_path, env)
+    n = len(calls(tmp_path))
+    r = _restore(tmp_path, {**env, **FRESH_KEY}, src, app_key_origin=origin)
+    text = r.stdout + r.stderr
+    assert r.returncode != 0 and message in text, text[-2000:]
+    assert not any(" stop " in c for c in calls(tmp_path)[n:])
+    assert not (tmp_path / "data" / "data" / f"{P}.db").exists()
+
+
+def test_restore_refuses_a_fresh_key_when_the_proof_is_absent_or_the_archive_holds_a_row(tmp_path):
+    env, src = _builtin_export(tmp_path / "a", encrypted=["webhook"])
+    n = len(calls(tmp_path / "a"))
+    r = _restore(tmp_path / "a", {**env, **FRESH_KEY}, src, app_key_origin="generated")
+    assert r.returncode != 0 and "webhook: 1 rows" in r.stdout + r.stderr
+    assert not any(" stop " in c for c in calls(tmp_path / "a")[n:])
+    env, src = _builtin_export(tmp_path / "b")
+    _relist(src, lambda m: m.pop("secret_key_unused_proof"))
+    r = _restore(tmp_path / "b", {**env, **FRESH_KEY}, src, app_key_origin="generated")
+    assert r.returncode != 0 and "no proof" in r.stdout + r.stderr

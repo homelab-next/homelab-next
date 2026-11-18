@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade one app: validate and record the bump (media_automation_upgrade_app and
+# media_automation_target_image, tag and digest), export every config first (a newer library manager
+# migrates its own database on first start and cannot be undone by an older one), then converge with
+# the new pin.
+#   ansible-playbook -i <inventory> modules/media-automation/playbooks/upgrade.yml \
+#     -e media_automation_upgrade_app=<app> -e media_automation_target_image=<ref>
+- name: Upgrade one app of the media automation stack
+  hosts: mod_media_automation_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: media_automation
+        tasks_from: upgrade
+    - name: Export the config before the new image opens the databases
+      ansible.builtin.include_role:
+        name: media_automation
+        tasks_from: export
+    - name: Take the new pin for the one app (a fact outranks the role's default and the site's variable)
+      ansible.builtin.set_fact:
+        "media_automation_{{ media_automation_upgrade_app }}_image": "{{ media_automation_target_image }}"
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: media_automation

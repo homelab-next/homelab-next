@@ -1,0 +1,50 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role media_automation). Do not edit.
+[Unit]
+Description=media-automation helper: clean release-style file names in the library
+After=docker.service
+ConditionPathIsDirectory={{ media_automation_library_path }}
+
+[Service]
+Type=oneshot
+User={{ media_automation_uid | int }}
+Group={{ media_automation_gid | int }}
+EnvironmentFile={{ media_automation_helpers_dir }}/helper.env
+Environment=BLACKLIST_FILE=/usr/local/libexec/homelabnext/hnx-media-excluded-file-names.txt
+Environment=APP_CONFIG_ROOT={{ media_automation_data_root }}/config
+Environment=MEDIA_ROOT={{ media_automation_library_path }}
+Environment=QBIT_URL=http://{{ media_automation_bind }}:{{ media_automation_qbittorrent_port | int }}
+Environment=SONARR_URL=http://{{ media_automation_bind }}:{{ media_automation_sonarr_port | int }}
+Environment=RADARR_URL=http://{{ media_automation_bind }}:{{ media_automation_radarr_port | int }}
+Environment=STALLED_TORRENT_STATE={{ media_automation_state_dir }}/stalled-torrents.json
+Environment=STALLED_TORRENT_HOURS={{ media_automation_helper_stall_hours | int }}
+# the job's last-run record (role last_run), written on start and on stop; "-+" = a writer problem never
+# fails the job, and the writer runs as root (outside this unit's User= and sandbox) into the root-owned record directory
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ media_automation_last_run_dir }} --group {{ media_automation_last_run_group }} --job timer:media_automation/rename-cleanup --unit %n --calendar "*-*-* 05:30:00 UTC" --delay 300
+ExecStart=/usr/local/libexec/homelabnext/hnx-media-rename-cleanup
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ media_automation_last_run_dir }} --group {{ media_automation_last_run_group }} --job timer:media_automation/rename-cleanup --unit %n --calendar "*-*-* 05:30:00 UTC" --delay 300
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+ReadWritePaths={{ media_automation_library_path }} {{ media_automation_state_dir }}
+ReadOnlyPaths={{ media_automation_data_root }}/config

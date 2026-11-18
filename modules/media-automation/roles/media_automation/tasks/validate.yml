@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - media_automation_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      # every image pinned by tag and digest
+      - media_automation_images.values() | reject('match', '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\\Z') | list | length == 0
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - media_automation_bind is match(media_automation_ipv4_pattern)
+      - media_automation_bind != '0.0.0.0'
+      - media_automation_ports | map('int') | select('lt', 1) | list | length == 0
+      - media_automation_ports | map('int') | select('gt', 65535) | list | length == 0
+      - media_automation_uid | int >= 1000 and media_automation_gid | int >= 1000
+      - media_automation_seerr_uid | int >= 1000 and media_automation_seerr_gid | int >= 1000
+      # absolute, canonical paths (no //, no . or .. component, no trailing /)
+      - >-
+        [media_automation_dir, media_automation_data_root, media_automation_cache_dir, media_automation_library_path]
+        | reject('match', media_automation_path_pattern) | list | length == 0
+      # the library is never inside the module's own state, and a state directory never inside it
+      - media_automation_library_path != media_automation_data_root and not (media_automation_library_path ~ '/').startswith(media_automation_data_root ~ '/')
+      - not (media_automation_data_root ~ '/').startswith(media_automation_library_path ~ '/')
+      - not (media_automation_cache_dir ~ '/').startswith(media_automation_library_path ~ '/')
+      - not (media_automation_dir ~ '/').startswith(media_automation_library_path ~ '/')
+      - not (media_automation_library_path ~ '/').startswith(media_automation_dir ~ '/')
+      - media_automation_library_path not in ['/srv', '/mnt', '/media', '/home', '/opt', '/var', '/usr', '/etc']
+      - media_automation_library_marker is match('^\.?[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}\Z')
+      - media_automation_downloads_subdir is match('^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}\Z')
+      - media_automation_downloads_subdir not in ['.', '..']
+      - media_automation_timezone is match('^[A-Za-z][A-Za-z0-9_+/-]{0,63}\Z')
+      - media_automation_vpn_provider is match('^[a-z0-9][a-z0-9 ._-]{0,40}\Z')
+      - media_automation_vpn_server_hostnames == '' or media_automation_vpn_server_hostnames is match('^[A-Za-z0-9.-]+(,[A-Za-z0-9.-]+)*\Z')
+      - media_automation_vpn_input_ports is sequence and media_automation_vpn_input_ports is not string
+      - media_automation_vpn_input_ports | length <= 10
+      - media_automation_vpn_input_ports | map('string') | reject('match', '^[1-9][0-9]{0,4}\Z') | list | length == 0
+      - media_automation_vpn_input_ports | map('int') | select('gt', 65535) | list | length == 0
+      # the kill-switch admits answers to the lab only: at least one subnet, each a CIDR
+      - media_automation_vpn_outbound_subnets is sequence and media_automation_vpn_outbound_subnets is not string
+      - media_automation_vpn_outbound_subnets | length >= 1
+      - media_automation_vpn_outbound_subnets | map('string') | reject('match', media_automation_cidr_pattern) | list | length == 0
+      - media_automation_vpn_outbound_subnets | length <= 8
+      - media_automation_vpn_outbound_subnets | map('string') | reject('match', media_automation_lan_cidr_pattern) | list | length == 0
+      - >-
+        [media_automation_vpn_key_ref, media_automation_vpn_psk_ref,
+         media_automation_vpn_addresses_ref, media_automation_qbittorrent_login_ref]
+        | reject('match', media_automation_ref_pattern) | list | length == 0
+      - >-
+        [media_automation_vpn_key_ref, media_automation_vpn_psk_ref,
+         media_automation_vpn_addresses_ref, media_automation_qbittorrent_login_ref] | unique | list | length == 4
+      - media_automation_qbittorrent_user is match('^[A-Za-z0-9_.-]{1,64}\Z')
+      - >-
+        [media_automation_helpers_enabled, media_automation_helper_cleanup_enabled,
+         media_automation_helper_stalled_enabled, media_automation_helper_rename_enabled,
+         media_automation_start, media_automation_validate_with_docker] | map('type_debug') | unique | list == ['bool']
+      - media_automation_helper_stall_hours | int >= 1 and media_automation_helper_min_age_hours | int >= 1
+      - media_automation_systemctl_cli is match('^[A-Za-z0-9_/.-]+\Z')
+      - media_automation_unit_dir is match(media_automation_path_pattern)
+      - media_automation_last_run_dir is match(media_automation_path_pattern)
+      - media_automation_last_run_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - media_automation_libexec_dir is match(media_automation_path_pattern)
+    fail_msg: >-
+      media-automation: a registry id, every image pinned by tag and digest, the guest's IPv4 address
+      to publish on (not all interfaces), ports, uids and gids of 1000 or more, absolute canonical
+      directories with the library outside the data root and the compose project and not a host-wide
+      directory, a downloads directory name, a timezone, a VPN provider, optional server hostnames,
+      forwarded ports, one to eight outbound subnets as CIDRs in private, shared, link-local or loopback ranges (the
+      kill-switch's only way out to the lab: a public range would be a hole around the tunnel), four distinct secret references, boolean switches, positive helper hours, http(s) URLs
+      or empty 
+  tags: [health, backup, restore, export, upgrade, readiness]

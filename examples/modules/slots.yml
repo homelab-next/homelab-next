@@ -45,6 +45,7 @@ slots:
   tts:                 {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   context:             {stage: null, contract: context.py, stateful: false}
   metrics:             {stage: null, contract: null, stateful: false}
+  media-automation:    {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   automation:          {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   chat:                {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   dataflow:            {stage: null, contract: null, stateful: true, export_formats: [json]}

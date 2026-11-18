@@ -29,7 +29,7 @@ credentials:
   - secret: secret:gitea/secret-key
     identity: key
     holder: provider
-    purpose: the key Gitea encrypts two-factor seeds and stored credentials with; on a migration the source's value (another one leaves them unreadable)
+    purpose: the key Gitea encrypts two-factor seeds and stored credentials with; on a migration the source's value, or a fresh one only if the source ran on the built-in default with nothing under it (README)
   - secret: secret:gitea/internal-token
     identity: token
     holder: provider

@@ -71,6 +71,8 @@ class Host:
         hook=None,
         keys=None,
         policy="always",
+        encrypted=(),
+        key_tables=True,
     ):
         self.running, self.fsck, self.repos, self.files, self.log = (
             running,
@@ -86,10 +88,11 @@ class Host:
             f"[security]\nINSTALL_LOCK = true\nSECRET_KEY = {k['SECRET_KEY']}\n"
             f"INTERNAL_TOKEN = {k['INTERNAL_TOKEN']}\n[oauth2]\nJWT_SECRET = {k['JWT_SECRET']}\n"
         )
-        self.zip = make_dump(work / "src.zip", repos=repos, users=users)
+        sql_kw = {"repos": repos, "users": users, "encrypted": encrypted, "key_tables": key_tables}
+        self.zip = make_dump(work / "src.zip", **sql_kw)
         self.db = work / "src.db"
         self.db.unlink(missing_ok=True)
-        sqlite3.connect(self.db).executescript(dump_sql(repos=repos, users=users))
+        sqlite3.connect(self.db).executescript(dump_sql(**sql_kw))
         self.fail_dump = False
 
     def lines(self) -> str:
@@ -534,7 +537,8 @@ def test_an_export_with_no_fingerprints_and_a_target_without_the_keys_prove_noth
         mt.verify(ep(), private / "out", _ctx=Host(private).ctx())
     bare = Host(private)
     bare.config = "[server]\nSSH_PORT = 22\n"
-    with pytest.raises(mt.MigrateError, match="SECRET_KEY"):
+    # no SECRET_KEY is the built-in key's case (below); the other two must still be in plain text
+    with pytest.raises(mt.MigrateError, match="INTERNAL_TOKEN"):
         mt.dump(ep(), private / "out3", _ctx=bare.ctx())
     assert not (private / "out3" / "dump.zip").exists()
 
@@ -553,3 +557,99 @@ def test_an_export_with_an_attach_statement_is_refused_and_creates_no_file(priva
         _dump(private, host)
     assert not target.exists()
     assert not (private / "out" / "dump.zip").exists()
+
+
+# ----------------------------------------------------------------------------- a SECRET_KEY never set
+# The source's configuration sets no SECRET_KEY, so the product runs on its built-in default key.
+# That key is not carried: the dump proves from its own database that nothing is encrypted under
+# it and records the proof, and the target then takes a fresh key; a row encrypted under it, an
+# unknown schema or a missing proof is a refusal. The source's own key keeps the copy path.
+
+FRESH = {"SECRET_KEY": "f" * 43}  # what a generated secret looks like (43 URL-safe characters)
+_helper = mt._load_helper()
+
+
+def _builtin_source(private, how="empty", **kw):
+    host = Host(private, keys={"SECRET_KEY": ""}, **kw)
+    if how == "absent":
+        host.config = host.config.replace("SECRET_KEY = \n", "")
+    elif how == "default":
+        host.config = host.config.replace(
+            "SECRET_KEY = ", "SECRET_KEY = " + _helper.BUILTIN_APP_KEY
+        )
+    return host
+
+
+@pytest.mark.parametrize("how", ["empty", "absent", "default"])
+def test_a_source_on_the_built_in_key_with_nothing_under_it_is_dumped_with_the_proof(private, how):
+    m = _dump(private, _builtin_source(private, how))
+    assert m["secret_key_source"] == "builtin-default"
+    proof = m["secret_key_unused_proof"]
+    assert proof["rules"] == _helper.APP_KEY_USES_RULES
+    assert proof["encrypted_rows"] == dict.fromkeys(sorted(_helper.APP_KEY_USES), 0)
+    # the key is not carried, so it has no fingerprint; the other two are the source's
+    assert sorted(m["app_key_fingerprints"]) == ["internal_token", "jwt_secret"]
+    assert _helper.BUILTIN_APP_KEY.encode() not in (private / "out" / "manifest.json").read_bytes()
+
+
+def test_a_target_with_a_fresh_key_verifies_and_one_on_the_default_or_other_secrets_does_not(
+    private,
+):
+    _dump(private, _builtin_source(private))
+    ok = mt.verify(ep(), private / "out", _ctx=Host(private, keys=FRESH).ctx())
+    assert ok["verified"] is True
+    with pytest.raises(mt.VerifyMismatch, match="built-in default SECRET_KEY"):
+        mt.verify(ep(), private / "out", _ctx=Host(private, keys={"SECRET_KEY": ""}).ctx())
+    for name in ("INTERNAL_TOKEN", "JWT_SECRET"):
+        other = Host(private, keys={**FRESH, name: "y" * 50})
+        with pytest.raises(mt.VerifyMismatch, match=name.lower()):
+            mt.verify(ep(), private / "out", _ctx=other.ctx())
+
+
+@pytest.mark.parametrize("table", ["two_factor", "secret", "webhook", "login_source", "task"])
+def test_a_source_on_the_built_in_key_with_a_row_encrypted_under_it_is_refused(private, table):
+    with pytest.raises(mt.VerifyMismatch, match=rf"built-in default SECRET_KEY.*{table}: 1 rows"):
+        _dump(private, _builtin_source(private, encrypted=[table]))
+    assert not (private / "out" / "dump.zip").exists()
+    assert not (private / "out" / "manifest.json").exists()
+
+
+def test_a_source_on_the_built_in_key_whose_schema_is_unknown_is_refused(private):
+    with pytest.raises(mt.VerifyMismatch, match="cannot prove what is encrypted"):
+        _dump(private, _builtin_source(private, key_tables=False))
+    assert not (private / "out" / "dump.zip").exists()
+
+
+def _edit_manifest(out: Path, edit) -> None:
+    path = out / "manifest.json"
+    doc = json.loads(path.read_text())
+    edit(doc)
+    path.write_text(json.dumps(doc))
+    rows = [json.loads(ln) for ln in (out / "listing.jsonl").read_text().splitlines()]
+    for r in rows:
+        if r["key"] == "manifest.json":
+            r["size"], r["sha256"] = mt._sha256(path)
+    (out / "listing.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+
+
+@pytest.mark.parametrize("edit, message", [
+    (lambda m: m.pop("secret_key_unused_proof"), "no proof"),
+    (lambda m: m["secret_key_unused_proof"].update(rules="1.0.0"), "no proof"),
+    (lambda m: m["secret_key_unused_proof"]["encrypted_rows"].pop("task"), "no proof"),
+    (lambda m: m["secret_key_unused_proof"]["encrypted_rows"].update(two_factor=2), "records rows"),
+])  # fmt: skip
+def test_verify_refuses_an_export_whose_proof_is_absent_incomplete_or_not_zero(
+    private, edit, message
+):
+    _dump(private, _builtin_source(private))
+    _edit_manifest(private / "out", edit)
+    with pytest.raises(mt.VerifyMismatch, match=message):
+        mt.verify(ep(), private / "out", _ctx=Host(private, keys=FRESH).ctx())
+
+
+def test_a_source_with_its_own_key_keeps_the_copy_path_and_a_fresh_key_is_refused(private):
+    m = _dump(private, Host(private))
+    assert m["secret_key_source"] == "configured" and "secret_key_unused_proof" not in m
+    assert sorted(m["app_key_fingerprints"]) == ["internal_token", "jwt_secret", "secret_key"]
+    with pytest.raises(mt.VerifyMismatch, match="secret_key is not the source's"):
+        mt.verify(ep(), private / "out", _ctx=Host(private, keys=FRESH).ctx())

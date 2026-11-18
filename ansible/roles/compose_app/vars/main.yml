@@ -2,7 +2,7 @@
 # Fixed spec rules, not settings: role vars outrank inventory, so a deployment cannot loosen them.
 compose_app_service_keys:
   [image, tag, digest, healthcheck, command, user, env_file, environment, ports, volumes,
-   depends_on, restart, cap_add, read_only, mem_limit, privileged, devices, group_add, tmpfs]
+   depends_on, restart, cap_add, read_only, mem_limit, privileged, devices, group_add, network_mode, init, tmpfs]
 compose_app_restart_policies: ["no", always, on-failure, unless-stopped]
 # docker (and its distribution) image grammar, repository part only: optional registry[:port]/
 compose_app_repository_pattern: '^(?:[A-Za-z0-9.-]+(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*\Z'
@@ -25,6 +25,7 @@ compose_app_interpolated_volume_pattern: '\$|^~'
 compose_app_host_wide_pattern: '^/(?:etc|proc|sys|dev|boot|root|run|var|var/run|var/lib|var/log|usr|usr/local|home|opt|srv|mnt|media|tmp|lib|lib64|bin|sbin)?\Z'
 compose_app_sensitive_name_pattern: '(?i)(password|passwd|secret|token|api_?key|private_?key|credential)'
 # capabilities that amount to privileged: refused in cap_add unless compose_app_allow_privileged
+# (NET_ADMIN alone is unlocked by the narrower compose_app_allow_net_admin)
 compose_app_dangerous_caps:
   [ALL, SYS_ADMIN, SYS_MODULE, SYS_RAWIO, SYS_PTRACE, SYS_BOOT, DAC_READ_SEARCH, BPF, PERFMON,
    NET_ADMIN, MAC_ADMIN, MAC_OVERRIDE]
@@ -34,14 +35,18 @@ compose_app_subnet_pattern: '^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.
 # names them hnx-<module id>-<host role>.slice, `-` in either written `_`), never system.slice,
 # -.slice or a cgroupfs path that would leave the slice's limits
 compose_app_cgroup_parent_pattern: '^hnx-[a-z0-9_]+-[a-z0-9_]+\.slice\Z'
-# a GPU handed to a container (`devices`): a DRM render node (/dev/dri/renderD128, the host's path
+# a device handed to a container (`devices`; a VPN client's tunnel node /dev/net/tun, with
+# compose_app_allow_net_admin for its capability): a DRM render node (/dev/dri/renderD128, the host's path
 # is the container's) or a CDI device name (nvidia.com/gpu=0 or =all, which the container
 # toolkit's CDI spec resolves). Never /dev/mem, /dev/kmsg, a disk or the control node of anything
 # else: a wider device needs its own reviewed change here, not a deployment setting.
-compose_app_device_pattern: '^(?:/dev/dri/renderD[0-9]{3}|nvidia\.com/gpu=(?:all|[0-9]{1,2}))\Z'
+compose_app_device_pattern: '^(?:/dev/dri/renderD[0-9]{3}|/dev/net/tun|nvidia\.com/gpu=(?:all|[0-9]{1,2}))\Z'
 # a supplementary group by number (the render group's id on the host: the name does not resolve
 # inside the image); the root group is refused, as a user's is
 compose_app_group_add_pattern: '^[1-9][0-9]{0,9}\Z'
+# a service's network_mode: only the namespace of another service of the same spec (a sidecar that
+# must have no network of its own: a VPN client's kill-switch), never host, bridge or a container
+compose_app_network_mode_pattern: '^service:[a-z0-9][a-z0-9_.-]*\Z'
 # a RAM-backed mount (`tmpfs`: [{target, size_bytes, mode}]): the target an absolute, canonical
 # container path of at least one component (never / itself); the size a positive integer of bytes
 # from one page to 1 TiB; the mode a string of three octal digits with an optional leading 0 or 1 (docker's default 1777)

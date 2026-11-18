@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: Apache-2.0
+# The media automation provider (docs/modules.md; README.md beside this file): the stack that ran
+# beside the media server on the old media host, as ONE compose_app project in the module's slice -
+# the library managers (TV, films, music), the indexer manager and its challenge solver, the torrent
+# and usenet clients, the request app, the transcode node, and the VPN client every download client
+# routes through. The download clients have no network of their own (network_mode service: the VPN
+# client): with the tunnel down they fail closed. Every web interface is internal only; the request
+# app's edge route is a later change to the registry row. The library is WRITABLE (the managers
+# import into it, the clients write under its downloads directory); its real source, the VPN
+# account, the uid the old files are owned by and every address are the site's.
+manifest_version: "1.0"
+id: media-automation
+kind: provider
+title: Media automation (library managers, VPN-routed downloads)
+description: Fills the media-automation slot with Sonarr, Radarr, Lidarr, Prowlarr with FlareSolverr,
+  qBittorrent and NZBGet routed through gluetun, Jellyseerr's successor Seerr and Tdarr as one
+  compose_app project; the library is writable at a path variable; the apps' config moves with
+  tools/migrate/media_automation.py.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: seerr
+  version: 3.5.1
+licence:
+  kind: open-source
+  spdx: MIT
+credentials:
+  - secret: secret:media-automation/vpn-wireguard-private-key
+    identity: key
+    holder: provider
+    purpose: the WireGuard private key of the VPN account, given only to the VPN client's env file (0600)
+  - secret: secret:media-automation/vpn-wireguard-preshared-key
+    identity: key
+    holder: provider
+    purpose: the WireGuard preshared key the VPN provider mandates, given only to the VPN client's env file (0600)
+  - secret: secret:media-automation/vpn-wireguard-addresses
+    identity: key
+    holder: provider
+    purpose: the interface address(es) (CIDR) the VPN provider assigned to the WireGuard key, given only to the VPN client's env file (0600)
+  - secret: secret:media-automation/qbittorrent-password
+    identity: password
+    holder: provider
+    purpose: the torrent client web interface password the helper timers log in with (the same value the apps hold for their download client, carried by the migration)
+identifiers:
+  - {kind: secret-name, name: media-automation, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the VPN credentials and the torrent client password are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 6, memory_mb: 12288, disk_gb: 60}
+      guest:
+        baselines: [base]
+      roles: [role:media_automation]
+      purpose: runs the whole stack (docker_engine applied first, compose_app renders it); the library mount and /dev/net/tun are the guest's
+provides:
+  slots:
+    media-automation:
+      adapter: homelabnext.conform.adapters.media_automation:make
+      provisional: true
+      reason: media-automation has no contract yet; the obvious standard is the request app answering its status and each library manager answering its ping, which is what the role's health hook reads
+      migration: {formats: [object-tree], export: role:media_automation, import: role:media_automation}
+egress:
+  - host: server
+    to: [internet]
+    purpose: the VPN provider's servers, the indexers, usenet providers and the managers' metadata lookups; no library file or account leaves except what a download client sends to its peers inside the tunnel
+contributes:
+  roles:
+    - file: roles/media_automation
+  services:
+    - file: registry/services.yml
+  scheduler_jobs:
+    - {timer: timer:media_automation/cleanup-downloads}
+    - {timer: timer:media_automation/stalled-repair}
+    - {timer: timer:media_automation/rename-cleanup}
+  preflight:
+    - {role: role:media_automation, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: config
+    kind: state
+    description: Every app's configuration and database (library managers, indexer manager, torrent and usenet clients, request app, transcode server) with their API keys and settings. The library and the downloads are not here; they are the site's.
+    export: {formats: [object-tree], via: role:media_automation}
+    import: {formats: [object-tree], via: role:media_automation}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "one app's pinned image bump (tag and digest): the role's upgrade hook validates and records it, the config is exported, then it converges (the library managers migrate their own databases on first start with a newer version and cannot go back)"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

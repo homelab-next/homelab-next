@@ -126,7 +126,7 @@ def record_problems(
         found = None
         for line in keys.get(key, []):
             try:
-                argv = shlex.split(line.lstrip("@+!:"))
+                argv = shlex.split(line.lstrip("-@+!:"))
             except ValueError:
                 continue
             if len(argv) > 1 and argv[0].lstrip("-") == WRITER and argv[1] == action:

@@ -211,5 +211,7 @@ allow:
     reason: "the per-guest host-metrics role (control metrics-agent) installs and configures the distribution's package of one product (prometheus-node-exporter), so the package, unit and argument file names are the role itself; reviewed as an exemption until a provider module carries it, as the other roles named for their product"
   - path: "tests/roles/test_node_exporter_role.py"
     reason: "the node_exporter role's own tests name the distribution's package, unit and argument file the role manages"
+  - path: "tools/migrate/media_automation.py"
+    reason: "the media automation stack's import tool (modules/media-automation): a product-specific importer by definition (it reads each app's own database, config file and resume files by their product file names), as tools/migrate/<product>.py"
   - path: "tests/*/test_openwebui_*.py"
     reason: "the tests of the chat provider module (modules/openwebui) and of its role (modules/openwebui/roles/openwebui): its manifest, adapter and an overlay that selects it, by the module's id, which is its product's name (a module role is named for the module id, role:<module id>); the compose service and env_file the core role renders carry the product's name"

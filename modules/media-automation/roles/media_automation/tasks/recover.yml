@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# Recover the download clients after the VPN client was restarted: a restart keeps the container id
+# but builds a new network namespace, and the clients keep the old one (no interface, no route: they
+# fail closed but stay dead, and their own health checks inside that namespace stay green). Compares the
+# namespaces and recreates only the clients that are out of step; the VPN client is never touched, and
+# the clients start again only behind its health check (depends_on service_healthy), so the
+# kill-switch holds throughout.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Read the network namespaces
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ media_automation_dir }}/docker-compose.yml"
+          - exec
+          - -T
+          - "{{ item }}"
+          - readlink
+          - /proc/self/ns/net
+      loop: [gluetun, qbittorrent, nzbget]
+      register: media_automation_netns
+      changed_when: false
+      failed_when: false
+      check_mode: false
+    - name: Recreate the clients that are not in the VPN client's namespace (or cannot be asked)
+      ansible.builtin.command:
+        argv: >-
+          {{ ['docker', 'compose', '-f', media_automation_dir ~ '/docker-compose.yml', 'up', '-d', '--force-recreate', '--no-deps']
+             + (media_automation_netns.results[1:]
+                | rejectattr('stdout', 'eq', media_automation_netns.results[0].stdout)
+                | map(attribute='item') | list
+                + media_automation_netns.results[1:] | selectattr('rc', 'ne', 0) | map(attribute='item') | list) | unique | list }}
+      when: >-
+        media_automation_netns.results[0].rc == 0 and
+        (media_automation_netns.results[1:] | rejectattr('stdout', 'eq', media_automation_netns.results[0].stdout) | list | length > 0
+         or media_automation_netns.results[1:] | selectattr('rc', 'ne', 0) | list | length > 0)
+      changed_when: true
+  tags: [recover]

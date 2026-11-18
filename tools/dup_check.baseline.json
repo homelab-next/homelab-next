@@ -6,10 +6,10 @@
   "min_lines": 5
  },
  "summary": {
-  "clones": 37,
-  "duplicated_lines": 540,
-  "total_lines": 194172,
-  "duplicated_percent": 0.28
+  "clones": 49,
+  "duplicated_lines": 779,
+  "total_lines": 202842,
+  "duplicated_percent": 0.38
  },
  "increases": [
   {
@@ -21,6 +21,11 @@
    "reason": "tools/migrate/forge.py is the forge provider's migration tool, written on the shipped projects-migrate tool's ssh-pipe scaffold (guard_dir, Runner, _subprocess_runner, _Ctx, _wrap, _run and two small guards); extracting them into a shared module changes the other tool and the tests of both, which patch module-level names, so it is a follow-up and not part of the forge module's review fixes",
    "from": 376,
    "to": 540
+  },
+  {
+   "reason": "tools/migrate/media_automation.py is a sibling of tools/migrate/jellyfin.py (the same import shape: read-only counts, one-pass path map, build-beside-then-rename guards, the CLI); the two standalone one-file tools share their guard and CLI lines on purpose, a shared module would couple two operator tools that run once at a cutover",
+   "from": 540,
+   "to": 807
   }
  ],
  "clones": {
@@ -77,6 +82,33 @@
     "03edda441e"
    ]
   },
+  "12054794cb82ce5c": {
+   "tokens": 107,
+   "lines": 13,
+   "count": 1,
+   "files": [
+    "tools/migrate/jellyfin.py",
+    "tools/migrate/media_automation.py"
+   ],
+   "fingerprints": [
+    "0191c018bc",
+    "03465dbb1c",
+    "048c09574f",
+    "0693c73579"
+   ]
+  },
+  "17e59e32af4d5c92": {
+   "tokens": 70,
+   "lines": 14,
+   "count": 1,
+   "files": [
+    "tools/migrate/jellyfin.py",
+    "tools/migrate/media_automation.py"
+   ],
+   "fingerprints": [
+    "0a5be7ec67"
+   ]
+  },
   "2dea0564519e2e70": {
    "tokens": 137,
    "lines": 12,
@@ -95,6 +127,33 @@
     "08abbb9124",
     "0d0d25aa8c",
     "14bbf4b4bc"
+   ]
+  },
+  "2e577e6ee3c46bc6": {
+   "tokens": 51,
+   "lines": 9,
+   "count": 1,
+   "files": [
+    "tools/migrate/jellyfin.py",
+    "tools/migrate/media_automation.py"
+   ],
+   "fingerprints": [
+    "06c63a0297"
+   ]
+  },
+  "34a19b563877e409": {
+   "tokens": 72,
+   "lines": 10,
+   "count": 1,
+   "files": [
+    "tools/migrate/jellyfin.py",
+    "tools/migrate/media_automation.py"
+   ],
+   "fingerprints": [
+    "00360141f9",
+    "04366cdc47",
+    "0558b7c71a",
+    "0767b514b8"
    ]
   },
   "3fbfee55f7e6e4c9": {
@@ -125,6 +184,37 @@
     "00620e6587",
     "13125cf328",
     "1ac8308707"
+   ]
+  },
+  "54d250285204b125": {
+   "tokens": 77,
+   "lines": 7,
+   "count": 1,
+   "files": [
+    "tools/migrate/jellyfin.py",
+    "tools/migrate/media_automation.py"
+   ],
+   "fingerprints": [
+    "009b560cc3",
+    "01941b1512",
+    "093347cbc3"
+   ]
+  },
+  "5a223b0578e255c0": {
+   "tokens": 122,
+   "lines": 14,
+   "count": 1,
+   "files": [
+    "tools/migrate/jellyfin.py",
+    "tools/migrate/media_automation.py"
+   ],
+   "fingerprints": [
+    "0552003bf0",
+    "0562224502",
+    "084314ca94",
+    "0ae869c5d5",
+    "0b7d5d1b93",
+    "0d398bc55c"
    ]
   },
   "7b2d1d3e3382e36f": {
@@ -221,6 +311,35 @@
     "010ff94c5f"
    ]
   },
+  "9ea72866093e09af": {
+   "tokens": 63,
+   "lines": 6,
+   "count": 1,
+   "files": [
+    "tools/migrate/jellyfin.py",
+    "tools/migrate/media_automation.py"
+   ],
+   "fingerprints": [
+    "0601013138",
+    "09c2b205a3"
+   ]
+  },
+  "a63ff04db4c013b1": {
+   "tokens": 101,
+   "lines": 10,
+   "count": 1,
+   "files": [
+    "tools/migrate/jellyfin.py",
+    "tools/migrate/media_automation.py"
+   ],
+   "fingerprints": [
+    "008074d331",
+    "00885519f4",
+    "01183b452e",
+    "06456de08f",
+    "069bef668f"
+   ]
+  },
   "b758b548b99917bd": {
    "tokens": 56,
    "lines": 10,
@@ -265,6 +384,19 @@
     "012f4a93eb"
    ]
   },
+  "ba5f344d828f1eae": {
+   "tokens": 69,
+   "lines": 10,
+   "count": 1,
+   "files": [
+    "tools/migrate/jellyfin.py",
+    "tools/migrate/media_automation.py"
+   ],
+   "fingerprints": [
+    "05398e0d9f",
+    "05664276c1"
+   ]
+  },
   "bccda83dbb55d3dd": {
    "tokens": 62,
    "lines": 7,
@@ -291,6 +423,34 @@
     "140eef7a2e",
     "2ab14c3d85",
     "3f5b683292"
+   ]
+  },
+  "c4da9e7fcad22e9d": {
+   "tokens": 116,
+   "lines": 12,
+   "count": 1,
+   "files": [
+    "tools/migrate/jellyfin.py",
+    "tools/migrate/media_automation.py"
+   ],
+   "fingerprints": [
+    "04d0780e66",
+    "056c130828",
+    "08b9d012f7",
+    "0d6cf883be",
+    "115e7649ef"
+   ]
+  },
+  "cb1cba18b4d485fb": {
+   "tokens": 60,
+   "lines": 8,
+   "count": 1,
+   "files": [
+    "tools/migrate/jellyfin.py",
+    "tools/migrate/media_automation.py"
+   ],
+   "fingerprints": [
+    "0fd1871073"
    ]
   },
   "cd8256f9ec00dad2": {
@@ -344,6 +504,20 @@
    ],
    "fingerprints": [
     "021f5b356c"
+   ]
+  },
+  "e5ceee68ef3f4e76": {
+   "tokens": 70,
+   "lines": 7,
+   "count": 1,
+   "files": [
+    "tools/migrate/jellyfin.py",
+    "tools/migrate/media_automation.py"
+   ],
+   "fingerprints": [
+    "08f7464a95",
+    "0c8b172cf9",
+    "0d4bbdd985"
    ]
   },
   "e6f0640f97b13d3e": {

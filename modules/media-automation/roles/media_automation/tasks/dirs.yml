@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's (root); each app's config directory belongs to the user the
+# app runs as, so it (and the export, run as that user) create files it can open. The gluetun
+# directory is root's (the client runs as root with only NET_ADMIN).
+- name: Create the data root, the config directories, state, export and the transcode cache
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop: >-
+    {{ [{'path': media_automation_data_root, 'owner': media_automation_owner, 'group': media_automation_group, 'mode': '0750'},
+        {'path': media_automation_data_root ~ '/config', 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0750'},
+        {'path': media_automation_data_root ~ '/config/gluetun', 'owner': media_automation_owner, 'group': media_automation_group, 'mode': '0700'},
+        {'path': media_automation_data_root ~ '/config/seerr', 'owner': media_automation_seerr_uid | int, 'group': media_automation_seerr_gid | int, 'mode': '0700'},
+        {'path': media_automation_data_root ~ '/config/tdarr', 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0700'},
+        {'path': media_automation_data_root ~ '/config/tdarr/configs', 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0700'},
+        {'path': media_automation_data_root ~ '/config/tdarr/logs', 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0700'},
+        {'path': media_automation_data_root ~ '/config/qbittorrent', 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0700'},
+        {'path': media_automation_data_root ~ '/config/nzbget', 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0700'},
+        {'path': media_automation_data_root ~ '/config/prowlarr', 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0700'},
+        {'path': media_automation_data_root ~ '/config/sonarr', 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0700'},
+        {'path': media_automation_data_root ~ '/config/radarr', 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0700'},
+        {'path': media_automation_data_root ~ '/config/lidarr', 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0700'},
+        {'path': media_automation_data_root ~ '/state', 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0700'},
+        {'path': media_automation_data_root ~ '/export', 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0700'},
+        {'path': media_automation_cache_dir, 'owner': media_automation_uid | int, 'group': media_automation_gid | int, 'mode': '0700'}] }}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]
