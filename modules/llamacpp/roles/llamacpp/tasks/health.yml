@@ -7,8 +7,9 @@
 # past llama-server's forced 512-token batch. The first request after a cold load is slow (a
 # 177B split model on 4 GPUs took 25.5 s), so one warm-up request with its own generous
 # llamacpp_first_request_timeout comes first; the timed probes after it, at llamacpp_health_timeout,
-# then measure a warm server (the steady-state timeout is not inflated). The completion is the one deviation from role interface v1's
-# "health does not mutate the service": it leaves one short prompt in a slot's cache.
+# then measure a warm server (the steady-state timeout is not inflated). The completion is the one
+# deviation from role interface v1's "health does not mutate the service": it leaves one short
+# prompt in a slot's cache.
 - block:
     - name: Validate the inputs
       ansible.builtin.include_tasks: validate.yml

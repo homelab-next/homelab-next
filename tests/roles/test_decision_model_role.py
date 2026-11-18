@@ -17,6 +17,7 @@ import json
 import os
 import socket
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -203,6 +204,32 @@ def test_decision_health_passes_on_a_probability_and_never_calls_chat(tmp_path):
     assert tiny["model"] == "clef" and list(tiny["questions"]) == ["hnx-health"]
     assert tiny["questions"]["hnx-health"]["type"] == "noul"
     assert len(long_["state"].split()) > FORCED_BATCH_TOKENS  # past the forced batch
+
+
+def _slow_systemone(first=0.0, every=0.0):
+    """A /v1/systemone answer that takes ``first`` s on the first call and ``every`` s on each."""
+    calls = []
+
+    def answer(state, body):
+        calls.append(1)
+        time.sleep(every + (first if len(calls) == 1 else 0.0))
+        return 200, ANSWERS
+
+    return answer
+
+
+def test_decision_health_survives_a_cold_first_call_slower_than_the_steady_state_timeout(tmp_path):
+    """The decision-mode warm-up takes the first-request timeout; the timed probes after it
+    run warm under the steady-state one."""
+    with _Server(systemone=_slow_systemone(first=3.0)) as s:
+        r = _health(tmp_path, s, mode="decision", health_timeout=1, first_request_timeout=30)
+    assert r.returncode == 0, r.stdout[-2500:]
+
+
+def test_decision_health_still_fails_a_server_that_is_slow_on_every_call(tmp_path):
+    with _Server(systemone=_slow_systemone(every=3.0)) as s:
+        r = _health(tmp_path, s, mode="decision", health_timeout=1, first_request_timeout=30)
+    assert r.returncode != 0
 
 
 def test_decision_health_skips_the_long_probe_when_a_slot_cannot_hold_it(tmp_path):
