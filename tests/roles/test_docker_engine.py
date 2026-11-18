@@ -400,6 +400,8 @@ def test_the_signing_key_task_list_works_in_check_mode(first):
     assert r.returncode == 0, r.stdout + r.stderr
     assert not first.setup["ring"].exists()
     assert not first.setup["ring"].parent.exists()  # not even the keyring directory
+    # ... but the run says so, instead of being silent about the key
+    assert "would fetch, check and install the key" in r.stdout, r.stdout
 
 
 def test_recommends_are_not_installed_so_rootless_extras_stays_at_no_unpinned_version():
@@ -411,3 +413,24 @@ def test_recommends_are_not_installed_so_rootless_extras_stays_at_no_unpinned_ve
                   and "docker_engine_packages" in str(t["ansible.builtin.apt"].get("name"))]  # fmt: skip
     assert install["install_recommends"] is False
     assert "rootless" not in str(FIXED["docker_engine_packages"])
+
+
+def test_check_mode_reports_an_existing_keyring_as_rechecked_by_a_real_run(tmp_path):
+    ring = tmp_path / "ring.asc"
+    ring.write_text("x")
+    r = run_role(tmp_path, ROLE, "signing_key", {"docker_engine_keyring": str(ring)}, check=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "exists; a real run re-checks it" in r.stdout and ring.read_text() == "x"
+
+
+def test_apparmor_and_ca_certificates_are_installed_by_name_not_through_recommends():
+    """install_recommends is off for the pinned transaction, which would drop what docker-ce
+    recommends and a guest needs (the docker-default AppArmor profile, registry TLS roots)."""
+    assert FIXED["docker_engine_prerequisites"] == ["apparmor", "ca-certificates"]
+    tasks = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / "main.yml").read_text())
+    (i,) = [n for n, t in enumerate(tasks) if "ansible.builtin.apt" in t
+            and t["ansible.builtin.apt"].get("name") == "{{ docker_engine_prerequisites }}"]  # fmt: skip
+    assert tasks[i]["ansible.builtin.apt"]["state"] == "present"
+    (pinned,) = [n for n, t in enumerate(tasks) if "ansible.builtin.apt" in t
+                 and "docker_engine_packages" in str(t["ansible.builtin.apt"].get("name"))]  # fmt: skip
+    assert i < pinned

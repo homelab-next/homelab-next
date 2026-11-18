@@ -1735,3 +1735,23 @@ def test_check_mode_on_a_guest_without_the_accounts_does_not_chown_to_them(first
     assert r.returncode == 0, r.stdout + r.stderr
     assert "failed to look up" not in r.stdout + r.stderr
     assert not (tmp_path / "srv").exists()  # check mode wrote nothing
+
+
+def _real_first(tmp_path):
+    """A real (not --check) run (account creation needs root, so the accounts are not managed)."""
+    store = manifest()
+    v = store_vars(tmp_path, store, model_store_fetch=False)
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_real_first)
+def test_a_real_run_is_never_deferred_by_the_pending_accounts_note(first):
+    """model_store_accounts_pending is true only under --check: a real run, writes the store (a forced-true flag would skip all of it and still exit 0)."""
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (tmp_path / "srv" / "manifests" / "model_store.json").is_file()
+    assert (tmp_path / "srv" / "exports").is_dir()
+    accounts = _accounts_tasks()
+    (note,) = [t for t in accounts if "ansible.builtin.set_fact" in t]
+    expr = note["ansible.builtin.set_fact"]["model_store_accounts_pending"]
+    assert expr.lstrip().startswith("{{ ansible_check_mode | bool and")
