@@ -28,6 +28,7 @@ from homelabnext.conform.adapters._env import AdapterConfigError
 from homelabnext.modules import cli as mcli
 from homelabnext.modules import loader as ld
 from tests.modules.documents_front import Server
+from tests.modules.play_vars import without_footprint
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -193,9 +194,7 @@ def test_an_overlay_placing_the_module_on_a_guest_checks_clean_and_renders(tmp_p
     plays = [p for p in books if p["hosts"] == "mod_documents_server"]
     assert len(plays) == 1 and plays[0]["become"] is True
     assert plays[0]["roles"][0]["role"].endswith("modules/documents/roles/documents")
-    assert {k: v for k, v in plays[0]["vars"].items() if k != "hnx_module_footprint"} == {
-        "hnx_module_slice": "hnx-documents-server.slice"
-    }
+    assert without_footprint(plays[0]["vars"]) == {"hnx_module_slice": "hnx-documents-server.slice"}
 
 
 def test_a_registry_row_that_differs_is_named(tmp_path, capsys):

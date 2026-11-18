@@ -155,6 +155,85 @@ def test_the_module_play_carries_the_footprint_as_placed(tree):
     assert low[lake] == declared
 
 
+def _two_instances(second_host: str, first: dict, second: dict) -> dict:
+    """The small lab with a second instance of the lake provider, each with its own raise."""
+    site = ld.load_yaml(SMALL_LAB)
+    _lake_entry(site)["footprint"] = {"lake": first}
+    site["slots"]["lake-catalog"].append(
+        {
+            "provider": "example-lake",
+            "instance": "lake2",
+            "placement": {"lake": second_host},
+            "footprint": {"lake": second},
+        }
+    )
+    return site
+
+
+def _books(tree, site) -> dict[str, str]:
+    from homelabnext.modules import apply
+
+    sel = mr.selected(site, tree.mods)
+    return apply.render(site, sel, {m: f"../{m}" for m in sel}, _render(tree, _check(tree, site)))
+
+
+def _lake_plays(tree, site) -> list[tuple[str, str]]:
+    """(hosts pattern, footprint) of every play of the lake provider's host role."""
+    from homelabnext.modules import apply
+
+    got, cur = [], {}
+    for line in _books(tree, site)[apply.PLAYBOOK].splitlines():
+        if line.startswith("- name:"):
+            cur = {"name": line}
+        elif line.startswith("  hosts:"):
+            cur["hosts"] = line.split(":", 1)[1].strip()
+        elif f"{apply.FOOTPRINT_VAR}:" in line and "example-lake" in cur.get("name", ""):
+            got.append((cur["hosts"], line.split(":", 1)[1].strip()))
+    return got
+
+
+def test_instances_on_different_hosts_each_get_their_own_host_s_footprint(tree):
+    """The group holds both hosts; one footprint for it would hand the small host the large one's."""
+    site = _two_instances("core", {"memory_mb": 4096, "cpu": 2}, {"memory_mb": 12288, "cpu": 6})
+    got = _lake_plays(tree, site)
+    assert [h for h, _ in got] == [
+        "mod_example_lake_lake:&modhost_core",
+        "mod_example_lake_lake:&modhost_data",
+    ]
+    by = dict(got)
+    assert "memory_mb: 12288" in by["mod_example_lake_lake:&modhost_core"]
+    assert "memory_mb: 4096" in by["mod_example_lake_lake:&modhost_data"]
+    # each equals what that host's slice is given
+    files = _render(tree, _check(tree, site))
+    for host, fp in (("core", "12288"), ("data", "4096")):
+        slice_ = next(
+            v for k, v in files.items() if k == f"{host}/{ml.slice_name('example-lake', 'lake')}"
+        )
+        assert f"MemoryMax={fp}M" in slice_ or fp in slice_
+
+
+def test_instances_on_one_host_get_the_sum_their_shared_slice_is_given(tree):
+    site = _two_instances("data", {"memory_mb": 4096}, {"memory_mb": 6144})
+    got = _lake_plays(tree, site)
+    assert [h for h, _ in got] == ["mod_example_lake_lake"]  # one host: one play
+    assert "memory_mb: 10240" in got[0][1]
+    files = _render(tree, _check(tree, site))
+    assert "10240" in files[f"data/{ml.slice_name('example-lake', 'lake')}"]
+
+
+def test_the_split_plays_keep_the_tag_and_cover_each_host_once(tree):
+    from homelabnext.modules import apply
+
+    site = _two_instances("core", {"memory_mb": 4096}, {"memory_mb": 12288})
+    text = _books(tree, site)[apply.PLAYBOOK]
+    plays = [p for p in text.split("\n- name: ")[1:] if "example-lake" in p.splitlines()[0]]
+    assert len(plays) == 2
+    assert all("tags: [mod_example_lake]" in p and "roles:" in p for p in plays)
+    # the guard asserts the host groups the split plays intersect with
+    loop = next(line for line in text.splitlines() if line.strip().startswith("loop: ["))
+    assert "modhost_core" in loop and "modhost_data" in loop
+
+
 # ----------------------------------------------------------------------------- refusals
 
 
