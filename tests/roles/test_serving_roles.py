@@ -382,6 +382,98 @@ def test_model_store_refuses_a_snapshot_link_out_of_its_blobs(tmp_path, fetched_
     assert run_role(tmp_path, "model_store", "health", v).returncode != 0
 
 
+# the example's one-file q8_0 GGUF entry, by its shape (not its id), made a split series below
+SPLIT_ID = next(
+    k for k, e in manifest()["models"].items() if e["format"] == "gguf" and e["quant"] == "q8_0"
+)
+
+
+def split_manifest(shards=(1, 2, 3), total: int = 3, stem: str = "model-Q8_0") -> dict:
+    """The example store with its q8_0 GGUF entry as a split series in a quant subdirectory."""
+    store = manifest()
+    eid = SPLIT_ID
+    files = []
+    for n in shards:
+        path = f"Q8_0/{stem}-{n:05d}-of-{total:05d}.gguf"
+        body = content(eid, path)
+        files.append({"path": path, "sha256": hashlib.sha256(body).hexdigest(), "size": len(body)})
+    store["models"][eid]["files"] = files
+    return store
+
+
+def test_model_store_fetches_a_split_series_and_checks_only_the_entries_this_host_keeps(tmp_path):
+    store = split_manifest()
+    remote_tree(tmp_path, store)
+    v = store_vars(tmp_path, store, model_store_fetch_ids=[SPLIT_ID])
+    r = run_role(tmp_path, "model_store", "main", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    (line,) = calls(tmp_path)  # one entry, its three shards in one download
+    assert all(f"Q8_0/model-Q8_0-0000{n}-of-00003.gguf" in line for n in (1, 2, 3))
+    listing = (tmp_path / "srv" / "manifests" / "listings" / f"{SPLIT_ID}.sha256").read_text()
+    assert len(listing.splitlines()) == 3
+    digest = store_mod.Store.from_dict(store).entries[SPLIT_ID].digest
+    assert "sha256:" + hashlib.sha256(listing.encode()).hexdigest() == digest
+    # health and verify check this host's entry only: the others are another guest's
+    for hook in ("health", "verify"):
+        ok = run_role(tmp_path, "model_store", hook, v)
+        assert ok.returncode == 0, (hook, ok.stdout)
+        every = run_role(tmp_path, "model_store", hook, {**v, "model_store_fetch_ids": []})
+        assert every.returncode != 0 and "(missing)" in every.stdout, hook
+        stale = run_role(tmp_path, "model_store", hook, {**v, "model_store_fetch_ids": ["gone"]})
+        assert stale.returncode != 0 and '["gone"]' in stale.stdout, hook
+    # a shard gone is caught by size, a changed byte by sha256
+    shard = tmp_path / "srv" / "gguf" / manifest()["models"][SPLIT_ID]["source"]["repo"] / "Q8_0"
+    two = shard / "model-Q8_0-00002-of-00003.gguf"
+    two.write_bytes(two.read_bytes().upper())
+    assert run_role(tmp_path, "model_store", "health", v).returncode == 0
+    bad = run_role(tmp_path, "model_store", "verify", v)
+    assert bad.returncode != 0 and "00002-of-00003.gguf (sha256 differs)" in bad.stdout
+    # the quant subdirectory may not be a link, even to the right bytes
+    two.write_bytes(content(SPLIT_ID, "Q8_0/model-Q8_0-00002-of-00003.gguf"))
+    assert run_role(tmp_path, "model_store", "verify", v).returncode == 0
+    shard.rename(tmp_path / "elsewhere")
+    shard.symlink_to(tmp_path / "elsewhere")
+    linked = run_role(tmp_path, "model_store", "health", v)
+    assert linked.returncode != 0 and "(under Q8_0, a link)" in linked.stdout
+
+
+@pytest.mark.parametrize(
+    ("store", "needle"),
+    [
+        (split_manifest(shards=(1, 3)), "an incomplete series"),
+        (split_manifest(shards=(2, 3)), "an incomplete series"),
+        (split_manifest(stem="model-Q4_K_M"), "does not carry the quant q8_0"),
+    ],
+)
+def test_model_store_refuses_a_partial_or_mislabelled_split_series_before_fetching(
+    tmp_path, store, needle
+):
+    remote_tree(tmp_path, store)
+    r = run_role(tmp_path, "model_store", "main", store_vars(tmp_path, store))
+    assert r.returncode != 0 and needle in r.stdout, r.stdout
+    assert calls(tmp_path) == []
+
+
+def test_model_store_refuses_mixed_series_and_a_single_file_beside_one(tmp_path):
+    mixed = split_manifest()
+    other = split_manifest(stem="model-Q8_0-alt")["models"][SPLIT_ID]["files"]
+    mixed["models"][SPLIT_ID]["files"] += other
+    beside = split_manifest()
+    beside["models"][SPLIT_ID]["files"].append(manifest()["models"][SPLIT_ID]["files"][0])
+    for store, needle in (
+        (mixed, "mixed quants or series"),
+        (beside, "a single-file .gguf beside"),
+    ):
+        r = run_role(tmp_path, "model_store", "validate", store_vars(tmp_path, store))
+        assert r.returncode != 0 and needle in r.stdout, r.stdout
+    assert (
+        run_role(
+            tmp_path, "model_store", "validate", store_vars(tmp_path, split_manifest())
+        ).returncode
+        == 0
+    )
+
+
 EXPORT_RUN = "2026-10-01-triage"  # example-4b-triage's run (examples/model-serving)
 
 

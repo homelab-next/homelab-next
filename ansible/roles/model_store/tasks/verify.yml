@@ -1,9 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-# The sha256 pass over every entry (hf, gguf and promoted exports): what `hnx models store check`
+# The sha256 pass over every entry this host keeps (model_store_fetch_ids; empty: every entry, hf,
+# gguf and promoted exports): what `hnx models store check`
 # does from a checkout, run on the store host.
-- name: Verify every entry by sha256
+- name: Refuse fetch ids that name no entry (an empty scope would pass vacuously)
+  ansible.builtin.include_tasks: scope.yml
+  tags: [verify]
+
+- name: Verify every entry this host keeps by sha256
   ansible.builtin.include_tasks: verify_entry.yml
-  loop: "{{ model_store_manifest.models | dict2items }}"
+  loop: "{{ model_store_manifest.models | dict2items | selectattr('key', 'in', model_store_scope) | list }}"
   loop_control:
     loop_var: model_store_entry
     label: "{{ model_store_entry.key }}"

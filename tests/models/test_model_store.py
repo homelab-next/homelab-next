@@ -332,3 +332,89 @@ def test_the_store_library_is_standard_library_only():
         if line.startswith(("import ", "from ")) and not line.startswith("from __future__")
     }
     assert imports <= set(sys.stdlib_module_names)
+
+
+# ---------------------------------------------------------------- split GGUF series
+# the example's one-file q8_0 GGUF entry and a safetensors one, by their shape (not their ids)
+Q8 = next(k for k, e in doc()["models"].items() if e["format"] == "gguf" and e["quant"] == "q8_0")
+BF16 = next(k for k, e in doc()["models"].items() if e["format"] == "hf")
+SINGLE_Q8 = doc()["models"][Q8]["files"][0]["path"]
+
+
+def _split(n_of: int, *, have=None, stem="model-Q8_0", sub="Q8_0", total=None) -> list:
+    total = n_of if total is None else total
+    return [
+        {"path": f"{sub + '/' if sub else ''}{stem}-{n:05d}-of-{total:05d}.gguf",
+         "sha256": hashlib.sha256(f"shard {n}".encode()).hexdigest(), "size": n}
+        for n in (have if have is not None else range(1, n_of + 1))
+    ]  # fmt: skip
+
+
+def _with_files(files: list) -> dict:
+    d = doc()
+    d["models"][Q8]["files"] = files
+    return d
+
+
+def test_a_complete_split_series_in_a_subdirectory_is_one_gguf_entry():
+    st = sm.Store.from_dict(_with_files(_split(6)))
+    e = st.entries[Q8]
+    assert e.model_file == "Q8_0/model-Q8_0-00001-of-00006.gguf"
+    assert len(e.files) == 6 and e.size == sum(range(1, 7))
+    # every shard is pinned: the digest is over all six lines, in path order
+    lines = e.listing.splitlines()
+    assert len(lines) == 6 and lines == sorted(lines, key=lambda line: line.split("  ", 1)[1])
+    assert e.digest == "sha256:" + hashlib.sha256(e.listing.encode()).hexdigest()
+    # a series of one, and a series at the entry's top level, are series too
+    assert sm.Store.from_dict(_with_files(_split(1, sub=""))).entries[Q8].model_file \
+        == "model-Q8_0-00001-of-00001.gguf"  # fmt: skip
+    # a single file is its own model file; safetensors have none
+    single = sm.Store.from_dict(doc()).entries
+    assert single[Q8].model_file == SINGLE_Q8
+    assert single[BF16].model_file == ""
+
+
+@pytest.mark.parametrize(
+    ("files", "needle"),
+    [
+        (_split(6, have=[1, 2, 3, 5, 6]), "incomplete series model-Q8_0-*-of-00006: missing 00004"),
+        (_split(6, have=[2, 3, 4, 5, 6]), "missing 00001"),
+        (_split(3, have=[1, 2, 3, 4]), "out of range 00004"),
+        (_split(2, have=[0, 1, 2]), "out of range 00000"),
+        (_split(2) + _split(2, stem="model-Q4_K_M"), "mixed quants or series"),
+        (_split(2) + _split(3, sub="other"), "mixed quants or series"),
+        (_split(2, have=[1]) + _split(3, have=[2, 3], total=3), "mixed quants or series"),
+        ([*_split(2), {"path": "model-Q8_0.gguf", "sha256": "0" * 64, "size": 1}],
+         "single-file model-Q8_0.gguf beside"),
+        (_split(2, stem="model-Q4_K_M"), "does not carry the entry's quant 'q8_0'"),
+        ([{"path": "README.md", "sha256": "0" * 64, "size": 1}], "it lists no .gguf"),
+    ],
+)  # fmt: skip
+def test_a_partial_mixed_or_mislabelled_split_series_is_refused(files, needle):
+    found = problems_of(_with_files(files))
+    assert any(needle in p for p in found), found
+    assert any("exactly one model" in p or "quant" in p for p in found)
+
+
+def test_store_check_verifies_every_shard_and_refuses_a_linked_subdirectory(tmp_path):
+    d = _with_files(_split(3))
+    st = sm.Store.from_dict(d)
+    e = st.entries[Q8]
+    edir = tmp_path / "srv" / e.directory
+    for f in e.files:
+        (edir / f.path).parent.mkdir(parents=True, exist_ok=True)
+        (edir / f.path).write_bytes(
+            f"shard {int(f.path[-20:-15])}".encode()[: f.size].ljust(f.size)
+        )
+    # the sizes are the shard numbers; bytes are checked by --sizes-only off below
+    assert sm.check_disk(st, tmp_path / "srv", only=[e.id], sizes_only=True) == []
+    (edir / e.files[1].path).unlink()
+    assert sm.check_disk(st, tmp_path / "srv", only=[e.id], sizes_only=True) == [
+        f"{e.id}: {e.directory}/{e.files[1].path}: missing"
+    ]
+    # the quant subdirectory may not be a link out of the entry, even with the right bytes behind it
+    outside = tmp_path / "outside"
+    (edir / "Q8_0").rename(outside)
+    (edir / "Q8_0").symlink_to(outside)
+    found = sm.check_disk(st, tmp_path / "srv", only=[e.id], sizes_only=True)
+    assert any("outside the entry" in p for p in found), found

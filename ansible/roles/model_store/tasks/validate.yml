@@ -59,3 +59,40 @@
   loop: "{{ model_store_manifest.models | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
+
+# A GGUF entry is ONE model: a single .gguf, or one complete split series as gguf-split names it
+# (<stem>-00001-of-0000M.gguf .. -0000M-of-0000M, in one directory, the stem carrying the quant).
+# The same rule as homelabnext.models.store: a partial series would load a truncated model (or
+# fail hours into a fetch), and two stems or totals are two models (mixed quants) under one digest.
+# The expression says ok when the entry holds one model (an empty template result is not a string).
+- name: Refuse a GGUF entry that is not one single file or one complete split series
+  ansible.builtin.assert:
+    that: model_store_gguf_problem | trim == 'ok'
+    fail_msg: >-
+      model_store: {{ item.key }} must hold exactly one GGUF model, one single-file .gguf or one
+      complete split series <stem>-00001-of-0000M.gguf .. <stem>-0000M-of-0000M.gguf in one
+      directory whose stem carries the entry's quant: {{ model_store_gguf_problem }}
+  vars:
+    model_store_split: '^(?:.*/)?[^/]+-[0-9]{5}-of-[0-9]{5}[.]gguf\Z'
+    model_store_gguf_problem: >-
+      {%- set g = item.value.files | map(attribute='path') | select('match', '.*[.]gguf\Z') | sort | list -%}
+      {%- set s = g | select('match', model_store_split) | list -%}
+      {%- if g | length == 0 -%}it lists no .gguf
+      {%- elif g | length == 1 and s | length == 0 -%}ok
+      {%- elif s | length != g | length -%}a single-file .gguf beside other .gguf files ({{ g | reject('match', model_store_split) | join(', ') }})
+      {%- else -%}
+      {%- set heads = s | map('regex_replace', '-[0-9]{5}-of-[0-9]{5}[.]gguf\Z', '') | unique | list -%}
+      {%- set totals = s | map('regex_replace', '^.*-of-([0-9]{5})[.]gguf\Z', '\\1') | unique | list -%}
+      {%- if heads | length != 1 or totals | length != 1 -%}mixed quants or series ({{ heads | join(', ') }} of {{ totals | join(', ') }})
+      {%- else -%}
+      {%- set nums = s | map('regex_replace', '^.*-([0-9]{5})-of-[0-9]{5}[.]gguf\Z', '\\1') | map('int') | sort | list -%}
+      {%- if nums != range(1, (totals[0] | int) + 1) | list -%}an incomplete series {{ heads[0] }}-*-of-{{ totals[0] }} (has {{ nums | join(', ') }})
+      {%- elif (item.value.quant | default('') | lower) not in (heads[0] | basename | lower) -%}the series {{ heads[0] | basename }} does not carry the quant {{ item.value.quant | default('') }}
+      {%- else -%}ok
+      {%- endif -%}
+      {%- endif -%}
+      {%- endif -%}
+  when: item.value.format == 'gguf' or (item.value.format == 'export' and item.value.layout | default('') == 'gguf')
+  loop: "{{ model_store_manifest.models | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

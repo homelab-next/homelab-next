@@ -46,7 +46,7 @@ argument_specs:
       model_store_fetch_ids: &ids
         type: list
         elements: str
-        description: "Fetch only these entry ids (empty: every hf and gguf entry)."
+        description: "The entries this host keeps: fetch only these ids, and health and verify check only these (empty: every entry; an id that names no entry is refused)."
         default: []
       model_store_hf_install: &hfinstall
         type: bool
@@ -77,15 +77,17 @@ argument_specs:
         description: "Where the export hook writes the manifest and the sha256sum listings."
         default: /var/backups/model-store/export
   health:
-    short_description: Fail unless the layout exists and every entry's files are present with their sizes.
+    short_description: "Fail unless the layout exists and the files of every entry this host keeps (model_store_fetch_ids; empty: every entry) are present with their sizes."
     options:
       model_store_manifest: *manifest
       model_store_root: *root
+      model_store_fetch_ids: *ids
   verify:
-    short_description: Fail unless every entry's files match their sha256 (the slow pass).
+    short_description: "Fail unless the files of every entry this host keeps (model_store_fetch_ids; empty: every entry) match their sha256 (the slow pass)."
     options:
       model_store_manifest: *manifest
       model_store_root: *root
+      model_store_fetch_ids: *ids
   readiness:
     short_description: The hf CLI runs and reports its version (when fetching).
     options:

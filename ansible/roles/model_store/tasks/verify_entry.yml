@@ -2,7 +2,8 @@
 # Fail unless every file of model_store_entry is on disk with its size and (unless
 # model_store_sizes_only) its sha256.  A hub-cache snapshot file is a symlink to its blob: followed,
 # but only into its repository's blobs/ (an hf entry) or its own directory; a link anywhere else
-# would keep the digest while bytes nothing manages change behind it.  An export (written by the
+# would keep the digest while bytes nothing manages change behind it. A directory on the way that
+# is a link (a split model's quant subdirectory pointing elsewhere) fails the same way.  An export (written by the
 # trainers' group) is also walked without following links: a link, a special file or a file no
 # export entry of its run lists anywhere in it fails, and so does an entry directory that is a link.
 - name: Locate the entry
@@ -39,7 +40,8 @@
       {%- set link = r.link -%}
       {%- set ns = namespace(inside=not (link.islnk | default(false))) -%}
       {%- for i in model_store_inside if link.islnk | default(false) and link.lnk_source.startswith(i) -%}{%- set ns.inside = true -%}{%- endfor -%}
-      {%- if not r.stat.exists -%}{{ bad.append(r.item.path ~ ' (missing)') or '' }}
+      {%- if r.link.via | default(none) -%}{{ bad.append(r.item.path ~ ' (under ' ~ r.link.via ~ ', a link)') or '' }}
+      {%- elif not r.stat.exists -%}{{ bad.append(r.item.path ~ ' (missing)') or '' }}
       {%- elif not ns.inside -%}{{ bad.append(r.item.path ~ ' (links to ' ~ link.lnk_source ~ ')') or '' }}
       {%- elif r.stat.size != r.item.size -%}{{ bad.append(r.item.path ~ ' (size ' ~ r.stat.size ~ ', manifest ' ~ r.item.size ~ ')') or '' }}
       {%- elif not (model_store_sizes_only | default(false) | bool) and r.stat.checksum != r.item.sha256 -%}{{ bad.append(r.item.path ~ ' (sha256 differs)') or '' }}

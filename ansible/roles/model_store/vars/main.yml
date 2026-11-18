@@ -8,3 +8,6 @@ model_store_public_hub_pattern: '^https://(?:[A-Za-z0-9-]+\.)*(?:huggingface|hf)
 # The managed hf CLI's release (files/hf_requirements.txt pins it and its dependencies by hash;
 # regenerate: uv pip compile --generate-hashes --universal --python-version 3.11).
 model_store_hf_version: "2.4.0"
+# The entries this host keeps (fetches, health and verify check): model_store_fetch_ids, or every
+# entry when it is empty (tasks/scope.yml refuses an id that names none).
+model_store_scope: "{{ model_store_fetch_ids or (model_store_manifest.models.keys() | list) }}"

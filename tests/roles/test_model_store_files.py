@@ -56,10 +56,12 @@ def test_a_regular_file_and_a_link_into_its_blobs(mod, tmp_path):
         "checksum": hashlib.sha256(body).hexdigest(),
     }
     blob = top / "blobs" / hashlib.sha256(body).hexdigest()
-    assert cfg["link"] == {"exists": True, "islnk": True, "lnk_source": str(blob.resolve())}
+    assert cfg["link"] == {
+        "exists": True, "islnk": True, "lnk_source": str(blob.resolve()), "via": None
+    }  # fmt: skip
     data = (snap / "model.safetensors").read_bytes()
     assert weights["stat"]["checksum"] == hashlib.sha256(data).hexdigest()
-    assert weights["link"] == {"exists": True, "islnk": False}
+    assert weights["link"] == {"exists": True, "islnk": False, "via": None}
 
 
 def test_a_snapshot_link_out_of_its_blobs_reports_where_it_resolves(mod, tmp_path):
@@ -77,6 +79,29 @@ def test_a_snapshot_link_out_of_its_blobs_reports_where_it_resolves(mod, tmp_pat
     )
     assert r["link"]["islnk"] and r["link"]["lnk_source"] == str(outside.resolve())
     assert not r["link"]["lnk_source"].startswith((str(snap) + "/", str(top / "blobs") + "/"))
+
+
+def test_a_file_under_a_linked_subdirectory_names_the_link(mod, tmp_path):
+    """A split model's shards sit in a quant subdirectory: when that directory is a link, each
+    shard is a regular file (islnk false) whose bytes live wherever the link points, so the module
+    names the linked directory (verify_entry.yml refuses it); a real subdirectory names none."""
+    _, snap = entry(tmp_path)
+    (snap / "Q8_0").mkdir()
+    (snap / "Q8_0" / "m-00001-of-00002.gguf").write_bytes(b"one")
+    (r,) = mod.read_entry(str(snap), [{"path": "Q8_0/m-00001-of-00002.gguf"}], True)
+    assert r["link"] == {"exists": True, "islnk": False, "via": None}
+    outside = tmp_path / "outside"
+    (snap / "Q8_0").rename(outside)
+    (snap / "Q8_0").symlink_to(outside)
+    (r,) = mod.read_entry(str(snap), [{"path": "Q8_0/m-00001-of-00002.gguf"}], True)
+    assert r["stat"]["exists"] and r["link"]["islnk"] is False
+    assert r["link"]["via"] == "Q8_0"
+    # a deeper link is named by its own path, the first one on the way
+    (snap / "Q8_0").unlink()
+    (snap / "a" / "b").mkdir(parents=True)
+    (snap / "a" / "b" / "c").symlink_to(outside)
+    (r,) = mod.read_entry(str(snap), [{"path": "a/b/c/m-00001-of-00002.gguf"}], True)
+    assert r["link"]["via"] == "a/b/c"
 
 
 def test_sizes_only_reads_no_bytes(mod, tmp_path, monkeypatch):
@@ -97,13 +122,14 @@ def test_missing_and_dangling_files_do_not_exist(mod, tmp_path):
     _, snap = entry(tmp_path)
     (snap / "dangling").symlink_to(tmp_path / "nowhere")
     gone, dangling = mod.read_entry(str(snap), [{"path": "gone"}, {"path": "dangling"}], True)
-    assert gone["stat"] == {"exists": False} and gone["link"] == {"exists": False}
+    assert gone["stat"] == {"exists": False} and gone["link"] == {"exists": False, "via": None}
     # followed: absent (stat follow:true says so); unfollowed: a link to where it would resolve
     assert dangling["stat"] == {"exists": False}
     assert dangling["link"] == {
         "exists": True,
         "islnk": True,
         "lnk_source": str((tmp_path / "nowhere").resolve()),
+        "via": None,
     }
 
 

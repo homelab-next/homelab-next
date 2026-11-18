@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# The entries this host keeps: model_store_fetch_ids, or every entry of the manifest when it is
+# empty. Two GPU guests that share the lab's one manifest each fetch their own model; health and
+# verify check those, not the other guest's (which is not on this disk). An id that names no entry
+# is refused rather than skipped: a scope that matched nothing would pass vacuously.
+- name: Refuse a fetch id that is not a manifest entry
+  ansible.builtin.assert:
+    that:
+      - model_store_manifest is mapping and model_store_manifest.models is mapping
+      - model_store_fetch_ids is sequence and model_store_fetch_ids is not string
+      - model_store_fetch_ids | difference(model_store_manifest.models.keys() | list) | length == 0
+      - model_store_scope | length > 0
+    fail_msg: >-
+      model_store: model_store_fetch_ids
+      {{ model_store_fetch_ids | difference((model_store_manifest.models | default({})).keys() | list) | to_json }}
+      name no manifest entry (or the manifest lists none): nothing would be checked
+  tags: [health, verify]
