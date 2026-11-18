@@ -57,3 +57,15 @@
     shell: /usr/sbin/nologin
     create_home: false
     state: present
+
+# Under --check the account tasks above create nothing, so a task that names the owner or a group
+# (file/copy owner:, group:) would fail "failed to look up user". Say so once; main.yml defers
+# those tasks.
+- name: Note whether the owner or a group is still to be created
+  no_log: true
+  ansible.builtin.set_fact:
+    model_store_accounts_pending: >-
+      {{ ansible_check_mode | bool and
+         (getent_group[model_store_group] is not defined or getent_group[model_store_group] is none
+          or getent_group[model_store_exports_group] is not defined or getent_group[model_store_exports_group] is none
+          or getent_passwd[model_store_owner] is not defined or getent_passwd[model_store_owner] is none) }}
