@@ -758,3 +758,35 @@ def _first_a_restore_source_that_is_not_a_canonical_absolute_path_is_refused(tmp
 def test_a_restore_source_that_is_not_a_canonical_absolute_path_is_refused(first):
     r, _ = first
     assert r.returncode != 0
+
+
+def _spec_with_table_above(tmp_path: Path) -> tuple[Path, Path]:
+    """A site checkout whose spec names a role table above its own directory; the play's working
+    directory (tmp_path) is outside the checkout, as a deploy directory is."""
+    site = tmp_path / "site-checkout"
+    spec = site / "lab" / "gateway" / "gateway.yml"
+    spec.parent.mkdir(parents=True)
+    (site / "model_roles.json").write_text((FIXTURES / "model_roles.json").read_text())
+    doc = yaml.safe_load((FIXTURES / "gateway.yml").read_text())
+    doc["roles"] = "../../model_roles.json"
+    spec.write_text(yaml.safe_dump(doc))
+    return site, spec
+
+
+def test_main_renders_a_spec_whose_role_table_is_above_it_when_given_the_checkout_root(tmp_path):
+    site, spec = _spec_with_table_above(tmp_path)
+    env = {"PYTHONPATH": str(Path(__file__).resolve().parents[2])}  # the generator, from any cwd
+    r, _ = main(tmp_path, env=env, gateway_spec=spec)
+    assert r.returncode != 0  # the default root is the spec's own directory
+    assert "outside the root" in " ".join((r.stdout + r.stderr).split())
+    r, _ = main(tmp_path, env=env, gateway_spec=spec, gateway_spec_root=str(site))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (tmp_path / "data" / "config" / "gateway.json").exists()
+
+
+@pytest.mark.parametrize("root", ["relative/dir", "/srv/../etc"])
+def test_main_refuses_a_spec_root_that_is_not_canonical(tmp_path, root):
+    _, spec = _spec_with_table_above(tmp_path)
+    r, _ = main(tmp_path, gateway_spec=spec, gateway_spec_root=root)
+    assert r.returncode != 0
+    assert not (tmp_path / "data" / "config" / "gateway.json").exists()
