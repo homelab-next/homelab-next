@@ -18,7 +18,7 @@
       - llamacpp_uid | int >= 1000 and llamacpp_gid | int >= 1000
       - >-
         [llamacpp_dir, llamacpp_data_root, llamacpp_store_root, llamacpp_precheck_bin, llamacpp_unit_dir,
-        llamacpp_sysfs_root, llamacpp_dev_root] | reject('match', llamacpp_path_pattern) | list | length == 0
+        llamacpp_sysfs_root, llamacpp_dev_root, llamacpp_proc_root] | reject('match', llamacpp_path_pattern) | list | length == 0
       - llamacpp_model_repo is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}\Z')
       # a relative path inside the store entry: no absolute path, no . or .. segment, no //
       - llamacpp_model_file is string and llamacpp_model_file is match(llamacpp_model_file_pattern)
@@ -59,7 +59,8 @@
       - llamacpp_extra_args.keys() | list | difference(llamacpp_extra_flags.keys() | list) | length == 0
       - llamacpp_extra_args.batch_size is not defined or (llamacpp_extra_args.batch_size is integer and llamacpp_extra_args.batch_size >= 1 and llamacpp_extra_args.batch_size <= 131072)
       - llamacpp_extra_args.ubatch_size is not defined or (llamacpp_extra_args.ubatch_size is integer and llamacpp_extra_args.ubatch_size >= 1 and llamacpp_extra_args.ubatch_size <= 131072)
-      - llamacpp_extra_args.ubatch_size is not defined or llamacpp_extra_args.batch_size is not defined or llamacpp_extra_args.ubatch_size <= llamacpp_extra_args.batch_size
+      # at most the batch: the one set, or llama-server's default -b of 2048
+      - llamacpp_extra_args.ubatch_size is not defined or llamacpp_extra_args.ubatch_size <= (llamacpp_extra_args.batch_size | default(llamacpp_default_batch_size))
       - llamacpp_extra_args.kv_unified is not defined or llamacpp_extra_args.kv_unified is boolean
       - llamacpp_extra_args.split_mode is not defined or (llamacpp_extra_args.split_mode is string and llamacpp_extra_args.split_mode in llamacpp_split_modes)
       - >-
@@ -68,7 +69,12 @@
             and llamacpp_extra_args.tensor_split | length >= 1 and llamacpp_extra_args.tensor_split | length <= 16
             and llamacpp_extra_args.tensor_split | reject('integer') | reject('float') | list | length == 0
             and llamacpp_extra_args.tensor_split | select('lt', 0) | list | length == 0
+            and llamacpp_extra_args.tensor_split | map('float') | map('string') | select('search', '(?i)inf|nan') | list | length == 0
             and llamacpp_extra_args.tensor_split | sum > 0)
+      # one proportion per card when the cards are listed
+      - >-
+        llamacpp_extra_args.tensor_split is not defined or llamacpp_gpu_indices is string or llamacpp_gpu_indices | length == 0
+        or llamacpp_extra_args.tensor_split | length == llamacpp_gpu_indices | length
       - llamacpp_mode == 'generate' or llamacpp_extra_args.keys() | list | intersect(llamacpp_generate_only_args) | length == 0
       - llamacpp_backend in llamacpp_gpu_backends or llamacpp_extra_args.keys() | list | intersect(llamacpp_gpu_only_args) | length == 0
     fail_msg: >-
@@ -82,7 +88,7 @@
       (renderD<NNN>), cuda cards as "all" or a list of distinct indices 0 to 15 (cuda only),
       llamacpp_extra_args with only batch_size and ubatch_size (integers, ubatch at most batch),
       kv_unified (a boolean), split_mode (none, layer or row) and tensor_split (a list of 1 to 16
-      non-negative numbers), the first three in generate mode only and the last two on a GPU
+      finite non-negative numbers, one per card when the cards are listed), the first three in generate mode only and the last two on a GPU
       backend only, group ids that are not 0, a power limit of 200 W at most (the operator's rule: a setting can only tighten it) and the hwmon attributes
       that carry it
   tags: [health, backup, restore, export, upgrade]

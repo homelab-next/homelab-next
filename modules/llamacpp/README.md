@@ -37,8 +37,10 @@ address, VM id or secret value.
   NVIDIA (cuda) it reads `nvidia-smi --query-gpu=index,power.limit,enforced.power.limit` and
   holds **every card the container gets** to the limit, both the limit set and the one the card
   enforces (`llamacpp_gpu_indices: all`: every card nvidia-smi lists, at least one; a list: each
-  index, and one that nvidia-smi does not list refuses; `[N/A]` refuses). A cpu backend has no
-  card and passes. The health hook runs the same rule (`--power-only`), so a cap raised after
+  index, and one that nvidia-smi does not list refuses; `[N/A]` refuses). nvidia-smi runs only
+  when the driver is already up: `/proc/modules` lists `nvidia` and `/dev/nvidiactl` exists, else
+  the check refuses without calling it (as root it would load the module itself, a warm-card load
+  on a guest that must not have one). A cpu backend has no card and passes. The health hook runs the same rule (`--power-only`), so a cap raised after
   the start turns the service red. Setting the cap is not this module's job (the baseline or a
   udev rule does it); this module only refuses to load without it.
 - **The bytes are checked, not trusted.** The same script checks, before every start, that the
@@ -105,12 +107,13 @@ address, VM id or secret value.
   non-empty value on another backend, is refused. llama.cpp spreads the layers over every card it
   sees (`-sm layer` is its default with several GPUs); the power-cap check covers each card.
 - **Throughput settings.** `llamacpp_extra_args` (default `{}`) takes named settings only, never
-  a raw flag: `batch_size` (`-b`), `ubatch_size` (`-ub`, at most `batch_size`), integers 1 to
-  131072; `kv_unified` (a boolean: `true` gives the slots ONE shared KV cache of
+  a raw flag: `batch_size` (`-b`), `ubatch_size` (`-ub`, at most `batch_size`, or at most
+  llama-server's default 2048 when `batch_size` is not set), integers 1 to 131072; `kv_unified` (a boolean: `true` gives the slots ONE shared KV cache of
   `llamacpp_context_size` tokens: `-c` is that total, `--kv-unified`, and each slot may use all
   of it, which `/v1/models` reports as a slot's `n_ctx`, so health's comparison is unchanged);
   `split_mode` (`-sm`: `none`, `layer` or `row`; b12033's cuda build does not support `row`) and
-  `tensor_split` (`-ts`: 1 to 16 non-negative numbers, not all 0, the per-card proportions).
+  `tensor_split` (`-ts`: 1 to 16 finite non-negative numbers, not all 0, the per-card proportions;
+  one per card when `llamacpp_gpu_indices` is a list).
   Any other key, a wrong type (a string for a number, a boolean for a count) is refused;
   `batch_size`, `ubatch_size` and `kv_unified` are refused in decision mode (it fixes them), and
   `split_mode`/`tensor_split` on the cpu backend. For example, one 128k cache shared by 16 slots

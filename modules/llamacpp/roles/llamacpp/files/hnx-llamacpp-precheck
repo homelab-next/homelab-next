@@ -17,12 +17,15 @@
 # restart or a reboot. Usage:
 #   hnx-llamacpp-precheck --backend vulkan|sycl|cuda|cpu --max-watts N
 #       [--render-node renderD128] [--gpu-index N|N,M,...|all] [--attrs power1_cap,power1_max] [--sysfs-root /sys]
+#       [--proc-root /proc] [--dev-root /dev]
 #       [--model-file NAME --listing FILE --digest sha256:HEX --model-dir DIR | --power-only]
 #  1. power: on vulkan and sycl every attribute of --attrs (default power1_cap) under the render node's hwmon (microwatts) must exist,
 #     be above 0 (0 is "no limit set") and be at most N watts; on cuda, for every card --gpu-index
 #     names (all: every card nvidia-smi lists, at least one), both power.limit (the limit set) and
 #     enforced.power.limit (the one the card enforces) must be numbers above 0 and at most N, and a
-#     named card that nvidia-smi does not list refuses; cpu has no card and passes. An unreadable
+#     named card that nvidia-smi does not list refuses; nvidia-smi runs only when /proc/modules
+#     already lists the nvidia module and /dev/nvidiactl exists (as root it would load the module
+#     otherwise), else it refuses; cpu has no card and passes. An unreadable
 #     cap refuses: a cap that cannot be read is not a cap that holds.
 #  2. bytes: sha256 of the store's listing is the pinned digest, then every file in it has its
 #     sha256 in the model directory (sha256sum --check --strict), as hnx-model-verify does for the other serving role,
@@ -33,8 +36,8 @@
 #     directory: a file or a directory on its path that links out of it refuses.
 #  The limit is the operator's 200 W rule at most: --max-watts above it is a usage error.
 set -eu
-usage() { echo "usage: hnx-llamacpp-precheck --backend B --max-watts N [--render-node NODE] [--gpu-index N] [--attrs A,B] [--sysfs-root DIR] [--model-file NAME --listing F --digest sha256:HEX --model-dir D | --power-only]" >&2; exit 2; }
-backend="" max="" mfile="" node="" idx=0 sysfs=/sys listing="" digest="" dir="" power_only=0 attrs=""
+usage() { echo "usage: hnx-llamacpp-precheck --backend B --max-watts N [--render-node NODE] [--gpu-index N] [--attrs A,B] [--sysfs-root DIR] [--proc-root DIR] [--dev-root DIR] [--model-file NAME --listing F --digest sha256:HEX --model-dir D | --power-only]" >&2; exit 2; }
+backend="" max="" mfile="" node="" idx=0 sysfs=/sys proc=/proc devroot=/dev listing="" digest="" dir="" power_only=0 attrs=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --backend) [ "$#" -ge 2 ] || usage; backend=$2; shift 2 ;;
@@ -43,6 +46,8 @@ while [ "$#" -gt 0 ]; do
     --gpu-index) [ "$#" -ge 2 ] || usage; idx=$2; shift 2 ;;
     --attrs) [ "$#" -ge 2 ] || usage; attrs=$(printf '%s' "$2" | tr ',' ' '); shift 2 ;;
     --sysfs-root) [ "$#" -ge 2 ] || usage; sysfs=$2; shift 2 ;;
+    --proc-root) [ "$#" -ge 2 ] || usage; proc=$2; shift 2 ;;
+    --dev-root) [ "$#" -ge 2 ] || usage; devroot=$2; shift 2 ;;
     --model-file) [ "$#" -ge 2 ] || usage; mfile=$2; shift 2 ;;
     --listing) [ "$#" -ge 2 ] || usage; listing=$2; shift 2 ;;
     --digest) [ "$#" -ge 2 ] || usage; digest=$2; shift 2 ;;
@@ -84,6 +89,13 @@ case "$backend" in
     done
     ;;
   cuda)
+    # nvidia-smi run as root loads the nvidia kernel module when it is absent; on a guest whose
+    # cards must never be initialised warm that load is the hazard. So it runs only when the driver
+    # is ALREADY up: /proc/modules lists nvidia and its control device exists; otherwise refuse.
+    grep -q '^nvidia ' "$proc/modules" 2>/dev/null \
+      || refuse "the nvidia kernel module is not loaded ($proc/modules); nvidia-smi is not run, since as root it would load it"
+    [ -e "$devroot/nvidiactl" ] \
+      || refuse "$devroot/nvidiactl is missing: the driver is not up; nvidia-smi is not run, since as root it would load it"
     # every card nvidia-smi lists, one line each: "<index>, <power.limit>, <enforced.power.limit>"
     rows=$(nvidia-smi --query-gpu=index,power.limit,enforced.power.limit --format=csv,noheader,nounits 2>/dev/null) \
       || refuse "nvidia-smi cannot read the GPUs' power limits"

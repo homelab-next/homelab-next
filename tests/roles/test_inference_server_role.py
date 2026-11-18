@@ -232,7 +232,8 @@ def test_main_hands_a_cuda_container_its_card_by_cdi_name_and_a_cpu_one_nothing(
     svc = compose(tmp_path)
     assert svc["devices"] == ["nvidia.com/gpu=1"] and svc["group_add"] == [str(MODELS_GID)]
     unit = next((tmp_path / "units").glob("*.service")).read_text()
-    assert "--backend cuda --max-watts 200 --gpu-index 1 --model-file" in unit
+    assert "--backend cuda --max-watts 200 --gpu-index 1 --proc-root /proc --dev-root " in unit
+    assert f"--dev-root {tmp_path / 'dev'} --model-file" in unit
     cpu = tmp_path / "cpu"
     cpu.mkdir()
     store(cpu)
@@ -285,12 +286,12 @@ def test_main_hands_a_cuda_container_every_card_or_a_list_and_checks_each_cap(tm
     assert run_role(tmp_path, ROLE, "main", v).returncode == 0
     assert compose(tmp_path)["devices"] == ["nvidia.com/gpu=all"]
     unit = next((tmp_path / "units").glob("*.service")).read_text()
-    assert "--backend cuda --max-watts 200 --gpu-index all --model-file" in unit
+    assert "--backend cuda --max-watts 200 --gpu-index all --proc-root /proc --dev-root" in unit
     v[f"{MID}_gpu_indices"] = [0, 1, 2, 3]
     assert run_role(tmp_path, ROLE, "main", v).returncode == 0
     assert compose(tmp_path)["devices"] == [f"nvidia.com/gpu={i}" for i in range(4)]
     unit = next((tmp_path / "units").glob("*.service")).read_text()
-    assert "--gpu-index 0,1,2,3 --model-file" in unit
+    assert "--gpu-index 0,1,2,3 --proc-root" in unit
 
 
 def test_main_passes_the_allow_listed_throughput_settings_by_name(tmp_path):
@@ -405,6 +406,15 @@ REFUSED = {
     "an all-zero tensor split": {"extra_args": {"tensor_split": [0, 0]}},
     "a tensor split as a string": {"extra_args": {"tensor_split": "1,1"}},
     "a tensor split of booleans": {"extra_args": {"tensor_split": [True, True]}},
+    "an infinite tensor split": {"extra_args": {"tensor_split": [1, float("inf")]}},
+    "a tensor split that is not a number": {"extra_args": {"tensor_split": [1, float("nan")]}},
+    "a tensor split of another length than the cards": {
+        "backend": "cuda",
+        "image": image_for("cuda"),
+        "gpu_indices": [0, 1],
+        "extra_args": {"tensor_split": [1, 1, 1]},
+    },
+    "a micro-batch alone above the default batch": {"extra_args": {"ubatch_size": 4096}},
     "a batch size in decision mode": {"mode": "decision", "extra_args": {"batch_size": 4096}},
     "a unified cache in decision mode": {"mode": "decision", "extra_args": {"kv_unified": True}},
     "a split mode on the cpu backend": {
@@ -517,6 +527,51 @@ def _smi(tmp_path: Path, out: str, rc: int = 0) -> dict:
     return {"PATH": f"{d}:{os.environ['PATH']}"}
 
 
+def driver_up(
+    tmp_path: Path,
+    modules: str = "nvidia_uvm 1 0 - Live 0x0\nnvidia 2 1 nvidia_uvm, Live 0x0\n",
+    ctl: bool = True,
+) -> list[str]:
+    """--proc-root and --dev-root of a guest whose driver is loaded (or, by the arguments, not)."""
+    proc, dev = tmp_path / "proc", tmp_path / "devroot"
+    proc.mkdir(exist_ok=True)
+    dev.mkdir(exist_ok=True)
+    (proc / "modules").write_text(modules)
+    if ctl:
+        (dev / "nvidiactl").write_text("")
+    return ["--proc-root", str(proc), "--dev-root", str(dev)]
+
+
+@pytest.mark.parametrize(
+    "modules, ctl",
+    [("", True), ("nvidia_uvm 1 0 - Live 0x0\ndrm 2 0 - Live 0x0\n", True),
+     ("nvidia 2 0 - Live 0x0\n", False)],
+)  # fmt: skip
+def test_precheck_never_runs_nvidia_smi_unless_the_driver_is_already_loaded(tmp_path, modules, ctl):
+    """nvidia-smi as root loads the nvidia module when it is absent: a warm-card load on a guest
+    whose cards must not be initialised that way. Without the module and its control device the
+    check refuses before calling it."""
+    env = _smi(tmp_path, _rows(("180.00", "180.00")))
+    log = tmp_path / "smi.log"
+    fake(tmp_path / "smi" / "nvidia-smi",
+         f"import sys\nopen({str(log)!r}, 'a').write('ran')\nsys.stdout.write({_rows(('180.00', '180.00'))!r})\n")  # fmt: skip
+    r = precheck("--backend", "cuda", "--max-watts", "200", "--gpu-index", "all", "--power-only",
+                 *driver_up(tmp_path, modules, ctl), env=env)  # fmt: skip
+    assert r.returncode == 1 and "nvidia-smi is not run" in r.stderr, r.stderr
+    assert not log.exists()
+    ok = tmp_path / "ok"
+    ok.mkdir()
+    r = precheck("--backend", "cuda", "--max-watts", "200", "--gpu-index", "all", "--power-only",
+                 *driver_up(ok), env=env)  # fmt: skip
+    assert r.returncode == 0 and log.read_text() == "ran", r.stderr
+
+
+def test_the_unit_passes_the_driver_seams_as_fixed_paths():
+    fixed = yaml.safe_load((MODULE / "roles" / MID / "vars" / "main.yml").read_text())
+    assert fixed[f"{MID}_proc_root"] == "/proc" and fixed[f"{MID}_dev_root"] == "/dev"
+    assert f"{MID}_proc_root" not in DEFAULTS
+
+
 def _rows(*limits: tuple[str, str]) -> str:
     """nvidia-smi --query-gpu=index,power.limit,enforced.power.limit csv, one card per pair."""
     return "".join(f"{i}, {lim}, {enf}\n" for i, (lim, enf) in enumerate(limits))
@@ -532,6 +587,7 @@ def _rows(*limits: tuple[str, str]) -> str:
 )  # fmt: skip
 def test_precheck_judges_an_nvidia_cards_power_limit_in_watts(tmp_path, limit, enforced, rc, ok):
     r = precheck("--backend", "cuda", "--max-watts", "200", "--gpu-index", "0", "--power-only",
+                 *driver_up(tmp_path),
                  env=_smi(tmp_path, _rows((limit, enforced)), rc))  # fmt: skip
     assert (r.returncode == 0) is ok, r.stdout + r.stderr
 
@@ -559,6 +615,7 @@ def test_precheck_holds_every_card_a_multi_gpu_container_gets_to_the_cap(
     tmp_path, gpus, out, ok, needle
 ):
     r = precheck("--backend", "cuda", "--max-watts", "200", "--gpu-index", gpus, "--power-only",
+                 *driver_up(tmp_path),
                  env=_smi(tmp_path, out))  # fmt: skip
     assert (r.returncode == 0) is ok, r.stdout + r.stderr
     assert needle in (r.stdout if ok else r.stderr), r.stdout + r.stderr
@@ -570,6 +627,7 @@ def test_precheck_holds_every_card_a_multi_gpu_container_gets_to_the_cap(
 @pytest.mark.parametrize("gpus", ["", "0,", ",1", "0,,1", "all,1", "one", "0;1", "-1"])
 def test_precheck_refuses_a_malformed_card_list(tmp_path, gpus):
     r = precheck("--backend", "cuda", "--max-watts", "200", "--gpu-index", gpus, "--power-only",
+                 *driver_up(tmp_path),
                  env=_smi(tmp_path, FOUR))  # fmt: skip
     assert r.returncode == 2, (gpus, r.stderr)
 
