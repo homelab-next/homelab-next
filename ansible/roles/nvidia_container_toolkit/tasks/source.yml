@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# The vendor's flat apt repository, signed by the checked key. Skipped (by main) when
+# nvidia_container_toolkit_repository is "": the host's own apt sources then serve the packages.
+- name: Install gpg (it checks the vendor key's fingerprint)
+  ansible.builtin.apt:
+    name: gpg
+    state: present
+
+- name: Fetch the vendor signing key and check it against the pinned fingerprints
+  ansible.builtin.include_tasks: signing_key.yml
+
+- name: Add the vendor apt repository (flat, suite /), signed by the checked vendor key
+  ansible.builtin.deb822_repository:
+    name: "{{ nvidia_container_toolkit_source_name }}"
+    types: deb
+    uris: "{{ nvidia_container_toolkit_apt_uri }}"
+    suites: "/"
+    signed_by: "{{ nvidia_container_toolkit_keyring }}"

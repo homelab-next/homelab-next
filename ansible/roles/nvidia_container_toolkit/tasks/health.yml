@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy: the four packages installed at the pin and held (dpkg state hi), the spec on disk, the
+# runtime resolving nvidia.com/gpu=all and the expected GPUs, and, unless auto_refresh is on, the
+# refresh units masked.
+- block:
+    - name: Read the toolkit packages' versions and selections
+      ansible.builtin.command:
+        argv: "{{ [nvidia_container_toolkit_dpkg_query_cli, '-W', '-f', '${Package} ${Version} ${db:Status-Abbrev}\\n'] + nvidia_container_toolkit_packages }}"
+      register: nvidia_container_toolkit_dpkg_health
+      changed_when: false
+      check_mode: false  # read-only: it runs in --check too
+      failed_when: false
+    - name: Fail unless every package is installed at the pin and held
+      vars:
+        nvidia_container_toolkit_unpinned: >-
+          {%- set out = [] -%}
+          {%- for p in nvidia_container_toolkit_packages -%}
+          {%- set want = '(?m)^' ~ (p | regex_escape) ~ ' ' ~ (nvidia_container_toolkit_apt_version | regex_escape) ~ ' hi\\s*$' -%}
+          {%- if not (nvidia_container_toolkit_dpkg_health.stdout is search(want)) -%}{%- set _ = out.append(p) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out | join(', ') }}
+      ansible.builtin.assert:
+        that: nvidia_container_toolkit_unpinned | length == 0
+        fail_msg: >-
+          nvidia_container_toolkit: not installed at {{ nvidia_container_toolkit_apt_version }} and
+          held (dpkg state hi): {{ nvidia_container_toolkit_unpinned }}
+          (dpkg-query: {{ nvidia_container_toolkit_dpkg_health.stdout_lines | join('; ') or nvidia_container_toolkit_dpkg_health.stderr | default('') | trim }})
+    - name: Look for the CDI spec
+      ansible.builtin.stat:
+        path: "{{ nvidia_container_toolkit_cdi_spec }}"
+      register: nvidia_container_toolkit_spec_health
+      check_mode: false
+    - name: Fail without the spec
+      ansible.builtin.assert:
+        that: nvidia_container_toolkit_spec_health.stat.exists and nvidia_container_toolkit_spec_health.stat.size | default(0) > 0
+        fail_msg: "nvidia_container_toolkit: no CDI spec at {{ nvidia_container_toolkit_cdi_spec }}"
+    - name: Check the runtime resolves the devices
+      ansible.builtin.include_tasks:
+        file: cdi_check.yml
+        apply:
+          tags: [health]
+    - name: Read whether the refresh units are masked
+      ansible.builtin.command:
+        argv: "{{ [nvidia_container_toolkit_systemctl_cli, 'is-enabled'] + nvidia_container_toolkit_refresh_units }}"
+      register: nvidia_container_toolkit_unit_health
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: not nvidia_container_toolkit_auto_refresh
+    - name: Fail unless the refresh units are masked
+      ansible.builtin.assert:
+        that: nvidia_container_toolkit_unit_health.stdout_lines | select('equalto', 'masked') | list | length == nvidia_container_toolkit_refresh_units | length
+        fail_msg: >-
+          nvidia_container_toolkit: {{ nvidia_container_toolkit_refresh_units | join(' and ') }} are
+          not both masked (is-enabled: {{ nvidia_container_toolkit_unit_health.stdout_lines | join(', ') or 'no answer' }});
+          they would load kernel modules and rewrite the spec on a driver event (auto_refresh is false)
+      when: not nvidia_container_toolkit_auto_refresh
+  tags: [health]

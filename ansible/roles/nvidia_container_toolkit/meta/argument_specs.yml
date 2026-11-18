@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the pinned NVIDIA container toolkit (held) and keep a CDI spec current, never touching the driver, the kernel or any other package.
+    options:
+      nvidia_container_toolkit_expected_gpus:
+        type: int
+        description: "How many GPUs the guest has (0 to 16): nvidia-ctk cdi list must then show exactly nvidia.com/gpu=0 to N-1 and nvidia.com/gpu=all. 0 checks no count (at least one GPU and the all device are still required). Required so that the count is a decision for each guest."
+        required: true
+      nvidia_container_toolkit_version: &version
+        type: str
+        description: Pinned toolkit upstream version (x.y.z) for all four packages, installed and held.
+        default: 1.20.1
+      nvidia_container_toolkit_package_revision: &revision
+        type: str
+        description: The packaging revision of that version (digits); the apt version is <version>-<revision>, exact.
+        default: "1"
+      nvidia_container_toolkit_repository:
+        type: str
+        description: 'Vendor package repository root (https); the role appends /<channel>/deb/<amd64|arm64> (a flat repository). A lab mirror with the same layout may stand in. An empty string adds no source and no key and installs the pinned version from the apt sources the host already has (for example a CUDA repository).'
+        default: https://nvidia.github.io/libnvidia-container
+      nvidia_container_toolkit_channel:
+        type: str
+        description: The repository channel directory (a lower-case name).
+        default: stable
+      nvidia_container_toolkit_key_fingerprints:
+        type: list
+        elements: str
+        description: Primary-key fingerprints (40 upper-case hex digits) the repository's signing key (<repository>/gpgkey) must carry; the key is refused otherwise. Not used with an empty repository.
+        default: ["C95B321B61E88C1809C4F759DDCAE044F796ECB0"]
+      nvidia_container_toolkit_cdi_spec: &cdi_spec
+        type: path
+        description: The CDI spec the role writes and checks (the container runtime reads /etc/cdi without a restart).
+        default: /etc/cdi/nvidia.yaml
+      nvidia_container_toolkit_state_dir: &state_dir
+        type: path
+        description: Where the role stages a generated spec (outside /etc/cdi, so a half-written file is never loaded).
+        default: /var/lib/homelabnext/nvidia_container_toolkit
+      nvidia_container_toolkit_auto_refresh: &auto_refresh
+        type: bool
+        description: "false masks nvidia-cdi-refresh.path and .service before the install and removes a leftover /var/run/cdi spec, so nothing loads kernel modules or rewrites the spec on a driver event. true leaves the units alone (an earlier mask is undone by hand)."
+        default: false
+      nvidia_container_toolkit_apt_get_cli:
+        type: str
+        description: The apt-get command (simulates, then installs).
+        default: apt-get
+      nvidia_container_toolkit_apt_mark_cli:
+        type: str
+        description: The apt-mark command (releases and sets the toolkit packages' holds).
+        default: apt-mark
+      nvidia_container_toolkit_dpkg_query_cli: &dpkg_query
+        type: str
+        description: The dpkg-query command (reads every package's version and hold before and after the install).
+        default: dpkg-query
+      nvidia_container_toolkit_ctk_cli: &ctk
+        type: str
+        description: The nvidia-ctk command (generates and lists the CDI spec).
+        default: nvidia-ctk
+      nvidia_container_toolkit_systemctl_cli: &systemctl
+        type: str
+        description: The systemctl command (reads and sets the mask of the refresh units; it never restarts anything).
+        default: systemctl
+  health:
+    short_description: Fail unless the four packages are at the pin and held, the CDI spec exists and resolves the expected GPUs, and (without auto_refresh) the refresh units are masked.
+    options:
+      nvidia_container_toolkit_expected_gpus: &expected
+        type: int
+        description: How many GPUs the guest has (0 checks no count).
+        required: true
+      nvidia_container_toolkit_version: *version
+      nvidia_container_toolkit_package_revision: *revision
+      nvidia_container_toolkit_cdi_spec: *cdi_spec
+      nvidia_container_toolkit_auto_refresh: *auto_refresh
+      nvidia_container_toolkit_dpkg_query_cli: *dpkg_query
+      nvidia_container_toolkit_ctk_cli: *ctk
+      nvidia_container_toolkit_systemctl_cli: *systemctl
+  readiness:
+    short_description: Fail unless nvidia-ctk answers at the pinned version and the driver's control device exists.
+    options:
+      nvidia_container_toolkit_version: *version
+      nvidia_container_toolkit_ctk_cli: *ctk
+  backup:
+    short_description: Nothing to back up; the toolkit holds no data.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main installs the toolkit and rebuilds the spec.
+    options: {}
+  upgrade:
+    short_description: Validate a newer pinned toolkit version; then set the version (and revision) and re-run main.
+    options:
+      nvidia_container_toolkit_version: *version
+      nvidia_container_toolkit_target_version:
+        type: str
+        description: Toolkit version to upgrade to (must be newer).
+        required: true
+  export:
+    short_description: Nothing to export; the toolkit holds no data.
+    options: {}

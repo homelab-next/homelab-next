@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# The packages are deb packages for amd64 and arm64: refuse anything else before using either.
+- name: Refuse a host that is neither Debian nor Ubuntu
+  ansible.builtin.assert:
+    that: nvidia_container_toolkit_distribution in ['Debian', 'Ubuntu']
+    fail_msg: >-
+      nvidia_container_toolkit supports Debian and Ubuntu guests only (got
+      {{ nvidia_container_toolkit_distribution | to_json }})
+
+- name: Refuse a CPU architecture the vendor publishes no packages for
+  ansible.builtin.assert:
+    that: nvidia_container_toolkit_architecture in ['x86_64', 'aarch64']
+    fail_msg: >-
+      nvidia_container_toolkit: the vendor publishes amd64 and arm64 packages only (got
+      {{ nvidia_container_toolkit_architecture | to_json }})

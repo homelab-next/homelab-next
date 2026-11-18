@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: Pinned, held NVIDIA container toolkit with a CDI spec, for GPU guests whose driver the role never touches.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []
