@@ -120,6 +120,41 @@ def test_the_placed_rows_carry_the_declared_role_when_nothing_is_raised(tree):
         assert h is declared
 
 
+# ----------------------------------------------------------------------------- the play
+
+
+def _play_footprints(tree, site) -> dict[str, str]:
+    """module play name -> its ``hnx_module_footprint`` line, from the rendered install playbook."""
+    from homelabnext.modules import apply
+
+    sel = mr.selected(site, tree.mods)
+    books = apply.render(site, sel, {m: f"../{m}" for m in sel}, _render(tree, _check(tree, site)))
+    out: dict[str, str] = {}
+    name = ""
+    for line in books[apply.PLAYBOOK].splitlines():
+        if line.startswith("- name:"):
+            name = line
+        if f"{apply.FOOTPRINT_VAR}:" in line:
+            out[name] = line.split(":", 1)[1].strip()
+    return out
+
+
+def test_the_module_play_carries_the_footprint_as_placed(tree):
+    base = _play_footprints(tree, ld.load_yaml(SMALL_LAB))
+    lake = next(k for k in base if "example-lake" in k)
+    declared = base[lake]
+    raised = _play_footprints(tree, _raised(SMALL_LAB, {"memory_mb": 24576, "cpu": 6}))
+    assert (
+        raised[lake] != declared and "memory_mb: 24576" in raised[lake] and "cpu: 6" in raised[lake]
+    )
+    assert {k: v for k, v in raised.items() if k != lake} == {
+        k: v for k, v in base.items() if k != lake
+    }
+    # a raise below the floor is never carried below it
+    low = _play_footprints(tree, _raised(SMALL_LAB, {"memory_mb": 16}))
+    assert low[lake] == declared
+
+
 # ----------------------------------------------------------------------------- refusals
 
 
@@ -197,4 +232,4 @@ def test_a_feature_placement_can_be_raised(tree):
 def test_the_schema_takes_only_cpu_memory_and_disk(tree, fp):
     site = _raised(SMALL_LAB, fp)
     got = _problems(tree, site)
-    assert got and all("footprint" in p or "lake" in p for p in got), got
+    assert got and all(p.startswith("schema:") for p in got), got

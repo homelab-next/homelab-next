@@ -212,7 +212,9 @@ def test_an_overlay_placing_the_module_on_a_guest_checks_clean_and_renders(tmp_p
     plays = [p for p in books if p["hosts"] == "mod_tts_server"]
     assert len(plays) == 1 and plays[0]["become"] is True
     assert plays[0]["roles"][0]["role"].endswith("modules/tts/roles/tts")
-    assert plays[0]["vars"] == {"hnx_module_slice": "hnx-tts-server.slice"}
+    assert {k: v for k, v in plays[0]["vars"].items() if k != "hnx_module_footprint"} == {
+        "hnx_module_slice": "hnx-tts-server.slice"
+    }
 
 
 def test_a_registry_row_that_differs_is_named(tmp_path, capsys):

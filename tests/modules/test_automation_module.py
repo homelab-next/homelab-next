@@ -212,9 +212,11 @@ def test_the_manifest_declares_what_it_reaches_and_holds_no_literal_secret():
     for key, val in DEFAULTS.items():  # every reference the role takes is one the manifest declares
         if key.endswith("_ref"):
             assert val in refs, key
-    assert (
-        MANIFEST["requires"]["hosts"][0]["footprint"]["memory_mb"]
-        == DEFAULTS[f"{ID}_footprint_memory_mb"]
+    # the role's budget is the placed footprint's memory, the manifest's as its fallback
+    mem = DEFAULTS[f"{ID}_footprint_memory_mb"]
+    assert "hnx_module_footprint" in mem
+    assert mem.endswith(
+        f"default({MANIFEST['requires']['hosts'][0]['footprint']['memory_mb']}) }}}}"
     )
     assert (MODULE / "roles" / ID / "files" / "runtime-compat.txt").is_file()
 
@@ -245,7 +247,9 @@ def test_an_overlay_placing_the_module_on_a_guest_checks_clean_and_renders(tmp_p
     assert len(plays) == 1 and plays[0]["become"] is True
     assert plays[0]["roles"][0]["role"].endswith(f"modules/{ID}/roles/{ID}")
     assert plays[0]["pre_tasks"][0]["ansible.builtin.include_role"]["tasks_from"] == "readiness"
-    assert plays[0]["vars"] == {"hnx_module_slice": f"hnx-{ID}-server.slice"}
+    assert {k: v for k, v in plays[0]["vars"].items() if k != "hnx_module_footprint"} == {
+        "hnx_module_slice": f"hnx-{ID}-server.slice"
+    }
     assert (dest / "limits" / "auto" / f"hnx-{ID}-server.slice").is_file()
 
 
