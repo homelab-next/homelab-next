@@ -44,12 +44,37 @@
   changed_when: true
   when: gitea_start | bool and (gitea_tls_files is changed or gitea_ssh_files is changed or gitea_secret_files is changed)
 
+# --check starts nothing, so on a guest with no container yet there is no service to wait for: the
+# wait (a read-only task, it runs in --check) would poll its whole timeout for one, and the seed's
+# listings would exec into a container that does not exist. Under --check, ask whether a container
+# is listed; a real run does not ask, and goes on exactly as gitea_start says.
+- name: Under --check, is the service there to wait for (a fresh guest has none)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ gitea_dir }}/docker-compose.yml", ps, --quiet, "{{ gitea_service }}"]
+  register: gitea_check_ps
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only
+  when: gitea_start | bool and ansible_check_mode
+
+- name: Say what --check leaves out on a guest with no service yet
+  ansible.builtin.debug:
+    msg: >-
+      {{ gitea_service }} is not running here: a real run would start it, wait for it to answer and
+      create the administrator; --check does not wait for a service it never started
+  when: gitea_start | bool and ansible_check_mode and (gitea_check_ps.stdout | default('') | trim | length) == 0
+
+- name: Name whether the service is to be waited for and seeded
+  ansible.builtin.set_fact:
+    gitea_after_start: >-
+      {{ gitea_start | bool and not (ansible_check_mode and (gitea_check_ps.stdout | default('') | trim | length) == 0) }}
+
 - name: Wait for the service to answer
   ansible.builtin.include_tasks: helper.yml
   vars:
     gitea_helper_cmd: wait
-  when: gitea_start | bool
+  when: gitea_after_start | bool
 
 - name: Create the administrator on an empty database, the OpenID Connect source and the password sync
   ansible.builtin.include_tasks: seed.yml
-  when: gitea_start | bool
+  when: gitea_after_start | bool
