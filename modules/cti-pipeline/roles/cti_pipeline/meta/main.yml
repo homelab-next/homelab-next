@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The threat-intelligence pipeline as module job units: a site-built app artefact pinned by sha256 and installed with an offline venv, run per job and lane (real, shadow) by a hardened systemd template the orchestration dispatcher starts, with credentials loaded as systemd credentials, a shadow lane that only stages and writes its own lake schema, last-run freshness, and a consistent export and checked restore of each lane's store."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

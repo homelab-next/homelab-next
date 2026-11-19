@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+# The app artefact: one release per sha256 under <install dir>/releases/<sha16>/, copied from the
+# control host (never fetched or built on the guest), hashed on the host and refused unless it is
+# the pin (cti_artefact.py install, before anything is unpacked), unpacked into a sibling directory
+# with its offline venv and only then renamed into place; then <install dir>/current is switched to
+# it. A wrong artefact or a failed install never touches the release in use. Releases past
+# cti_pipeline_keep_releases are pruned (only directories named as a release, never the current one).
+- name: Look for the pinned release
+  ansible.builtin.stat:
+    path: "{{ cti_pipeline_releases_dir }}/{{ cti_pipeline_release_name }}/.hnx-installed"
+  register: cti_pipeline_release_stat
+
+- name: Install the pinned release
+  when: >-
+    not cti_pipeline_release_stat.stat.exists
+    or not cti_pipeline_release_stat.stat.isreg | default(false)
+  block:
+    - name: Copy the incoming artefact beside the releases (root-only)
+      ansible.builtin.copy:
+        src: "{{ cti_pipeline_artefact }}"
+        dest: "{{ cti_pipeline_incoming }}"
+        owner: "{{ cti_pipeline_owner }}"
+        group: "{{ cti_pipeline_owner_group }}"
+        mode: "0600"
+    # in --check the copy wrote nothing: the pin is checked on the run that copies it (readiness
+    # has already hashed the control host's file)
+    - name: Hash, refuse unless it is the pin, unpack, build the venv offline and rename into place
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -I
+          - -c
+          - "{{ lookup('ansible.builtin.file', 'cti_artefact.py') }}"
+          - install
+          - "{{ cti_pipeline_incoming }}"
+          - "{{ cti_pipeline_artefact_sha256 }}"
+          - "{{ cti_pipeline_releases_dir }}"
+          - "{{ cti_pipeline_python }}"
+      register: cti_pipeline_install
+      changed_when: cti_pipeline_install.rc == 0 and (cti_pipeline_install.stdout | from_json).changed
+      when: not ansible_check_mode
+  always:
+    - name: Remove the incoming copy (that one file)
+      ansible.builtin.file:
+        path: "{{ cti_pipeline_incoming }}"
+        state: absent
+
+- name: Switch the current link to the pinned release
+  ansible.builtin.file:
+    src: "{{ cti_pipeline_releases_dir }}/{{ cti_pipeline_release_name }}"
+    dest: "{{ cti_pipeline_current }}"
+    state: link
+    force: true
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+  when: not ansible_check_mode or cti_pipeline_release_stat.stat.exists
+
+- name: Prune the releases past the ones kept (never the current one)
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -I
+      - -c
+      - "{{ lookup('ansible.builtin.file', 'cti_artefact.py') }}"
+      - prune
+      - "{{ cti_pipeline_releases_dir }}"
+      - "{{ cti_pipeline_release_name }}"
+      - "{{ cti_pipeline_keep_releases | int }}"
+  register: cti_pipeline_prune
+  changed_when: cti_pipeline_prune.rc == 0 and (cti_pipeline_prune.stdout | from_json).changed
+  when: not ansible_check_mode

@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless every dependency is there before anything is written: systemd and an interpreter that
+# can build a venv on the host, the pinned artefact on the control host, every secret in its form,
+# and the gateway's and the lake's registry rows when the probes name them. The orchestration
+# dispatcher is not a dependency of the install: until it runs, the units are simply never started.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Look for systemd on the host
+      ansible.builtin.stat:
+        path: /run/systemd/system
+      register: cti_pipeline_systemd_stat
+    - name: The host runs systemd
+      ansible.builtin.assert:
+        that: cti_pipeline_systemd_stat.stat.isdir | default(false)
+        fail_msg: "cti-pipeline: the host does not run systemd (the jobs are units)"
+    - name: The interpreter can build a venv
+      ansible.builtin.command:
+        argv: ["{{ cti_pipeline_python }}", -c, "import venv, ensurepip, sqlite3"]
+      changed_when: false
+    - name: Hash the pinned artefact where the play controls it
+      ansible.builtin.stat:
+        path: "{{ cti_pipeline_artefact }}"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: cti_pipeline_src_stat
+      delegate_to: localhost
+      become: false
+    - name: The artefact is there and is the pinned one
+      ansible.builtin.assert:
+        that:
+          - cti_pipeline_src_stat.stat.exists
+          - cti_pipeline_src_stat.stat.isreg | default(false)
+          - cti_pipeline_src_stat.stat.checksum == cti_pipeline_artefact_sha256
+        fail_msg: >-
+          cti-pipeline: {{ cti_pipeline_artefact }} is missing, not a regular file, or does not hash
+          to the pinned {{ cti_pipeline_artefact_sha256 }} (README, "The artefact")
+    - name: The gateway and the lake query service are in the registry
+      ansible.builtin.assert:
+        that: lookup('hnx_registry', item, field='url') is match('^https?://')
+        fail_msg: "cti-pipeline: {{ item }} is not a service of the registry"
+      loop: "{{ [cti_pipeline_gateway_id, cti_pipeline_lake_query_id] | select | list }}"
+  tags: [readiness]

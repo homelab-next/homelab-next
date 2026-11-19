@@ -1,0 +1,54 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ cti_pipeline_marker }}, service {{ cti_pipeline_logical_id }}); local changes are overwritten.
+# The job units of cti-pipeline instance {{ cti_pipeline_logical_id }}: hnx-{{ cti_pipeline_logical_id }}@<job>-<lane>.service, started
+# by the orchestration controller's dispatcher (systemctl start --wait, under the polkit rule the
+# orchestration role writes for this set) and never enabled. The template alone runs nothing: the
+# wrapper refuses an instance with no job spec, and only a declared instance's drop-in
+# (hnx-{{ cti_pipeline_logical_id }}@<job>-<lane>.service.d/{{ cti_pipeline_dropin_name }}) names its lane's user, the one directory it
+# may write and its credentials. Its own cgroup, user and sandbox: nothing of the controller's.
+[Unit]
+Description=cti-pipeline {{ cti_pipeline_logical_id }} job %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# the least-privileged account until a declared instance's drop-in names its lane's
+User={{ cti_pipeline_shadow_user }}
+Group={{ cti_pipeline_group }}
+ExecStart={{ cti_pipeline_bin }} --spec {{ cti_pipeline_jobs_dir }}/%i.json --instance %i
+# the dispatcher's run file (run id, lane, task), read by PID 1: data, never an environment file
+LoadCredential=hnx-dispatch:{{ cti_pipeline_dispatch_dir }}/{{ cti_pipeline_logical_id }}/%i.json
+# the dispatcher returns this file's tail as the job's answer (the controller never reads the journal)
+StandardOutput=append:{{ cti_pipeline_job_logs_dir }}/{{ cti_pipeline_logical_id }}/%i.log
+StandardError=inherit
+TimeoutStartSec=3600
+TimeoutStopSec=90
+{% if hnx_module_slice | default('') %}
+# the module role's slice (the module play's hnx_module_slice): its limits and its egress policy apply
+Slice={{ hnx_module_slice }}
+{% endif %}
+MemoryMax={{ cti_pipeline_memory_max }}
+TasksMax={{ cti_pipeline_tasks_max | int }}
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

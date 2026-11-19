@@ -1,0 +1,108 @@
+# SPDX-License-Identifier: Apache-2.0
+# The threat-intelligence pipeline as module job units (modules/cti-pipeline): a site-built app
+# artefact pinned by sha256, installed as a release with its own offline venv, run per job and per
+# lane (real, shadow) by the systemd template hnx-<set>@<job>-<lane>.service that the orchestration
+# controller's dispatcher starts (modules/orchestration README, "Module job units"). Nothing here is
+# a lab value: the artefact, the job table, the environment, the credentials and the placement are
+# the overlay's.
+# cti_pipeline_logical_id (required): the instance id, which is also the unit set's name
+#   (hnx-<id>@.service and the orchestration_job_units entry naming it), e.g. cti
+# cti_pipeline_artefact (required): the artefact's path on the control host (README, "The artefact")
+# cti_pipeline_artefact_sha256 (required): its sha256, the pin
+
+cti_pipeline_install_dir: "/opt/hnx/{{ cti_pipeline_logical_id }}"
+cti_pipeline_config_dir: "/etc/hnx/{{ cti_pipeline_logical_id }}"
+# the module's data root (docs/modules/data.md): root's, read by the module's group; each lane's root
+# under it (real/, shadow/) is that lane's user's alone, 0700, and holds the app's working tree
+cti_pipeline_data_root: "/var/lib/hnx-modules/{{ cti_pipeline_logical_id }}"
+cti_pipeline_owner: root
+cti_pipeline_owner_group: root
+# the lanes' users share the module's group; each owns only its own lane root
+cti_pipeline_user: "hnx-{{ cti_pipeline_logical_id }}"
+cti_pipeline_shadow_user: "hnx-{{ cti_pipeline_logical_id }}-shadow"
+cti_pipeline_group: "hnx-{{ cti_pipeline_logical_id }}"
+cti_pipeline_manage_accounts: true
+# the host's interpreter the release's venv is built from (python3-venv installed)
+cti_pipeline_python: /usr/bin/python3
+cti_pipeline_keep_releases: 3
+
+# --- lanes ------------------------------------------------------------------------------------
+# the lanes deployed (units, users, roots): a subset of [real, shadow]
+cti_pipeline_lanes: [real, shadow]
+# the lanes whose job freshness the health hook judges (the shadow window: [shadow]; after the
+# switch: [real]; both while they overlap)
+cti_pipeline_active_lanes: [real]
+# each lane's lake schema, forced into the job's environment last (never the env's to set): the
+# shadow lane's ends in _shadow and differs from the real lane's
+cti_pipeline_lake_schema:
+  real: cti
+  shadow: cti_shadow
+# the app's own variable names for the lake schema and the publish mode (the app contract, README
+# "The app contract"); the publish mode is always forced to stage: this module never publishes
+cti_pipeline_lake_schema_env: CTI_LAKE_SCHEMA
+cti_pipeline_publish_mode_env: PUBLISH_MODE
+
+# --- the job table (role data: README, "Jobs") -------------------------------------------------
+# {<job>: {steps: [[argv], ...], timeout_s, max_age_s, lanes?, env?, refs?}}
+#   job        a slug of up to 48 characters, the unit's instance first part (hnx-<id>@<job>-<lane>)
+#   steps      argv lists run in order in the lane root; the first failure ends the job. Placeholders
+#              {python} {app} {lane_root} {config} {lake_ca} (README, "Jobs")
+#   timeout_s  the unit's TimeoutStartSec; max_age_s the health hook's freshness bound (0: not judged)
+#   lanes      a subset of cti_pipeline_lanes (default: all); env merged over the lane's env
+#   refs       the names (of the lane's refs) this job's processes get (default: every one of the lane's)
+cti_pipeline_jobs: {}
+# the non-secret environment per lane (NAME: value); never the forced names, never a credential's name
+cti_pipeline_env:
+  real: {}
+  shadow: {}
+# the secret references per lane, {NAME: <a reference in the module's own namespace, cti-pipeline/>};
+# each value written root-only (0600) and loaded into the unit as a systemd credential, exported to
+# the job's processes only
+cti_pipeline_lane_refs:
+  real: {}
+  shadow: {}
+# the directories (relative to a lane root) that hold the app's state: exported, restored, backed up
+cti_pipeline_state_dirs: [data, state, podcast]
+
+# --- the orchestration dispatcher's interface (modules/orchestration, "Module job units") --------
+# where the dispatcher writes each run file (<dir>/<set>/<job>-<lane>.json): the orchestration
+# instance's data root plus dispatch/
+cti_pipeline_dispatch_dir: /var/lib/hnx-modules/orchestration/dispatch
+# where each unit appends its log (<dir>/<set>/<job>-<lane>.log, pre-created by the orchestration role)
+cti_pipeline_job_logs_dir: /var/log/hnx-jobs
+
+# --- checks -------------------------------------------------------------------------------------
+# a module the release's python must import in the health hook (the app's package); empty: skipped
+cti_pipeline_import_check: ""
+# the gateway (a registry id) the health hook probes with a real-sized request; empty: skipped
+cti_pipeline_gateway_id: ""
+cti_pipeline_gateway_key_ref: secret:cti-pipeline/gateway-key
+cti_pipeline_gateway_path: /v1/chat/completions
+cti_pipeline_gateway_model: main-reasoner
+# a reasoning model given a small budget returns empty content: probe at what a real job asks for
+cti_pipeline_gateway_probe_max_tokens: 2500
+cti_pipeline_gateway_probe_timeout_s: 300
+# the lake query service (a registry id) the health hook reaches over the lab CA; empty: skipped
+cti_pipeline_lake_query_id: ""
+cti_pipeline_lake_probe_path: /v1/info
+# the lab CA (a secret holding PEM) written to <config>/lake-ca.pem, the {lake_ca} placeholder; empty: none
+cti_pipeline_lake_ca_ref: ""
+cti_pipeline_allow_plain_http: false
+cti_pipeline_health_timeout: 20
+
+# --- restore (README, "Backup, export, restore") ------------------------------------------------
+# an export directory on the guest (hnx-cti-state/1); the lane it replaces; optional source counts
+cti_pipeline_restore_source: ""
+cti_pipeline_restore_lane: real
+cti_pipeline_restore_expect_counts: ""
+# upgrade: the new artefact's sha256 (cti_pipeline_artefact names its file for that run)
+cti_pipeline_target_artefact_sha256: ""
+
+# --- the unit -----------------------------------------------------------------------------------
+cti_pipeline_unit_dir: /etc/systemd/system
+cti_pipeline_systemctl_cli: systemctl
+cti_pipeline_reload_systemd: true
+cti_pipeline_memory_max: 6G
+cti_pipeline_tasks_max: 512
+# the backup hook's exports kept per lane (<data root>/export/<lane>-<stamp>/)
+cti_pipeline_keep_exports: 3

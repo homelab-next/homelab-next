@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the current release is the pinned one; the wrapper, the template unit, every
+# declared instance's spec and drop-in are in place; the release imports the app (when named); the
+# gateway answers a real-sized request with non-empty content (when named: a reasoning model given
+# a small budget spends it all on thought and answers nothing, so a probe that only checks HTTP
+# 200 passes a broken tier); the lake query service answers over the lab CA (when named); and, in
+# each active lane, every job with a max age last ended ok within it. Nothing is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Read the current release's pin
+      ansible.builtin.slurp:
+        src: "{{ cti_pipeline_current }}/.hnx-installed"
+      register: cti_pipeline_current_pin
+    - name: The current release is the pinned one
+      ansible.builtin.assert:
+        that: (cti_pipeline_current_pin.content | b64decode | trim) == cti_pipeline_artefact_sha256
+        fail_msg: >-
+          cti-pipeline: the current release is {{ cti_pipeline_current_pin.content | b64decode | trim }},
+          the pin is {{ cti_pipeline_artefact_sha256 }} (run the install)
+    - name: Look for the wrapper, the template unit, each spec and each drop-in
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: cti_pipeline_unit_files
+      loop: >-
+        {{ [cti_pipeline_bin, cti_pipeline_unit_dir ~ '/' ~ cti_pipeline_unit_template]
+           + (cti_pipeline_instances | map(attribute='spec') | list)
+           + (cti_pipeline_instances | map(attribute='dropin_dir') | map('regex_replace', '$', '/' ~ cti_pipeline_dropin_name) | list) }}
+    - name: They are all there
+      ansible.builtin.assert:
+        that: cti_pipeline_unit_files.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: >-
+          cti-pipeline: missing {{ cti_pipeline_unit_files.results | rejectattr('stat.exists') | map(attribute='item') | list }}
+          (run the install)
+    - name: The release imports the app
+      ansible.builtin.command:
+        argv: ["{{ cti_pipeline_current }}/venv/bin/python", -c, "import importlib, sys; importlib.import_module(sys.argv[1])", "{{ cti_pipeline_import_check }}"]
+        chdir: "{{ cti_pipeline_current }}/app"
+      changed_when: false
+      when: cti_pipeline_import_check != ''
+    - name: Name the gateway's URL
+      ansible.builtin.set_fact:
+        cti_pipeline_gateway_url: "{{ lookup('hnx_registry', cti_pipeline_gateway_id, field='url') ~ cti_pipeline_gateway_path }}"
+      when: cti_pipeline_gateway_id != ''
+    - name: The gateway is reached over https (http only when allowed)
+      ansible.builtin.assert:
+        that: cti_pipeline_gateway_url is match('^https://') or (cti_pipeline_allow_plain_http | bool and cti_pipeline_gateway_url is match('^http://'))
+        fail_msg: "cti-pipeline: the gateway's URL is not https (the key would travel in clear); set cti_pipeline_allow_plain_http to accept that"
+      when: cti_pipeline_gateway_id != ''
+    - name: Probe the gateway with a real-sized request
+      ansible.builtin.command:
+        argv: >-
+          {{ ['python3', '-I', '-c', lookup('ansible.builtin.file', 'cti_state.py'), 'probe-gateway',
+              cti_pipeline_gateway_url, cti_pipeline_gateway_model, cti_pipeline_gateway_probe_max_tokens | string,
+              cti_pipeline_gateway_probe_timeout_s | string]
+             + (['--ca', cti_pipeline_lake_ca_file] if cti_pipeline_lake_ca_ref != '' else []) }}
+        stdin: "{{ lookup('hnx_secret', cti_pipeline_gateway_key_ref) }}"
+      register: cti_pipeline_gateway_probe
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: cti_pipeline_gateway_id != ''
+    - name: The gateway answered with content
+      ansible.builtin.assert:
+        that: cti_pipeline_gateway_probe.rc == 0 and (cti_pipeline_gateway_probe.stdout | from_json).ok
+        fail_msg: "cti-pipeline: the gateway probe failed: {{ cti_pipeline_gateway_probe.stdout | default('') | truncate(400) }}"
+      when: cti_pipeline_gateway_id != ''
+    - name: The lake query service answers over the lab CA
+      ansible.builtin.uri:
+        url: "{{ lookup('hnx_registry', cti_pipeline_lake_query_id, field='url') ~ cti_pipeline_lake_probe_path }}"
+        ca_path: "{{ cti_pipeline_lake_ca_file if cti_pipeline_lake_ca_ref != '' else omit }}"
+        status_code: 200
+        timeout: "{{ cti_pipeline_health_timeout | int }}"
+      changed_when: false
+      when: cti_pipeline_lake_query_id != ''
+    - name: Judge each active lane's job freshness
+      ansible.builtin.command:
+        argv: >-
+          {{ ['python3', '-I', '-c', lookup('ansible.builtin.file', 'cti_state.py'), 'freshness',
+              cti_pipeline_data_root ~ '/' ~ item ~ '/' ~ cti_pipeline_runs_subdir]
+             + cti_pipeline_freshness_by_lane[item] }}
+      register: cti_pipeline_freshness
+      changed_when: false
+      failed_when: false
+      loop: "{{ cti_pipeline_active_lanes | select('in', cti_pipeline_freshness_by_lane.keys() | list) | list }}"
+    - name: Every judged job last ended ok within its max age
+      ansible.builtin.assert:
+        that: item.rc == 0
+        fail_msg: "cti-pipeline: lane {{ item.item }} has a stale or failed job: {{ item.stdout | default('') | truncate(800) }}"
+      loop: "{{ cti_pipeline_freshness.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}"
+  tags: [health]

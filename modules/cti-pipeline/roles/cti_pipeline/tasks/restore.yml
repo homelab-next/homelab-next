@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore one lane (cti_pipeline_restore_lane) from an export (cti_pipeline_restore_source: an
+# hnx-cti-state/1 directory on the guest; the backup's export/<lane>-<stamp>/, or one made by
+# cti_state.py export from the old lab's working tree). Refused while a unit of that lane runs. The
+# export is checked first, writing nothing (every file listed with its size and sha256, the store's
+# integrity, its row counts equal to counts.json, and to cti_pipeline_restore_expect_counts, the
+# source's own counts, when given); then the store and the files are staged in the lane root as the
+# lane's user, each replaced directory is moved aside as <dir>.before-restore-<stamp> and the staged
+# one renamed in. Nothing is deleted.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: A source and a deployed lane are named
+      ansible.builtin.assert:
+        that:
+          - cti_pipeline_restore_source is match(cti_pipeline_path_pattern)
+          - cti_pipeline_restore_lane in cti_pipeline_lanes
+          - cti_pipeline_restore_expect_counts == '' or cti_pipeline_restore_expect_counts is match(cti_pipeline_path_pattern)
+        fail_msg: >-
+          cti-pipeline: set cti_pipeline_restore_source (an export directory on the guest) and
+          cti_pipeline_restore_lane (a deployed lane); cti_pipeline_restore_expect_counts is a path or empty
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: List the lane's units that are running
+      ansible.builtin.command:
+        argv: ["{{ cti_pipeline_systemctl_cli }}", list-units, --plain, --no-legend, "--state=active,activating,deactivating,reloading",
+               "hnx-{{ cti_pipeline_logical_id }}@*-{{ cti_pipeline_restore_lane }}.service"]
+      register: cti_pipeline_running
+      changed_when: false
+    - name: No unit of the lane runs
+      ansible.builtin.assert:
+        that: cti_pipeline_running.stdout | trim == ''
+        fail_msg: "cti-pipeline: a unit of the {{ cti_pipeline_restore_lane }} lane is running: {{ cti_pipeline_running.stdout | trim | truncate(300) }}"
+    - name: Read the lane user's ids
+      ansible.builtin.command:
+        argv: [id, "{{ item }}", "{{ cti_pipeline_lane_user[cti_pipeline_restore_lane] }}"]
+      register: cti_pipeline_restore_ids
+      changed_when: false
+      loop: ["-u", "-g"]
+    - name: Check the export before changing anything
+      ansible.builtin.command:
+        argv: >-
+          {{ ['python3', '-I', '-c', lookup('ansible.builtin.file', 'cti_state.py'), 'check', cti_pipeline_restore_source]
+             + (['--expect-counts', cti_pipeline_restore_expect_counts] if cti_pipeline_restore_expect_counts != '' else []) }}
+      changed_when: false
+    - name: Stage, move the replaced directories aside and rename the restored ones in
+      ansible.builtin.command:
+        argv: >-
+          {{ ['python3', '-I', '-c', lookup('ansible.builtin.file', 'cti_state.py'), 'restore', cti_pipeline_restore_source,
+              cti_pipeline_data_root ~ '/' ~ cti_pipeline_restore_lane,
+              cti_pipeline_restore_ids.results[0].stdout | trim, cti_pipeline_restore_ids.results[1].stdout | trim]
+             + (['--expect-counts', cti_pipeline_restore_expect_counts] if cti_pipeline_restore_expect_counts != '' else []) }}
+      changed_when: true
+  tags: [restore]
