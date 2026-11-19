@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: The service group
+  ansible.builtin.group:
+    name: "{{ publishing_gate_group }}"
+    system: true
+
+- name: The service user
+  ansible.builtin.user:
+    name: "{{ publishing_gate_user }}"
+    group: "{{ publishing_gate_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: The data directories (the producers write items into publishable/)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ publishing_gate_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ publishing_gate_root }}", owner: "{{ publishing_gate_root_owner }}", mode: "0755"}
+    - {path: "{{ publishing_gate_publishable_dir }}", owner: "{{ publishing_gate_root_owner }}", mode: "0775"}
+    - {path: "{{ publishing_gate_staging_dir }}", owner: "{{ publishing_gate_user }}", mode: "0750"}
+    - {path: "{{ publishing_gate_state_dir }}", owner: "{{ publishing_gate_user }}", mode: "0750"}
+    - {path: "{{ publishing_gate_tools_dir }}", owner: "{{ publishing_gate_root_owner }}", mode: "0755"}
+    - {path: "{{ publishing_gate_export_dir }}", owner: "{{ publishing_gate_user }}", mode: "0750"}
+    - {path: "{{ publishing_gate_config_dir }}", owner: "{{ publishing_gate_root_owner }}", mode: "0755"}
+    - {path: "{{ publishing_gate_cred_src_dir }}", owner: "{{ publishing_gate_user }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"

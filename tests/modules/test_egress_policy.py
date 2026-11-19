@@ -19,9 +19,10 @@ from homelabnext.modules import egress as eg
 from homelabnext.modules import limits as ml
 from homelabnext.modules import rules as mr
 from homelabnext.modules.scope import EMBEDDED_V4
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULES_DIR = ROOT / "examples/modules"
+MODULES_DIR = examples_with_publishing()
 
 
 def load(p):

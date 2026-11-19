@@ -20,9 +20,10 @@ from homelabnext.golden.canary import benign_model
 from homelabnext.models import store as st
 from homelabnext.modules import swap as ms
 from homelabnext.registry.models import RoleTable
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULES_DIR = ROOT / "examples" / "modules"
+MODULES_DIR = examples_with_publishing()
 EXAMPLE = ROOT / "schemas/platform/examples/module_swap.inference-rebind.json"
 ROLES = paths.example_file("model_roles.json")
 STORE = st.load(paths.example_file("model-serving", "model_store.json"))
@@ -45,7 +46,10 @@ def load(p: Path) -> dict:
 
 
 def _modules() -> dict:
-    mods = {p.parent.name: load(p) for p in sorted(MODULES_DIR.glob("*/module.yml"))}
+    mods = {
+        p.parent.name: load(p)
+        for p in sorted([*MODULES_DIR.glob("*/module.yml"), ROOT / "modules/publishing/module.yml"])
+    }
     other = copy.deepcopy(mods["example-inference"])
     other["id"] = "other-inference"
     mods["other-inference"] = other

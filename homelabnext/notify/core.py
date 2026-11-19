@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
@@ -137,6 +137,16 @@ class Notifier:
     ) -> None:
         """Register a problem title and its recovery.  ``module``: the module the pair was
         loaded from, written to the record for the census; None for the core's own."""
+        self._register(problem_title, recovery_title, module)
+
+    def register_module_pairs(self, pairs: Iterable[tuple[str, str]], module: str) -> None:
+        """Register the ``(problem, recovery)`` pairs a module's manifest declares
+        (``contributes.notify_pairs``), each recorded as that module's for the census.  The core's
+        own pairs are registered by their callers (``core_pairs``); a module's never are."""
+        for problem_title, recovery_title in pairs:
+            self._register(problem_title, recovery_title, module)
+
+    def _register(self, problem_title: str, recovery_title: str, module: str | None) -> None:
         if not problem_title or not recovery_title:
             raise ValueError("both titles are required")
         if problem_title == recovery_title:

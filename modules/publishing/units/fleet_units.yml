@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# fleet_units spec (homelabnext.generators.fleet_units): the publishing run, gate first. Its name is
+# bound to the module id. It runs as the module's own service user (the role creates it; the
+# credential files are its own, 0600) under the generator's full hardening block (no root, no
+# opt-out) and pages only through the notify slot's recovery pair, never directly. The mode
+# (stage, dry-run or live) is the configuration's, not the unit's: a lab starts in stage.
+- name: publishing-run
+  description: Gate every publishable item, then stage, plan or push what passes
+  exec: /opt/hnx/bin/hnx publishing --config /etc/hnx-modules/publishing/publishing.json
+  user: hnx-publishing
+  on_calendar: "*-*-* *:20:00 UTC"
+  timeout_start_sec: 900
+  read_write_paths:
+    - /var/lib/hnx-modules/publishing/state
+    - /var/lib/hnx-modules/publishing/staging
+  pages_directly: false

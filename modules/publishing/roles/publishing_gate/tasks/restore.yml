@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the published manifest from <restore_source>/published-manifest.jsonl, verified against its
+# sha256 file first and never over a non-empty live manifest (the manifest is append-only history).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: A source is named
+      ansible.builtin.assert:
+        that: publishing_gate_restore_source is match(publishing_gate_path_pattern)
+        fail_msg: "publishing: publishing_gate_restore_source is an absolute path"
+    - name: Hash the source manifest
+      ansible.builtin.stat:
+        path: "{{ publishing_gate_restore_source }}/published-manifest.jsonl"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: publishing_gate_src_manifest
+    - name: Read the recorded hash
+      ansible.builtin.slurp:
+        src: "{{ publishing_gate_restore_source }}/published-manifest.sha256"
+      register: publishing_gate_src_sum
+    - name: The manifest is there and is the one that was exported
+      ansible.builtin.assert:
+        that:
+          - publishing_gate_src_manifest.stat.exists
+          - (publishing_gate_src_sum.content | b64decode).split()[0] == publishing_gate_src_manifest.stat.checksum
+        fail_msg: "publishing: the source manifest is missing or does not match its sha256"
+    - name: The live manifest
+      ansible.builtin.stat:
+        path: "{{ publishing_gate_state_dir }}/published-manifest.jsonl"
+      register: publishing_gate_live_manifest
+    - name: Refuse to overwrite a live, non-empty manifest
+      ansible.builtin.assert:
+        that: not publishing_gate_live_manifest.stat.exists or publishing_gate_live_manifest.stat.size == 0
+        fail_msg: "publishing: the live manifest is not empty; it is append-only history and is never overwritten"
+    - name: Restore it
+      ansible.builtin.copy:
+        src: "{{ publishing_gate_restore_source }}/published-manifest.jsonl"
+        dest: "{{ publishing_gate_state_dir }}/published-manifest.jsonl"
+        remote_src: true
+        owner: "{{ publishing_gate_user }}"
+        group: "{{ publishing_gate_group }}"
+        mode: "0640"
+  tags: [restore]

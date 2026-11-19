@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# The open-format exit copy: the published manifest (jsonl), byte for byte, plus its sha256.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Hash the live manifest
+      ansible.builtin.stat:
+        path: "{{ publishing_gate_state_dir }}/published-manifest.jsonl"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: publishing_gate_manifest
+    - name: Copy it out (when nothing was published yet there is nothing to copy)
+      ansible.builtin.copy:
+        src: "{{ publishing_gate_state_dir }}/published-manifest.jsonl"
+        dest: "{{ publishing_gate_export_dir }}/published-manifest.jsonl"
+        remote_src: true
+        owner: "{{ publishing_gate_user }}"
+        group: "{{ publishing_gate_group }}"
+        mode: "0640"
+      when: publishing_gate_manifest.stat.exists
+    - name: Record its sha256
+      ansible.builtin.copy:
+        dest: "{{ publishing_gate_export_dir }}/published-manifest.sha256"
+        content: "{{ publishing_gate_manifest.stat.checksum }}  published-manifest.jsonl\n"
+        owner: "{{ publishing_gate_user }}"
+        group: "{{ publishing_gate_group }}"
+        mode: "0640"
+      when: publishing_gate_manifest.stat.exists
+  tags: [export]

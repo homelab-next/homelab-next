@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate a wrangler bump and record it as pending. Nothing is installed here: the bump is a new
+# lockfile shipped with the role (its version and integrity set as the pin together), applied by the
+# install. A target that is not an exact, different version is refused (never latest).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The target is an exact version that differs from the pin
+      ansible.builtin.assert:
+        that:
+          - publishing_gate_target_wrangler_version is match(publishing_gate_semver_pattern)
+          - publishing_gate_target_wrangler_version != publishing_gate_wrangler_version
+        fail_msg: "publishing: the target must be an exact X.Y.Z that differs from the pin (never latest or a range)"
+    - name: Record the pending bump
+      ansible.builtin.copy:
+        dest: "{{ publishing_gate_state_dir }}/pending-upgrade.json"
+        content: "{{ {'from': publishing_gate_wrangler_version, 'to': publishing_gate_target_wrangler_version} | to_nice_json }}\n"
+        owner: "{{ publishing_gate_user }}"
+        group: "{{ publishing_gate_group }}"
+        mode: "0644"
+  tags: [upgrade]

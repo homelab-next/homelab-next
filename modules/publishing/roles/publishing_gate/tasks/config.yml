@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# The run's configuration (no secret in it). The schedule is the module's fleet unit
+# (units/fleet_units.yml: publishing-run), rendered and enabled by the fleet scheduler, not here.
+- name: The run's configuration
+  ansible.builtin.template:
+    src: publishing.json.j2
+    dest: "{{ publishing_gate_config_dir }}/publishing.json"
+    owner: "{{ publishing_gate_root_owner }}"
+    group: "{{ publishing_gate_root_owner }}"
+    mode: "0644"

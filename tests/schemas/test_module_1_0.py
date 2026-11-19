@@ -29,27 +29,30 @@ from homelabnext.modules import loader as ld
 from homelabnext.modules import rules as mr
 from homelabnext.modules import scope as ms
 from homelabnext.schemas.module_manifest import NEVER_SHARED
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
 REG = sc.build_registry(ROOT)
 SCHEMA_PATH = ROOT / "schemas/platform/module.schema.json"
 SCHEMA = json.loads(SCHEMA_PATH.read_text())
 LAKE_TABLE = json.loads((ROOT / "schemas/platform/lake_table.schema.json").read_text())
-MODULES_DIR = ROOT / "examples/modules"
+MODULES_DIR = examples_with_publishing()
+#: the publishing module is real (modules/publishing), the one in-tree module the fictional site selects
+PUBLISHING_DIR = ROOT / "modules/publishing"
 
 
 def load(path) -> dict:
     return yaml.load(Path(path).read_text(), Loader=UniqueKeyLoader)
 
 
-MANIFESTS = sorted(MODULES_DIR.glob("*/module.yml"))
+MANIFESTS = sorted([*MODULES_DIR.glob("*/module.yml"), PUBLISHING_DIR / "module.yml"])
 MODULES = {p.parent.name: load(p) for p in MANIFESTS}
 SLOTS = load(MODULES_DIR / "slots.yml")["slots"]
 SITES = {p.stem: load(p) for p in sorted((MODULES_DIR / "sites").glob("*.yml"))}
-DIRS = {n: MODULES_DIR / n for n in MODULES}
+DIRS = {n: (PUBLISHING_DIR if n == "publishing" else MODULES_DIR / n) for n in MODULES}
 #: the fictional examples count as in-tree only because the tests say so: the rules' default
 #: public root is modules/ alone, so a loader copying the default never makes them available
-ROOTS = (MODULES_DIR,)
+ROOTS = (MODULES_DIR, ROOT / "modules")
 #: the site rules' inputs, built the loader's way from the manifests' contributed files
 _INPUTS = ld.inputs(ld.Tree(MODULES, DIRS, dict.fromkeys(MODULES, "fixture")))
 ROWS, UNITS, ROOT_UNITS = _INPUTS.rows, _INPUTS.units, _INPUTS.privileged_units
@@ -870,7 +873,7 @@ def test_interface_schema_is_the_owners_json_schema(tmp_path):
     import shutil
 
     mod = tmp_path / "publishing"
-    shutil.copytree(MODULES_DIR / "publishing", mod)
+    shutil.copytree(PUBLISHING_DIR, mod)
     f = mod / "interfaces/publishable-item.schema.json"
     s = json.loads(f.read_text())
     s["$id"] = s["$id"].replace("/modules/publishing/", "/modules/external-collector/")
@@ -1036,7 +1039,7 @@ def test_every_version_of_a_gate_interface_is_marked_whatever_the_order(first, s
     either order, by the module rules and across manifests."""
     mods = _two_versions(first, second)
     doc = mods["publishing"]
-    probs = mr.module_problems(doc, MODULES_DIR / "publishing", SLOTS, load, ROOTS)
+    probs = mr.module_problems(doc, PUBLISHING_DIR, SLOTS, load, ROOTS)
     bad = "1.0" if first is not True else "1.1"
     assert any(
         p.startswith(f"interface publishable-output {bad}: consumed with gate: true") for p in probs
@@ -1051,7 +1054,7 @@ def test_an_unconsumed_version_mix_is_refused_too():
     mods = _two_versions(None, True)
     doc = mods["publishing"]
     doc["prefers"]["interfaces"][0].pop("gate")
-    probs = mr.module_problems(doc, MODULES_DIR / "publishing", SLOTS, load, ROOTS)
+    probs = mr.module_problems(doc, PUBLISHING_DIR, SLOTS, load, ROOTS)
     assert (
         "interface publishable-output 1.0: another version is a gate, so every version says "
         "gate: true" in probs
@@ -1061,7 +1064,7 @@ def test_an_unconsumed_version_mix_is_refused_too():
 def test_every_version_marked_is_accepted():
     mods = _two_versions(True, True)
     doc = mods["publishing"]
-    probs = mr.module_problems(doc, MODULES_DIR / "publishing", SLOTS, load, ROOTS)
+    probs = mr.module_problems(doc, PUBLISHING_DIR, SLOTS, load, ROOTS)
     assert not [p for p in probs if "gate" in p], probs
     assert not [p for p in mr.tree_problems(mods) if "gate" in p]
 
@@ -1805,7 +1808,7 @@ def test_the_module_rules_leave_privilege_to_the_site(tmp_path):
     import shutil
 
     mod = tmp_path / "publishing"
-    shutil.copytree(MODULES_DIR / "publishing", mod)
+    shutil.copytree(PUBLISHING_DIR, mod)
     doc = copy.deepcopy(MODULES["publishing"])
     units = load(mod / doc["contributes"]["scheduler_jobs"][0]["file"])
     units[0].update(run_as_root=True, user="root")

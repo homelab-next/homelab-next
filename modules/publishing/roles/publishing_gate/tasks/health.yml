@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy: the pinned wrangler is installed and prints the pin, the config and credential files are
+# in place with the right modes, and the package imports (the fleet unit's timer is the fleet scheduler's). Reads only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The installed package version
+      ansible.builtin.slurp:
+        src: "{{ publishing_gate_tools_dir }}/node_modules/wrangler/package.json"
+      register: publishing_gate_installed
+      when: publishing_gate_pages_project != ''
+    - name: It is the pin
+      ansible.builtin.assert:
+        that: (publishing_gate_installed.content | b64decode | from_json).version == publishing_gate_wrangler_version
+        fail_msg: "publishing: the installed wrangler is not the pin {{ publishing_gate_wrangler_version }}"
+      when: publishing_gate_pages_project != ''
+    - name: Stat the credential files
+      ansible.builtin.stat:
+        path: "{{ publishing_gate_cred_src_dir }}/{{ item.name }}"
+      loop: "{{ publishing_gate_credentials }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: publishing_gate_cred_stats
+      no_log: true
+      when: item.need == 'always' or publishing_gate_mode != 'stage'
+    - name: They exist and are 0600
+      ansible.builtin.assert:
+        that: item.stat.exists and item.stat.mode == '0600'
+        fail_msg: "publishing: credential {{ item.item.name }} is missing or not 0600"
+      loop: "{{ publishing_gate_cred_stats.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: item.stat is defined
+    - name: The package imports
+      ansible.builtin.command:
+        argv: ["{{ publishing_gate_hnx_bin }}", publishing, --help]
+      changed_when: false
+  tags: [health]

@@ -136,7 +136,7 @@ example-orchestrator, example-agent-runtime, example-inference (an exclusive GPU
 example-log-pipeline, example-detonation; features
 [external-collector](../examples/modules/external-collector/module.yml),
 [example-sandbox](../examples/modules/example-sandbox/module.yml) and
-[publishing](../examples/modules/publishing/module.yml); core
+[publishing](../modules/publishing/module.yml); core
 [core-staff](../examples/modules/core-staff/module.yml) and
 [core-modules](../examples/modules/core-modules/module.yml); profiles in `examples/modules/sites/`.
 

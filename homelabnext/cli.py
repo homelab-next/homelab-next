@@ -234,6 +234,11 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "the read-only status hub: sources (the menu)|catalog|views|collect|render|serve|ingest|probe-tls",
         lambda a: importlib.import_module("homelabnext.status.cli").main(a),
     ),
+    "publishing": (
+        "the publishing gate (modules/publishing): --config FILE [--mode stage|dry-run|live]; gates the "
+        "publishable items, then stages, plans or pushes them",
+        lambda a: importlib.import_module("homelabnext.publishing.run").main(a),
+    ),
     "graph": (
         "the repository knowledge graph: build|check|related (docs/graph/)",
         lambda a: importlib.import_module("homelabnext.graph.cli").main(a),

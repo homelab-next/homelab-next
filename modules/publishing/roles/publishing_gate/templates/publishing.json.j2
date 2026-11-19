@@ -1,0 +1,36 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+{% set cfg = {
+  'mode': publishing_gate_mode,
+  'publishable_dir': publishing_gate_publishable_dir,
+  'staging_dir': publishing_gate_staging_dir,
+  'state_dir': publishing_gate_state_dir,
+  'credentials_dir': publishing_gate_cred_src_dir,
+  'tlp_allowed': publishing_gate_tlp_allowed,
+  'audience': publishing_gate_audience,
+  'access_control': publishing_gate_access_control,
+  'posture_rules': publishing_gate_posture_rules | bool,
+  'snapshots_keep': publishing_gate_snapshots_keep | int,
+  'snapshots_min_age_s': publishing_gate_snapshots_min_age_s | int,
+  'legacy_exceptions': publishing_gate_legacy_exceptions,
+} %}
+{% if publishing_gate_pages_project != '' %}
+{% set _ = cfg.update({'pages': {
+  'project': publishing_gate_pages_project,
+  'branch': publishing_gate_pages_branch,
+  'wrangler_version': publishing_gate_wrangler_version,
+  'lock_sha256': publishing_gate_wrangler_lock_sha256,
+  'install_dir': publishing_gate_tools_dir,
+  'node': publishing_gate_node,
+  'account_id': publishing_gate_cloudflare_account_id}}) %}
+{% endif %}
+{% if publishing_gate_r2_bucket != '' %}
+{% set _ = cfg.update({
+  'r2': {'account_id': publishing_gate_cloudflare_account_id, 'bucket': publishing_gate_r2_bucket},
+  'feed': {'public_base_url': publishing_gate_feed_public_base_url, 'title': publishing_gate_feed_title,
+           'description': publishing_gate_feed_description, 'author': publishing_gate_feed_author,
+           'owner_email': publishing_gate_feed_owner_email, 'category': publishing_gate_feed_category}}) %}
+{% endif %}
+{% if publishing_gate_notify_url != '' %}
+{% set _ = cfg.update({'notify': {'url': publishing_gate_notify_url, 'topic': publishing_gate_notify_topic}}) %}
+{% endif %}
+{{ cfg | to_nice_json }}

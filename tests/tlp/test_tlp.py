@@ -201,7 +201,7 @@ def test_the_spelling_tables_are_read_only():
 
 
 def test_publishing_sidecar_uses_the_canonical_enum():
-    path = ROOT / "examples/modules/publishing/interfaces/publishable-item.schema.json"
+    path = ROOT / "modules/publishing/interfaces/publishable-item.schema.json"
     schema = json.loads(path.read_text(encoding="utf-8"))
     assert tuple(schema["properties"]["tlp"]["enum"]) == tlp.LABELS
 
