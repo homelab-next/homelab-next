@@ -11,7 +11,7 @@ from .core import (
     SendError,
     UnregisteredProblem,
 )
-from .senders import FakeSender, NtfySender
+from .senders import FakeSender, NtfySender, default_sender
 
 __all__ = [
     "LEVELS",
@@ -24,4 +24,5 @@ __all__ = [
     "SendError",
     "Sender",
     "UnregisteredProblem",
+    "default_sender",
 ]

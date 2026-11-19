@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless the host can run the gate, before anything is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The runtime release holding this package (hnx), and node and npm
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: ["{{ publishing_gate_hnx_bin }}", "{{ publishing_gate_node }}", "{{ publishing_gate_npm }}"]
+      register: publishing_gate_bins
+    - name: They are all there
+      ansible.builtin.assert:
+        that: publishing_gate_bins.results | map(attribute='stat.exists') | select | list | length == 3
+        fail_msg: "publishing: the runtime release (role hnx_runtime), node (22 or newer) and npm are required on the host"
+    - name: The runtime has the publishing package
+      ansible.builtin.command:
+        argv: ["{{ publishing_gate_hnx_bin }}", publishing, --help]
+      changed_when: false
+      check_mode: false
+    - name: Node is 22 or newer (the pinned wrangler's own requirement)
+      ansible.builtin.command:
+        argv: ["{{ publishing_gate_node }}", --version]
+      register: publishing_gate_node_said
+      changed_when: false
+      check_mode: false
+    - name: Check the node version
+      ansible.builtin.assert:
+        that: (publishing_gate_node_said.stdout | trim | regex_findall('^v([0-9]+)') | first | default(0) | int) >= 22
+        fail_msg: "publishing: node {{ publishing_gate_node_said.stdout }} is older than 22"
+    - name: The pinned lockfile is on the control host (a Pages project needs wrangler)
+      ansible.builtin.stat:
+        path: "{{ publishing_gate_wrangler_lock_src }}"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: publishing_gate_lock_probe
+      delegate_to: localhost
+      become: false
+      when: publishing_gate_pages_project != ''
+    - name: It hashes to the pin
+      ansible.builtin.assert:
+        that: publishing_gate_lock_probe.stat.exists and publishing_gate_lock_probe.stat.checksum == publishing_gate_wrangler_lock_sha256
+        fail_msg: "publishing: {{ publishing_gate_wrangler_lock_src }} is missing or does not hash to the pinned lockfile sha256"
+      when: publishing_gate_pages_project != ''
+    - name: Start the credential verdicts empty (this file runs again from every hook)
+      ansible.builtin.set_fact:
+        publishing_gate_cred_state: {}
+    - name: Is each credential the mode needs set (only the verdict is kept, never a value)
+      ansible.builtin.set_fact:
+        publishing_gate_cred_state: >-
+          {{ publishing_gate_cred_state | combine({item.ref: ((lookup('hnx_secret', item.ref, errors='ignore') or '') | string | length > 0)}) }}
+      loop: "{{ publishing_gate_credentials }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+      when: item.need == 'always' or publishing_gate_mode != 'stage'
+    - name: Every credential the mode needs is set
+      ansible.builtin.assert:
+        that: publishing_gate_cred_state.values() | select | list | length == publishing_gate_cred_state | length
+        fail_msg: >-
+          publishing: not set in the secret store: {{ publishing_gate_cred_state | dict2items | rejectattr('value') | map(attribute='key') | sort | join(', ') }}
+  tags: [readiness]

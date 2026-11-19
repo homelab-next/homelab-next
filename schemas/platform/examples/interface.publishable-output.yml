@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# A gate interface, as examples/modules/publishing/module.yml defines it.
+# A gate interface, as modules/publishing/module.yml defines it.
 id: publishable-output
 version: '1.0'
 kind: object-prefix

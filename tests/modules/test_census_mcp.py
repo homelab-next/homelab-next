@@ -18,9 +18,10 @@ import yaml
 from homelabnext.modules import census
 from homelabnext.modules import loader as ld
 from homelabnext.notify import record as nr
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
-EXAMPLES = ROOT / "examples" / "modules"
+EXAMPLES = examples_with_publishing()
 SITE = ld.load_yaml(EXAMPLES / "sites" / "small-lab.yml")
 SLOTS = ld.load_yaml(EXAMPLES / "slots.yml")["slots"]
 ROLES = json.loads((ROOT / "examples" / "model_roles.json").read_text())["roles"]

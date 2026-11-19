@@ -17,9 +17,10 @@ import yaml
 from homelabnext.generators import fleet_units as fu
 from homelabnext.modules import limits as ml
 from homelabnext.modules import rules as mr
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULES_DIR = ROOT / "examples/modules"
+MODULES_DIR = examples_with_publishing()
 
 
 def load(p):

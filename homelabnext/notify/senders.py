@@ -99,7 +99,7 @@ class NtfySender:
         self.capability = capability
 
     def __repr__(self) -> str:
-        return f"NtfySender(capability={self.capability!r}, default_topic={self.default_topic!r})"
+        return f"{type(self).__name__}(capability={self.capability!r}, default_topic={self.default_topic!r})"
 
     def base_url(self) -> str:
         ep = self._endpoint
@@ -178,3 +178,8 @@ class NtfySender:
             close()
         if not (200 <= int(status) < 300):
             raise SendError(f"notify endpoint answered HTTP {status}")
+
+
+def default_sender(**kwargs: Any) -> Any:
+    """The production sender of the ``notify`` slot, for a caller that must not name its product."""
+    return NtfySender(**kwargs)

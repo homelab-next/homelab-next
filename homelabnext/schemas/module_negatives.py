@@ -819,10 +819,14 @@ def render(root: Path) -> dict[str, str]:
     )
     gates = {}
     for owner, iid in (("publishing", "publishable-output"), ("example-sandbox", "sample-handoff")):
-        doc = yaml.safe_load((ex / owner / "module.yml").read_text(encoding="utf-8"))
+        # the publishing module is real (modules/publishing); the fictional sandbox is an example
+        where = "modules" if owner == "publishing" else "examples/modules"
+        doc = yaml.safe_load(
+            (Path(root) / where / owner / "module.yml").read_text(encoding="utf-8")
+        )
         gates[iid] = next(i for i in doc["interfaces"] if i["id"] == iid)
         out[f"schemas/platform/examples/interface.{iid}.yml"] = _dump(
-            gates[iid], f"A gate interface, as examples/modules/{owner}/module.yml defines it."
+            gates[iid], f"A gate interface, as {where}/{owner}/module.yml defines it."
         )
     iface = gates["publishable-output"]
     for name, mutate, comment in (

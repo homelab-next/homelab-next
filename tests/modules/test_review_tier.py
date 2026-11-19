@@ -20,9 +20,10 @@ import yaml
 from homelabnext.modules import cli as mcli
 from homelabnext.modules import loader as ld
 from homelabnext.modules import review_tier as rt
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
-EXAMPLES = ROOT / "examples" / "modules"
+EXAMPLES = examples_with_publishing()
 KEYS = rt.schema_keys(json.loads((ROOT / rt.SCHEMA).read_text()))
 PRIV = rt.privileged_slots(ld.load_yaml(EXAMPLES / "slots.yml"))
 MODS = {p.parent.name: ld.load_yaml(p) for p in sorted(EXAMPLES.glob("*/module.yml"))}

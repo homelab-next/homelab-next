@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Create the users and directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Install the pinned wrangler (a Pages project needs it)
+  ansible.builtin.include_tasks: wrangler.yml
+  when: publishing_gate_pages_project != ''
+
+- name: Write the credentials
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Write the configuration
+  ansible.builtin.include_tasks: config.yml

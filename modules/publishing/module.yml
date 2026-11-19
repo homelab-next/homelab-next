@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# The publishing module (fictional values): the lab's ONLY egress path for published content. It
+# The publishing module (docs/modules.md; README.md beside this file; promoted from examples/modules/publishing): the lab's ONLY egress path for published content. It
 # OWNS the publishable-output interface, because the gate's input (the TLP field) is the contract;
 # every producer references it. It reads every producer's items, applies the gate (the TLP is
 # verified, never trusted; then the leak and deny-list scan) and pushes what passes through the
@@ -12,9 +12,9 @@ title: Publishing
 description: Gates and publishes every module's publishable output to the static-hosting slot; the
   only module that sends published content off the lab.
 owner: platform-team
-author: agent:example-builder
+author: agent:claude
 status: draft
-version: 0.2.0
+version: 0.3.0
 origin: {kind: in-tree}
 requires:
   capabilities:
@@ -65,6 +65,8 @@ contributes:
       recovery: 'Publishing: the gate passes every item again'
   scheduler_jobs:
     - file: units/fleet_units.yml
+  docs:
+    - file: README.md
   preflight:
     - {role: role:publishing_gate, hook: readiness}
 data:
@@ -91,11 +93,45 @@ config:
     type: string
     description: the access control that restricts a community publication to its community (needed with green)
     overlay: optional
+  mode:
+    type: enum
+    description: stage (the gate and the would-be publish set, no network at all; what a shadow lane runs), dry-run (the gate and read-only requests, no write) or live
+    values: [stage, dry-run, live]
+    default: stage
+    overlay: optional
+  pages_project:
+    type: string
+    description: the static-hosting project a site item is deployed to (the production branch is always named)
+    overlay: optional
+  pages_branch:
+    type: string
+    description: the production branch every deploy names
+    default: pages
+    overlay: optional
+  r2_bucket:
+    type: string
+    description: the object-store bucket that holds the podcast episodes and feed.xml
+    overlay: optional
   deny_list:
     type: secret
     description: the site's deny-list of internal names and addresses, including its public ones
     default: secret:publishing/deny-list
     overlay: required
+  cloudflare_api_token:
+    type: secret
+    description: the hosting API token (Pages edit); read by name at run time, live mode only
+    default: secret:publishing/cloudflare-api-token
+    overlay: optional
+  r2_access_key_id:
+    type: secret
+    description: the object-store access key id; read by name at run time, dry-run and live
+    default: secret:publishing/r2-access-key-id
+    overlay: optional
+  r2_secret_access_key:
+    type: secret
+    description: the object-store secret access key; read by name at run time, dry-run and live
+    default: secret:publishing/r2-secret-access-key
+    overlay: optional
 lifecycle:
   install: {playbook: playbooks/install.yml}
   remove:

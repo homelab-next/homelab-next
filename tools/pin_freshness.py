@@ -93,6 +93,16 @@ SOURCES: dict[str, tuple[str, str]] = {
     ),
     "role:events_bus/events_bus_version": ("github", "nats-io/nats-server"),
     "role:example_service/example_service_version": ("none", "a fictitious example package"),
+    "role:publishing_gate/publishing_gate_wrangler_version": (
+        "none",
+        "an npm package (wrangler) pinned by its lockfile's sha256, released from cloudflare/workers-sdk "
+        "as wrangler@X.Y.Z tags the github source does not parse: compare with the npm registry by hand, "
+        "and move only to a release at least 14 days old (playbooks/upgrade.yml)",
+    ),
+    "role:publishing_gate/publishing_gate_target_wrangler_version": (
+        "none",
+        "the upgrade hook's target: empty unless an upgrade is under way, never a standing pin",
+    ),
     "role:garage/garage_image": (
         "none",
         "Garage is released from git.deuxfleurs.fr (no GitHub release feed): compare its tags "

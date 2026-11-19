@@ -25,6 +25,7 @@ from homelabnext.modules import cli as mcli
 from homelabnext.modules import swap as ms
 from homelabnext.modules import swap_evidence as se
 from homelabnext.registry.models import RoleTable
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "schemas/platform/examples/module_swap.inference-rebind.json"
@@ -309,7 +310,7 @@ def test_an_extra_report_is_read_but_never_through_a_link(repo, report, tmp_path
 def checkout(repo) -> Path:
     """The repo with the example modules, an incoming provider and the site the swap starts
     from, so ``hnx modules swap-check`` runs end to end."""
-    shutil.copytree(ROOT / "examples" / "modules", repo / "examples" / "modules")
+    shutil.copytree(examples_with_publishing(), repo / "examples" / "modules")
     (repo / "modules").mkdir()
     other = repo / "examples" / "modules" / "other-inference"
     shutil.copytree(repo / "examples" / "modules" / "example-inference", other)

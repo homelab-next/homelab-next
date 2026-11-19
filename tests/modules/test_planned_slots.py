@@ -21,9 +21,10 @@ from homelabnext.modules import cli as mcli
 from homelabnext.modules import loader as ld
 from homelabnext.modules import rules as mr
 from homelabnext.modules.providers import ProviderLookupError, provider_for
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
-EXAMPLES = ROOT / "examples" / "modules"
+EXAMPLES = examples_with_publishing()
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "selection.planned.yml"
 SLOTS = ld.load_yaml(EXAMPLES / "slots.yml")["slots"]
 ROLES = json.loads((ROOT / "examples" / "model_roles.json").read_text())["roles"]
