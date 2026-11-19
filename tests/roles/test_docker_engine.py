@@ -526,8 +526,6 @@ def test_check_mode_on_a_guest_with_no_daemon_json_reports_it_instead_of_failing
 def test_a_real_run_is_not_guarded_and_the_guard_follows_the_repository_in_check_mode_only():
     """Outside --check nothing is skipped (the guard is false whatever the repository did), and
     inside it the guard is the repository task reporting a change."""
-    import jinja2
-
     main = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / "main.yml").read_text())
     (guard,) = [
         t
@@ -537,15 +535,8 @@ def test_a_real_run_is_not_guarded_and_the_guard_follows_the_repository_in_check
     expr = guard["ansible.builtin.set_fact"]["docker_engine_would_install"]
     (repo,) = [t for t in main if "ansible.builtin.deb822_repository" in t]
     assert repo["register"] == "docker_engine_repo"
-    env = jinja2.Environment(autoescape=True)  # the output is "True" or "False", never markup
-    env.tests["changed"] = lambda r: bool(r.get("changed"))
-
-    def ev(check, changed):
-        ctx = {"ansible_check_mode": check, "docker_engine_repo": {"changed": changed}}
-        return env.from_string(expr).render(**ctx).strip()
-
-    assert [ev(False, True), ev(False, False), ev(True, False), ev(True, True)] == [
-        "False", "False", "False", "True"]  # fmt: skip
+    # a conjunction led by --check: false in every real run, whatever the repository task reported
+    assert expr.strip() == "{{ ansible_check_mode and docker_engine_repo is changed }}"
     for hook in ("install", "service"):
         tasks = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / f"{hook}.yml").read_text())
         assert [t for t in tasks if "docker_engine_would_install" in str(t.get("when", ""))], hook
