@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# the owner of what only root may write (a role test runs unprivileged and sets its own)
+publishing_gate_root_owner: root
+publishing_gate_root: /var/lib/hnx-modules/publishing
+publishing_gate_publishable_dir: "{{ publishing_gate_root }}/publishable"
+publishing_gate_staging_dir: "{{ publishing_gate_root }}/staging"
+publishing_gate_state_dir: "{{ publishing_gate_root }}/state"
+publishing_gate_tools_dir: "{{ publishing_gate_root }}/tools"
+publishing_gate_config_dir: /etc/hnx-modules/publishing
+publishing_gate_cred_src_dir: "{{ publishing_gate_config_dir }}/credentials"
+publishing_gate_wrangler_bin: "{{ publishing_gate_tools_dir }}/node_modules/.bin/wrangler"
+publishing_gate_semver_pattern: '^[0-9]+\.[0-9]+\.[0-9]+\Z'
+publishing_gate_path_pattern: '^(/(?!\.{1,2}(/|\Z))[A-Za-z0-9._-]+)+\Z'
+publishing_gate_ref_pattern: '^secret:[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)+\Z'
+publishing_gate_hex64_pattern: '^[0-9a-f]{64}\Z'
+publishing_gate_credentials:
+  - {name: deny-list, ref: "{{ publishing_gate_deny_list_ref }}", need: always}
+  - {name: cloudflare-api-token, ref: "{{ publishing_gate_pages_cred }}", need: live}
+  - {name: r2-access-key-id, ref: "{{ publishing_gate_r2_id_cred }}", need: live}
+  - {name: r2-secret-access-key, ref: "{{ publishing_gate_r2_sk_cred }}", need: live}

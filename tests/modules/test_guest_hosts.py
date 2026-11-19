@@ -21,9 +21,10 @@ import yaml
 from homelabnext.modules import cli as mcli
 from homelabnext.modules import guest_hosts as gh
 from homelabnext.modules import loader as ld
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
-EXAMPLES = ROOT / "examples" / "modules"
+EXAMPLES = examples_with_publishing()
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 GUESTS = FIXTURES / "guests"
 SITE = FIXTURES / "selection.guest-hosts.yml"

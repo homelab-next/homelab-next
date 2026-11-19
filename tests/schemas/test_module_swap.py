@@ -14,9 +14,10 @@ import pytest
 import yaml
 
 from homelabnext.modules import swap as ms
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULES_DIR = ROOT / "examples" / "modules"
+MODULES_DIR = examples_with_publishing()
 EXAMPLE = ROOT / "schemas/platform/examples/module_swap.object-store-samples.json"
 
 
@@ -24,7 +25,10 @@ def load(p: Path) -> dict:
     return yaml.safe_load(p.read_text(encoding="utf-8"))
 
 
-MODULES = {p.parent.name: load(p) for p in sorted(MODULES_DIR.glob("*/module.yml"))}
+MODULES = {
+    p.parent.name: load(p)
+    for p in sorted([*MODULES_DIR.glob("*/module.yml"), ROOT / "modules/publishing/module.yml"])
+}
 #: sites/full.yml is the selection after the swap (samples on other-object-store); the swap starts
 #: from the same site with samples on example-object-store
 AFTER = load(MODULES_DIR / "sites" / "full.yml")

@@ -17,9 +17,10 @@ from homelabnext.compute.gen import node_mirror
 from homelabnext.modules import cli as mcli
 from homelabnext.modules import egress
 from homelabnext.modules import loader as ld
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
-EXAMPLES = ROOT / "examples" / "modules"
+EXAMPLES = examples_with_publishing()
 ROLES_DIR = ROOT / "ansible" / "roles"
 SLOTS = ld.load_yaml(EXAMPLES / "slots.yml")["slots"]
 ROLES = json.loads((ROOT / "examples" / "model_roles.json").read_text())["roles"]

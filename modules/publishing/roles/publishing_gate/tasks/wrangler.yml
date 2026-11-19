@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: Apache-2.0
+# The pinned wrangler. The lockfile (every package with its integrity hash) comes from the control
+# host and must hash to the pinned sha256 before it is copied; `npm ci` then installs exactly it with
+# scripts off. Never npx, never @latest. The installed version is read back and must equal the pin.
+# Skipped when no Pages project is configured (a podcast-only site needs no wrangler).
+- name: Hash the lockfile on the control host
+  ansible.builtin.stat:
+    path: "{{ publishing_gate_wrangler_lock_src }}"
+    checksum_algorithm: sha256
+    get_checksum: true
+  register: publishing_gate_lock_stat
+  delegate_to: localhost
+  become: false
+
+- name: It is the pinned lockfile, for the pinned version
+  ansible.builtin.assert:
+    that:
+      - publishing_gate_lock_stat.stat.exists
+      - publishing_gate_lock_stat.stat.checksum == publishing_gate_wrangler_lock_sha256
+      - (lookup('file', publishing_gate_wrangler_lock_src) | from_json).packages['node_modules/wrangler'].version == publishing_gate_wrangler_version
+    fail_msg: >-
+      publishing: {{ publishing_gate_wrangler_lock_src }} is missing, does not hash to the pinned
+      {{ publishing_gate_wrangler_lock_sha256 }}, or does not pin wrangler {{ publishing_gate_wrangler_version }}
+
+- name: The package manifest (the one pinned version, nothing else)
+  ansible.builtin.template:
+    src: package.json.j2
+    dest: "{{ publishing_gate_tools_dir }}/package.json"
+    owner: "{{ publishing_gate_root_owner }}"
+    group: "{{ publishing_gate_root_owner }}"
+    mode: "0644"
+  register: publishing_gate_manifest_file
+
+- name: The lockfile
+  ansible.builtin.copy:
+    src: "{{ publishing_gate_wrangler_lock_src }}"
+    dest: "{{ publishing_gate_tools_dir }}/package-lock.json"
+    owner: "{{ publishing_gate_root_owner }}"
+    group: "{{ publishing_gate_root_owner }}"
+    mode: "0644"
+  register: publishing_gate_lock_file
+
+- name: Is wrangler installed at the pinned version
+  ansible.builtin.slurp:
+    src: "{{ publishing_gate_tools_dir }}/node_modules/wrangler/package.json"
+  register: publishing_gate_installed
+  failed_when: false
+  check_mode: false
+
+- name: Install exactly the lockfile (hashes checked, install scripts off)
+  ansible.builtin.command:
+    argv: ["{{ publishing_gate_npm }}", ci, --ignore-scripts, --no-audit, --no-fund]
+    chdir: "{{ publishing_gate_tools_dir }}"
+  environment:
+    PATH: "{{ publishing_gate_node | dirname }}:/usr/bin:/bin"
+  changed_when: true
+  when: >-
+    publishing_gate_lock_file is changed or publishing_gate_manifest_file is changed
+    or publishing_gate_installed.content is not defined
+    or (publishing_gate_installed.content | b64decode | from_json).version != publishing_gate_wrangler_version
+
+- name: Read back the installed version
+  ansible.builtin.command:
+    argv: ["{{ publishing_gate_node }}", "{{ publishing_gate_wrangler_bin }}", --version]
+  register: publishing_gate_wrangler_said
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: The installed wrangler is the pin
+  ansible.builtin.assert:
+    that: publishing_gate_wrangler_version in publishing_gate_wrangler_said.stdout
+    fail_msg: "publishing: wrangler printed {{ publishing_gate_wrangler_said.stdout }}, the pin is {{ publishing_gate_wrangler_version }}"
+  when: not ansible_check_mode

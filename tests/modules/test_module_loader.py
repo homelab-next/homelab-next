@@ -17,9 +17,10 @@ import yaml
 
 from homelabnext.modules import cli as mcli
 from homelabnext.modules import loader as ld
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
-EXAMPLES = ROOT / "examples" / "modules"
+EXAMPLES = examples_with_publishing()
 SITES = {p.stem: ld.load_yaml(p) for p in sorted((EXAMPLES / "sites").glob("*.yml"))}
 SLOTS = ld.load_yaml(EXAMPLES / "slots.yml")["slots"]
 ROLES = json.loads((ROOT / "examples" / "model_roles.json").read_text())["roles"]
@@ -707,20 +708,22 @@ def test_a_contributed_sigma_rule_is_validated(tmp_path):
 
 
 def test_the_roles_and_playbooks_exemption_is_the_fixture_root_s_only(tmp_path):
-    tree, _ = examples(tmp_path, without=("publishing",))
+    tree, _ = examples(tmp_path, without=("example-object-store",))
     overlay = tmp_path / "overlay"
-    shutil.copytree(EXAMPLES / "publishing", overlay / "lab" / "modules" / "publishing")
+    shutil.copytree(
+        EXAMPLES / "example-object-store", overlay / "lab" / "modules" / "example-object-store"
+    )
     tree, found = ld.discover(fixtures=tmp_path / "fixtures", overlay=overlay)
     assert found == []
     got = messages(check(tree, (tmp_path / "fixtures",)))
-    mod = tree.mods["publishing"]
+    mod = tree.mods["example-object-store"]
     roles = [r for k, r in ld.contributed_files(mod) if k == "roles"]
     books = list(ld.lifecycle_playbooks(mod))
     assert roles and all(
-        f"publishing: {r}: not a role directory in the module" in got for r in roles
+        f"example-object-store: {r}: not a role directory in the module" in got for r in roles
     ), got
     assert books and all(
-        f"publishing: {b}: not a regular file in the module" in got for b in books
+        f"example-object-store: {b}: not a regular file in the module" in got for b in books
     ), got
 
 
@@ -913,12 +916,12 @@ def test_the_cli_refuses_a_module_pair_with_one_of_the_core_s_own_titles(capsys,
     from homelabnext.notify.core_pairs import STATUS_ITEM
 
     fixtures = tmp_path / "root"
-    shutil.copytree(ROOT / "examples" / "modules", fixtures / "examples" / "modules")
+    shutil.copytree(EXAMPLES, fixtures / "examples" / "modules")
     for name in ("model_roles.json", "services.yml"):
         shutil.copy(ROOT / "examples" / name, fixtures / "examples" / name)
     shutil.copytree(ROOT / "examples" / "keyring", fixtures / "examples" / "keyring")
-    (fixtures / "modules").mkdir()
-    m = fixtures / "examples" / "modules" / "publishing" / "module.yml"
+    shutil.copytree(ROOT / "modules" / "publishing", fixtures / "modules" / "publishing")
+    m = fixtures / "modules" / "publishing" / "module.yml"
     doc = ld.load_yaml(m)
     doc["contributes"]["notify_pairs"] = [{"problem": STATUS_ITEM[0], "recovery": "Ours"}]
     m.write_text(yaml.safe_dump(doc))
@@ -1128,7 +1131,9 @@ def test_the_cli_exits_0_clean_and_names_what_it_did_not_check(capsys):
     assert "note: the public modules/ tree" not in out.out
     # every example module and every public module: counted from the trees, so a new module
     # does not move this line
-    shipped = sum(len(list(d.glob("*/module.yml"))) for d in (EXAMPLES, ROOT / "modules"))
+    shipped = sum(
+        len(list(d.glob("*/module.yml"))) for d in (ROOT / "examples" / "modules", ROOT / "modules")
+    )
     assert out.out.rstrip().endswith(f"{shipped} module(s), 0 problem(s)")
 
 

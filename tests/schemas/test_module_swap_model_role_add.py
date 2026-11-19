@@ -23,9 +23,10 @@ from homelabnext.golden.canary import benign_decider, benign_model
 from homelabnext.models import store as st
 from homelabnext.modules import swap as ms
 from homelabnext.registry.models import RoleTable
+from tests.modules.example_root import examples_with_publishing
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULES_DIR = ROOT / "examples" / "modules"
+MODULES_DIR = examples_with_publishing()
 EXAMPLE = ROOT / "schemas/platform/examples/module_swap.inference-add.json"
 STORE = st.load(paths.example_file("model-serving", "model_store.json"))
 SHIPPED = RoleTable.load(paths.example_file("model_roles.json"))
@@ -67,7 +68,7 @@ ADDED = RoleTable.from_dict(_decision_doc())
 def _modules() -> dict:
     mods = {
         p.parent.name: yaml.safe_load(p.read_text(encoding="utf-8"))
-        for p in sorted(MODULES_DIR.glob("*/module.yml"))
+        for p in sorted([*MODULES_DIR.glob("*/module.yml"), ROOT / "modules/publishing/module.yml"])
     }
     other = copy.deepcopy(mods["example-inference"])
     other["id"] = "other-inference"

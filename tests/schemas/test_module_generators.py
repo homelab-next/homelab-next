@@ -24,7 +24,7 @@ def test_no_committed_negative_or_example_is_left_without_a_generator():
 def test_check_mode_reports_a_hand_edit(tmp_path, capsys):
     import shutil
 
-    for d in ("schemas/platform", "examples/modules"):
+    for d in ("schemas/platform", "examples/modules", "modules/publishing"):
         shutil.copytree(ROOT / d, tmp_path / d)
     (tmp_path / "schemas/platform/module.schema.json").write_text("{}\n")
     stray = tmp_path / "schemas/platform/negative/module.hand-written.yml"

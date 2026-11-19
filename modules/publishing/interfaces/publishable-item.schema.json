@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/modules/publishing/publishable-item/1.0",
+  "title": "Publishable item sidecar",
+  "description": "The JSON sidecar (sidecar.json) beside each item a producer offers through publishable-output 1.0 (owned by the publishing module): an item is a directory <kind>/<id>/ (kind site or podcast) holding the producer's files and this sidecar. tlp is the producer's CLAIM: the gate excludes anything above its ceiling, re-derives the marking from the content (a TLP marker in the body raises the label; a deny-listed name, a secret shape or posture language blocks it) and checks every file's sha256 before anything leaves the lab. The files named in sha256s are exactly the files present; nothing else is accepted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tlp", "producer", "sha256s"],
+  "properties": {
+    "tlp": {"enum": ["clear", "green", "amber", "amber+strict", "red"]},
+    "producer": {"type": "string", "minLength": 1, "maxLength": 100},
+    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+    "sha256s": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(/[A-Za-z0-9][A-Za-z0-9._-]{0,127})*$"},
+      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }
+  }
+}

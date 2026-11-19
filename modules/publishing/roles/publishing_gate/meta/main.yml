@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The publishing gate and its two adapters: a TLP and deny-list gate, a static-site deploy with a pinned wrangler, and an additive, idempotent podcast feed; stage, dry-run and live modes."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

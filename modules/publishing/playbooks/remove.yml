@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the published manifest (export_first), stop and disable the timer, delete the unit,
+# the timer, the configuration and the credential files. The data root (with the export in it) is
+# kept for the operator to archive or delete.
+- name: Remove the publishing gate
+  hosts: mod_publishing_publisher
+  become: true
+  tasks:
+    - name: Export the published manifest first
+      ansible.builtin.include_role:
+        name: publishing_gate
+        tasks_from: export
+    - name: Stop and disable the timer (a no-op when there never was one)
+      ansible.builtin.systemd_service:
+        name: hnx-publishing.timer
+        state: stopped
+        enabled: false
+      failed_when: false
+    - name: Remove the units, the configuration and the credentials
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/hnx-publishing.timer
+        - /etc/systemd/system/hnx-publishing.service
+        - /etc/hnx-modules/publishing/publishing.json
+        - /etc/hnx-modules/publishing/credentials
+    - name: Reload systemd
+      ansible.builtin.command:
+        argv: [systemctl, daemon-reload]
+      changed_when: true

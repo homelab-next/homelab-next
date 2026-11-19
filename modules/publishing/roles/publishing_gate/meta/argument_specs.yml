@@ -1,0 +1,162 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Gate every publishable item and push what passes (static site and podcast feed) from one host; stage mode never touches the network.
+    options: &opts
+      publishing_gate_logical_id:
+        type: str
+        description: The instance's id (the module's selection instance).
+        required: true
+      publishing_gate_mode:
+        type: str
+        description: stage (gate and write the would-be set, no network), dry-run (reads only) or live.
+        default: stage
+        choices: [stage, dry-run, live]
+      publishing_gate_tlp_allowed:
+        type: str
+        description: The most permissive TLP the gate lets out (clear or green).
+        default: clear
+        choices: [clear, green]
+      publishing_gate_audience:
+        type: str
+        description: public, or community (green needs community and an access control).
+        default: public
+        choices: [public, community]
+      publishing_gate_access_control:
+        type: str
+        description: The access control restricting a community publication; required with green.
+        default: ""
+      publishing_gate_posture_rules:
+        type: bool
+        description: Keep the disclosure-posture phrases of the old pipeline's guard on.
+        default: true
+      publishing_gate_user:
+        type: str
+        description: The system user the run uses.
+        default: hnx-publishing
+      publishing_gate_group:
+        type: str
+        description: The system group the run uses.
+        default: hnx-publishing
+      publishing_gate_hnx_bin:
+        type: str
+        description: The hnx command of the runtime release (role hnx_runtime), which holds this package; the scheduled run is `hnx publishing`.
+        default: /opt/hnx/bin/hnx
+      publishing_gate_node:
+        type: str
+        description: The node binary (22 or newer) the pinned wrangler runs on.
+        default: /usr/bin/node
+      publishing_gate_npm:
+        type: str
+        description: The npm binary the pinned install runs with (npm ci from the lockfile, scripts off).
+        default: /usr/bin/npm
+      publishing_gate_wrangler_version:
+        type: str
+        description: The exact wrangler version (X.Y.Z), which must equal the pinned lockfile's. Never latest, never a range.
+        default: 4.157.0
+      publishing_gate_wrangler_lock_src:
+        type: str
+        description: The package-lock.json (on the control host) that pins wrangler and every dependency with its integrity hash; required with a Pages project.
+        default: ""
+      publishing_gate_wrangler_lock_sha256:
+        type: str
+        description: The sha256 of that lockfile (64 lowercase hex); the role refuses any other file.
+        default: ""
+      publishing_gate_pages_project:
+        type: str
+        description: The Pages project (needed to publish a site item).
+        default: ""
+      publishing_gate_pages_branch:
+        type: str
+        description: The production branch every deploy names (the trap is a deploy to another branch).
+        default: pages
+      publishing_gate_cloudflare_account_id:
+        type: str
+        description: The hosting account id (configuration, not a credential).
+        default: ""
+      publishing_gate_r2_bucket:
+        type: str
+        description: The object-store bucket of the podcast feed (needed to publish an episode).
+        default: ""
+      publishing_gate_feed_public_base_url:
+        type: str
+        description: The https base URL the feed's links use (no trailing slash).
+        default: ""
+      publishing_gate_feed_title:
+        type: str
+        description: The feed title.
+        default: ""
+      publishing_gate_feed_description:
+        type: str
+        description: The feed description.
+        default: ""
+      publishing_gate_feed_author:
+        type: str
+        description: The feed author and owner name.
+        default: ""
+      publishing_gate_feed_owner_email:
+        type: str
+        description: The feed owner address (required by the directories; need not be monitored).
+        default: ""
+      publishing_gate_feed_category:
+        type: str
+        description: The feed category.
+        default: Technology
+      publishing_gate_notify_url:
+        type: str
+        description: The notify endpoint's base URL; empty means no notification.
+        default: ""
+      publishing_gate_notify_topic:
+        type: str
+        description: The notify topic.
+        default: ""
+      publishing_gate_deny_list_ref:
+        type: str
+        description: The deny-list's secret reference (its content is the list; read by name at deploy).
+        default: secret:publishing/deny-list
+      publishing_gate_pages_cred:
+        type: str
+        description: The hosting API token's secret reference (live mode).
+        default: secret:publishing/cloudflare-api-token
+      publishing_gate_r2_id_cred:
+        type: str
+        description: The object-store access key id's secret reference (dry-run and live).
+        default: secret:publishing/r2-access-key-id
+      publishing_gate_r2_sk_cred:
+        type: str
+        description: The object-store secret access key's secret reference (dry-run and live).
+        default: secret:publishing/r2-secret-access-key
+      publishing_gate_notify_cred:
+        type: str
+        description: The notify token's secret reference; empty when notify needs none.
+        default: ""
+      publishing_gate_export_dir:
+        type: str
+        description: Where the export writes the published-manifest copy.
+        default: /var/lib/hnx-modules/publishing/export
+      publishing_gate_restore_source:
+        type: str
+        description: A directory holding published-manifest.jsonl to restore (restore hook).
+        default: ""
+      publishing_gate_target_wrangler_version:
+        type: str
+        description: The version an upgrade moves to (upgrade hook); never latest.
+        default: ""
+  health:
+    short_description: Fail unless the pinned wrangler, the config and the credentials are in place.
+    options: *opts
+  readiness:
+    short_description: Fail unless the host can run the gate (runtime, node, credentials resolve).
+    options: *opts
+  backup:
+    short_description: Declare what a backup captures (the published manifest and the gate log).
+    options: *opts
+  restore:
+    short_description: Restore the published manifest from a directory.
+    options: *opts
+  upgrade:
+    short_description: Validate a wrangler bump (a different exact version) and record it as pending.
+    options: *opts
+  export:
+    short_description: Write the published manifest as jsonl.
+    options: *opts

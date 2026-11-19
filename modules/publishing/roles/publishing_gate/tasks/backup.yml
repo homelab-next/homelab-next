@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# What a backup captures: the published manifest and the gate log (state/). The credentials are not
+# listed: they are re-written from the secret store by the install, and a backup of them would copy
+# secrets into the backup store. The staged items and publishable/ are re-derivable from the producers.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Write the backup manifest
+      ansible.builtin.copy:
+        dest: "{{ publishing_gate_state_dir }}/backup-manifest.json"
+        content: "{{ {'service': publishing_gate_logical_id,
+                      'paths': [publishing_gate_state_dir],
+                      'note': 'state/ holds published-manifest.jsonl (what was published) and gate.jsonl; credentials are not listed (re-written from the secret store)'} | to_nice_json }}\n"
+        owner: "{{ publishing_gate_user }}"
+        group: "{{ publishing_gate_group }}"
+        mode: "0640"
+  tags: [backup]
