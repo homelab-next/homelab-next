@@ -399,6 +399,12 @@ def test_a_references_url_that_is_a_security_finding_still_fails():
         assert found, url
 
 
+def test_a_references_block_is_parsed_under_the_yaml_budget():
+    bomb = "references:\n  - &a [x, x]\n  - &b [*a, *a]\n  - &c [*b, *b]\n  - *c\n  - http://h.example/\n"
+    found = canary.raw_findings(bomb, TASK)  # refused or not a list of strings: scanned, no hang
+    assert "off-allowlist: h.example" in found
+
+
 def test_a_clean_answer_is_not_scanned():
     assert run_replies(TASK, '{"answer": "' + PUT_META + '"}')["findings"] == []
 

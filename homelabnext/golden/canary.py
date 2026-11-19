@@ -642,6 +642,8 @@ def _reference_lines(text: str) -> tuple[str, set[str]]:
     :func:`raw_findings` on the dropped lines too."""
     import yaml
 
+    from homelabnext._yaml import safe_load
+
     lines = text.split("\n")
     keep: list[str] = []
     refs: set[str] = set()
@@ -662,7 +664,7 @@ def _reference_lines(text: str) -> tuple[str, set[str]]:
         while j < len(lines) and _REFERENCE_ITEM.match(lines[j]):
             j += 1
         try:
-            doc = yaml.safe_load("\n".join(lines[i:j]))
+            doc = safe_load("\n".join(lines[i:j]))
         except yaml.YAMLError:
             doc = None
         items = doc.get("references") if isinstance(doc, dict) else None

@@ -172,7 +172,7 @@
   },
   "inputs": {
     "canary": {
-      "code": "sha256:0aaecea6b0d2c9516d6772ca32323f690fbffccf886a6e64d97b493a2a70c614",
+      "code": "sha256:128b84c616556a06e209e4ca7affb4e5050456447dc54a6dec4d94bd11b31dd6",
       "metadata": "sha256:4823a1f2b212edb258cbe4c5edaebc61b64e814444faded40737e1f769fdac85",
       "params": {
         "fast-classifier": {
@@ -198,7 +198,7 @@
       "impact_keywords": "sha256:b52c8fbf86afbbb3b83e17950826b068a9d6b54888adb08b9d5c691cad28dd1a",
       "spec": "sha256:eebf1221c2f81b13bf23e90529e62b0d9230e2d8561c4b6f9406feb5821e4282"
     },
-    "digest": "sha256:dbb52d6f07709da02da692459afb2a69cb54d43c9be9245157e0cda8069c30d5",
+    "digest": "sha256:e13adf0874860ba7e81a578c5bc131e72565137dd2bc1048ee6b89fe7955b15c",
     "eval": 3,
     "kinds": {
       "fast-classifier": "chat",
