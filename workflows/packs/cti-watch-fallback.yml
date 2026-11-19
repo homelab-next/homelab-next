@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0
+# cti-watch-fallback: every 30 minutes (UTC) look up the cti-watch-fallback row of table:cti.watch and post when it is stale.
+# D1: more than the threshold of claude-cli fallbacks in the window (every fallback is counted and alerted, never silent).
+# The row comes from homelabnext.workflows.cti_watch (the checks and their thresholds, tested
+# there).  Like new-critical-alert this pack is a reference pack: a lookup step does not run on
+# the workflow engine yet and notify.post's handler is the site's, so it is not pinned in deploy.yml
+# or bound in the binding until both exist.  Schedule: `*/30 * * * *`, schedule id cti-watch-fallback.
+pack: cti-watch-fallback
+version: 1
+description: Notify when the cti fallback check is stale.
+trigger:
+  event: homelabnext.schedule.fired
+  where:
+    - {ref: $event.data.schedule, equals: cti-watch-fallback}
+actor: profile:workflow-soc
+broker_manifest: workflows/broker.manifest.json
+steps:
+  - id: check
+    kind: enrich
+    op: lookup
+    table: table:cti.watch
+    key: $event.data.schedule
+  - id: notify
+    kind: action
+    action: notify.post
+    target: svc:notify
+    when:
+      - {ref: $steps.check.found, equals: true}
+      - {ref: $steps.check.row.stale, equals: true}
+    params:
+      channel: cti-watch
+      case_id: cti-watch-fallback
+      title: $steps.check.row.summary
+      severity: warning
+fixtures:
+  - name: stale-notifies
+    event:
+      specversion: "1.0"
+      id: evt-cti-watch-fallback-stale-notifies
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:00:00Z"
+      data: {schedule: cti-watch-fallback, fired_at: "2026-01-01T12:00:00Z", cron: "*/30 * * * *"}
+    lookups:
+      table:cti.watch:
+        cti-watch-fallback: {check: fallback, stale: true, summary: "cti fallback: 9 claude-cli fallbacks in 3 h (alert above 5)", value: 1, threshold: 1}
+    expect:
+      calls:
+        - action: notify.post
+          target: svc:notify
+          params:
+            channel: cti-watch
+            case_id: cti-watch-fallback
+            title: "cti fallback: 9 claude-cli fallbacks in 3 h (alert above 5)"
+            severity: warning
+          result: executed
+  - name: fresh-is-quiet
+    event:
+      specversion: "1.0"
+      id: evt-cti-watch-fallback-fresh-is-quiet
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:00:00Z"
+      data: {schedule: cti-watch-fallback, fired_at: "2026-01-01T12:00:00Z", cron: "*/30 * * * *"}
+    lookups:
+      table:cti.watch:
+        cti-watch-fallback: {check: fallback, stale: false, summary: "cti fallback: 0 claude-cli fallbacks in 3 h (alert above 5)", value: 1, threshold: 1}
+    expect:
+      calls: []
+  - name: another-schedule-ignored
+    event:
+      specversion: "1.0"
+      id: evt-cti-watch-fallback-other
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:00:00Z"
+      data: {schedule: not-cti-watch-fallback, fired_at: "2026-01-01T12:00:00Z"}
+    expect:
+      triggered: false
+      calls: []
