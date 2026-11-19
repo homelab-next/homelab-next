@@ -15,7 +15,7 @@ import pytest
 from homelabnext.publishing import gate as gt
 from homelabnext.publishing import normalise, r2, snapshots
 from homelabnext.publishing import run as rn
-from tests.publishing.helpers import FEED, FakeBucket, episode, make_item, policy
+from tests.publishing.helpers import FEED, FakeBucket, build_mp3, episode, make_item, policy
 from tests.publishing.test_publishing_hardening import DENY2, verdict
 from tests.publishing.test_publishing_pages_stage_run import setup_lab
 from tests.publishing.test_publishing_round3 import cps, rules
@@ -66,15 +66,25 @@ def test_the_armenian_ho_and_oh_fold_to_latin():
 
 # ----------------------------------------------------------------------------- own episode never excused
 def test_a_legacy_exception_is_never_applied_to_the_item_being_published(tmp_path):
-    item = gt.load_item(episode(tmp_path, "ep"), "podcast")
-    # the policy that would block this item's text (as a stricter deny-list would): the item's own
-    # key is listed as a "reviewed legacy" object with its own sha256, to excuse itself
-    meta = (item.root / "metadata.json").read_bytes()
+    # a denied word that appears ONLY in the episode's title (not in its key, guid or enclosure), and
+    # the item's own key is listed as a "reviewed legacy" object with its own sha256, to excuse itself
+    meta = json.dumps(
+        {"period": "weekly", "date": "2026-01-05", "title": "zzdeniedzz", "description": "d"}
+    )
+    item = gt.load_item(
+        make_item(
+            tmp_path,
+            "podcast",
+            "ep",
+            {"metadata.json": meta, "weekly_2026-01-05.mp3": build_mp3()},
+        ),
+        "podcast",
+    )
     own_key = "episodes/weekly_2026-01-05.json"
-    sha = hashlib.sha256(meta).hexdigest()
-    strict = policy("weekly\n")  # the word in the title
+    sha = hashlib.sha256(meta.encode()).hexdigest()
+    strict = policy("zzdeniedzz\n")
     b = FakeBucket()
-    b.objects[own_key] = (meta, {"x-amz-meta-sha256": sha})
+    b.objects[own_key] = (meta.encode(), {"x-amz-meta-sha256": sha})
     b.objects["episodes/weekly_2026-01-05.mp3"] = (
         (item.root / "weekly_2026-01-05.mp3").read_bytes(),
         {"x-amz-meta-sha256": item.sidecar["sha256s"]["weekly_2026-01-05.mp3"]},
@@ -82,6 +92,20 @@ def test_a_legacy_exception_is_never_applied_to_the_item_being_published(tmp_pat
     client = r2.R2Client("https://store.example.test", "b", "id" * 4, "s" * 20, b)
     with pytest.raises(r2.FeedBlocked):
         r2.plan_episode(client, item, FEED, strict, {own_key: sha})
+    del b.objects[own_key]  # (its text is still in the bucket: it would block the next feed too)
+    # the same exception does excuse an OLDER object with that text (so the test can tell the two apart)
+    old = json.dumps({"period": "daily", "date": "2025-12-01", "title": "zzdeniedzz"}).encode()
+    b.objects["episodes/daily_2025-12-01.json"] = (old, {})
+    b.objects["episodes/daily_2025-12-01.mp3"] = (build_mp3(), {})
+    clean = gt.load_item(episode(tmp_path / "c", "c1", date="2026-02-02"), "podcast")
+    plan = r2.plan_episode(
+        client,
+        clean,
+        FEED,
+        strict,
+        {"episodes/daily_2025-12-01.json": hashlib.sha256(old).hexdigest()},
+    )
+    assert plan.excused == ("episodes/daily_2025-12-01.json",)
 
 
 # ----------------------------------------------------------------------------- staging pruning
@@ -160,3 +184,45 @@ def test_the_staging_settings_are_read_from_the_config(tmp_path):
     cfg = cf.load(base / "config.json")
     assert (cfg.staging_keep, cfg.staging_min_age_s) == (7, 99.0)
     assert cf.load(base / "config.json").snapshots_keep == 5
+
+
+def test_the_current_items_are_never_pruned_however_old_their_staging_is(tmp_path):
+    """60 current items staged three days ago survive repeated runs with a tiny keep."""
+    _base, pub, cfg = setup_lab(tmp_path, "stage", deny=DENY2)
+    cfg = dataclasses.replace(cfg, staging_keep=1, staging_min_age_s=60)
+    for n in range(60):
+        episode(pub, f"e{n}", period=f"p{n % 3}", date=f"2026-01-{n // 3 + 1:02d}")
+    now = 2_000_000.0
+    assert rn.run(cfg, clock=lambda: now).code == 0
+    staged = sorted((cfg.staging_dir / "podcast").iterdir())
+    assert len(staged) == 60
+    for d in staged:  # three days old
+        os.utime(d, (now - 259_200, now - 259_200))
+    for _ in range(2):
+        assert rn.run(cfg, clock=lambda: now).code == 0
+        assert sorted((cfg.staging_dir / "podcast").iterdir()) == staged
+
+
+def test_a_reused_staged_item_is_touched_so_age_follows_use(tmp_path):
+    _base, pub, cfg = setup_lab(tmp_path, "stage", deny=DENY2)
+    episode(pub)
+    rn.run(cfg)
+    d = next((cfg.staging_dir / "podcast").iterdir())
+    os.utime(d, (1_000, 1_000))
+    rn.run(cfg)
+    assert d.stat().st_mtime > 1_000_000
+
+
+def test_prune_does_not_touch_a_link_even_to_a_sibling_snapshot(tmp_path):
+    """A link named like a snapshot that points at ANOTHER directory under the same root: only the
+    symlink check stands between it and rmtree (which refuses links by raising)."""
+    now = 1_000_000.0
+    root = tmp_path / "srv" / "lab" / "staging"
+    target = _staged(root, "site", "target", 0, now)
+    link = root / "site" / ("old-" + "1" * 12)
+    link.symlink_to(target)
+    for n in range(3):
+        _staged(root, "site", f"x{n}", 5_000_000 + n, now)
+    gone = snapshots.prune(root, keep=1, min_age_s=0, protect_ids=set(), now=now, digest_len=12)
+    assert link.is_symlink() and (target / "plan.json").exists()
+    assert f"site/{link.name}" not in gone
