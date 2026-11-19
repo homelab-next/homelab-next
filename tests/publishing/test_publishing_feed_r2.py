@@ -12,7 +12,9 @@ import pytest
 from homelabnext.publishing import feed as fd
 from homelabnext.publishing import gate as gt
 from homelabnext.publishing import r2
-from tests.publishing.helpers import FEED, FakeBucket, episode
+from tests.publishing.helpers import DENY, FEED, FakeBucket, build_mp3, episode, policy
+
+POL = policy(DENY)
 
 HERE = Path(__file__).parent
 
@@ -67,7 +69,7 @@ def test_the_signer_reproduces_a_published_signature_vector():
 def test_first_publish_uploads_audio_metadata_then_the_feed(tmp_path):
     b = FakeBucket()
     item = gt.load_item(episode(tmp_path), "podcast")
-    plan = r2.plan_episode(client(b), item, FEED)
+    plan = r2.plan_episode(client(b), item, FEED, POL)
     assert b.methods().count("PUT") == 0  # planning writes nothing
     assert r2.apply_plan(client(b), plan) == [
         "episodes/weekly_2026-01-05.mp3",
@@ -80,10 +82,10 @@ def test_first_publish_uploads_audio_metadata_then_the_feed(tmp_path):
 def test_publishing_twice_is_a_no_op(tmp_path):
     b = FakeBucket()
     item = gt.load_item(episode(tmp_path), "podcast")
-    r2.apply_plan(client(b), r2.plan_episode(client(b), item, FEED))
+    r2.apply_plan(client(b), r2.plan_episode(client(b), item, FEED, POL))
     before = {k: v[0] for k, v in b.objects.items()}
     b.calls.clear()
-    plan = r2.plan_episode(client(b), item, FEED)
+    plan = r2.plan_episode(client(b), item, FEED, POL)
     assert not plan.uploads and not plan.feed_changes
     assert r2.apply_plan(client(b), plan) == []
     assert "PUT" not in b.methods()
@@ -94,12 +96,12 @@ def test_a_second_episode_adds_and_keeps_the_first(tmp_path):
     b = FakeBucket()
     r2.apply_plan(
         client(b),
-        r2.plan_episode(client(b), gt.load_item(episode(tmp_path, "e1"), "podcast"), FEED),
+        r2.plan_episode(client(b), gt.load_item(episode(tmp_path, "e1"), "podcast"), FEED, POL),
     )
     second = gt.load_item(
-        episode(tmp_path, "e2", date="2026-01-12", mp3=b"ID3" + b"z" * 70), "podcast"
+        episode(tmp_path, "e2", date="2026-01-12", mp3=build_mp3(title="zz")), "podcast"
     )
-    r2.apply_plan(client(b), r2.plan_episode(client(b), second, FEED))
+    r2.apply_plan(client(b), r2.plan_episode(client(b), second, FEED, POL))
     assert fd.guids(b.objects["feed.xml"][0].decode()) == {"weekly_2026-01-05", "weekly_2026-01-12"}
     assert "episodes/weekly_2026-01-05.mp3" in b.objects
 
@@ -107,10 +109,10 @@ def test_a_second_episode_adds_and_keeps_the_first(tmp_path):
 def test_nothing_is_ever_deleted_and_an_existing_key_is_never_overwritten(tmp_path):
     b = FakeBucket()
     item = gt.load_item(episode(tmp_path, "e1"), "podcast")
-    r2.apply_plan(client(b), r2.plan_episode(client(b), item, FEED))
-    changed = gt.load_item(episode(tmp_path, "e1b", mp3=b"ID3" + b"q" * 99), "podcast")
+    r2.apply_plan(client(b), r2.plan_episode(client(b), item, FEED, POL))
+    changed = gt.load_item(episode(tmp_path, "e1b", mp3=build_mp3(title="qq")), "podcast")
     with pytest.raises(r2.Conflict):
-        r2.plan_episode(client(b), changed, FEED)
+        r2.plan_episode(client(b), changed, FEED, POL)
     assert "DELETE" not in b.methods()
     assert not any(n.startswith(("delete", "remove")) for n in dir(r2.R2Client))
 
@@ -119,7 +121,7 @@ def test_the_feed_is_never_shrunk(tmp_path):
     b = FakeBucket()
     r2.apply_plan(
         client(b),
-        r2.plan_episode(client(b), gt.load_item(episode(tmp_path, "e1"), "podcast"), FEED),
+        r2.plan_episode(client(b), gt.load_item(episode(tmp_path, "e1"), "podcast"), FEED, POL),
     )
     # the remote feed claims an episode whose objects are gone: the new feed would drop it
     feed = (
@@ -132,7 +134,10 @@ def test_the_feed_is_never_shrunk(tmp_path):
     b.objects["feed.xml"] = (feed.encode(), {})
     with pytest.raises(r2.R2Error, match="drop"):
         r2.plan_episode(
-            client(b), gt.load_item(episode(tmp_path, "e2", date="2026-02-02"), "podcast"), FEED
+            client(b),
+            gt.load_item(episode(tmp_path, "e2", date="2026-02-02"), "podcast"),
+            FEED,
+            POL,
         )
 
 

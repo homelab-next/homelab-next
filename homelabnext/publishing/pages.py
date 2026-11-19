@@ -42,6 +42,7 @@ class PagesConfig:
     #: the sha256 of package-lock.json: it pins every package and its integrity hash
     lock_sha256: str
     install_dir: Path  # holds package-lock.json and node_modules/
+    node: Path = Path("/usr/bin/node")  # the node readiness verified; wrangler runs on exactly this
     timeout_s: int = 180
 
     def __post_init__(self) -> None:
@@ -95,13 +96,15 @@ def verify_pin(cfg: PagesConfig) -> None:
         raise PagesError(f"wrangler {installed} is installed, the pin is {cfg.wrangler_version}")
 
 
-Runner = Callable[[list[str], dict[str, str], int], tuple[int, str]]
+Runner = Callable[[list[str], dict[str, str], int, str], tuple[int, str]]
 
 
-def subprocess_runner(argv: list[str], env: dict[str, str], timeout: int) -> tuple[int, str]:
+def subprocess_runner(
+    argv: list[str], env: dict[str, str], timeout: int, cwd: str
+) -> tuple[int, str]:
     try:
         p = subprocess.run(
-            argv, env=env, capture_output=True, text=True, timeout=timeout, check=False
+            argv, env=env, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PagesError(f"{argv[0]}: {type(exc).__name__}") from exc
@@ -110,7 +113,8 @@ def subprocess_runner(argv: list[str], env: dict[str, str], timeout: int) -> tup
 
 def deploy_argv(cfg: PagesConfig, dist_dir: Path) -> list[str]:
     argv = [
-        str(cfg.bin),
+        str(cfg.node),
+        str(cfg.bin.resolve()),
         "pages",
         "deploy",
         str(dist_dir),
@@ -127,7 +131,7 @@ def deploy_argv(cfg: PagesConfig, dist_dir: Path) -> list[str]:
 
 def _env(cfg: PagesConfig, token: str, account_id: str, home: Path) -> dict[str, str]:
     env = {
-        "PATH": f"{cfg.install_dir / 'node_modules' / '.bin'}:/usr/local/bin:/usr/bin:/bin",
+        "PATH": f"{cfg.node.parent}:/usr/bin:/bin",
         "HOME": str(home),
         "CI": "true",
         "WRANGLER_SEND_METRICS": "false",
@@ -145,18 +149,31 @@ def deploy(
     token: str,
     account_id: str,
     home: Path,
+    workdir: Path,
     runner: Runner = subprocess_runner,
 ) -> str:
-    """Verify the pin, check the running version, deploy.  Returns wrangler's output (token-free)."""
+    """Verify the pin, check the running version, deploy ``dist_dir`` (a gated snapshot) with
+    ``workdir`` (an empty directory of the gate's) as the working directory, so no ``wrangler.toml``
+    or ``functions/`` is ever found.  Returns wrangler's output (token-free)."""
     verify_pin(cfg)
+    if dist_dir.is_symlink() or not dist_dir.is_dir():
+        raise PagesError("the deploy directory is not a plain directory")
+    if any(
+        (dist_dir / n).exists()
+        for n in ("wrangler.toml", "wrangler.json", "wrangler.jsonc", "functions", "_worker.js")
+    ):
+        raise PagesError("the deploy directory holds a deploy configuration or code (refused)")
+    if any(workdir.iterdir()):
+        raise PagesError("the working directory is not empty")
     env = _env(cfg, token, account_id, home)
-    code, out = runner([str(cfg.bin), "--version"], env, 60)
+    cwd = str(workdir)
+    code, out = runner([str(cfg.node), str(cfg.bin.resolve()), "--version"], env, 60, cwd)
     shown = set(re.findall(r"\b\d+\.\d+\.\d+\b", _ANSI.sub("", out)))
     if code != 0 or shown != {cfg.wrangler_version}:
         raise PagesError(
             f"wrangler --version printed {sorted(shown)}, the pin is {cfg.wrangler_version}"
         )
-    code, out = runner(deploy_argv(cfg, dist_dir), env, cfg.timeout_s)
+    code, out = runner(deploy_argv(cfg, dist_dir), env, cfg.timeout_s, cwd)
     out = out.replace(token, "[redacted]") if token else out
     if code != 0:
         raise PagesError(f"wrangler pages deploy failed (exit {code}): {out[-600:]}")

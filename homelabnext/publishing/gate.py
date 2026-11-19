@@ -20,14 +20,16 @@ must not hold the secret).  Standard library only (plus ``homelabnext.tlp`` and 
 from __future__ import annotations
 
 import hashlib
-import html
 import json
+import os
 import re
+import secrets
 import stat
 from dataclasses import dataclass
 from pathlib import Path
 
 from homelabnext import tlp, tlp_egress
+from homelabnext.publishing import media, normalise
 
 SIDECAR = "sidecar.json"
 KINDS = ("site", "podcast")
@@ -212,9 +214,13 @@ class Policy:
 
 
 # ----------------------------------------------------------------------------- items
-def _sha256_file(path: Path) -> str:
-    with path.open("rb") as fh:
-        return hashlib.file_digest(fh, "sha256").hexdigest()
+#: names a Pages deploy would treat as configuration or code: never part of a publishable item
+_RESERVED = re.compile(r"^(wrangler\.[A-Za-z]+|_worker\.js|functions)$")
+_MAX_FILE = 512 * 1024 * 1024
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def tree_digest(item: Item) -> str:
@@ -225,29 +231,31 @@ def tree_digest(item: Item) -> str:
     return h.hexdigest()
 
 
-def load_item(root: Path, kind: str) -> Item:
-    """Read an item directory.  Refuses what cannot be judged: a missing or malformed sidecar, a
-    symlink, a special file, an unsafe name, a payload that differs from the sidecar's list."""
-    if kind not in KINDS:
-        raise GateError(f"unknown item kind {kind!r}")
-    if not _NAME.match(root.name):
-        raise GateError(f"unsafe item name {root.name!r}")
+def _read_sidecar(root: Path) -> dict:
+    sc = root / SIDECAR
     try:
-        sc_path = root / SIDECAR
-        if sc_path.is_symlink():
+        if sc.is_symlink():
             raise GateError(f"{root.name}: the sidecar is a symlink")
-        sidecar = json.loads(sc_path.read_text(encoding="utf-8"))
+        doc = json.loads(sc.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise GateError(f"{root.name}: no readable {SIDECAR} ({type(exc).__name__})") from exc
-    if not isinstance(sidecar, dict) or set(sidecar) - {"tlp", "producer", "sha256s", "title"}:
+    if not isinstance(doc, dict) or set(doc) - {"tlp", "producer", "sha256s", "title"}:
         raise GateError(f"{root.name}: the sidecar holds keys beyond tlp, producer, sha256s, title")
-    if not isinstance(sidecar.get("producer"), str) or not sidecar["producer"]:
+    if not isinstance(doc.get("producer"), str) or not doc["producer"]:
         raise GateError(f"{root.name}: the sidecar has no producer")
-    sums = sidecar.get("sha256s")
+    if "title" in doc and not isinstance(doc["title"], str):
+        raise GateError(f"{root.name}: the sidecar title is not text")
+    sums = doc.get("sha256s")
     if not isinstance(sums, dict) or not sums:
         raise GateError(f"{root.name}: the sidecar lists no files")
+    if any(not isinstance(v, str) or not _HEX64.match(v) for v in sums.values()):
+        raise GateError(f"{root.name}: a sidecar sha256 is not 64 lowercase hex")
+    return doc
+
+
+def _list_files(root: Path) -> list[str]:
+    """The payload files of ``root``: regular, single-link, safely named; never the sidecar."""
     files: list[str] = []
-    base = root.resolve()
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root).as_posix()
         st = p.lstat()
@@ -259,61 +267,172 @@ def load_item(root: Path, kind: str) -> Item:
             )
         if rel == SIDECAR:
             continue
-        if any(part.startswith(".") or not _NAME.match(part) for part in rel.split("/")):
+        if st.st_nlink > 1:
+            raise GateError(f"{root.name}: {rel} has more than one hard link")
+        parts = rel.split("/")
+        if any(part.startswith(".") or not _NAME.match(part) for part in parts):
             raise GateError(f"{root.name}: unsafe file name {rel!r}")
-        if base not in p.resolve().parents:
-            raise GateError(f"{root.name}: {rel} resolves outside the item")
+        if any(_RESERVED.match(part) for part in parts):
+            raise GateError(f"{root.name}: {rel} is a deploy configuration name, never content")
         files.append(rel)
-    if set(files) != set(sums):
+    return files
+
+
+def load_item(root: Path, kind: str) -> Item:
+    """Read an item directory in place.  Refuses what cannot be judged: a symlinked root, a missing
+    or malformed sidecar, a link, a special file, an unsafe name, a payload that differs from the
+    sidecar's list.  Publishing never reads this form: :func:`snapshot_item` copies it first."""
+    if kind not in KINDS:
+        raise GateError(f"unknown item kind {kind!r}")
+    if root.is_symlink() or root.parent.is_symlink():
+        raise GateError(f"{root.name}: the item (or its kind directory) is a symlink")
+    if not _NAME.match(root.name):
+        raise GateError(f"unsafe item name {root.name!r}")
+    sidecar = _read_sidecar(root)
+    files = _list_files(root)
+    if set(files) != set(sidecar["sha256s"]):
         raise GateError(f"{root.name}: the files differ from the sidecar's list (extra or missing)")
-    if any(not isinstance(v, str) or not _HEX64.match(v) for v in sums.values()):
-        raise GateError(f"{root.name}: a sidecar sha256 is not 64 lowercase hex")
     return Item(root.name, kind, root, sidecar, tuple(files))
 
 
+def snapshot_item(root: Path, kind: str, snapshots: Path) -> Item:
+    """Copy an item into a private snapshot under ``snapshots`` and return the copy.
+
+    Every byte is read once with ``O_NOFOLLOW``, hashed as read and written from the same bytes, so
+    what is later gated and published is what was hashed, whatever a producer does to the original
+    afterwards.  The sidecar is not copied (it is never published).  The directory is named by the
+    content, built beside and renamed in; an existing one must hold the same bytes.  Nothing is
+    deleted."""
+    src = load_item(root, kind)
+    held: dict[str, bytes] = {}
+    for rel in src.files:
+        fd = os.open(root / rel, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1 or st.st_size > _MAX_FILE:
+                raise GateError(f"{root.name}: {rel} changed or is too large")
+            with os.fdopen(fd, "rb", closefd=False) as fh:
+                held[rel] = fh.read()
+        finally:
+            os.close(fd)
+    digest = hashlib.sha256(
+        "".join(f"{r}\0{_sha256_bytes(held[r])}\n" for r in sorted(held)).encode()
+    ).hexdigest()[:16]
+    base = snapshots / kind
+    base.mkdir(parents=True, exist_ok=True, mode=0o700)
+    final = base / f"{root.name}-{digest}"
+    if (
+        final.exists()
+    ):  # the same content was copied before: reused only if every byte still matches
+        for rel, data in held.items():
+            if (final / rel).read_bytes() != data:
+                raise GateError(f"{root.name}: the existing snapshot differs from the source")
+        return Item(root.name, kind, final, src.sidecar, src.files)
+    tmp = base / f".tmp-{secrets.token_hex(6)}"
+    tmp.mkdir(mode=0o700)
+    for rel, data in held.items():
+        dest = tmp / rel
+        dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        dfd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(dfd, "wb") as out:
+            out.write(data)
+    os.rename(tmp, final)
+    return Item(root.name, kind, final, src.sidecar, src.files)
+
+
 # ----------------------------------------------------------------------------- the gate
-def evaluate(item: Item, policy: Policy) -> Verdict:
-    """Judge one item.  Reads every file; never raises for a content problem (it blocks)."""
+def _scan(unit: str, variants: list[str], policy: Policy, reasons: list[Reason]) -> None:
+    for variant in variants:
+        for i in policy.deny_list.hits(variant):
+            reasons.append(Reason("deny-list", unit, f"line #{i + 1} of the deny-list"))
+        for name, pat in _SECRET_SHAPES:
+            if pat.search(variant):
+                reasons.append(Reason("secret-shape", unit, name))
+        if policy.posture_rules:
+            for name, pat in _POSTURE:
+                if pat.search(variant):
+                    reasons.append(Reason("posture", unit, name))
+
+
+def _unit_variants(suffix: str, text: str, reasons: list[Reason], unit: str) -> list[str]:
+    out = normalise.variants(text)
+    if suffix in (".json", ".webmanifest"):
+        try:
+            out += normalise.variants(normalise.json_text(text))
+        except ValueError:
+            reasons.append(Reason("json-invalid", unit))
+    return out
+
+
+def judge(
+    claimed: object, units: dict[str, list[str]], policy: Policy, reasons: list[Reason]
+) -> str:
+    """The label ``claimed`` and every marker in every variant leave under, and the rule hits."""
+    body = [v for vs in units.values() for v in vs]
+    decision = tlp_egress.egress_check(
+        policy.ceiling, claimed, recorded=tlp_egress.NO_RECORD, body=body
+    )
+    if not decision.allowed:
+        reasons.append(Reason("tlp-above-ceiling", "", f"{decision.label} over {policy.ceiling}"))
+    for unit, vs in units.items():
+        _scan(unit, vs, policy, reasons)
+    return str(decision.label)
+
+
+def gate_artifact(name: str, text: str, policy: Policy) -> Verdict:
+    """Gate a generated artefact (the feed) before it is uploaded: the same rules, claim clear."""
     reasons: list[Reason] = []
-    texts: dict[str, str] = {}
+    suffix = Path(name).suffix.lower()
+    label = judge("clear", {name: _unit_variants(suffix, text, reasons, name)}, policy, reasons)
+    uniq = tuple(dict.fromkeys(reasons))
+    return Verdict(name, "artefact", not uniq, label, uniq)
+
+
+def evaluate(item: Item, policy: Policy) -> Verdict:
+    """Judge one item.  Reads every file once; never raises for a content problem (it blocks)."""
+    reasons: list[Reason] = []
+    units: dict[str, list[str]] = {}
+    # what becomes a public URL or a visible field is content too: names, the id, the sidecar's text
+    for n, rel in enumerate(item.files):
+        units[f"name-of-file-{n + 1}"] = normalise.variants(rel)
+    units["item-id"] = normalise.variants(item.id)
+    for key in ("producer", "title"):
+        if isinstance(item.sidecar.get(key), str):
+            units[f"sidecar-{key}"] = normalise.variants(item.sidecar[key])
     for rel in item.files:
         suffix = Path(rel).suffix.lower()
         path = item.path(rel)
-        if _sha256_file(path) != item.sidecar["sha256s"][rel]:
+        try:
+            data = path.read_bytes()
+        except OSError:
+            reasons.append(Reason("unreadable", rel))
+            continue
+        if _sha256_bytes(data) != item.sidecar["sha256s"][rel]:
             reasons.append(Reason("sha256-mismatch", rel))
             continue
         if suffix in BINARY_SUFFIXES:
+            try:
+                extracted = media.metadata_texts_of(suffix, data)
+            except media.MediaError as exc:
+                reasons.append(Reason("media-invalid", rel, str(exc)))
+                continue
+            units[rel] = [v for t in extracted for v in normalise.variants(t)]
             continue
         if suffix not in TEXT_SUFFIXES:
             reasons.append(Reason("unknown-file-type", rel, suffix or "no suffix"))
             continue
-        if path.stat().st_size > MAX_TEXT_BYTES:
+        if len(data) > MAX_TEXT_BYTES:
             reasons.append(Reason("text-too-large", rel))
             continue
+        if media.looks_binary(data):
+            reasons.append(Reason("media-invalid", rel, "binary content in a text file"))
+            continue
         try:
-            texts[rel] = path.read_text(encoding="utf-8")
+            text = data.decode("utf-8")
         except UnicodeDecodeError:
             reasons.append(Reason("text-not-utf8", rel))
-
-    decision = tlp_egress.egress_check(
-        policy.ceiling,
-        item.sidecar.get("tlp"),
-        recorded=tlp_egress.NO_RECORD,
-        body=list(texts.values()),
-    )
-    if not decision.allowed:
-        reasons.append(Reason("tlp-above-ceiling", "", f"{decision.label} over {policy.ceiling}"))
-
-    for rel, text in texts.items():
-        for variant in {text, html.unescape(text)}:
-            for i in policy.deny_list.hits(variant):
-                reasons.append(Reason("deny-list", rel, f"line #{i + 1} of the deny-list"))
-            for name, pat in _SECRET_SHAPES:
-                if pat.search(variant):
-                    reasons.append(Reason("secret-shape", rel, name))
-            if policy.posture_rules:
-                for name, pat in _POSTURE:
-                    if pat.search(variant):
-                        reasons.append(Reason("posture", rel, name))
+            continue
+        units[rel] = _unit_variants(suffix, text, reasons, rel)
+    label = judge(item.sidecar.get("tlp"), units, policy, reasons)
     uniq = tuple(dict.fromkeys(reasons))
-    return Verdict(item.id, item.kind, not uniq, str(decision.label), uniq)
+    return Verdict(item.id, item.kind, not uniq, label, uniq)

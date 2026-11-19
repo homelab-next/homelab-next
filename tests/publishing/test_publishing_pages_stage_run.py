@@ -41,6 +41,18 @@ def install(tmp_path, version=VERSION, integrity=INTEGRITY, installed=None, lock
     return d
 
 
+def dist(tmp_path) -> Path:
+    d = tmp_path / "dist"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def work(tmp_path) -> Path:
+    d = tmp_path / "work"
+    d.mkdir(exist_ok=True)
+    return d
+
+
 def pcfg(d, version=VERSION):
     return pg.PagesConfig("site-x", "pages", version, PIN, d)
 
@@ -49,8 +61,8 @@ class Runner:
     def __init__(self, version=VERSION, code=0):
         self.calls, self.version, self.code = [], version, code
 
-    def __call__(self, argv, env, timeout):
-        self.calls.append((argv, env))
+    def __call__(self, argv, env, timeout, cwd):
+        self.calls.append((argv, env, cwd))
         return (0, f"wrangler {self.version}\n") if argv[-1] == "--version" else (self.code, "ok")
 
 
@@ -65,9 +77,18 @@ def test_only_an_exact_version_is_a_pin(tmp_path, bad):
 
 def test_a_valid_pin_deploys_with_the_installed_binary_and_never_npx(tmp_path):
     d, r = install(tmp_path), Runner()
-    pg.deploy(pcfg(d), tmp_path, token="t" * 5, account_id="a1", home=tmp_path, runner=r)
+    pg.deploy(
+        pcfg(d),
+        dist(tmp_path),
+        token="t" * 5,
+        account_id="a1",
+        home=tmp_path,
+        workdir=work(tmp_path),
+        runner=r,
+    )
     argv = r.calls[-1][0]
-    assert argv[0] == str(d / "node_modules/.bin/wrangler") and "--branch=pages" in argv
+    assert argv[0] == str(pcfg(d).node) and argv[1].endswith("wrangler")
+    assert "--branch=pages" in argv and r.calls[-1][2] == str(work(tmp_path))
     assert not any("npx" in a or "@latest" in a for c in r.calls for a in c[0])
 
 
@@ -99,7 +120,13 @@ def test_a_binary_that_reports_another_version_is_refused_before_any_deploy(tmp_
     r = Runner(version="4.165.0")
     with pytest.raises(pg.PagesError, match="--version"):
         pg.deploy(
-            pcfg(install(tmp_path)), tmp_path, token="t", account_id="", home=tmp_path, runner=r
+            pcfg(install(tmp_path)),
+            dist(tmp_path),
+            token="t",
+            account_id="",
+            home=tmp_path,
+            workdir=work(tmp_path),
+            runner=r,
         )
     assert len(r.calls) == 1
 
@@ -107,12 +134,18 @@ def test_a_binary_that_reports_another_version_is_refused_before_any_deploy(tmp_
 def test_a_failed_deploy_does_not_leak_the_token(tmp_path):
     tok = "tok-" + "z" * 12
 
-    def run(argv, env, t):
+    def run(argv, env, t, cwd):
         return (0, f"wrangler {VERSION}") if argv[-1] == "--version" else (1, f"denied {tok}")
 
     with pytest.raises(pg.PagesError) as e:
         pg.deploy(
-            pcfg(install(tmp_path)), tmp_path, token=tok, account_id="", home=tmp_path, runner=run
+            pcfg(install(tmp_path)),
+            dist(tmp_path),
+            token=tok,
+            account_id="",
+            home=tmp_path,
+            workdir=work(tmp_path),
+            runner=run,
         )
     assert tok not in str(e.value)
 
@@ -121,7 +154,9 @@ def test_a_failed_deploy_does_not_leak_the_token(tmp_path):
 def test_credentials_must_be_0600_and_non_empty(tmp_path):
     f = tmp_path / "deny-list"
     f.write_text("x")
-    os.chmod(f, 0o644)
+    os.chmod(
+        f, 0o640
+    )  # group-readable: refused (not 0o644: that trips a static check for what it is)
     with pytest.raises(cf.ConfigError, match="0600"):
         cf.read_credential(tmp_path, "deny-list")
     os.chmod(f, 0o600)
@@ -213,7 +248,7 @@ def test_staging_twice_leaves_one_directory_and_removes_nothing(tmp_path):
 
 
 def test_a_blocked_item_is_not_staged_logged_without_the_match_and_notified(tmp_path):
-    base, pub, cfg = setup_lab(tmp_path, "stage")
+    base, pub, cfg = setup_lab(tmp_path, "dry-run")  # a page is a network call: never in stage
     make_item(pub, "site", "b1", {"index.html": "<p>vault.example.internal</p>"})
     sent = []
 

@@ -17,6 +17,7 @@ from rolerun import run_role
 ROOT = Path(__file__).resolve().parents[2]
 ROLE = str(ROOT / "modules" / "publishing" / "roles" / "publishing_gate")
 USER = pwd.getpwuid(os.getuid()).pw_name
+SECRET_VALUE = "dv" * 3
 LOCK_PIN = (
     "a" * 64
 )  # a well-formed pin for the validate hook (the hash is only compared in wrangler.yml)
@@ -256,3 +257,62 @@ def test_the_role_refuses_a_lockfile_that_is_not_the_pinned_one_before_installin
         env=env,
     )
     assert r.returncode != 0 and not (tmp_path / "var" / "tools" / "package-lock.json").exists()
+
+
+def _readiness_bins(tmp_path: Path) -> dict:
+    from rolerun import fake
+
+    b = tmp_path / "bin"
+    b.mkdir(exist_ok=True)
+    fake(b / "hnx", "pass\n")
+    fake(b / "node", "print('v22.4.0')\n")
+    fake(b / "npm", "pass\n")
+    return {
+        "publishing_gate_hnx_bin": str(b / "hnx"),
+        "publishing_gate_node": str(b / "node"),
+        "publishing_gate_npm": str(b / "npm"),
+    }
+
+
+def test_readiness_names_the_unset_secret_reference_and_never_a_value(tmp_path):
+    v = {
+        **good(tmp_path),
+        **_readiness_bins(tmp_path),
+        "publishing_gate_mode": "live",
+        "publishing_gate_r2_bucket": "podcast",
+        "publishing_gate_cloudflare_account_id": "acct1",
+        "publishing_gate_feed_public_base_url": "https://cdn.example.test",
+        "publishing_gate_feed_title": "T",
+        "publishing_gate_feed_description": "D",
+        "publishing_gate_feed_author": "A",
+        "publishing_gate_feed_owner_email": "a@example.test",
+    }
+    env = {"HNX_SECRET_PUBLISHING_DENY_LIST": SECRET_VALUE}  # the others are unset
+    r = run_role(tmp_path, ROLE, "readiness", v, env=env)
+    assert r.returncode != 0
+    out = r.stdout + r.stderr
+    assert (
+        "secret:publishing/cloudflare-api-token" in out
+        and "secret:publishing/r2-access-key-id" in out
+    )
+    assert (
+        "secret:publishing/deny-list"
+        not in out.split("not set in the secret store:")[1].split("\n")[0]
+    )
+    assert SECRET_VALUE not in out
+    # with every one set it passes
+    env.update(
+        HNX_SECRET_PUBLISHING_CLOUDFLARE_API_TOKEN="t" * 12,
+        HNX_SECRET_PUBLISHING_R2_ACCESS_KEY_ID="i" * 8,
+        HNX_SECRET_PUBLISHING_R2_SECRET_ACCESS_KEY="s" * 12,
+    )
+    r = run_role(tmp_path, ROLE, "readiness", v, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_stage_mode_readiness_needs_only_the_deny_list(tmp_path):
+    v = {**good(tmp_path), **_readiness_bins(tmp_path)}
+    r = run_role(tmp_path, ROLE, "readiness", v, env={})
+    assert r.returncode != 0 and "secret:publishing/deny-list" in r.stdout + r.stderr
+    r = run_role(tmp_path, ROLE, "readiness", v, env={"HNX_SECRET_PUBLISHING_DENY_LIST": "x"})
+    assert r.returncode == 0, r.stdout + r.stderr

@@ -11,7 +11,7 @@ import pytest
 
 from homelabnext import tlp
 from homelabnext.publishing import gate as gt
-from tests.publishing.helpers import make_item, policy
+from tests.publishing.helpers import build_mp3, build_png, make_item, policy
 
 
 def verdict(tmp_path, files, tlp_claim="clear", **kw):
@@ -115,7 +115,7 @@ def test_a_file_that_differs_from_its_sidecar_blocks(tmp_path):
 
 
 def test_an_unknown_binary_type_blocks_and_known_media_passes(tmp_path):
-    v = verdict(tmp_path, {"a.exe": b"MZ", "pic.png": b"\x89PNG"})
+    v = verdict(tmp_path, {"a.exe": b"MZ", "pic.png": build_png()})
     assert [r.path for r in v.reasons] == ["a.exe"] and v.reasons[0].rule == "unknown-file-type"
 
 
@@ -165,7 +165,7 @@ def _podcast(tmp_path, description, extra=None):
     meta = _json.dumps(
         {"period": "weekly", "date": "2026-01-05", "title": "t", "description": description}
     )
-    files = {"metadata.json": meta, "weekly_2026-01-05.mp3": b"ID3" + b"a" * 30, **(extra or {})}
+    files = {"metadata.json": meta, "weekly_2026-01-05.mp3": build_mp3(), **(extra or {})}
     return _mk(tmp_path, "podcast", "ep1", files, tlp="clear")  # the sidecar says clear
 
 

@@ -69,11 +69,13 @@ def discover(publishable: Path) -> list[tuple[str, Path]]:
     out = []
     for kind in gt.KINDS:
         base = publishable / kind
-        if base.is_dir():
+        if base.is_symlink():  # a symlinked kind directory is refused by name, not followed
+            out.append((kind, base))
+        elif base.is_dir():
             out += [
                 (kind, p)
                 for p in sorted(base.iterdir())
-                if p.is_dir() and not p.name.startswith(".")
+                if (p.is_dir() or p.is_symlink()) and not p.name.startswith(".")
             ]
     return out
 
@@ -109,9 +111,10 @@ def run(
             report.done.append({"item": root.name, "kind": kind, "result": "superseded"})
             continue
         try:
-            item = gt.load_item(root, kind)
+            # what is gated and published is a private copy: every byte read once, hashed as read
+            item = gt.snapshot_item(root, kind, cfg.state_dir / "snapshots")
             verdict = gt.evaluate(item, policy)
-        except gt.GateError as exc:
+        except (gt.GateError, OSError) as exc:
             report.blocked.append(root.name)
             _append(
                 gate_log,
@@ -139,7 +142,19 @@ def run(
             report.blocked.append(item.id)
             continue
         try:
-            report.done.append(_handle(cfg, item, verdict, net, runner, manifest, clock))
+            report.done.append(_handle(cfg, item, verdict, net, runner, manifest, clock, policy))
+        except r2.FeedBlocked as exc:
+            report.blocked.append(item.id)
+            _append(
+                gate_log,
+                {
+                    "ts": clock(),
+                    "item": item.id,
+                    "kind": kind,
+                    "ok": False,
+                    "reasons": [{"rule": "feed-blocked", "path": "feed.xml", "detail": str(exc)}],
+                },
+            )
         except (r2.R2Error, pg.PagesError, cf.ConfigError, stage.StageError, OSError) as exc:
             report.failed.append(item.id)
             _append(
@@ -152,23 +167,29 @@ def run(
                     "failed": f"{type(exc).__name__}: {exc}",
                 },
             )
-    if notifier is not None:
+    # stage mode makes no network call at all, a notification included; and a notification that
+    # cannot be sent never takes the run down (the verdicts are already logged and returned)
+    if notifier is not None and cfg.mode != "stage":
         bad = report.blocked
-        notifier.report(
-            NOTIFY_KEY,
-            "blocked" if bad else "ok",
-            Message(
+        try:
+            notifier.report(
                 NOTIFY_KEY,
-                PROBLEM,
-                "blocked: " + ", ".join(bad) if bad else RECOVERY,
-                level="warn",
-                tlp="amber",
-            ),
-        )
+                "blocked" if bad else "ok",
+                Message(
+                    NOTIFY_KEY,
+                    PROBLEM,
+                    "blocked: " + ", ".join(bad) if bad else RECOVERY,
+                    level="warn",
+                    tlp="amber",
+                ),
+            )
+        except Exception as exc:
+            _append(gate_log, {"ts": clock(), "notify_failed": type(exc).__name__})
+            print(f"publishing: notification not sent ({type(exc).__name__})", file=sys.stderr)
     return report
 
 
-def _handle(cfg, item, verdict, net, runner, manifest, clock) -> dict:
+def _handle(cfg, item, verdict, net, runner, manifest, clock, policy) -> dict:
     out: dict = {"item": item.id, "kind": item.kind, "mode": cfg.mode}
     digest = gt.tree_digest(item)
     plan: dict
@@ -187,13 +208,16 @@ def _handle(cfg, item, verdict, net, runner, manifest, clock) -> dict:
         }
         if cfg.mode == "live" and not same:
             home = cfg.state_dir / "home"
+            workdir = cfg.state_dir / "wrangler-cwd"  # empty, ours: no wrangler.toml or functions/
             home.mkdir(parents=True, exist_ok=True)
+            workdir.mkdir(parents=True, exist_ok=True)
             pg.deploy(
                 cfg.pages,
                 item.root,
                 token=cf.read_credential(cfg.credentials_dir, cf.CRED_PAGES_TOKEN),
                 account_id=cfg.pages_account_id,
                 home=home,
+                workdir=workdir,
                 runner=runner,
             )
             _append(
@@ -232,7 +256,7 @@ def _handle(cfg, item, verdict, net, runner, manifest, clock) -> dict:
                 cf.read_credential(cfg.credentials_dir, cf.CRED_R2_SECRET),
                 net,
             )
-            p = r2.plan_episode(client, item, cfg.feed)
+            p = r2.plan_episode(client, item, cfg.feed, policy)
             plan = {
                 "adapter": "r2-feed",
                 "bucket": cfg.r2.bucket,
@@ -240,9 +264,14 @@ def _handle(cfg, item, verdict, net, runner, manifest, clock) -> dict:
                 "unchanged": list(p.unchanged),
                 "feed_changes": p.feed_changes,
                 "episodes": p.episodes,
+                "unverified_by_size_only": list(p.unverified),
             }
             if cfg.mode == "live":
-                written = r2.apply_plan(client, p)
+                try:
+                    written = r2.apply_plan(client, p)
+                except r2.PreconditionFailed:  # the feed moved under us: read it again, once
+                    p = r2.plan_episode(client, item, cfg.feed, policy)
+                    written = r2.apply_plan(client, p)
                 if written:
                     _append(
                         manifest,
@@ -268,14 +297,16 @@ def _handle(cfg, item, verdict, net, runner, manifest, clock) -> dict:
     return out
 
 
-def build_notifier(cfg: cf.Config) -> Notifier | None:
+def build_notifier(cfg: cf.Config, opener=None) -> Notifier | None:
     if not cfg.notify_url:
         return None
+    extra = {"opener": opener} if opener is not None else {}
     n = Notifier(
         default_sender(
-            cfg.notify_url,
+            endpoint=lambda: cfg.notify_url,
             default_topic=cfg.notify_topic or None,
             auth=lambda: "Bearer " + cf.read_credential(cfg.credentials_dir, cf.CRED_NOTIFY),
+            **extra,
         ),
         StateStore(cfg.state_dir / "notify.json"),
     )
@@ -292,7 +323,13 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     try:
         cfg = cf.load(args.config, args.mode)
-        rep = run(cfg, notifier=build_notifier(cfg))
+        notifier = None
+        if cfg.mode != "stage":  # stage makes no network call: no notifier is even built
+            try:
+                notifier = build_notifier(cfg)
+            except Exception as exc:
+                print(f"publishing: notifier not built ({type(exc).__name__})", file=sys.stderr)
+        rep = run(cfg, notifier=notifier)
     except (cf.ConfigError, gt.GateError, pg.PagesError) as exc:
         print(f"publishing: {exc}", file=sys.stderr)
         return 2

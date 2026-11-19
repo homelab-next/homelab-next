@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from homelabnext.publishing import feed as fd
+from homelabnext.publishing import gate
 from homelabnext.publishing.gate import Item
 from homelabnext.publishing.transport import Request, Response, Transport
 
@@ -28,6 +29,14 @@ FEED_TYPE = "application/rss+xml; charset=utf-8"
 
 class R2Error(RuntimeError):
     pass
+
+
+class PreconditionFailed(R2Error):
+    """A conditional write lost a race (HTTP 412): the object changed after it was read."""
+
+
+class FeedBlocked(R2Error):
+    """The feed this run would write does not pass the gate (it is gated like any item)."""
 
 
 class Conflict(R2Error):
@@ -160,6 +169,14 @@ class R2Client:
             raise R2Error(f"get {key!r}: HTTP {r.status}")
         return r.body
 
+    def get_with_etag(self, key: str) -> tuple[bytes, str] | None:
+        r = self._call("GET", key)
+        if r.status == 404:
+            return None
+        if r.status != 200:
+            raise R2Error(f"get {key!r}: HTTP {r.status}")
+        return r.body, r.headers.get("etag", "")
+
     def head_sha256(self, key: str) -> str | None:
         """The ``sha256`` metadata this module stamped on the object (None if it has none)."""
         r = self._call("HEAD", key)
@@ -171,15 +188,19 @@ class R2Client:
         """Create ``key``; refuses (a precondition) if it exists, so a race cannot overwrite."""
         self._put(key, body, content_type, sha256, {"If-None-Match": "*"})
 
-    def put_replace(self, key: str, body: bytes, content_type: str) -> None:
-        """Replace the feed (the one object whose key is fixed and whose content moves)."""
-        self._put(key, body, content_type, hashlib.sha256(body).hexdigest(), {})
+    def put_replace(self, key: str, body: bytes, content_type: str, etag: str | None) -> None:
+        """Replace the feed (the one object whose key is fixed and whose content moves), only if it
+        still is the version that was read (``If-Match``); created only if it still does not exist."""
+        cond = {"If-Match": etag} if etag else {"If-None-Match": "*"}
+        self._put(key, body, content_type, hashlib.sha256(body).hexdigest(), cond)
 
     def _put(
         self, key: str, body: bytes, content_type: str, sha256: str, extra: dict[str, str]
     ) -> None:
         h = {"Content-Type": content_type, "x-amz-meta-sha256": sha256, **extra}
         r = self._call("PUT", key, body=body, headers=h)
+        if r.status == 412:
+            raise PreconditionFailed(f"put {key!r}: the object changed since it was read")
         if r.status not in (200, 201, 204):
             raise R2Error(f"put {key!r}: HTTP {r.status}")
 
@@ -202,6 +223,8 @@ class Plan:
     feed_xml: str
     feed_changes: bool
     episodes: int
+    feed_etag: str | None = None  # the ETag of the feed the plan read (None: there was none)
+    unverified: tuple[str, ...] = ()  # existing keys compared by size only (no sha256 stamp)
 
 
 def episode_files(item: Item) -> tuple[str, str, str, str]:
@@ -215,25 +238,31 @@ def episode_files(item: Item) -> tuple[str, str, str, str]:
     return stem, date, "metadata.json", f"{stem}.mp3"
 
 
-def plan_episode(client: R2Client, item: Item, feed_cfg: fd.FeedConfig) -> Plan:
+def plan_episode(
+    client: R2Client, item: Item, feed_cfg: fd.FeedConfig, policy: gate.Policy
+) -> Plan:
     """Reads the bucket (listing, metadata, the feed); writes nothing."""
     stem, _date, meta_rel, mp3_rel = episode_files(item)
     mp3_key, json_key = f"episodes/{stem}.mp3", f"episodes/{stem}.json"
-    local = {
-        mp3_key: (item.path(mp3_rel).read_bytes(), "audio/mpeg", item.sidecar["sha256s"][mp3_rel]),
-        json_key: (
-            item.path(meta_rel).read_bytes(),
-            "application/json",
-            item.sidecar["sha256s"][meta_rel],
-        ),
-    }
+    local = {}
+    for key, rel, ctype in (
+        (mp3_key, mp3_rel, "audio/mpeg"),
+        (json_key, meta_rel, "application/json"),
+    ):
+        body = item.path(rel).read_bytes()  # the snapshot: private, already hashed and gated
+        sha = hashlib.sha256(body).hexdigest()
+        if sha != item.sidecar["sha256s"][rel]:
+            raise R2Error(f"{item.id}: {rel} no longer matches its sidecar sha256")
+        local[key] = (body, ctype, sha)
     listing = client.list("episodes/")
-    uploads, unchanged = [], []
+    uploads, unchanged, unverified = [], [], []
     for key, (body, ctype, sha) in local.items():
         if key not in listing:
             uploads.append(Upload(key, body, ctype, sha))
             continue
         remote_sha = client.head_sha256(key)
+        if not remote_sha:
+            unverified.append(key)  # an episode from before this module: compared by size only
         same = remote_sha == sha if remote_sha else listing[key] == len(body)
         if not same:
             raise Conflict(f"{key} exists with different bytes: a published key never changes")
@@ -268,7 +297,14 @@ def plan_episode(client: R2Client, item: Item, feed_cfg: fd.FeedConfig) -> Plan:
     if not episodes:
         raise R2Error("zero episodes: refusing to publish an empty feed")
     new_xml = fd.build_feed(episodes, feed_cfg)
-    old = client.get(FEED_KEY)
+    verdict = gate.gate_artifact(FEED_KEY, new_xml, policy)
+    if not verdict.ok:  # the rendered feed is content too: it must pass what the items passed
+        rules = sorted({r.rule for r in verdict.reasons})
+        raise FeedBlocked(
+            f"the feed this run would write is refused by the gate ({', '.join(rules)})"
+        )
+    got = client.get_with_etag(FEED_KEY)
+    old, etag = (got[0], got[1]) if got else (None, None)
     if old is not None:
         dropped = fd.guids(old.decode("utf-8", "replace")) - {e.stem for e in episodes}
         if dropped:
@@ -281,6 +317,8 @@ def plan_episode(client: R2Client, item: Item, feed_cfg: fd.FeedConfig) -> Plan:
         new_xml,
         old is None or old != new_xml.encode(),
         len(episodes),
+        etag or None,
+        tuple(unverified),
     )
 
 
@@ -291,6 +329,6 @@ def apply_plan(client: R2Client, plan: Plan) -> list[str]:
         client.put_new(up.key, up.body, up.content_type, up.sha256)
         written.append(up.key)
     if plan.feed_changes:
-        client.put_replace(FEED_KEY, plan.feed_xml.encode(), FEED_TYPE)
+        client.put_replace(FEED_KEY, plan.feed_xml.encode(), FEED_TYPE, plan.feed_etag)
         written.append(FEED_KEY)
     return written

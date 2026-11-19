@@ -40,6 +40,8 @@ def read_credential(directory: Path, name: str) -> str:
         raise ConfigError(f"credential {name!r} is not readable ({type(exc).__name__})") from exc
     if not stat.S_ISREG(st.st_mode):
         raise ConfigError(f"credential {name!r} is not a regular file")
+    if st.st_uid not in (0, os.geteuid()):
+        raise ConfigError(f"credential {name!r} is owned by neither root nor this user")
     if st.st_mode & 0o077:
         raise ConfigError(
             f"credential {name!r} is readable by group or others (mode {st.st_mode & 0o777:04o}); 0600 or tighter"
@@ -106,6 +108,7 @@ def load(path: Path, mode_override: str | None = None) -> Config:
             wrangler_version=p.get("wrangler_version", ""),
             lock_sha256=p.get("lock_sha256", ""),
             install_dir=_abs(p, "install_dir"),
+            node=_abs(p, "node") if "node" in p else Path("/usr/bin/node"),
         )
     r2 = feed = None
     if isinstance(doc.get("r2"), dict):

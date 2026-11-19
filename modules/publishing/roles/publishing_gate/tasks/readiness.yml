@@ -25,7 +25,7 @@
       check_mode: false
     - name: Check the node version
       ansible.builtin.assert:
-        that: (publishing_gate_node_said.stdout | trim | regex_replace('^v([0-9]+)\..*', '\1') | int) >= 22
+        that: (publishing_gate_node_said.stdout | trim | regex_findall('^v([0-9]+)') | first | default(0) | int) >= 22
         fail_msg: "publishing: node {{ publishing_gate_node_said.stdout }} is older than 22"
     - name: The pinned lockfile is on the control host (a Pages project needs wrangler)
       ansible.builtin.stat:
@@ -41,13 +41,21 @@
         that: publishing_gate_lock_probe.stat.exists and publishing_gate_lock_probe.stat.checksum == publishing_gate_wrangler_lock_sha256
         fail_msg: "publishing: {{ publishing_gate_wrangler_lock_src }} is missing or does not hash to the pinned lockfile sha256"
       when: publishing_gate_pages_project != ''
-    - name: Every credential the mode needs resolves (checked in a no_log task, only the verdict is shown)
+    - name: Start the credential verdicts empty (this file runs again from every hook)
       ansible.builtin.set_fact:
-        publishing_gate_cred_ok: >-
-          {{ (lookup('hnx_secret', item.ref) | length > 0) }}
+        publishing_gate_cred_state: {}
+    - name: Is each credential the mode needs set (only the verdict is kept, never a value)
+      ansible.builtin.set_fact:
+        publishing_gate_cred_state: >-
+          {{ publishing_gate_cred_state | combine({item.ref: ((lookup('hnx_secret', item.ref, errors='ignore') or '') | string | length > 0)}) }}
       loop: "{{ publishing_gate_credentials }}"
       loop_control:
         label: "{{ item.name }}"
       no_log: true
       when: item.need == 'always' or publishing_gate_mode != 'stage'
+    - name: Every credential the mode needs is set
+      ansible.builtin.assert:
+        that: publishing_gate_cred_state.values() | select | list | length == publishing_gate_cred_state | length
+        fail_msg: >-
+          publishing: not set in the secret store: {{ publishing_gate_cred_state | dict2items | rejectattr('value') | map(attribute='key') | sort | join(', ') }}
   tags: [readiness]

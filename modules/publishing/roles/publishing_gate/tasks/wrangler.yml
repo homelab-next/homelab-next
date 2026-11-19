@@ -69,6 +69,6 @@
 
 - name: The installed wrangler is the pin
   ansible.builtin.assert:
-    that: publishing_gate_wrangler_version in publishing_gate_wrangler_said.stdout
+    that: (publishing_gate_wrangler_said.stdout | regex_findall('[0-9]+[.][0-9]+[.][0-9]+') | unique | list) == [publishing_gate_wrangler_version]
     fail_msg: "publishing: wrangler printed {{ publishing_gate_wrangler_said.stdout }}, the pin is {{ publishing_gate_wrangler_version }}"
   when: not ansible_check_mode

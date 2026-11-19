@@ -55,9 +55,38 @@ A blocked item is **refused and logged**: `state/gate.jsonl` records the rule an
 that matched. The run exits 1 and pages once through the notify pair (`Publishing: an item was blocked by the
 gate` / `Publishing: the gate passes every item again`), state-diffed, never per run.
 
+## What the gate reads, and what it is
+
+The gate is a literal, **normalised** matcher: every rule runs over the text as written and as a reader
+sees it (HTML entities and percent escapes decoded up to three layers, NFKC, zero-width, soft-hyphen and other
+format characters removed, look-alike Cyrillic and Greek letters folded to Latin, base64 `data:` URIs decoded),
+and over JSON after decoding (keys and string values). It does not run scripts or rebuild strings a page
+assembles at run time. It also judges:
+
+* **names**: every file and directory name, the item id and the sidecar's `producer` and `title` (they become
+  public URLs or visible fields); a reason names the file's number, never the matched text;
+* **binaries by content**: a suffix proves nothing. Magic bytes must match the type (MP3, PNG, JPEG, GIF, WebP,
+  ICO, WOFF/WOFF2), a text file may not hold binary, and the text a media file carries is scanned: ID3 frames
+  (and the ID3v1 and tail tags), PNG `tEXt`/`iTXt`/`zTXt`/`eXIf` and ancillary chunks, JPEG comment and APPn
+  (EXIF, XMP) segments, and every printable run of the other formats. What does not parse is refused;
+* **what the adapters generate**: the `feed.xml` a run would write is gated like an item (claim clear) before any
+  upload; a feed that does not pass (for example one built from an episode already in the bucket) blocks the run
+  and nothing is written;
+* **never published**: `sidecar.json`, and anything not in the sidecar. `wrangler.*`, `functions/` and
+  `_worker.js` are refused in an item (a deploy configuration is not content).
+
+## A private snapshot is what is published
+
+The producers' directory is group-writable, so a check there proves nothing about the push. Each item is copied
+into `state/snapshots/<kind>/<id>-<digest>/` (owned by the module's user, `0700`): every byte is read once with
+`O_NOFOLLOW`, hashed as read and written from the same bytes (a symlinked item or kind directory, a symlink and a
+hard link are refused), then gated **there**, and only the snapshot is deployed or uploaded (R2 stamps the sha256
+of the bytes it sends). The sidecar is not copied. A snapshot is named by its content, so an unchanged item
+reuses it; old ones are not deleted by the module (prune `state/snapshots/` by age).
+
 ## Modes
 
-* **stage** is what a shadow lane runs: the gate, then each passing item copied to
+* **stage** is what a shadow lane runs (no notification either: no notifier is built): the gate, then each passing item copied to
   `<staging>/<kind>/<id>-<digest12>/` with a `plan.json` (what each adapter would do). **Zero network calls**:
   the transport is one that raises (whatever a caller passes in), and no hosting credential is read.
   Staged directories are built beside and renamed in; nothing is ever removed.
@@ -89,7 +118,7 @@ Enforced at three layers, each tested:
   `wrangler --version` all say the pin;
 * the argv is the installed binary, never `npx`, never `@latest`, and always `--branch=<production branch>`.
 
-A deploy whose tree digest equals the last published one for the project is skipped (idempotent). To bump:
+wrangler runs on the node the role verified (`pages.node`, first on `PATH`) with an empty directory of the gate's as its working directory, so it never finds a `wrangler.toml` or `functions/`. A deploy whose tree digest equals the last published one for the project is skipped (idempotent). To bump:
 generate a new lockfile, set the version and its sha256 together, run `playbooks/upgrade.yml`.
 
 ## The `r2-feed` adapter (the podcast feed)
@@ -100,11 +129,11 @@ A port of the old feed builder. Bucket layout: `episodes/<period>_<date>.mp3|.js
   key that exists with **different** bytes is a conflict and refused (a published key never changes: podcast
   apps cache the enclosure URL). Publishing twice makes no write. New objects are created with
   `If-None-Match: *`, so a race cannot overwrite.
-* **`feed.xml`** is rebuilt deterministically from the bucket's episodes and written only when it differs from
+* **`feed.xml`** is replaced only if it still is the version that was read (`If-Match` on its ETag; a lost race is read again once, then failed). It is rebuilt deterministically from the bucket's episodes and written only when it differs from
   the remote one, and **never when it would drop an episode the remote feed carries** (a partial listing cannot
   shrink the feed). An empty feed is refused.
 * **Feed state in the bucket is untouched** except by that rule: nothing is renamed, moved or deleted.
-* Requests are signed in the module (signature v4, region `auto`; tested against a published vector).
+* Episodes already in the bucket with no sha256 stamp (from before this module) are compared by size only; the plan reports them as `unverified_by_size_only`. Requests are signed in the module (signature v4, region `auto`; tested against a published vector).
 
 ## Credentials (by name, at run time)
 
