@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: Apache-2.0
+# The accounts, then the directories, one owner each (modules/context's data-root rule, #510): the
+# data root is root's, read by the module's group (root:<group> 0750), and nothing else ever sets
+# it; each lane's root under it, and every directory the app writes inside that, is the lane's
+# user's alone (0700), so the shadow lane can neither write nor read the real lane's state. The
+# export directory is root's (0700): the backup and restore hooks run as root. The install and
+# configuration directories are root's; the credentials directory is root-only (0700), each file
+# 0600 (systemd reads them as root, LoadCredential=).
+- name: Create the module's group
+  ansible.builtin.group:
+    name: "{{ cti_pipeline_group }}"
+    system: true
+  when: cti_pipeline_manage_accounts | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create each lane's user (no home, no shell)
+  ansible.builtin.user:
+    name: "{{ cti_pipeline_lane_user[item] }}"
+    group: "{{ cti_pipeline_group }}"
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+  loop: "{{ cti_pipeline_lanes }}"
+  when: cti_pipeline_manage_accounts | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the data root (root's, read by the module's group) and the export directory (root's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ cti_pipeline_data_root }}", group: "{{ cti_pipeline_group }}", mode: "0750"}
+    - {path: "{{ cti_pipeline_export_dir }}", group: "{{ cti_pipeline_owner_group }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore, upgrade]
+
+- name: Create each lane's root and its working directories (the lane's user's alone)
+  ansible.builtin.file:
+    path: "{{ cti_pipeline_data_root }}/{{ item.0 }}{{ '' if item.1 == '.' else '/' ~ item.1 }}"
+    state: directory
+    owner: "{{ cti_pipeline_lane_user[item.0] }}"
+    group: "{{ cti_pipeline_group }}"
+    mode: "0700"
+  loop: "{{ cti_pipeline_lanes | product(['.'] + cti_pipeline_lane_dirs) | list }}"
+  loop_control:
+    label: "{{ item.0 }}/{{ item.1 }}"
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the install and configuration directories (root's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ cti_pipeline_install_dir }}", mode: "0755"}
+    - {path: "{{ cti_pipeline_install_dir }}/bin", mode: "0755"}
+    - {path: "{{ cti_pipeline_releases_dir }}", mode: "0755"}
+    - {path: "{{ cti_pipeline_config_dir }}", mode: "0755"}
+    - {path: "{{ cti_pipeline_jobs_dir }}", mode: "0755"}
+    - {path: "{{ cti_pipeline_refs_dir }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore, upgrade]
+
+- name: Create each lane's credentials directory (root-only)
+  ansible.builtin.file:
+    path: "{{ cti_pipeline_refs_dir }}/{{ item }}"
+    state: directory
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "0700"
+  loop: "{{ cti_pipeline_lanes }}"

@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: Apache-2.0
+# The lane secrets (root-only files the units load as systemd credentials), the lake CA, the
+# wrapper, one job spec per declared instance (root's, read by the wrapper), the template unit and
+# one drop-in per declared instance. What the site no longer declares loses its spec, its drop-in
+# and its secret file (only files this role writes: by name and place); systemd is reloaded when a
+# unit file changed. Nothing is enabled or started: the dispatcher starts the units.
+- name: Write each lane secret (root-only, 0600; loaded by PID 1, LoadCredential=)
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', item.ref) }}"
+    dest: "{{ cti_pipeline_refs_dir }}/{{ item.lane }}/{{ item.name }}"
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "0600"
+  loop: "{{ cti_pipeline_ref_items }}"
+  loop_control:
+    label: "{{ item.lane }}/{{ item.name }}"
+  no_log: true
+
+- name: Find the secret files the role wrote
+  ansible.builtin.find:
+    paths: "{{ cti_pipeline_refs_dir }}"
+    file_type: file
+    recurse: true
+    depth: 2
+    hidden: true
+  register: cti_pipeline_ref_files
+
+- name: Remove the secret files the site no longer declares
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ cti_pipeline_ref_files.files | map(attribute='path') | reject('in', cti_pipeline_ref_paths) | list }}"
+  no_log: true
+
+- name: Write the lake CA (public, read by the jobs)
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', cti_pipeline_lake_ca_ref) }}"
+    dest: "{{ cti_pipeline_lake_ca_file }}"
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "0644"
+  when: cti_pipeline_lake_ca_ref != ''
+
+- name: Install the job wrapper
+  ansible.builtin.copy:
+    src: hnx-cti-run
+    dest: "{{ cti_pipeline_bin }}"
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "0755"
+
+- name: Write each declared instance's job spec (root's; the wrapper refuses any other owner)
+  ansible.builtin.template:
+    src: job-spec.json.j2
+    dest: "{{ item.spec }}"
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "0644"
+  loop: "{{ cti_pipeline_instances }}"
+  loop_control:
+    label: "{{ item.instance }}"
+
+- name: Find the job specs
+  ansible.builtin.find:
+    paths: "{{ cti_pipeline_jobs_dir }}"
+    patterns: ["*.json"]
+    file_type: file
+    recurse: false
+  register: cti_pipeline_spec_files
+
+- name: Remove the spec of an instance the site no longer declares
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ cti_pipeline_spec_files.files | map(attribute='path') | reject('in', cti_pipeline_instances | map(attribute='spec') | list) | list }}"
+
+- name: Write the template unit
+  ansible.builtin.template:
+    src: job.service.j2
+    dest: "{{ cti_pipeline_unit_dir }}/{{ cti_pipeline_unit_template }}"
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "0644"
+  register: cti_pipeline_unit_file
+
+- name: Create each declared instance's drop-in directory
+  ansible.builtin.file:
+    path: "{{ item.dropin_dir }}"
+    state: directory
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "0755"
+  loop: "{{ cti_pipeline_instances }}"
+  loop_control:
+    label: "{{ item.instance }}"
+
+- name: Write each declared instance's drop-in (its lane's user, root, time budget and credentials)
+  ansible.builtin.template:
+    src: job-lane.conf.j2
+    dest: "{{ item.dropin_dir }}/{{ cti_pipeline_dropin_name }}"
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "0644"
+  loop: "{{ cti_pipeline_instances }}"
+  loop_control:
+    label: "{{ item.instance }}"
+  register: cti_pipeline_dropins
+
+- name: Find this set's drop-ins
+  ansible.builtin.find:
+    paths: "{{ cti_pipeline_unit_dir }}"
+    patterns: ["hnx-{{ cti_pipeline_logical_id }}@*.service.d"]
+    file_type: directory
+    recurse: false
+  register: cti_pipeline_dropin_dirs
+
+- name: Remove the drop-in of an instance the site no longer declares (the role's file only)
+  ansible.builtin.file:
+    path: "{{ item }}/{{ cti_pipeline_dropin_name }}"
+    state: absent
+  loop: "{{ cti_pipeline_dropin_dirs.files | map(attribute='path') | reject('in', cti_pipeline_instances | map(attribute='dropin_dir') | list) | list }}"
+  register: cti_pipeline_dropins_removed
+
+- name: Reload systemd when a unit file changed
+  ansible.builtin.command:
+    argv: ["{{ cti_pipeline_systemctl_cli }}", daemon-reload]
+  changed_when: true
+  when: >-
+    cti_pipeline_reload_systemd | bool and
+    (cti_pipeline_unit_file is changed or cti_pipeline_dropins is changed or cti_pipeline_dropins_removed is changed)

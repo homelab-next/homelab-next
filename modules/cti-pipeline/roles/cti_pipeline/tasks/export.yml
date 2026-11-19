@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (state, object-tree): for each deployed lane that has a store, with the lane's units
+# blocked and idle (quiesce.yml), a new <data root>/export/<lane>-<stamp>/ (hnx-cti-state/1: the
+# store copied through descriptors that never follow a link, then made one file by the database's
+# backup API, every table's row count, the state directories' files and a sha256
+# listing; cti_state.py export builds it beside its name and renames it when complete). The
+# exports past cti_pipeline_keep_exports are pruned (only directories named as one).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Look for each lane's store
+      ansible.builtin.stat:
+        path: "{{ cti_pipeline_data_root }}/{{ item }}/data/cti.db"
+      register: cti_pipeline_stores
+      loop: "{{ cti_pipeline_lanes }}"
+    - name: Name this export
+      ansible.builtin.set_fact:
+        cti_pipeline_export_stamp: "{{ now(utc=true, fmt='%Y%m%dT%H%M%SZ') }}"
+    - name: Export each lane that has a store, its units blocked meanwhile
+      ansible.builtin.include_tasks: export_lane.yml
+      loop: "{{ cti_pipeline_stores.results | selectattr('stat.exists') | map(attribute='item') | list }}"
+      loop_control:
+        loop_var: cti_pipeline_quiesce_lane
+    - name: Prune the exports past the ones kept
+      ansible.builtin.command:
+        argv: ['python3', '-I', '-c', "{{ lookup('ansible.builtin.file', 'cti_state.py') }}", 'prune-exports',
+               "{{ cti_pipeline_export_dir }}", "{{ item }}", "{{ cti_pipeline_keep_exports | int }}"]
+      register: cti_pipeline_pruned
+      changed_when: cti_pipeline_pruned.rc == 0 and (cti_pipeline_pruned.stdout | from_json).changed
+      loop: "{{ cti_pipeline_lanes }}"
+  tags: [export, backup]

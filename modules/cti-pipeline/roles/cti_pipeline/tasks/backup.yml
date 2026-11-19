@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's
+# paths). The configuration directory is NOT in the manifest: it holds the lanes' secrets and is
+# re-rendered from the role's variables and the secret store by the install. The export runs first,
+# so the backup holds a consistent copy of every lane's store (export/<lane>-<stamp>/) and a restore
+# never depends on the live file being caught between two writes.
+- block:
+    - name: Export every lane's store and state
+      ansible.builtin.include_tasks: export.yml
+    - name: Write the backup manifest
+      ansible.builtin.copy:
+        dest: "{{ cti_pipeline_data_root }}/backup-manifest.json"
+        content: "{{ {'service': cti_pipeline_logical_id,
+                      'paths': [cti_pipeline_data_root],
+                      'restore_from': cti_pipeline_export_dir,
+                      'note': 'the configuration directory is not listed: it holds the lanes secrets and is re-rendered by the install; export/<lane>-<stamp>/ holds a consistent copy of each lane store (cti.db), its row counts and a sha256 listing; the live store and its -wal are caught between writes, so restore from export/'} | to_nice_json }}\n"
+        owner: "{{ cti_pipeline_owner }}"
+        group: "{{ cti_pipeline_group }}"
+        mode: "0640"
+  tags: [backup]

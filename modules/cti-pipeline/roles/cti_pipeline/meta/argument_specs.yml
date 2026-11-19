@@ -1,0 +1,236 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the pipeline's pinned app artefact as a release with its offline venv, and render its job units (a template, one drop-in and one spec per job and lane) for the orchestration dispatcher.
+    options: &opts
+      cti_pipeline_logical_id:
+        type: str
+        description: The instance id (a slug of up to 24 characters), also the unit set's name (hnx-<id>@.service; the orchestration_job_units entry naming it).
+        required: true
+      cti_pipeline_artefact:
+        type: path
+        description: Absolute path, on the control host, of the app artefact (README, "The artefact").
+        required: true
+      cti_pipeline_artefact_sha256:
+        type: str
+        description: 'The artefact''s sha256 (64 hex): the bytes on the host must hash to it.'
+        required: true
+      cti_pipeline_install_dir:
+        type: path
+        description: "Where the releases, the current link and the wrapper are (root's)."
+        default: "/opt/hnx/{{ cti_pipeline_logical_id }}"
+      cti_pipeline_config_dir:
+        type: path
+        description: "The job specs, the lanes' secret files (root-only) and the lake CA."
+        default: "/etc/hnx/{{ cti_pipeline_logical_id }}"
+      cti_pipeline_data_root:
+        type: path
+        description: "The module's data root (root:<group> 0750); each lane's root under it is that lane's user's alone (0700)."
+        default: "/var/lib/hnx-modules/{{ cti_pipeline_logical_id }}"
+      cti_pipeline_owner:
+        type: str
+        description: "The owner of the data root, the install and the configuration (root on a host)."
+        default: "root"
+      cti_pipeline_owner_group:
+        type: str
+        description: "The group of the install and the configuration (root on a host)."
+        default: "root"
+      cti_pipeline_user:
+        type: str
+        description: "The real lane's user (a system account, created)."
+        default: "hnx-{{ cti_pipeline_logical_id }}"
+      cti_pipeline_shadow_user:
+        type: str
+        description: "The shadow lane's user (a system account, created; never the real lane's)."
+        default: "hnx-{{ cti_pipeline_logical_id }}-shadow"
+      cti_pipeline_group:
+        type: str
+        description: "The module's group, both lane users' primary group; it reads the data root, never a lane root."
+        default: "hnx-{{ cti_pipeline_logical_id }}"
+      cti_pipeline_manage_accounts:
+        type: bool
+        description: "Create the group and the lane users; false when the guest image has them."
+        default: true
+      cti_pipeline_python:
+        type: path
+        description: "The host interpreter the release's venv is built from (python3-venv installed)."
+        default: "/usr/bin/python3"
+      cti_pipeline_keep_releases:
+        type: int
+        description: "Releases kept under <install dir>/releases, the current one included (1 to 20)."
+        default: 3
+      cti_pipeline_lanes:
+        type: list
+        elements: str
+        description: "The lanes deployed (units, users, roots): a subset of real and shadow."
+        default: ["real", "shadow"]
+      cti_pipeline_active_lanes:
+        type: list
+        elements: str
+        description: "The lanes whose job freshness the health hook judges."
+        default: ["real"]
+      cti_pipeline_lake_schema:
+        type: dict
+        description: "The lake schema per lane ({real, shadow}), forced into the job environment last; the shadow one ends in _shadow and differs from the real one."
+        default: {"real": "cti", "shadow": "cti_shadow"}
+      cti_pipeline_lake_schema_env:
+        type: str
+        description: "The app's variable naming its lake schema (forced per lane)."
+        default: "CTI_LAKE_SCHEMA"
+      cti_pipeline_publish_mode_env:
+        type: str
+        description: "The app's variable naming its publish mode (always forced to stage: this module never publishes)."
+        default: "PUBLISH_MODE"
+      cti_pipeline_jobs:
+        type: dict
+        description: "The job table: {job: {steps, timeout_s, max_age_s, lanes, env, refs}} (README, \"Jobs\")."
+        default: {}
+      cti_pipeline_env:
+        type: dict
+        description: "The non-secret environment per lane ({real: {NAME: value}, shadow: {...}})."
+        default: {"real": {}, "shadow": {}}
+      cti_pipeline_lane_refs:
+        type: dict
+        description: "The secret references per lane ({real: {NAME: a reference in the module's own namespace, cti-pipeline/}, shadow: {...}}), each loaded as a systemd credential and exported to the job's processes only."
+        default: {"real": {}, "shadow": {}}
+      cti_pipeline_state_dirs:
+        type: list
+        elements: str
+        description: "The directories of a lane root that hold the app's state (exported, restored); data among them."
+        default: ["data", "state", "podcast"]
+      cti_pipeline_dispatch_dir:
+        type: path
+        description: "The orchestration dispatcher's run-file root (contract v3): the job reads <dir>/<service>/<id>/%i.json itself, as its lane's user."
+        default: "/var/lib/hnx-dispatch"
+      cti_pipeline_dispatch_service:
+        type: str
+        description: "The controller's orchestration_logical_id, which namespaces the run directory and group."
+        default: "orchestrator"
+      cti_pipeline_dispatch_owner:
+        type: str
+        description: "The controller's user, which must own every run file (the job refuses one of another owner)."
+        default: "hnx-orchestrator"
+      cti_pipeline_dispatch_group:
+        type: str
+        description: "The run files' group (at most 32 characters), created by the orchestration role; the job units join it (SupplementaryGroups=)."
+        default: "hnx-{{ cti_pipeline_dispatch_service }}_{{ cti_pipeline_logical_id }}"
+      cti_pipeline_job_logs_dir:
+        type: path
+        description: "The job units' log directory (<dir>/<id>/%i.log), pre-created by the orchestration role."
+        default: "/var/log/hnx-jobs"
+      cti_pipeline_import_check:
+        type: str
+        description: "A module the release's python must import in the health hook; empty skips it."
+        default: ""
+      cti_pipeline_gateway_id:
+        type: str
+        description: "The gateway's registry id the health hook probes; empty skips it."
+        default: ""
+      cti_pipeline_gateway_key_ref:
+        type: str
+        description: "The secret holding the key the probe presents to the gateway."
+        default: "secret:cti-pipeline/gateway-key"
+      cti_pipeline_gateway_path:
+        type: str
+        description: "The gateway's chat-completions path."
+        default: "/v1/chat/completions"
+      cti_pipeline_gateway_model:
+        type: str
+        description: "The model role the probe asks for."
+        default: "main-reasoner"
+      cti_pipeline_gateway_probe_max_tokens:
+        type: int
+        description: "The probe's output budget: what a real job asks for (a small one leaves a reasoning model no content)."
+        default: 2500
+      cti_pipeline_gateway_probe_timeout_s:
+        type: int
+        description: "The probe's timeout, seconds."
+        default: 300
+      cti_pipeline_lake_query_id:
+        type: str
+        description: "The lake query service's registry id the health hook reaches; empty skips it."
+        default: ""
+      cti_pipeline_lake_probe_path:
+        type: str
+        description: "The path the lake probe GETs (an unauthenticated info route)."
+        default: "/v1/info"
+      cti_pipeline_lake_ca_ref:
+        type: str
+        description: "The secret holding the lab CA (PEM), written to <config>/lake-ca.pem ({lake_ca}); empty for none."
+        default: ""
+      cti_pipeline_allow_plain_http:
+        type: bool
+        description: "Accept a gateway over plain http (the key then travels in clear)."
+        default: false
+      cti_pipeline_health_timeout:
+        type: int
+        description: "The lake probe's timeout, seconds."
+        default: 20
+      cti_pipeline_restore_source:
+        type: str
+        description: "restore: an export directory on the guest (hnx-cti-state/1)."
+        default: ""
+      cti_pipeline_restore_lane:
+        type: str
+        description: "restore: the lane it replaces."
+        default: "real"
+      cti_pipeline_restore_expect_counts:
+        type: str
+        description: "restore: a JSON file of the source's own row counts the store must equal; empty to skip."
+        default: ""
+      cti_pipeline_target_artefact_sha256:
+        type: str
+        description: "upgrade: the sha256 of the artefact to move to."
+        default: ""
+      cti_pipeline_unit_dir:
+        type: path
+        description: "Where the template unit and its drop-ins are written."
+        default: "/etc/systemd/system"
+      cti_pipeline_systemctl_cli:
+        type: str
+        description: "The systemctl the role runs (a stand-in in tests)."
+        default: "systemctl"
+      cti_pipeline_reload_systemd:
+        type: bool
+        description: "Run daemon-reload when a unit file changed."
+        default: true
+      cti_pipeline_memory_max:
+        type: str
+        description: "Each job unit's MemoryMax (like 6G)."
+        default: "6G"
+      cti_pipeline_tasks_max:
+        type: int
+        description: "Each job unit's TasksMax."
+        default: 512
+      cti_pipeline_quiesce_wait_s:
+        type: int
+        description: "Export and restore mask the lane's units and wait this long, in seconds, for a running one to finish."
+        default: 3600
+      cti_pipeline_keep_exports:
+        type: int
+        description: "The backup hook's exports kept per lane."
+        default: 3
+
+  health:
+    short_description: "The current release is the pin, every unit file is in place, the app imports, the gateway answers a real-sized request with content, the lake answers over the lab CA, and each active lane's jobs are fresh."
+    options: *opts
+
+  readiness:
+    short_description: "Fail unless systemd and a venv-capable interpreter exist, the pinned artefact is on the control host, and every secret resolves in its form."
+    options: *opts
+
+  backup:
+    short_description: "Export every lane's store and state consistently, then write the backup manifest naming the data root."
+    options: *opts
+
+  restore:
+    short_description: "Check an export (listing, sizes, sha256, integrity, row counts) and restore one lane from it, moving the replaced directories aside."
+    options: *opts
+
+  upgrade:
+    short_description: "Validate an artefact bump (a different sha256 the target file hashes to) and record it as pending."
+    options: *opts
+
+  export:
+    short_description: "Write each lane's exit copy (store copy, row counts, state files, sha256 listing) under <data root>/export."
+    options: *opts

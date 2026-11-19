@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+cti_pipeline_unit_template: "hnx-{{ cti_pipeline_logical_id }}@.service"
+cti_pipeline_bin: "{{ cti_pipeline_install_dir }}/bin/hnx-cti-run"
+cti_pipeline_releases_dir: "{{ cti_pipeline_install_dir }}/releases"
+cti_pipeline_current: "{{ cti_pipeline_install_dir }}/current"
+cti_pipeline_release_name: "{{ cti_pipeline_artefact_sha256[:16] }}"
+cti_pipeline_incoming: "{{ cti_pipeline_install_dir }}/.incoming-{{ cti_pipeline_release_name }}.archive"
+cti_pipeline_jobs_dir: "{{ cti_pipeline_config_dir }}/jobs"
+cti_pipeline_refs_dir: "{{ cti_pipeline_config_dir }}/credentials"
+cti_pipeline_lake_ca_file: "{{ cti_pipeline_config_dir }}/lake-ca.pem"
+cti_pipeline_export_dir: "{{ cti_pipeline_data_root }}/export"
+cti_pipeline_runs_subdir: hnx-runs
+# each run id the lane consumed (the dispatcher's run file is read once: a replay is refused)
+cti_pipeline_consumed_subdir: hnx-consumed
+# what the app needs in a lane root besides its state: the staged items the publishing module takes
+# (publishable/), the rendered site (dist/), HOME and the cache, and the wrapper's run records
+cti_pipeline_lane_dirs: "{{ (cti_pipeline_state_dirs + ['publishable', 'dist', 'home', 'cache', cti_pipeline_runs_subdir, cti_pipeline_consumed_subdir]) | unique | list }}"
+# the publish mode the module forces in every lane: items are staged, never pushed
+cti_pipeline_stage_mode: stage
+# the drop-in each declared instance gets; only a file of this name is ever removed by the role
+cti_pipeline_dropin_name: 50-hnx-lane.conf
+cti_pipeline_marker: "Managed by homelabnext (role cti_pipeline"
+cti_pipeline_lane_names: [real, shadow]
+cti_pipeline_lane_user:
+  real: "{{ cti_pipeline_user }}"
+  shadow: "{{ cti_pipeline_shadow_user }}"
+# every declared unit instance: {job, lane, instance, unit, dropin_dir, spec}
+cti_pipeline_instances: >-
+  {%- set out = [] -%}
+  {%- for job, spec in (cti_pipeline_jobs | dictsort) -%}
+  {%- for lane in (spec.lanes | default(cti_pipeline_lanes)) if lane in cti_pipeline_lanes -%}
+  {%- set inst = job ~ '-' ~ lane -%}
+  {%- set _ = out.append({'job': job, 'lane': lane, 'instance': inst,
+        'unit': 'hnx-' ~ cti_pipeline_logical_id ~ '@' ~ inst ~ '.service',
+        'dropin_dir': cti_pipeline_unit_dir ~ '/hnx-' ~ cti_pipeline_logical_id ~ '@' ~ inst ~ '.service.d',
+        'spec': cti_pipeline_jobs_dir ~ '/' ~ inst ~ '.json'}) -%}
+  {%- endfor -%}
+  {%- endfor -%}
+  {{ out }}
+cti_pipeline_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+cti_pipeline_slug_pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+cti_pipeline_set_pattern: '^(?=.{1,24}\Z)[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+cti_pipeline_job_pattern: '^(?=.{1,48}\Z)[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+cti_pipeline_env_pattern: '^[A-Z][A-Z0-9_]{0,63}\Z'
+cti_pipeline_user_pattern: '^[a-z_][a-z0-9_-]{0,31}\Z'
+# a secret-store reference; validate.yml also holds it to the module's own namespace
+cti_pipeline_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]{0,134}\Z'
+cti_pipeline_namespace_pattern: '^cti-pipeline/'
+cti_pipeline_schema_pattern: '^[a-z][a-z0-9_]{0,62}\Z'
+# names the environment never sets: the wrapper's own, and those the systemd unit owns
+cti_pipeline_reserved_env: [PATH, HOME, XDG_CACHE_HOME, LANG, CREDENTIALS_DIRECTORY, HNX_RUN_ID, HNX_LANE, HNX_JOB]
+# every lane secret: {lane, name, ref}, one per name of each deployed lane
+cti_pipeline_ref_items: >-
+  {%- set out = [] -%}
+  {%- for lane in cti_pipeline_lanes -%}
+  {%- for name, ref in ((cti_pipeline_lane_refs[lane] | default({})) | dictsort) -%}
+  {%- set _ = out.append({'lane': lane, 'name': name, 'ref': ref}) -%}
+  {%- endfor -%}
+  {%- endfor -%}
+  {{ out }}
+cti_pipeline_ref_paths: >-
+  {{ cti_pipeline_ref_items | map(attribute='lane') | zip(cti_pipeline_ref_items | map(attribute='name'))
+     | map('join', '/') | map('regex_replace', '^', cti_pipeline_refs_dir ~ '/') | list }}
+# per lane, the "<job>=<max age>" of every job the health hook judges (max_age_s above 0)
+cti_pipeline_freshness_by_lane: >-
+  {%- set out = {} -%}
+  {%- for i in cti_pipeline_instances -%}
+  {%- set age = cti_pipeline_jobs[i.job].max_age_s | int -%}
+  {%- if age > 0 -%}
+  {%- set _ = out.update({i.lane: (out[i.lane] | default([])) + [i.job ~ '=' ~ age]}) -%}
+  {%- endif -%}
+  {%- endfor -%}
+  {{ out }}
+# the real lake schema as a token (validate.yml: never in a shadow-lane job's arguments or env): the
+# whole value, a word of it (space, =, comma, colon or a quote around it), or a table under it
+# (<schema>.<table>); a path segment or a hyphenated name that contains it is not the schema
+cti_pipeline_real_schema_token: >-
+  (^|[\s=,:'"]){{ cti_pipeline_lake_schema.real | regex_escape }}([.\s=,:'"]|$)

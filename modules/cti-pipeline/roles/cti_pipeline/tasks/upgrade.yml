@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate an artefact bump (cti_pipeline_target_artefact_sha256) and record it as pending: the
+# target must be a different, well-formed sha256 than the running pin, and the file
+# cti_pipeline_artefact names on the control host must hash to it. Nothing is installed here: the
+# playbook exports every lane first, then converges with cti_pipeline_artefact_sha256 set to the
+# target (the old release stays until pruned; a rollback is the old pin).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Hash the target artefact on the control host
+      ansible.builtin.stat:
+        path: "{{ cti_pipeline_artefact }}"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: cti_pipeline_target_stat
+      delegate_to: localhost
+      become: false
+    - name: Refuse a target that is not a different, pinned artefact
+      ansible.builtin.assert:
+        that:
+          - cti_pipeline_target_artefact_sha256 is match('^[0-9a-f]{64}\Z')
+          - cti_pipeline_target_artefact_sha256 != cti_pipeline_artefact_sha256
+          - cti_pipeline_target_stat.stat.exists
+          - cti_pipeline_target_stat.stat.checksum == cti_pipeline_target_artefact_sha256
+        fail_msg: >-
+          cti-pipeline: the target must be 64 hex that differs from the pin, and
+          {{ cti_pipeline_artefact }} (set to the new artefact for this run) must hash to it
+    - name: Record the pending bump
+      ansible.builtin.copy:
+        dest: "{{ cti_pipeline_install_dir }}/pending-upgrade.json"
+        content: "{{ {'from': cti_pipeline_artefact_sha256, 'to': cti_pipeline_target_artefact_sha256} | to_nice_json }}\n"
+        owner: "{{ cti_pipeline_owner }}"
+        group: "{{ cti_pipeline_owner_group }}"
+        mode: "0644"
+  tags: [upgrade]

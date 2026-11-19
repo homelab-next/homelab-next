@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a new artefact (cti_pipeline_target_artefact_sha256, the file named by
+# cti_pipeline_artefact for this run), export every lane, then converge with the new pin (set
+# cti_pipeline_artefact_sha256 to the target in the overlay). A running job keeps its release; the
+# next start runs the new one. Run the health hook after.
+#   ansible-playbook -i <inventory> modules/cti-pipeline/playbooks/upgrade.yml \
+#     -e cti_pipeline_target_artefact_sha256=<sha256> -e cti_pipeline_artefact=<new file>
+- name: Upgrade the threat-intelligence pipeline
+  hosts: mod_cti_pipeline_worker
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: cti_pipeline
+        tasks_from: upgrade
+    - name: Export every lane first
+      ansible.builtin.include_role:
+        name: cti_pipeline
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: cti_pipeline
+      vars:
+        cti_pipeline_artefact_sha256: "{{ cti_pipeline_target_artefact_sha256 }}"
