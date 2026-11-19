@@ -77,6 +77,11 @@ argument_specs:
         type: str
         description: "The app's variable naming its lake schema (forced per lane)."
         default: "CTI_LAKE_SCHEMA"
+      cti_pipeline_shadow_programs:
+        type: list
+        elements: str
+        description: "Absolute paths a shadow-lane step may run besides {python} -m <module>, {python} {app}/<script> and {app}/<path> (an allowlist)."
+        default: []
       cti_pipeline_publish_mode_env:
         type: str
         description: "The app's variable naming its publish mode (always forced to stage: this module never publishes)."
@@ -206,6 +211,10 @@ argument_specs:
         type: int
         description: "Export and restore mask the lane's units and wait this long, in seconds, for a running one to finish."
         default: 3600
+      cti_pipeline_quiesce_marker_max_age_s:
+        type: int
+        description: "A quiesce marker older than this, in seconds, was left by an export or restore that died; an install unmasks its lane."
+        default: 21600
       cti_pipeline_keep_exports:
         type: int
         description: "The backup hook's exports kept per lane."

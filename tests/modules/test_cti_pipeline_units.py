@@ -220,12 +220,7 @@ def test_the_run_file_group_fits_its_32_characters_only_with_a_short_enough_id()
 def test_a_converge_lifts_runtime_masks_and_health_refuses_a_masked_unit():
     """An export or restore that died before its always: leaves the lane's units masked; the
     install unmasks every declared instance, and health fails while one is masked."""
-    main = ld.load_yaml(ROLE / "tasks" / "main.yml")
-    lift = next(t for t in main if t["name"].startswith("Lift any runtime mask"))
-    argv = lift["ansible.builtin.command"]["argv"]
-    assert (
-        "'unmask', '--runtime'" in argv and "cti_pipeline_instances | map(attribute='unit')" in argv
-    )
+    # the install's unmask (busy lanes left alone) is rendered in test_cti_pipeline_render.py
     health = ld.load_yaml(ROLE / "tasks" / "health.yml")[0]["block"]
     names = [t["name"] for t in health]
     show = health[names.index("Read each job unit's load state")]["ansible.builtin.command"]["argv"]

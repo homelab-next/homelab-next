@@ -75,11 +75,11 @@ cti_pipeline_freshness_by_lane: >-
 # the real lake schema as a token (validate.yml: never in a shadow-lane job's arguments or env),
 # matched case-insensitively (a lake folds unquoted identifiers) after quotes, backticks and
 # backslashes are deleted (c""ti reads as cti): bounded by the start or end, white space, = , : ;
-# a dot (schema.table, catalog.schema.table), a quote, a backtick or a bracket. A path segment or a
+# a dot (schema.table, catalog.schema.table), a quote, a backtick, a bracket or | < > +. A path segment or a
 # hyphenated name that contains it is not the schema. The wrapper applies the same (hnx-cti-run).
 cti_pipeline_real_schema_token: >-
-  (?i)(^|[\s=,:;.'"`()\[\]{}]){{ cti_pipeline_lake_schema.real | regex_escape }}([\s=,:;.'"`()\[\]{}]|$)
-# a shadow-lane step may run no shell and no interpreter given inline code: their text can splice
-# the real schema's name past any check
-cti_pipeline_shells: [sh, bash, dash, zsh, ksh, ash, busybox, env]
-cti_pipeline_inline_flags: ['-c', '-e', '--eval', '--command']
+  (?i)(^|[\s=,:;.'"`()\[\]{}|<>+]){{ cti_pipeline_lake_schema.real | regex_escape }}([\s=,:;.'"`()\[\]{}|<>+]|$)
+# what a shadow-lane step may run (an allowlist; validate.yml, hnx-cti-run): {python} -m <module>,
+# {python} {app}/<script>, an {app}/<path>, or an absolute path of cti_pipeline_shadow_programs
+cti_pipeline_module_pattern: '^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z'
+cti_pipeline_app_path_pattern: '^\{app\}(/(?!\.\.?(/|\Z))[^/]+)+\Z'

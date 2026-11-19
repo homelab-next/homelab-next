@@ -125,14 +125,19 @@ module.
   the role refuses an env or a job that sets either, and refuses a shadow schema that does not end
   in `_shadow` or equals the real one.
 - The role refuses, and the wrapper refuses again at every start, a shadow-lane job that runs a
-  shell (`sh`, `bash`, `env`, ...) or an interpreter given inline code (`-c`, `-e`), whose text can
-  splice a name past any check, and one whose step arguments or env values name the real schema
-  as a token: case-insensitively (a lake folds unquoted identifiers), after quotes, backticks and
-  backslashes are deleted, bounded by white space, `= , : ;`, a dot (`cti.items`,
-  `catalog.cti.items`), a quote, a backtick or a bracket. Only the module `{python} -m` names is
-  exempt (code, not a table). A script file a step runs is not read: the grant below is what holds. The wrapper
-  also refuses a shadow spec whose schema is not a shadow schema, any spec whose publish mode is
-  not `stage`, and a run whose dispatcher lane differs from the instance's.
+  program off the allowlist below (its text could splice a name past any check), and one whose
+  step arguments or env values name the real schema as a token: case-insensitively (a lake folds
+  unquoted identifiers), after quotes, backticks and backslashes are deleted, bounded by white
+  space, `= , : ; | < > +`, a dot (`cti.items`, `catalog.cti.items`), a quote, a backtick or a
+  bracket. Only the module `{python} -m` names is exempt (code, not a table). A script file a step
+  runs is not read: the grant below is what holds.
+- A shadow-lane step runs only what is on an allowlist: `{python} -m <module>` or
+  `{python} {app}/<script>` (no interpreter option before them), an `{app}/<path>`, or an absolute
+  path the site lists in `cti_pipeline_shadow_programs` (default none). A shell, another
+  interpreter, inline code or a command runner (`find -exec`, `xargs`, `timeout`, `nice`, `flock`,
+  `script`) is never on it unless the site lists it.
+- The wrapper also refuses a shadow spec whose schema is not a shadow schema, any spec whose
+  publish mode is not `stage`, and a run whose dispatcher lane differs from the instance's.
 - **The lake grant is the real control; the environment is a convenience.** The forced variable
   is what the app is told, and the token check catches the obvious ways around it, but only the
   lake can make writing the real schema impossible. The shadow lane's lake credential must be one
@@ -183,7 +188,11 @@ then fails and the controller retries it later. The lane's units are the declare
 other instance of the lane systemd still has loaded (a job the site just removed may still run). A
 play that dies before it unmasks (the control node, the connection) leaves runtime masks: every
 install lifts them (`systemctl unmask --runtime`, idempotent), and health fails while any job
-unit is masked.
+unit is masked. While an export or restore runs, `<data root>/.quiesced-<lane>` marks its lane: an
+install converging meanwhile (a scheduled deploy during a backup) leaves that lane's masks alone,
+and treats a marker older than `cti_pipeline_quiesce_marker_max_age_s` as left by a play that died
+(it unmasks the lane, warns and removes the marker). **Health fails during a backup window**: the
+lane's units are masked on purpose while the export runs.
 
 An export (`hnx-cti-state/1`, `files/cti_state.py`) is a directory: `cti.db` (the store and its
 `-wal` copied through descriptors that never follow a link, then made one consistent file by the

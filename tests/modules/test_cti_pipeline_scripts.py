@@ -182,10 +182,13 @@ def _spec(tmp_path: Path, lane: str = "real", **over) -> tuple[Path, dict]:
         "open(os.environ['PROBE_OUT'], 'a').write(json.dumps(out) + '\\n')\n"
         "sys.exit(int(sys.argv[1]) if sys.argv[1:2] and sys.argv[1].isdigit() else 0)\n"
     )
+    for rel in ("a" * 16, "b" * 16):  # the shadow lane runs it as {app}/probe.py (its allowlist)
+        (install / "releases" / rel / "app" / "probe.py").write_text(probe.read_text())
+    prog = "{app}/probe.py" if lane == "shadow" else str(probe)
     spec = {
         "version": 1, "set": "intel", "job": "fresh", "lane": lane, "instance": f"fresh-{lane}",
         "lane_root": str(root), "runs_dir": str(root / "hnx-runs"),
-        "steps": [["{python}", str(probe), "first"], ["{python}", str(probe), "{lane_root}", "{app}"]],
+        "steps": [["{python}", prog, "first"], ["{python}", prog, "{lane_root}", "{app}"]],
         "env": {"APP_MODE": "x", "PROBE_OUT": str(tmp_path / "probe.jsonl")},
         "forced_env": {"LAKE_SCHEMA": "intel_shadow" if lane == "shadow" else "intel", "PUBLISH_MODE": "stage"},
         "lake_schema_env": "LAKE_SCHEMA", "publish_mode_env": "PUBLISH_MODE", "real_lake_schema": "intel",
@@ -433,20 +436,30 @@ def test_the_release_is_pinned_at_start_and_never_pruned_while_a_job_runs_it(tmp
         ("real", {"forced_env": {"LAKE_SCHEMA": "intel_shadow", "PUBLISH_MODE": "stage"}}, "is a shadow schema"),
         ("real", {"forced_env": {"LAKE_SCHEMA": "intel"}}, "never publishes"),
         ("real", {"instance": "other-real"}, "another instance"),
-        ("shadow", {"steps": [["{python}", "load.py", "--schema", "intel"]]}, "names the real lake schema"),
-        ("shadow", {"steps": [["{python}", "load.py", "--schema=intel"]]}, "names the real lake schema"),
+        ("shadow", {"steps": [["{python}", "{app}/load.py", "--schema", "intel"]]}, "names the real lake schema"),
+        ("shadow", {"steps": [["{python}", "{app}/load.py", "--schema=intel"]]}, "names the real lake schema"),
         ("shadow", {"env": {"TABLE": "intel.items"}}, "names the real lake schema"),
-        *[("shadow", {"steps": [["{python}", "load.py", arg]]}, "names the real lake schema")
-          for arg in ["INTEL", "--schema=INTEL", "Intel.items", "lake.intel.items", "`intel`", "(intel)",
+        *[("shadow", {"steps": [["{python}", "{app}/load.py", arg]]}, "names the real lake schema")
+          for arg in ["|intel|", "<intel>", "+intel", "INTEL", "--schema=INTEL", "Intel.items", "lake.intel.items", "`intel`", "(intel)",
                       "[intel]", "intel;", "{intel}", 'in""tel', "in\\tel", "'intel'"]],
-        ("shadow", {"steps": [["/bin/sh", "-c", "run --schema in''tel"]]}, "runs inline code or a shell"),
-        ("shadow", {"steps": [["/usr/bin/env", "python3", "x.py"]]}, "runs inline code or a shell"),
-        ("shadow", {"steps": [["{python}", "-c", "print(1)"]]}, "runs inline code or a shell"),
-        ("shadow", {"steps": [["/opt/tool", "-m", "intel.items"]]}, "names the real lake schema"),
+        *[("shadow", {"steps": [step]}, "off the allowlist") for step in [
+            ["/bin/sh", "-c", "run --schema in''tel"], ["/usr/bin/env", "python3", "x.py"],
+            ["{python}", "-c", "print(1)"], ["{python}", "-Ic", "print(1)"], ["{python}", "-I", "{app}/x.py"],
+            ["/usr/bin/perl", "-e", "print 1"], ["/usr/bin/node", "-e", "1"],
+            ["/usr/bin/awk", "BEGIN{system(\"x\")}"], ["/usr/bin/fish", "-c", "x"], ["/bin/csh", "-c", "x"],
+            ["/usr/bin/flock", "/tmp/l", "-c", "x"], ["/usr/bin/script", "-qc", "x"], ["/usr/bin/xargs", "x"],
+            ["/usr/bin/find", ".", "-exec", "x", ";"], ["/usr/bin/nice", "sh", "-c", "x"],
+            ["/usr/bin/timeout", "9", "bash", "-c", "x"], ["load.py"], ["{python}", "load.py"],
+            ["{app}/../outside.py"], ["{python}", "{app}/a/../../x.py"], ["{python}", "-m", "a;b"],
+        ]],
+        ("shadow", {"steps": [["{python}", "{app}/x.py", "-m", "intel.items"]]}, "names the real lake schema"),
         ("shadow", {"real_lake_schema": ""}, "does not name the real lake schema"),
     ],
 )  # fmt: skip
 def test_the_lane_guard_and_the_spec_checks_refuse_before_any_step(tmp_path, lane, over, why):
+    steps = over.get("steps") or [["{python}", "{app}/x.py"]]
+    if why == "names the real lake schema":  # the token is what refuses, never the allowlist
+        assert all(run.shadow_program_ok(step, []) for step in steps)
     spec, _ = _spec(tmp_path, lane, **over)
     with pytest.raises(run.Refused, match=why):
         run.load_spec(str(spec), os.getuid(), f"fresh-{lane}")
@@ -456,7 +469,9 @@ def test_the_lane_guard_and_the_spec_checks_refuse_before_any_step(tmp_path, lan
 def test_a_shadow_job_may_run_a_module_named_like_the_schema_and_paths_that_contain_it(tmp_path):
     spec, _ = _spec(
         tmp_path, "shadow",
-        steps=[["{python}", "-m", "intel.cve", "--all"], ["{python}", "/srv/intel/x.py", "intel-rollup"]],
+        steps=[["{python}", "-m", "intel.cve", "--all"], ["{python}", "{app}/x.py", "intel-rollup"],
+               ["{app}/scripts/episode.sh", "weekly"], ["/opt/site/tool", "--day"]],
+        shadow_programs=["/opt/site/tool"],
         env={"SITE": "intel-rollup", "DIR": "/var/intel/shadow"},
     )  # fmt: skip
     run.load_spec(str(spec), os.getuid(), "fresh-shadow")
