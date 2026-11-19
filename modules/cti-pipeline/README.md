@@ -11,8 +11,9 @@ controller (exec runner) -> hnx-session-dispatch -> systemctl start --wait hnx-<
      -> hnx-cti-run (as the lane's user, in the unit's sandbox) -> the job's steps, in order
 ```
 
-The module never publishes. Every lane stages what it renders (`publishable/` under its root); the
-publishing module owns all egress to a public host. The shadow lane writes only its own lake schema
+The module never publishes. Every lane stages what it renders (`publishable/` under its root) and hands it
+off to a per-lane directory ([Handoff](#handoff-to-the-publishing-module)); the publishing module owns all
+egress to a public host. The shadow lane writes only its own lake schema
 and its own lane root, so it can run beside the real lane (or before it exists) without touching
 anything the real lane relies on.
 
@@ -246,6 +247,56 @@ guest and restore it with the source's counts.
   `cti_pipeline_job_logs_dir` to match;
 - the secrets under `cti-pipeline/` in the secret store.
 
+## Handoff to the publishing module
+
+A lane root is its user's alone (0700), so what a lane stages in `<lane root>/publishable/` never
+reaches the publishing module by itself. The handoff carries it, without widening any lane root:
+
+```text
+<lane root>/publishable/<kind>/<id>/        (the app's staged item: files + sidecar.json)
+     -- after every step of a job succeeded, hnx-cti-run, as the lane's user -->
+<handoff dir>/<lane>/<kind>/<id>/           (default /var/lib/hnx-handoff/<set>/<lane>/...)
+     -- read by that lane's group only (publishing_gate_extra_groups) -->
+publishing: publishing_gate_lane_sources [{lane, dir}] -> gated, STAGED ONLY under staging/lane-<lane>/
+```
+
+* **Per-lane directory and group.** `<handoff dir>` is root's, `0711` (traversable, not listable). Each
+  lane's directory under it is the lane user's, group `hnx-<set>-out-<lane>` (`cti_pipeline_handoff_group`),
+  mode `2750`: the lane's own group reads it and nothing else does, so the shadow lane's items and the real
+  lane's never share a path or a reader, and the shadow lane's user cannot read the real lane's. The
+  groups are system groups this role creates; the publishing module's user joins the one it reads
+  (`publishing_gate_extra_groups: [hnx-<set>-out-shadow]`), and the publishing module creates it too if it
+  installs first (the order of the two modules does not matter).
+* **The item format is publishing's** ([its README](../publishing/README.md#an-item)): `<kind>/<id>/` with
+  the files and `sidecar.json`. The handoff copies items whole and judges nothing about their content
+  (the gate does): a new one is built beside as `.tmp-<hex>` (files `0640`, directories `0750`, whatever the
+  unit's `UMask=0077`) and renamed in, so a reader sees all of an item or none. An item already handed off
+  with the same bytes is left alone; **a changed item under a name already handed off is a conflict** and is
+  never overwritten (a published id never changes); a symlink, hard link, device or an item with no
+  `sidecar.json` is `refused`; entries that are not item directories (a `latest` link the app keeps) are
+  `skipped`. Conflicts and refusals **fail the job** (exit 1, counters in the run record and the log, never
+  content), because a job that cannot deliver its output has not done its work.
+* **Pruning.** Handed-off items the lane no longer stages are pruned (the newest `cti_pipeline_handoff_keep`
+  of them stay, nothing younger than an hour goes, half-built leftovers go after a day); what the lane still
+  stages is never pruned (it would only be copied again). Only directories the wrapper made, directly
+  under the lane's kind directory, never a link, are removed.
+* **Nothing goes live from here.** The shadow lane's items are read by publishing as a stage-only source
+  (publishing never deploys or uploads from it, in any mode). The real lane's directory stays unread
+  until the cutover repoints publishing at it.
+* `cti_pipeline_handoff_enabled: false` turns it all off (no directory, group or copy).
+
+## Host preconditions
+
+What the module needs on the guest and no module provides, with the check that fails clearly:
+
+| Needs | Provided by | Check |
+|---|---|---|
+| the app artefact, a venv from `cti_pipeline_python` | this role (the artefact pin) | readiness: the pin, `import venv, ensurepip, sqlite3` |
+| the dispatcher's user and run-file group | the orchestration role | readiness: `getent` |
+| the `claude` CLI (the app's in-job fallback, D1: local model first) | **no module**: the site installs it | readiness, when `cti_pipeline_claude_cli` names a path: it must exist and `--version` must exit 0; the message says how to supply it. The path must be outside `/home` and `/root` (the units use `ProtectHome=yes`). Empty: the site does not declare the fallback |
+| node, npm, wrangler | not needed here | the Pages deploy is the publishing module's, and only in `live` |
+| the `hnx` runtime release | not needed here | the publishing module's (its readiness checks it) |
+
 ## Known limits (stated, not hidden)
 
 - **No registry row.** The module serves nothing on a port; its health is the role's hook.
@@ -254,7 +305,5 @@ guest and restore it with the source's counts.
   reader, an enrichment service, a research service, a graph store) is neither, so under the
   egress policy those stages are dropped until such a service has a slot or a feature row this
   module can name.
-- **The publishing module reads `publishable/` later.** A lane root is its user's alone (0700); the
-  publishing module's access to the real lane's `publishable/` is its change to make.
 - The units are never enabled: nothing runs a job but the dispatcher (or an operator writing a run
   file and starting the unit by hand).

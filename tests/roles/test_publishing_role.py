@@ -316,3 +316,126 @@ def test_the_stage_mode_readiness_needs_only_the_deny_list(tmp_path):
     assert r.returncode != 0 and "secret:publishing/deny-list" in r.stdout + r.stderr
     r = run_role(tmp_path, ROLE, "readiness", v, env={"HNX_SECRET_PUBLISHING_DENY_LIST": "x"})
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# ---- producer lanes (lane_sources, extra_groups) and the host preconditions ----------------------
+
+
+LANES = [{"lane": "shadow", "dir": "/var/lib/hnx-handoff/pipeline/shadow"}]
+
+
+def test_the_configuration_names_each_lane_source_and_a_lane_less_lab_has_none(tmp_path):
+    (tmp_path / "etc").mkdir()
+    run_role(tmp_path, ROLE, "config", {**good(tmp_path), "publishing_gate_lane_sources": LANES})
+    doc = json.loads((tmp_path / "etc" / "publishing.json").read_text())
+    assert doc["lane_sources"] == LANES
+    run_role(tmp_path, ROLE, "config", good(tmp_path))
+    assert "lane_sources" not in json.loads((tmp_path / "etc" / "publishing.json").read_text())
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"publishing_gate_lane_sources": "shadow"},
+        {"publishing_gate_lane_sources": ["shadow"]},
+        {"publishing_gate_lane_sources": [{"lane": "Shadow", "dir": "/var/lib/x/y"}]},
+        {"publishing_gate_lane_sources": [{"lane": "shadow", "dir": "relative/dir"}]},
+        {"publishing_gate_lane_sources": [{"lane": "shadow", "dir": "/var/lib/../etc"}]},
+        {"publishing_gate_lane_sources": [{"lane": "shadow"}]},
+        # always stage-only: there is no "live" key to set
+        {"publishing_gate_lane_sources": [{**LANES[0], "live": True}]},
+        {"publishing_gate_lane_sources": [*LANES, {"lane": "shadow", "dir": "/var/lib/x/y"}]},
+        {"publishing_gate_lane_sources": [*LANES, {"lane": "other", "dir": LANES[0]["dir"]}]},
+        {"publishing_gate_extra_groups": "hnx-out"},
+        {"publishing_gate_extra_groups": ["Bad Group"]},
+    ],
+)
+def test_validate_refuses_a_malformed_lane_source_or_group(tmp_path, over):
+    r = run_role(tmp_path, ROLE, "validate", {**good(tmp_path), **over})
+    assert r.returncode != 0, r.stdout
+
+
+def test_a_lane_source_may_not_be_the_publishable_directory(tmp_path):
+    v = good(tmp_path)
+    own = {"lane": "shadow", "dir": str(tmp_path / "var" / "publishable")}
+    r = run_role(tmp_path, ROLE, "validate", {**v, "publishing_gate_lane_sources": [own]})
+    assert r.returncode != 0
+
+
+def test_validate_accepts_lanes_and_a_read_group(tmp_path):
+    v = {
+        **good(tmp_path),
+        "publishing_gate_lane_sources": [*LANES, {"lane": "real", "dir": "/var/lib/x/real"}],
+        "publishing_gate_extra_groups": ["hnx-pipeline-out"],
+    }
+    r = run_role(tmp_path, ROLE, "validate", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_readiness_names_a_missing_runtime_release_and_how_to_supply_it(tmp_path):
+    v = {**good(tmp_path), "publishing_gate_hnx_bin": str(tmp_path / "nowhere" / "hnx")}
+    r = run_role(tmp_path, ROLE, "readiness", v, env={"HNX_SECRET_PUBLISHING_DENY_LIST": "x"})
+    out = r.stdout + r.stderr
+    assert r.returncode != 0 and "hnx_runtime" in out and "no module installs it" in out
+
+
+def test_readiness_names_a_runtime_without_the_publishing_package(tmp_path):
+    from rolerun import fake
+
+    b = tmp_path / "bin"
+    b.mkdir()
+    fake(b / "hnx", "import sys\nsys.exit(2)\n")
+    v = {**good(tmp_path), "publishing_gate_hnx_bin": str(b / "hnx")}
+    r = run_role(tmp_path, ROLE, "readiness", v, env={"HNX_SECRET_PUBLISHING_DENY_LIST": "x"})
+    assert r.returncode != 0 and "does not carry the publishing package" in r.stdout + r.stderr
+
+
+def test_stage_and_dry_run_need_neither_node_nor_npm_but_live_with_pages_does(tmp_path):
+    bins = _readiness_bins(tmp_path)
+    nothing = {
+        "publishing_gate_node": str(tmp_path / "no" / "node"),
+        "publishing_gate_npm": str(tmp_path / "no" / "npm"),
+    }
+    env = {"HNX_SECRET_PUBLISHING_DENY_LIST": "x"}
+    lock, pin = _lock(tmp_path)
+    pages = {
+        "publishing_gate_pages_project": "site-x",
+        "publishing_gate_wrangler_lock_src": str(lock),
+        "publishing_gate_wrangler_lock_sha256": pin,
+    }
+    # stage with a Pages project and no node/npm at all: ready
+    v = {**good(tmp_path), **bins, **nothing, **pages}
+    r = run_role(tmp_path, ROLE, "readiness", v, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    # dry-run reads only: still no node or npm
+    dry = {**v, "publishing_gate_mode": "dry-run"}
+    creds = {
+        **env,
+        "HNX_SECRET_PUBLISHING_CLOUDFLARE_API_TOKEN": "t" * 12,
+        "HNX_SECRET_PUBLISHING_R2_ACCESS_KEY_ID": "i" * 8,
+        "HNX_SECRET_PUBLISHING_R2_SECRET_ACCESS_KEY": "s" * 12,
+    }
+    r = run_role(tmp_path, ROLE, "readiness", dry, env=creds)
+    assert r.returncode == 0, r.stdout + r.stderr
+    # live with a Pages project: the missing node is named
+    live = {**v, "publishing_gate_mode": "live"}
+    env_live = {
+        **env,
+        "HNX_SECRET_PUBLISHING_CLOUDFLARE_API_TOKEN": "t" * 12,
+        "HNX_SECRET_PUBLISHING_R2_ACCESS_KEY_ID": "i" * 8,
+        "HNX_SECRET_PUBLISHING_R2_SECRET_ACCESS_KEY": "s" * 12,
+    }
+    r = run_role(tmp_path, ROLE, "readiness", live, env=env_live)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0 and "node 22" in out and "stage and dry-run need" in out
+
+
+def test_main_installs_wrangler_only_for_a_live_pages_project(tmp_path):
+    text = (
+        ROOT / "modules" / "publishing" / "roles" / "publishing_gate" / "tasks" / "main.yml"
+    ).read_text()
+    assert "publishing_gate_needs_wrangler | bool" in text
+    vars_text = (
+        ROOT / "modules" / "publishing" / "roles" / "publishing_gate" / "vars" / "main.yml"
+    ).read_text()
+    assert "publishing_gate_pages_project != '' and publishing_gate_mode == 'live'" in vars_text

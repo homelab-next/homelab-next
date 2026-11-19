@@ -37,3 +37,10 @@ publishing_gate_snapshots_min_age_s: 3600
 publishing_gate_legacy_exceptions: []
 publishing_gate_staging_keep: 48
 publishing_gate_staging_min_age_s: 172800
+# Producer lanes (homelabnext.publishing.config.LaneSource): [{lane, dir}], each an output directory in
+# the publishable-item layout that a producer's lane writes (the shadow lane's handoff directory). ALWAYS
+# stage-only: gated and staged under staging/lane-<lane>/, never deployed or uploaded, in any mode.
+publishing_gate_lane_sources: []
+# Supplementary groups the service user joins to READ those directories (the producer's handoff group);
+# created here when absent (a system group), so the install order of the two modules does not matter.
+publishing_gate_extra_groups: []

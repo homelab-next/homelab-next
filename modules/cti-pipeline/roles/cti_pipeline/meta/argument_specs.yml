@@ -219,6 +219,25 @@ argument_specs:
         type: int
         description: "The backup hook's exports kept per lane."
         default: 3
+      cti_pipeline_handoff_enabled:
+        type: bool
+        description: "Carry each lane's staged items (<lane root>/publishable/) to the lane's handoff directory after a job's steps all succeed, where the lane's read group (the publishing module's user) reads them."
+        default: true
+      cti_pipeline_handoff_dir:
+        type: str
+        description: "The handoff directory: traversable by all (0711), each lane's directory under it the lane user's and readable by that lane's group only (2750)."
+        default: "/var/lib/hnx-handoff/{{ cti_pipeline_logical_id }}"
+      cti_pipeline_handoff_group:
+        type: dict
+        description: "The read group per lane ({real, shadow}), created by this role; the publishing module's user joins the one it reads (publishing_gate_extra_groups)."
+      cti_pipeline_handoff_keep:
+        type: int
+        description: "Handed-off items the lane no longer stages: the newest this many are kept per kind (and nothing younger than an hour is removed); what the lane still stages is never pruned."
+        default: 20
+      cti_pipeline_claude_cli:
+        type: str
+        description: "Absolute path of the claude CLI the app's fallback calls (outside /home and /root). No module installs it: when set, readiness checks it runs; empty: not declared."
+        default: ""
 
   health:
     short_description: "The current release is the pin, every unit file is in place, the app imports, the gateway answers a real-sized request with content, the lake answers over the lab CA, and each active lane's jobs are fresh."

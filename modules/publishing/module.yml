@@ -18,9 +18,6 @@ version: 0.3.0
 origin: {kind: in-tree}
 requires:
   capabilities:
-    - cap: cap:static-hosting
-      provisional: true
-      purpose: where gated content is pushed (no contract yet; a site picks the provider)
     - cap: cap:object-store
       version: "1.0"
       purpose: reads the producers' items on whichever instance each producer's interface names
@@ -45,6 +42,19 @@ interfaces:
     description: items offered for publication under a producer's prefix, each with a JSON sidecar
       carrying its claimed TLP; the gate verifies the claim against the content before anything leaves
 prefers:
+  capabilities:
+    # PREFERRED, not required: only `live` pushes anything. `stage` (what a shadow lane runs) makes no
+    # network call and `dry-run` only reads, so a lab with no hosting provider selected (a hosted
+    # Pages project is not a host in the lab, and the slot may have no provider module yet) still
+    # runs the gate and the would-be publish set. `mode: live` WITHOUT a selected provider is refused
+    # by the loader's site rules (rules._live_publishing_problems), so the downgrade cannot reach
+    # production by accident. A preference still counts as reaching the slot, so grants.publish
+    # and the egress rules apply unchanged.
+    - cap: cap:static-hosting
+      provisional: true
+      purpose: where gated content is pushed (no contract yet; a site picks the provider)
+      fallback:
+        behaviour: with no provider selected the gate and the staged would-be publish set still run (stage and dry-run); live is refused until a provider is selected
   interfaces:
     - interface: publishable-output
       version: "1.0"

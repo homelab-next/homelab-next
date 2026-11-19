@@ -9,6 +9,9 @@
 {% if cti_pipeline_lake_ca_ref != '' %}
 {% set _ = placeholders.update({'lake_ca': cti_pipeline_lake_ca_file}) %}
 {% endif %}
+{% set handoff = {'source': lane_root ~ '/publishable',
+                  'dest': cti_pipeline_handoff_dir ~ '/' ~ item.lane,
+                  'keep': cti_pipeline_handoff_keep | int} %}
 {{ {'version': 1,
     'managed_by': cti_pipeline_marker ~ ', service ' ~ cti_pipeline_logical_id ~ ')',
     'set': cti_pipeline_logical_id,
@@ -29,4 +32,4 @@
     'run_owner': cti_pipeline_dispatch_owner,
     'consumed_dir': lane_root ~ '/' ~ cti_pipeline_consumed_subdir,
     'publish_mode_env': cti_pipeline_publish_mode_env,
-    'placeholders': placeholders} | to_nice_json }}
+    'placeholders': placeholders} | combine({'handoff': handoff} if cti_pipeline_handoff_enabled else {}) | to_nice_json }}

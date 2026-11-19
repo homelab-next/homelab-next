@@ -12,7 +12,7 @@
       - publishing_gate_wrangler_version is match(publishing_gate_semver_pattern)
       # the lockfile is pinned by sha256 (it pins every package and its integrity hash); required for a Pages project
       - publishing_gate_wrangler_lock_sha256 == '' or publishing_gate_wrangler_lock_sha256 is match(publishing_gate_hex64_pattern)
-      - publishing_gate_pages_project == '' or (publishing_gate_wrangler_lock_sha256 != '' and publishing_gate_wrangler_lock_src != '')
+      - publishing_gate_pages_project == '' or (publishing_gate_wrangler_lock_sha256 != '' and publishing_gate_wrangler_lock_src != '')  # the pin is config in every mode (the adapter refuses without it); only live installs it
       - publishing_gate_snapshots_keep | int >= 1 and publishing_gate_snapshots_min_age_s | int >= 0
       - publishing_gate_staging_keep | int >= 1 and publishing_gate_staging_min_age_s | int >= 0
       - publishing_gate_legacy_exceptions is sequence and publishing_gate_legacy_exceptions is not string
@@ -24,6 +24,21 @@
         [publishing_gate_deny_list_ref, publishing_gate_pages_cred, publishing_gate_r2_id_cred,
          publishing_gate_r2_sk_cred] | reject('match', publishing_gate_ref_pattern) | list | length == 0
       - publishing_gate_notify_cred == '' or publishing_gate_notify_cred is match(publishing_gate_ref_pattern)
+      - >-
+        publishing_gate_lane_sources is sequence and publishing_gate_lane_sources is not string
+      - >-
+        publishing_gate_lane_sources | select('mapping') | list | length == publishing_gate_lane_sources | length
+      - >-
+        publishing_gate_lane_sources | select('mapping') | map(attribute='lane', default='') | reject('match', publishing_gate_lane_pattern) | list | length == 0
+      - >-
+        publishing_gate_lane_sources | select('mapping') | map(attribute='dir', default='') | reject('match', publishing_gate_path_pattern) | list | length == 0
+      - >-
+        publishing_gate_lane_sources | select('mapping') | map('length') | reject('equalto', 2) | list | length == 0
+      - publishing_gate_lane_sources | map(attribute='lane', default='') | unique | list | length == publishing_gate_lane_sources | length
+      - publishing_gate_lane_sources | map(attribute='dir', default='') | unique | list | length == publishing_gate_lane_sources | length
+      - publishing_gate_lane_sources | map(attribute='dir', default='') | select('equalto', publishing_gate_publishable_dir) | list | length == 0
+      - publishing_gate_extra_groups is sequence and publishing_gate_extra_groups is not string
+      - publishing_gate_extra_groups | reject('match', publishing_gate_group_pattern) | list | length == 0
       - >-
         [publishing_gate_root, publishing_gate_config_dir, publishing_gate_export_dir, publishing_gate_hnx_bin,
          publishing_gate_node, publishing_gate_npm] | reject('match', publishing_gate_path_pattern) | list | length == 0

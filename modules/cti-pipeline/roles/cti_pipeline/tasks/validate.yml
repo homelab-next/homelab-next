@@ -44,6 +44,34 @@
       distinct lane users (never root), 1 to 20 kept releases, a memory limit like 6G
   tags: [readiness, health, backup, restore, export, upgrade]
 
+- name: Validate the handoff and the host tools
+  ansible.builtin.assert:
+    that:
+      - cti_pipeline_handoff_enabled is boolean
+      - cti_pipeline_handoff_dir is match(cti_pipeline_path_pattern)
+      - cti_pipeline_handoff_dir | split('/') | select | list | length >= 3
+      # a directory of its own: neither inside nor above the data root, the install or the configuration directory
+      - not (cti_pipeline_handoff_dir ~ '/').startswith(cti_pipeline_data_root ~ '/')
+      - not (cti_pipeline_data_root ~ '/').startswith(cti_pipeline_handoff_dir ~ '/')
+      - not (cti_pipeline_handoff_dir ~ '/').startswith(cti_pipeline_install_dir ~ '/')
+      - not (cti_pipeline_install_dir ~ '/').startswith(cti_pipeline_handoff_dir ~ '/')
+      - not (cti_pipeline_handoff_dir ~ '/').startswith(cti_pipeline_config_dir ~ '/')
+      - not (cti_pipeline_config_dir ~ '/').startswith(cti_pipeline_handoff_dir ~ '/')
+      - cti_pipeline_handoff_group is mapping and cti_pipeline_handoff_group.keys() | list | sort == cti_pipeline_lane_names
+      - cti_pipeline_handoff_group.values() | reject('match', cti_pipeline_group_name_pattern) | list | length == 0
+      - cti_pipeline_handoff_group.values() | unique | list | length == 2
+      - cti_pipeline_handoff_group.values() | intersect([cti_pipeline_group, cti_pipeline_dispatch_group, 'root']) | length == 0
+      - cti_pipeline_handoff_keep | int >= 1 and cti_pipeline_handoff_keep | int <= 1000
+      # the claude CLI: an absolute path the units' sandbox can see (ProtectHome=yes hides /home and /root)
+      - cti_pipeline_claude_cli == '' or cti_pipeline_claude_cli is match(cti_pipeline_path_pattern)
+      - cti_pipeline_claude_cli is not match('^/(home|root)(/|\Z)')
+    fail_msg: >-
+      cti-pipeline: a handoff directory of its own (at least three components deep, canonical, apart from the
+      data root, the install and the configuration directory), one read group per lane (distinct, plain
+      names, never the module's or the dispatcher's group or root), 1 to 1000 kept items, a claude CLI that
+      is empty or an absolute path outside /home and /root (the units hide both)
+  tags: [readiness, health, backup, restore, export, upgrade]
+
 - name: Validate the lanes, the lake schemas and the forced names
   ansible.builtin.assert:
     that:

@@ -8,12 +8,12 @@
       ansible.builtin.slurp:
         src: "{{ publishing_gate_tools_dir }}/node_modules/wrangler/package.json"
       register: publishing_gate_installed
-      when: publishing_gate_pages_project != ''
+      when: publishing_gate_needs_wrangler | bool
     - name: It is the pin
       ansible.builtin.assert:
         that: (publishing_gate_installed.content | b64decode | from_json).version == publishing_gate_wrangler_version
         fail_msg: "publishing: the installed wrangler is not the pin {{ publishing_gate_wrangler_version }}"
-      when: publishing_gate_pages_project != ''
+      when: publishing_gate_needs_wrangler | bool
     - name: Stat the credential files
       ansible.builtin.stat:
         path: "{{ publishing_gate_cred_src_dir }}/{{ item.name }}"

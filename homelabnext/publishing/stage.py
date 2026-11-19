@@ -33,7 +33,9 @@ def safe_root(path: Path) -> Path:
     return real
 
 
-def _write_plan(directory: Path, item: Item, verdict: Verdict, plan: dict) -> None:
+def _write_plan(
+    directory: Path, item: Item, verdict: Verdict, plan: dict, lane: str | None = None
+) -> None:
     doc = {
         "item": item.id,
         "kind": item.kind,
@@ -42,11 +44,20 @@ def _write_plan(directory: Path, item: Item, verdict: Verdict, plan: dict) -> No
         "plan": plan,
         "sha256s": item.sidecar["sha256s"],
     }
+    if lane is not None:  # which producer lane the item came from (never inferred from the path)
+        doc["lane"] = lane
     text = json.dumps(doc, indent=2, sort_keys=True) + "\n"
     atomic_write_text(directory / "plan.json", text, mode=0o640)
 
 
-def stage_item(item: Item, verdict: Verdict, plan: dict, staging: Path, source: Path) -> Path:
+def stage_item(
+    item: Item,
+    verdict: Verdict,
+    plan: dict,
+    staging: Path,
+    source: Path,
+    lane: str | None = None,
+) -> Path:
     """Write ``item`` and ``plan.json`` (the verdict and what each adapter would do)."""
     root = safe_root(staging)
     src = source.resolve()
@@ -66,7 +77,7 @@ def stage_item(item: Item, verdict: Verdict, plan: dict, staging: Path, source: 
             dest = tmp / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(item.path(rel), dest)
-        _write_plan(tmp, item, verdict, plan)
+        _write_plan(tmp, item, verdict, plan, lane)
         os.rename(tmp, final)
     except BaseException:
         # leave no half-built directory that looks like a staged item: name it plainly instead

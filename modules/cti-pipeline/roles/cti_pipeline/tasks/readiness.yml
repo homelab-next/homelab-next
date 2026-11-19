@@ -8,6 +8,23 @@
       ansible.builtin.include_tasks: validate.yml
     - name: Every secret resolves, in its form
       ansible.builtin.include_tasks: credentials.yml
+    - name: The claude CLI the app's fallback runs (when the site declares it)
+      ansible.builtin.command:
+        argv: ["{{ cti_pipeline_claude_cli }}", --version]
+      register: cti_pipeline_claude_probe
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      when: cti_pipeline_claude_cli != ''
+    - name: It is installed and runs
+      ansible.builtin.assert:
+        that: cti_pipeline_claude_probe.rc == 0
+        fail_msg: >-
+          cti-pipeline: the claude CLI {{ cti_pipeline_claude_cli }} is missing or does not run (exit
+          {{ cti_pipeline_claude_probe.rc }}). The app's fallback model calls need it and no module installs it:
+          install it on this guest at that path (outside /home and /root, which the job units hide), or empty
+          cti_pipeline_claude_cli if the site gives up that fallback
+      when: cti_pipeline_claude_cli != ''
     - name: Look for systemd on the host
       ansible.builtin.stat:
         path: /run/systemd/system

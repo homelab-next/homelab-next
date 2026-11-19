@@ -70,6 +70,7 @@ import json
 import os
 import pwd
 import re
+import shutil
 import signal
 import stat
 import subprocess
@@ -96,6 +97,14 @@ KEEP_S = 30 * 86400  # the dispatcher's keep window: older run files are refused
 FUTURE_S = 3600
 AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 BASE_PATH = "/usr/local/bin:/usr/bin:/bin"
+HANDOFF_KINDS = ("site", "podcast")  # the publishable-item kinds (the publishing module's contract)
+HANDOFF_SIDECAR = "sidecar.json"
+ITEM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+HANDOFF_TMP_RE = re.compile(r"^\.tmp-[0-9a-f]{12}\Z")
+HANDOFF_MIN_AGE_S = 3600  # a handed-off item younger than this is never pruned (a reader may be in it)
+HANDOFF_TMP_AGE_S = 86400
+MAX_ITEM_FILES = 4096
+MAX_ITEM_BYTES = 1 << 30
 
 
 class Refused(Exception):
@@ -164,7 +173,31 @@ def load_spec(path: str, owner: int, instance: str) -> dict:
     if set(spec["placeholders"]) - set(PLACEHOLDERS):
         raise Refused("the spec names an unknown placeholder")
     lane_guard(spec)
+    handoff_guard(spec)
     return spec
+
+
+def handoff_guard(spec: dict) -> None:
+    """The optional handoff block: where this lane's staged items are carried (README, "Handoff")."""
+    h = spec.get("handoff")
+    if h is None:
+        return
+    if (
+        not isinstance(h, dict)
+        or set(h) != {"source", "dest", "keep"}
+        or not all(isinstance(h[k], str) and h[k].startswith("/") for k in ("source", "dest"))
+        or isinstance(h["keep"], bool)
+        or not isinstance(h["keep"], int)
+        or h["keep"] < 1
+    ):
+        raise Refused("the spec's handoff is not {source, dest, keep}")
+    src, dst, root = (os.path.normpath(p) for p in (h["source"], h["dest"], spec["lane_root"]))
+    if src != h["source"] or dst != h["dest"] or len(dst.split("/")) < 5:
+        raise Refused("the spec's handoff paths are not canonical, or too shallow")
+    if os.path.dirname(src) != root:
+        raise Refused("the handoff source is not a directory of the lane's root")
+    if dst == root or dst.startswith(root + "/") or root.startswith(dst + "/"):
+        raise Refused("the handoff destination nests with the lane's root")
 
 
 def lane_guard(spec: dict) -> None:
@@ -448,6 +481,171 @@ def environment(spec: dict, run: dict, directory: str) -> dict:
     return env
 
 
+class HandoffError(Exception):
+    """A handoff that could not complete: the job did not deliver its output (a constant message)."""
+
+
+def _item_files(path: str) -> dict[str, tuple[int, int]]:
+    """{relative path: (size, mode)} of a staged item: regular files and directories only, bounded.
+    A link, a device or a hard-linked file anywhere in it makes the whole item refused."""
+    out: dict[str, tuple[int, int]] = {}
+    total = 0
+    stack = [""]
+    while stack:
+        rel = stack.pop()
+        for name in sorted(os.listdir(os.path.join(path, rel) if rel else path)):
+            r = f"{rel}/{name}" if rel else name
+            st = os.lstat(os.path.join(path, r))
+            if stat.S_ISDIR(st.st_mode):
+                stack.append(r)
+            elif stat.S_ISREG(st.st_mode) and st.st_nlink == 1:
+                total += st.st_size
+                out[r] = (st.st_size, st.st_mode & 0o111)
+            else:
+                raise HandoffError("an item holds a link, a device or a hard-linked file")
+            if len(out) > MAX_ITEM_FILES or total > MAX_ITEM_BYTES:
+                raise HandoffError("an item is too large")
+    return out
+
+
+def _read_nofollow(path: str) -> bytes:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise HandoffError("an item file is not a regular file")
+        return f.read()
+
+
+def _same_item(src: str, files: dict, dest: str) -> bool:
+    """True when ``dest`` already holds exactly the bytes of ``src`` (and nothing else)."""
+    try:
+        have = _item_files(dest)
+    except (OSError, HandoffError):
+        return False
+    if set(have) != set(files):
+        return False
+    return all(_read_nofollow(os.path.join(src, r)) == _read_nofollow(os.path.join(dest, r)) for r in files)
+
+
+def _copy_item(src: str, files: dict, dest_kind_dir: str, name: str) -> None:
+    """Build the item beside its place (``.tmp-<hex>``, group-readable) and rename it in: a reader
+    sees all of an item or none of it, never half."""
+    tmp = os.path.join(dest_kind_dir, ".tmp-" + os.urandom(6).hex())
+    os.mkdir(tmp, 0o750)
+    try:
+        os.chmod(tmp, 0o750)
+        for rel in sorted(files):
+            target = os.path.join(tmp, rel)
+            os.makedirs(os.path.dirname(target), mode=0o750, exist_ok=True)
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o640)
+            with os.fdopen(fd, "wb") as out:
+                out.write(_read_nofollow(os.path.join(src, rel)))
+            os.chmod(target, 0o640)  # the unit's UMask is 0077; the reader reads through the group
+        for dirpath, dirnames, _files in os.walk(tmp):
+            for d in dirnames:
+                os.chmod(os.path.join(dirpath, d), 0o750)
+        os.rename(tmp, os.path.join(dest_kind_dir, name))
+    except BaseException:
+        with contextlib.suppress(OSError):
+            shutil.rmtree(tmp)
+        raise
+
+
+def _removable(base: str, path: str) -> bool:
+    """A directory this wrapper made, directly under ``base`` (resolved), deep enough, not a link."""
+    try:
+        real = os.path.realpath(path)
+        return (
+            not os.path.islink(path)
+            and os.path.isdir(path)
+            and os.path.dirname(real) == os.path.realpath(base)
+            and len(real.split("/")) >= 6
+            and bool(ITEM_RE.match(os.path.basename(path)) or HANDOFF_TMP_RE.match(os.path.basename(path)))
+        )
+    except OSError:
+        return False
+
+
+def prune_handoff(dest_kind_dir: str, current: set, keep: int, now_s: float) -> int:
+    """Remove what the lane's staged set no longer holds: of the items the source dropped, the
+    newest ``keep`` stay, and nothing younger than an hour goes; stale half-built ``.tmp-`` leftovers
+    go after a day.  What the source still holds is never pruned (it would only be copied again)."""
+    removed = 0
+    entries = []
+    for name in os.listdir(dest_kind_dir):
+        path = os.path.join(dest_kind_dir, name)
+        if not _removable(dest_kind_dir, path):
+            continue
+        age = now_s - os.lstat(path).st_mtime
+        if HANDOFF_TMP_RE.match(name):
+            if age > HANDOFF_TMP_AGE_S:
+                shutil.rmtree(path)
+                removed += 1
+        elif name not in current:
+            entries.append((os.lstat(path).st_mtime, name, path))
+    for _m, _name, path in sorted(entries, reverse=True)[keep:]:
+        if now_s - os.lstat(path).st_mtime > HANDOFF_MIN_AGE_S:
+            shutil.rmtree(path)
+            removed += 1
+    return removed
+
+
+def handoff(spec: dict, now_s: float | None = None) -> dict | None:
+    """Carry this lane's staged items to the lane's handoff directory (``spec["handoff"]``), where the
+    publishing module's group reads them.  Runs as the lane's user after the steps all succeeded.
+
+    Per item (``<source>/<kind>/<id>/``, a ``sidecar.json`` beside the files): an item already there
+    with the same bytes is left alone; a changed item under a name already handed off is a conflict
+    (a published id never changes: refused, never overwritten); a new one is copied, with mode 0640 and
+    0750 whatever the unit's umask, into a ``.tmp-`` directory and renamed in.  Links, devices and
+    hard-linked files, or a missing sidecar, refuse the item (``refused``); entries that are not item
+    directories are ``skipped``.  Returns the counters (copied, unchanged, conflicts, refused, skipped,
+    pruned), or None without a handoff block; raises :class:`HandoffError` for what it cannot judge."""
+    h = spec.get("handoff")
+    if h is None:
+        return None
+    now_s = time.time() if now_s is None else now_s
+    counts = {"copied": 0, "unchanged": 0, "conflicts": 0, "refused": 0, "skipped": 0, "pruned": 0}
+    for kind in HANDOFF_KINDS:
+        sdir = os.path.join(h["source"], kind)
+        try:
+            st = os.lstat(sdir)
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISDIR(st.st_mode):
+            counts["skipped"] += 1  # a link or a file where the kind directory belongs
+            continue
+        ddir = os.path.join(h["dest"], kind)
+        if os.path.islink(ddir):
+            raise HandoffError("the handoff kind directory is a link")
+        os.makedirs(ddir, mode=0o750, exist_ok=True)
+        os.chmod(ddir, 0o750)
+        names = sorted(n for n in os.listdir(sdir) if not n.startswith("."))
+        for name in names:
+            src = os.path.join(sdir, name)
+            if not ITEM_RE.match(name) or not stat.S_ISDIR(os.lstat(src).st_mode):
+                counts["skipped"] += 1  # not an item (a "latest" link the app keeps, a stray file)
+                continue
+            try:
+                files = _item_files(src)
+                if HANDOFF_SIDECAR not in files:
+                    raise HandoffError("no sidecar")
+            except (OSError, HandoffError):
+                counts["refused"] += 1
+                continue
+            final = os.path.join(ddir, name)
+            if os.path.lexists(final):
+                if _same_item(src, files, final):
+                    counts["unchanged"] += 1
+                else:
+                    counts["conflicts"] += 1
+                continue
+            _copy_item(src, files, ddir, name)
+            counts["copied"] += 1
+        counts["pruned"] += prune_handoff(ddir, set(names), h["keep"], now_s)
+    return counts
+
+
 def write_record(runs_dir: str, job: str, body: dict) -> None:
     final = os.path.join(runs_dir, job + ".json")
     tmp = os.path.join(runs_dir, "." + job + ".json.tmp")
@@ -510,6 +708,20 @@ def main(argv: list[str]) -> int:
                 say(f"{instance}: step {i} failed with exit status {int(status)}; the steps after it did not run")
                 code = EXIT_FAILED
                 break
+        if code == EXIT_OK:  # the job delivered: carry its staged items where publishing reads them
+            try:
+                counts = handoff(spec)
+            except (OSError, HandoffError) as e:
+                say(f"{instance}: handoff failed ({type(e).__name__})")
+                record["handoff_error"] = type(e).__name__
+                code = EXIT_FAILED
+            else:
+                if counts is not None:
+                    record["handoff"] = counts
+                    say(f"{instance}: handoff " + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+                    if counts["conflicts"] or counts["refused"]:
+                        say(f"{instance}: handoff refused or conflicting items; see the counters")
+                        code = EXIT_FAILED
     except Stopped:
         if child is not None:
             child.terminate()

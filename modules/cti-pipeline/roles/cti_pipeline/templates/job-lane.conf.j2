@@ -8,6 +8,10 @@
 [Service]
 User={{ cti_pipeline_lane_user[item.lane] }}
 ReadWritePaths={{ cti_pipeline_data_root }}/{{ item.lane }}
+{% if cti_pipeline_handoff_enabled %}
+# the lane's handoff directory: where the staged items are carried for the publishing module's group
+ReadWritePaths={{ cti_pipeline_handoff_dir }}/{{ item.lane }}
+{% endif %}
 TimeoutStartSec={{ job.timeout_s | int }}
 {% for name in ((job.refs | sort) if job.refs is defined else lane_refs) %}
 LoadCredential={{ name }}:{{ cti_pipeline_refs_dir }}/{{ item.lane }}/{{ name }}

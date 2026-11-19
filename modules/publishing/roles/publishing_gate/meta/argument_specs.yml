@@ -146,6 +146,16 @@ argument_specs:
         type: int
         description: A staged item younger than this many seconds is never pruned.
         default: 172800
+      publishing_gate_lane_sources:
+        type: list
+        elements: dict
+        description: Producer lanes, each {lane, dir} (a slug and an absolute output directory in the publishable-item layout). Always stage-only (gated and staged under staging/lane-<lane>/, never deployed or uploaded, in any mode), tagged with the lane everywhere.
+        default: []
+      publishing_gate_extra_groups:
+        type: list
+        elements: str
+        description: Supplementary groups the service user joins to read the lane directories (the producer's handoff group); created when absent.
+        default: []
       publishing_gate_legacy_exceptions:
         type: list
         elements: dict
