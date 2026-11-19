@@ -188,26 +188,45 @@
   tags: [readiness, health, backup, restore, export, upgrade]
 
 # The forced schema variable is what the app is told; a step argument or an env value can still
-# name the real schema outright (--schema cti, --schema=cti, a table cti.items). In the shadow lane
-# neither may: the real schema's name as a token (vars/main.yml cti_pipeline_real_schema_token) is
-# refused in every argument and env value, except the module a `-m` names (a package that shares
-# the schema's name is code, not a table). The lake grant is the real control: the
-# shadow lane's lake credential is one that can write only *_shadow schemas (README, "Lanes").
+# name the real schema outright (--schema cti, --schema=CTI, a table cti.items or
+# catalog.cti.items, `cti`, (cti)). In the shadow lane neither may: the real schema's name as a token
+# (vars/main.yml cti_pipeline_real_schema_token: case-insensitive, after quotes and backslashes are
+# deleted) is refused in every argument and env value, except the module `{python} -m` names (a
+# package that shares the schema's name is code, not a table); and no shadow step runs a shell or
+# an interpreter given inline code, whose text could splice the name past any check. The lake
+# grant is the real control: the shadow lane's lake credential is one that can write only *_shadow
+# schemas (README, "Lanes"). The wrapper checks the same again at every start.
 - name: Refuse the real lake schema named in a shadow-lane job's arguments or environment
   ansible.builtin.assert:
     that:
+      - cti_pipeline_shadow_programs | select('in', cti_pipeline_shells) | list | length == 0
+      - cti_pipeline_shadow_inline | length == 0
       - >-
         cti_pipeline_shadow_texts | select('search', cti_pipeline_real_schema_token) | list | length == 0
+      - >-
+        cti_pipeline_shadow_texts | map('regex_replace', '[' ~ "'" ~ '"`\\\\]', '')
+        | select('search', cti_pipeline_real_schema_token) | list | length == 0
     fail_msg: >-
-      cti-pipeline: job {{ item.job }} runs in the shadow lane but names the real lake schema
-      ({{ cti_pipeline_lake_schema.real }}) in a step argument or an env value; the shadow lane
-      writes only {{ cti_pipeline_lake_schema.shadow }}
+      cti-pipeline: job {{ item.job }} runs in the shadow lane but runs a shell or inline code, or
+      names the real lake schema ({{ cti_pipeline_lake_schema.real }}) in a step argument or an env
+      value; the shadow lane writes only {{ cti_pipeline_lake_schema.shadow }}
   vars:
+    cti_pipeline_shadow_programs: >-
+      {{ cti_pipeline_jobs[item.job].steps | map('first') | map('basename') | map('lower') | list }}
+    cti_pipeline_shadow_inline: >-
+      {%- set out = [] -%}
+      {%- for step in cti_pipeline_jobs[item.job].steps -%}
+      {%- if (step[0] == '{python}' or (step[0] | basename | lower).startswith('python'))
+             and (step[1:] | intersect(cti_pipeline_inline_flags) | length > 0) -%}
+      {%- set _ = out.append(step[0]) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
     cti_pipeline_shadow_texts: >-
       {%- set out = [] -%}
       {%- for step in cti_pipeline_jobs[item.job].steps -%}
       {%- for arg in step -%}
-      {%- if not (loop.index0 > 0 and step[loop.index0 - 1] == '-m') -%}
+      {%- if not (loop.index0 == 2 and step[0] == '{python}' and step[1] == '-m') -%}
       {%- set _ = out.append(arg) -%}
       {%- endif -%}
       {%- endfor -%}

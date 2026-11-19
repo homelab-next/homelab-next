@@ -72,8 +72,14 @@ cti_pipeline_freshness_by_lane: >-
   {%- endif -%}
   {%- endfor -%}
   {{ out }}
-# the real lake schema as a token (validate.yml: never in a shadow-lane job's arguments or env): the
-# whole value, a word of it (space, =, comma, colon or a quote around it), or a table under it
-# (<schema>.<table>); a path segment or a hyphenated name that contains it is not the schema
+# the real lake schema as a token (validate.yml: never in a shadow-lane job's arguments or env),
+# matched case-insensitively (a lake folds unquoted identifiers) after quotes, backticks and
+# backslashes are deleted (c""ti reads as cti): bounded by the start or end, white space, = , : ;
+# a dot (schema.table, catalog.schema.table), a quote, a backtick or a bracket. A path segment or a
+# hyphenated name that contains it is not the schema. The wrapper applies the same (hnx-cti-run).
 cti_pipeline_real_schema_token: >-
-  (^|[\s=,:'"]){{ cti_pipeline_lake_schema.real | regex_escape }}([.\s=,:'"]|$)
+  (?i)(^|[\s=,:;.'"`()\[\]{}]){{ cti_pipeline_lake_schema.real | regex_escape }}([\s=,:;.'"`()\[\]{}]|$)
+# a shadow-lane step may run no shell and no interpreter given inline code: their text can splice
+# the real schema's name past any check
+cti_pipeline_shells: [sh, bash, dash, zsh, ksh, ash, busybox, env]
+cti_pipeline_inline_flags: ['-c', '-e', '--eval', '--command']

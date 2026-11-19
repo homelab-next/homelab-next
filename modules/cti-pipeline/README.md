@@ -27,7 +27,9 @@ parse error (deep nesting included) is a refusal. The file's `version` (2), `job
 `unit` must be this instance's; its `run_id`, `agent_key` and `dispatch_id` (32 hex) must be well
 formed; its `dispatched_at` must be within the 30-day keep window and at most an hour ahead. The
 dispatch is then consumed: `<lane root>/hnx-consumed/<dispatch_id>` is created exclusively, and a
-copied run file (the same dispatch) is refused. The key is never the run id: the controller
+copied run file (the same dispatch) is refused. The dispatch is consumed before the release is pinned, so
+a start refused after it ("the release went away") burns that dispatch; the controller's retry is a
+new dispatch, so nothing is lost. The key is never the run id: the controller
 reuses it across a run's retries and failovers, and each of those runs. Markers older than the
 keep window are pruned (regular files named as a dispatch id, by lstat, never a link).
 
@@ -110,14 +112,25 @@ and its drop-in.
 | secrets | `cti_pipeline_lane_refs.real` files | `cti_pipeline_lane_refs.shadow` files only |
 | lake schema (forced) | `cti_pipeline_lake_schema.real` | `cti_pipeline_lake_schema.shadow` (must end in `_shadow`) |
 | publish mode (forced) | `stage` | `stage` |
+| run files it can read | both lanes' (see below) | both lanes' (see below) |
+
+Both lane users join the one run-file group the dispatcher's contract gives a set
+(`hnx-<service>_<id>`), so while a real-lane run file exists the shadow lane's user can read it (its
+`task` text; never a secret, and never consumable or changeable: the file is the controller's, the
+marker directory each lane's own). A group per lane needs a later contract from the orchestration
+module.
 
 - The lake schema and the publish mode are **forced** into the environment last (the variable
   names are `cti_pipeline_lake_schema_env` and `cti_pipeline_publish_mode_env`, the app's own);
   the role refuses an env or a job that sets either, and refuses a shadow schema that does not end
   in `_shadow` or equals the real one.
-- The role refuses, and the wrapper refuses again at every start, a shadow-lane job whose step
-  arguments or env values name the real schema as a token (the whole value, a word of it, or a
-  table under it such as `cti.items`; the module a `-m` names is exempt, being code). The wrapper
+- The role refuses, and the wrapper refuses again at every start, a shadow-lane job that runs a
+  shell (`sh`, `bash`, `env`, ...) or an interpreter given inline code (`-c`, `-e`), whose text can
+  splice a name past any check, and one whose step arguments or env values name the real schema
+  as a token: case-insensitively (a lake folds unquoted identifiers), after quotes, backticks and
+  backslashes are deleted, bounded by white space, `= , : ;`, a dot (`cti.items`,
+  `catalog.cti.items`), a quote, a backtick or a bracket. Only the module `{python} -m` names is
+  exempt (code, not a table). A script file a step runs is not read: the grant below is what holds. The wrapper
   also refuses a shadow spec whose schema is not a shadow schema, any spec whose publish mode is
   not `stage`, and a run whose dispatcher lane differs from the instance's.
 - **The lake grant is the real control; the environment is a convenience.** The forced variable
@@ -166,7 +179,11 @@ Export and restore run as root on a tree the lane's user owns, and that user run
 the internet, so neither ever follows a path the lane controls. Both first block the lane's units
 (`systemctl mask --runtime` on each declared instance, then a wait, up to
 `cti_pipeline_quiesce_wait_s`, until none runs; always unmasked afterwards): the dispatcher's start
-then fails and the controller retries it later.
+then fails and the controller retries it later. The lane's units are the declared instances and any
+other instance of the lane systemd still has loaded (a job the site just removed may still run). A
+play that dies before it unmasks (the control node, the connection) leaves runtime masks: every
+install lifts them (`systemctl unmask --runtime`, idempotent), and health fails while any job
+unit is masked.
 
 An export (`hnx-cti-state/1`, `files/cti_state.py`) is a directory: `cti.db` (the store and its
 `-wal` copied through descriptors that never follow a link, then made one consistent file by the
@@ -176,7 +193,8 @@ of the lane's `cti_pipeline_state_dirs`, the live store and its `-wal`/`-shm` ex
 when complete. The export hook writes `<data root>/export/<lane>-<stamp>/` for every lane that has
 a store and keeps `cti_pipeline_keep_exports`. Every directory is opened relative to its parent
 with `O_DIRECTORY|O_NOFOLLOW` and must be the entry that was listed (device and inode), every file
-with `O_NOFOLLOW`; a link, a special file or an entry swapped mid-walk refuses the export; the backup hook runs it and writes the backup
+with `O_NOFOLLOW`; a link, a special file, a file with more than one link or an entry swapped
+mid-walk refuses the export; the backup hook runs it and writes the backup
 manifest (the configuration directory is not in it: it holds the secrets and is re-rendered).
 
 Restore (`-e cti_pipeline_restore_source=<dir> -e cti_pipeline_restore_lane=real`), with the lane's

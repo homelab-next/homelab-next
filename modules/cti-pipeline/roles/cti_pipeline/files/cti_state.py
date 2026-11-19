@@ -180,9 +180,13 @@ def walk_fd(dir_fd: int, rel: str):
                 fd = os.open(name, os.O_RDONLY | NF, dir_fd=dir_fd)
             except OSError as e:
                 raise Refused(f"{path} is a link or cannot be opened: {e.strerror}") from e
-            if not same(os.fstat(fd), st):
+            fst = os.fstat(fd)
+            if not same(fst, st):
                 os.close(fd)
                 raise Refused(f"{path} was swapped while it was read")
+            if fst.st_nlink != 1:  # a hard link to a file the lane does not own: never read it
+                os.close(fd)
+                raise Refused(f"{path} has more than one link")
             yield path, fd
         else:
             raise Refused(f"{path} is a link or a special file")
