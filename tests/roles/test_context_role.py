@@ -63,6 +63,9 @@ CALLERS = [
     {"name": "automation", "secret": "secret:context/automation-token", "ceiling": "clear",
      "scopes": ["reindex"]},
 ]  # fmt: skip
+# the data root's subdirectories the container's user writes: the git checkouts, the last
+# reindex's record, its HOME and its XDG_CACHE_HOME (modules/context/image/Dockerfile)
+WRITABLE = ("sources", "state", "home", "cache")
 HEALTH = {"text": "the dashboard is blank", "expect": "lesson:lessons/LL-003", "ceiling": "amber"}
 
 
@@ -141,6 +144,18 @@ def test_main_renders_the_service_its_configuration_secrets_and_timer(first):
     assert "GATEWAY" not in env and AGENTS not in env
     assert oct((tmp_path / "app" / "secrets" / "context.env").stat().st_mode & 0o777) == "0o600"
     assert oct((tmp_path / "data").stat().st_mode & 0o777) == "0o750"
+    # what the container writes (the checkouts, the last reindex's record, HOME, the library cache)
+    # is a directory of its own user, 0700, under a data root it may only traverse
+    for sub in WRITABLE:
+        d = tmp_path / "data" / sub
+        assert d.is_dir(), f"{sub}/ is not created for the container's user"
+        st = d.stat()
+        assert (st.st_uid, st.st_gid, oct(st.st_mode & 0o777)) == (
+            v["context_uid"],
+            v["context_gid"],
+            "0o700",
+        )
+        (d / "probe").write_text("x")  # the container's uid (this test's) writes there
     unit = (tmp_path / "units" / "hnx-context-reindex.service").read_text()
     assert "ExecStart=/usr/local/libexec/homelabnext/hnx-context-reindex" in unit
     assert "--job timer:context/reindex" in unit and "ExecStopPost=-" in unit
@@ -162,6 +177,32 @@ def test_main_renders_the_service_its_configuration_secrets_and_timer(first):
     assert "OnCalendar=*-*-* *:20:00 UTC" in timer
     again = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+def _first_the_data_root_has_one_owner_when_the_container_user_is_another(tmp_path):
+    v = context_vars(tmp_path)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@needs_ansible
+@first_run(_first_the_data_root_has_one_owner_when_the_container_user_is_another)
+def test_the_data_root_has_one_owner_when_the_container_user_is_another(first):
+    """On a guest the container's uid is not the project owner. The data root must then be set
+    the same way by the role's own directories task and by compose_app (the project owner, the
+    container's group, 0750), or each run re-owns it twice (changed=2) and it ends up whichever
+    way the last task left it: root-owned, so the container could not write /data and its first
+    index never ran. CI cannot chown, so the second run is --check with another container uid:
+    no task may want to change the data root itself, only the container's own subdirectories."""
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    v = dict(first.setup["v"], context_uid=os.getuid() + 4242)
+    again = run_role(tmp_path, ROLE, "main", v, env=SECRETS, check=True)
+    assert again.returncode == 0, again.stdout + again.stderr
+    root = f"(item={tmp_path}/data)"
+    changed = [ln for ln in again.stdout.splitlines() if ln.startswith("changed:")]
+    assert not [ln for ln in changed if ln.endswith(root)], again.stdout
+    for sub in WRITABLE:  # the container's own directories do follow its uid
+        assert any(ln.endswith(f"(item={tmp_path}/data/{sub})") for ln in changed), again.stdout
 
 
 def _first_the_judge_is_on_with_a_gateway_found_in_the_registry(tmp_path):

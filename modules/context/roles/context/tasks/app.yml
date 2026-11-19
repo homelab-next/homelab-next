@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # The compose_app inputs (shared by main and the hooks that delegate to compose_app). The container runs
-# as an id of its own; its only writable path is the data root (the checkouts, the last reindex's
-# record, the libraries' scratch); the configuration is read-only. compose_app gives it no capability
+# as an id of its own; its only writable paths are the data root's subdirectories of its own user
+# (dirs.yml: the checkouts, the last reindex's record, HOME, the libraries' cache); the data root
+# itself is set exactly as compose_app sets compose_app_data_dir; the configuration is read-only. compose_app gives it no capability
 # and never privileged. CONTEXT_CONFIG_SHA makes a changed configuration recreate the container.
 - name: Build the application spec
   ansible.builtin.set_fact:
