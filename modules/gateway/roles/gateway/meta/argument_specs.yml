@@ -15,6 +15,10 @@ argument_specs:
         type: str
         description: "repository:tag@sha256:<digest> of the gateway image built from this repository (modules/gateway/image/Dockerfile)."
         required: true
+      gateway_spec_root: &specroot
+        type: str
+        description: "Absolute path, on the controller, of the checkout the spec and its role table live in (the generator's --root). Needed when the role table is outside the spec's directory and the play does not run from inside the checkout; empty uses the generator's default."
+        default: ""
       gateway_hnx_cli: &cli
         type: list
         elements: str
@@ -144,6 +148,7 @@ argument_specs:
       gateway_spec: *spec
       gateway_image: *image
       gateway_build_repositories: *repos
+      gateway_spec_root: *specroot
       gateway_hnx_cli: *cli
       gateway_key_refs_extra: *extra
       gateway_admin_key_ref: *adminkey
