@@ -1,3 +1,7 @@
+---
+summary: 'Unreleased changelog entries (2026-10-15 to 2026-11-11) archived out of CHANGELOG.md for size.'
+summary_of: outline:sha256:2038072d2c57f012
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Unreleased changelog entries, archived for size (2026-10-15 to 2026-11-11)
 
