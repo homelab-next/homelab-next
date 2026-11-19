@@ -71,7 +71,9 @@ timer / automation --> POST /v1/reindex --> git fetch each source (sibling dir, 
 * **Role** `context`: validates the settings, resolves every credential, renders `config.json`
   (read-only in the container; callers as the sha256 of their tokens), the owner-only env file (the
   admin token, the gateway key, the sources' credentials), the container (its own uid, no capability,
-  the data root its only writable path) and the reindex timer, whose service writes its last-run record
+  the data root its only writable path: the data root is the project owner's, 0750, readable by the
+  container's group, and its writable directories `sources/`, `state/`, `home/` and `cache/` are the
+  container user's, 0700) and the reindex timer, whose service writes its last-run record
   (role `last_run`, `timer:context/reindex`).
 
 ## The API

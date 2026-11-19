@@ -1,7 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-# The data root belongs to the container's user (it writes the checkouts, the state and the libraries'
-# scratch there); the compose project directory is the owner's, readable by the container's group.
-- name: Create the compose project directory and the data root
+# The compose project directory and the data root are the project owner's (context_owner, root),
+# readable by the container's group: exactly what compose_app's "Create application directories"
+# sets on compose_app_data_dir, so the two never fight over it (a data root owned by the container's
+# user here and re-owned to the project owner by compose_app came back root-owned 0750 after every
+# run: the container could not write /data, the first index never ran and /ready stayed 503). What
+# the container writes lives in subdirectories of its own user, 0700: sources/ (the git checkouts),
+# state/ (the last reindex's record), home/ (HOME) and cache/ (XDG_CACHE_HOME, the libraries'
+# scratch). Nothing else is written: the export hook is a no-op (the index is derived).
+- name: Create the compose project directory, the data root and its writable directories
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: directory
@@ -10,7 +16,11 @@
     mode: "{{ item.mode }}"
   loop:
     - {path: "{{ context_dir }}", owner: "{{ context_owner }}", mode: "0750"}
-    - {path: "{{ context_data_root }}", owner: "{{ context_uid | int }}", mode: "0750"}
+    - {path: "{{ context_data_root }}", owner: "{{ context_owner }}", mode: "0750"}
+    - {path: "{{ context_data_root }}/sources", owner: "{{ context_uid | int }}", mode: "0700"}
+    - {path: "{{ context_data_root }}/state", owner: "{{ context_uid | int }}", mode: "0700"}
+    - {path: "{{ context_data_root }}/home", owner: "{{ context_uid | int }}", mode: "0700"}
+    - {path: "{{ context_data_root }}/cache", owner: "{{ context_uid | int }}", mode: "0700"}
   loop_control:
     label: "{{ item.path }}"
   tags: [backup]
