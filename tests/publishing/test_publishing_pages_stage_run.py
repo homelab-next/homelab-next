@@ -153,10 +153,12 @@ def test_a_failed_deploy_does_not_leak_the_token(tmp_path):
 # ---- credentials
 def test_credentials_must_be_0600_and_non_empty(tmp_path):
     f = tmp_path / "deny-list"
-    f.write_text("x")
-    os.chmod(
-        f, 0o640
-    )  # group-readable: refused (not 0o644: that trips a static check for what it is)
+    previous = os.umask(0o027)  # a file created under this umask is group-readable: refused
+    try:
+        f.write_text("x")
+    finally:
+        os.umask(previous)
+    assert f.stat().st_mode & 0o040
     with pytest.raises(cf.ConfigError, match="0600"):
         cf.read_credential(tmp_path, "deny-list")
     os.chmod(f, 0o600)
