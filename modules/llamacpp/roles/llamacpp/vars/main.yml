@@ -77,7 +77,25 @@ llamacpp_extra_flags:
   tensor_split: -ts
   threads: -t
   threads_batch: -tb
-llamacpp_generate_only_args: [batch_size, ubatch_size, kv_unified]
+  cache_type_k: --cache-type-k
+  cache_type_v: --cache-type-v
+  rope_scaling: --rope-scaling
+  rope_scale: --rope-scale
+  yarn_orig_ctx: --yarn-orig-ctx
+llamacpp_generate_only_args: [batch_size, ubatch_size, kv_unified, cache_type_k, cache_type_v, rope_scaling, rope_scale, yarn_orig_ctx]
+# The long-context settings. The KV cache's element types: b12033 accepts f32, f16, bf16, q8_0,
+# q4_0, q4_1, iq4_nl, q5_0 and q5_1 (common/arg.cpp kv_cache_types); the role allows the three a
+# placement is sized with (f16 is the engine's default). A quantized type needs flash attention
+# set to on: the engine refuses a quantized V cache with it off, and with auto it fails at load
+# when the backend cannot run it, so the role asks for the explicit setting before a file exists.
+llamacpp_cache_types: [f16, q8_0, q4_0]
+llamacpp_quantized_cache_types: [q8_0, q4_0]
+# RoPE scaling: yarn only (--rope-scaling none|linear|yarn in the engine), with its factor
+# (--rope-scale N, the context grows N times) and the model's trained context (--yarn-orig-ctx,
+# which the role requires rather than leave the engine to read it from the file, so the check
+# below can hold the context to the extension)
+llamacpp_rope_scalings: [yarn]
+llamacpp_rope_scale_max: 8
 llamacpp_gpu_only_args: [split_mode, tensor_split]
 llamacpp_split_modes: [none, layer, row]
 # llama-server's -b when none is given: the most a ubatch_size alone may be
@@ -103,7 +121,12 @@ llamacpp_command: >-
      + (['-sm', llamacpp_extra_args.split_mode] if llamacpp_extra_args.split_mode is defined else [])
      + (['-ts', llamacpp_extra_args.tensor_split | map('string') | join(',')] if llamacpp_extra_args.tensor_split is defined else [])
      + (['-t', llamacpp_extra_args.threads | string] if llamacpp_extra_args.threads is defined else [])
-     + (['-tb', llamacpp_extra_args.threads_batch | string] if llamacpp_extra_args.threads_batch is defined else []) }}
+     + (['-tb', llamacpp_extra_args.threads_batch | string] if llamacpp_extra_args.threads_batch is defined else [])
+     + (['--cache-type-k', llamacpp_extra_args.cache_type_k] if llamacpp_extra_args.cache_type_k is defined else [])
+     + (['--cache-type-v', llamacpp_extra_args.cache_type_v] if llamacpp_extra_args.cache_type_v is defined else [])
+     + (['--rope-scaling', llamacpp_extra_args.rope_scaling] if llamacpp_extra_args.rope_scaling is defined else [])
+     + (['--rope-scale', llamacpp_extra_args.rope_scale | string] if llamacpp_extra_args.rope_scale is defined else [])
+     + (['--yarn-orig-ctx', llamacpp_extra_args.yarn_orig_ctx | string] if llamacpp_extra_args.yarn_orig_ctx is defined else []) }}
 # the most -t / -tb may be (the manifest schema's most vCPUs a footprint may have)
 llamacpp_threads_max: 256
 # the precheck's arguments: the power rule alone (the health hook), and with the weights (the unit)
