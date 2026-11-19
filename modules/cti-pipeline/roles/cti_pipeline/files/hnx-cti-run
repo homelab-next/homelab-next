@@ -6,13 +6,13 @@
 #   purpose: Run one cti-pipeline job unit's steps in its lane, with the lane's credentials exported only into the job's processes, and record the run for the freshness check.
 #   owner: platform
 #   trigger: [role:cti_pipeline]
-#   inputs: the instance's job spec (root's), the dispatcher's run file and the lane's credentials (systemd credentials)
+#   inputs: the instance's job spec (root's), the dispatcher's run file (read and consumed as the lane's user) and the lane's credentials (systemd credentials)
 #   outputs: the steps' output on stdout (the unit's log file); <lane root>/hnx-runs/<job>.json, the last run's record
 #   exit:
 #     "0": every step succeeded
-#     "1": a step failed (its own non-zero exit status is passed on; the steps after it did not run)
+#     "1": a step failed, could not start or was killed by a signal (its own status is in the run record; the steps after it did not run)
 #     "2": refused before any step ran (an untrusted or malformed spec, a lane mismatch, a missing credential)
-#     "143": stopped (SIGTERM, the dispatcher's cancel)
+#     "143": stopped (SIGTERM to the wrapper, the dispatcher's cancel)
 """The job wrapper of module cti-pipeline (modules/cti-pipeline/README.md, "Job units").
 
 The unit ``hnx-<set>@<job>-<lane>.service`` runs::
@@ -24,18 +24,29 @@ one else) names the job's steps (argv lists), the lane, the lane's root (the wor
 the non-secret environment, the forced environment (the lane's lake schema and the stage-only
 publish mode, applied last so nothing overrides them).  The instance's drop-in loads the lane's
 credentials it is given as systemd credentials (``LoadCredential=``, read by PID 1 from root-only
-files): this wrapper takes every one in ``$CREDENTIALS_DIRECTORY`` (the dispatcher's run file
-apart) and puts it in the environment of the step processes only, never in a file, an argument
-or the log.
+files): this wrapper takes every one in ``$CREDENTIALS_DIRECTORY`` and puts it in the
+environment of the step processes only, never in a file, an argument or the log.
 
 The log carries constants, the instance (the unit's own ``%i``, an argument) and counters only:
 nothing read from the spec, the environment, the run file or a credential reaches it, so a value
 can never be logged by a message that names it.
 
-The dispatcher's run file (``LoadCredential=hnx-dispatch:...``) carries the run id and the lane:
-a lane that differs from the instance's is refused.  A shadow spec whose publish mode is not the
+The dispatcher's run file (the orchestration module's contract v2, modules/orchestration README,
+"Module job units") is read by this process, as the lane's user, never by PID 1: it is opened with
+``O_NOFOLLOW|O_NONBLOCK`` and must be a regular file with one link, owned by the controller's user,
+writable by no one else and at most 256 KiB; its ``version``, ``job``, ``lane`` and ``unit`` must
+be this instance's, its ``run_id`` and ``agent_key`` well formed. Each run id is consumed once: a
+file ``<consumed dir>/<run_id>`` is created exclusively (the lane's own directory), and a run id
+seen before is refused (a replay).  A shadow spec whose publish mode is not the
 staging one, or whose lake schema is the real lane's form, is refused: the shadow lane never
 publishes and never writes a table the real lane relies on.
+
+The release is pinned once, at start: ``current`` is resolved to its ``releases/<sha16>`` directory
+and every placeholder under it is rewritten to that directory for the whole run, and a shared lock
+on the release's ``.hnx-installed`` is held until the wrapper exits (the installer's prune takes an
+exclusive one, so it never removes a release a job runs).  A step that fails, cannot start or is
+killed ends the job with exit status 1 (its own status goes to the run record); 2 and 143 are the
+wrapper's own decisions only.
 
 Placeholders, replaced whole in every argument and environment value: ``{app}`` (the release's
 app tree), ``{python}`` (the release's venv python), ``{lane_root}``, ``{config}`` and
@@ -49,8 +60,10 @@ from __future__ import annotations
 import argparse
 import contextlib
 import errno
+import fcntl
 import json
 import os
+import pwd
 import re
 import signal
 import stat
@@ -58,7 +71,9 @@ import subprocess
 import sys
 import time
 
-EXIT_OK, EXIT_REFUSED, EXIT_STOPPED = 0, 2, 143
+EXIT_OK, EXIT_FAILED, EXIT_REFUSED, EXIT_STOPPED = 0, 1, 2, 143
+RELEASE_RE = re.compile(r"^[0-9a-f]{16}\Z")
+MARKER = ".hnx-installed"
 MAX_SPEC = 1 << 20
 MAX_CRED = 64 << 10
 LANES = ("real", "shadow")
@@ -69,7 +84,8 @@ RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 PLACEHOLDERS = ("app", "python", "lane_root", "config", "lake_ca")
 STAGE_MODE = "stage"
 SHADOW_SUFFIX = "_shadow"
-DISPATCH_CRED = "hnx-dispatch"
+MAX_RUN_FILE = 256 << 10
+AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 BASE_PATH = "/usr/local/bin:/usr/bin:/bin"
 
 
@@ -155,12 +171,55 @@ def lane_guard(spec: dict) -> None:
         raise Refused("the shadow lane's lake schema is not a shadow schema")
     if spec["lane"] == "real" and schema.endswith(SHADOW_SUFFIX):
         raise Refused("the real lane's lake schema is a shadow schema")
+    real = spec.get("real_lake_schema")
+    if spec["lane"] == "shadow":
+        if not isinstance(real, str) or not real or real.endswith(SHADOW_SUFFIX):
+            raise Refused("the shadow spec does not name the real lake schema it must never write")
+        token = re.compile(r"(^|[\s=,:'\"])" + re.escape(real) + r"([.\s=,:'\"]|$)")
+        texts = [*spec["env"].values()]
+        for step in spec["steps"]:
+            texts += [a for i, a in enumerate(step) if not (i > 0 and step[i - 1] == "-m")]
+        if any(token.search(t) for t in texts):
+            raise Refused("a shadow-lane step argument or env value names the real lake schema")
+
+
+def pin_release(spec: dict) -> int:
+    """Resolve ``current`` once, rewrite the placeholders under it to the release directory, and
+    hold a shared lock on the release's marker for the run (returned: the caller keeps it open)."""
+    link = spec.get("release_link")
+    if not isinstance(link, str) or not link.startswith("/"):
+        raise Refused("the spec does not name the release link")
+    real = os.path.realpath(link)
+    if os.path.dirname(real) != os.path.join(os.path.dirname(link), "releases") or not RELEASE_RE.match(
+        os.path.basename(real)
+    ):
+        raise Refused("the release link does not point at a release")
+    try:
+        fd = os.open(os.path.join(real, MARKER), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as e:
+        raise Refused("the release went away while the job started; it is retried") from e
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        try:
+            again = os.stat(os.path.join(real, MARKER), follow_symlinks=False)
+        except OSError as e:
+            raise Refused("the release went away while the job started; it is retried") from e
+        if (again.st_dev, again.st_ino) != (os.fstat(fd).st_dev, os.fstat(fd).st_ino):
+            raise Refused("the release changed while the job started; it is retried")
+    except BaseException:
+        os.close(fd)
+        raise
+    spec["placeholders"] = {
+        k: (real + v[len(link) :]) if v == link or v.startswith(link + "/") else v
+        for k, v in spec["placeholders"].items()
+    }
+    return fd
 
 
 def loaded_names(directory: str) -> list[str]:
     """The names of the credentials the unit loaded (the dispatcher's run file apart)."""
     try:
-        names = sorted(n for n in os.listdir(directory) if n != DISPATCH_CRED)
+        names = sorted(os.listdir(directory)) if directory else []
     except OSError as e:
         raise Refused("the credentials directory cannot be listed") from e
     if not all(ENV_RE.match(n) for n in names):
@@ -190,19 +249,78 @@ def read_loaded(directory: str, name: str) -> str:
     return value
 
 
-def dispatch_run(directory: str, lane: str) -> dict:
-    path = os.path.join(directory, DISPATCH_CRED)
+def dispatch_run(spec: dict) -> dict:
+    """The dispatcher's run file for this instance, checked (contract v2) before anything in it is
+    used, then consumed: a run id that was consumed before is refused."""
+    path, owner = spec.get("run_file"), spec.get("run_owner")
+    if not isinstance(path, str) or not path.startswith("/") or not isinstance(owner, str):
+        raise Refused("the spec does not name the run file and its owner")
     try:
-        with open(path, "rb") as f:
-            run = json.loads(f.read(MAX_SPEC))
-    except (OSError, ValueError) as e:
-        raise Refused("the dispatcher's run file is not loaded or not JSON") from e
-    if not isinstance(run, dict):
-        raise Refused("the dispatcher's run file is not an object")
-    if run.get("lane") != lane:
-        raise Refused("the run is for the other lane than this unit's")
-    if not isinstance(run.get("run_id"), str) or not RUN_ID_RE.match(run["run_id"]):
-        raise Refused("the dispatcher's run file has no run id")
+        owner_uid = pwd.getpwnam(owner).pw_uid
+    except KeyError as e:
+        raise Refused("the run file's owner is not an account on this host") from e
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError as e:
+        raise Refused("the run file is missing or is a link") from e
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise Refused("the run file is not a regular file with one link")
+        if st.st_uid != owner_uid or st.st_mode & 0o022 or st.st_size > MAX_RUN_FILE:
+            raise Refused("the run file has another owner, is writable by others or is too large")
+        chunks, got = [], 0
+        while got <= MAX_RUN_FILE:
+            chunk = os.read(fd, MAX_RUN_FILE + 1 - got)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            got += len(chunk)
+        raw = b"".join(chunks)
+    finally:
+        os.close(fd)
+    if len(raw) > MAX_RUN_FILE:
+        raise Refused("the run file is too large")
+    try:
+        run = json.loads(raw.decode("utf-8"))
+    except ValueError as e:
+        raise Refused("the run file is not UTF-8 JSON") from e
+    unit = f"hnx-{spec['set']}@{spec['instance']}.service"
+    if (
+        not isinstance(run, dict)
+        or run.get("version") != 1
+        or run.get("job") != spec["job"]
+        or run.get("lane") != spec["lane"]
+        or run.get("unit") != unit
+        or not isinstance(run.get("run_id"), str)
+        or not RUN_ID_RE.match(run["run_id"])
+        or not isinstance(run.get("agent_key"), str)
+        or not AGENT_RE.match(run["agent_key"])
+        or not isinstance(run.get("task"), str)
+        or not isinstance(run.get("dispatched_at"), str)
+    ):
+        raise Refused("the run file is not this instance's run (version, job, lane, unit, ids)")
+    consumed = spec.get("consumed_dir")
+    if not isinstance(consumed, str) or not consumed.startswith("/"):
+        raise Refused("the spec does not name the consumed-runs directory")
+    try:
+        dir_fd = os.open(consumed, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as e:
+        raise Refused("the consumed-runs directory is missing or is a link") from e
+    try:
+        mark = os.open(
+            run["run_id"],
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=dir_fd,
+        )
+        os.close(mark)
+    except FileExistsError as e:
+        raise Refused("the run was consumed before (a replay)") from e
+    except OSError as e:
+        raise Refused("the run cannot be marked consumed") from e
+    finally:
+        os.close(dir_fd)
     return run
 
 
@@ -269,11 +387,10 @@ def main(argv: list[str]) -> int:
     try:
         spec = load_spec(args.spec, args.spec_owner, args.instance)
         cred_dir = os.environ.get("CREDENTIALS_DIRECTORY", "")
-        if not cred_dir.startswith("/"):
-            raise Refused(
-                "no credentials directory: the unit loads the run file and the credentials"
-            )
-        run = dispatch_run(cred_dir, spec["lane"])
+        if cred_dir and not cred_dir.startswith("/"):
+            raise Refused("the credentials directory is not an absolute path")
+        run = dispatch_run(spec)
+        release_fd = pin_release(spec)  # held (shared lock) until the wrapper exits
         env = environment(spec, run, cred_dir)
         os.chdir(spec["lane_root"])
     except Refused as e:
@@ -294,10 +411,12 @@ def main(argv: list[str]) -> int:
             record["step"] = i
             say(f"{instance}: step {i} started")
             child = subprocess.Popen(argv_, env=env, stdin=subprocess.DEVNULL)
-            code = child.wait()
+            status = child.wait()
             child = None
-            if code != 0:
-                say(f"{instance}: step {i} failed with exit status {int(code)}; the steps after it did not run")
+            if status != 0:
+                record["step_status"] = status
+                say(f"{instance}: step {i} failed with exit status {int(status)}; the steps after it did not run")
+                code = EXIT_FAILED
                 break
     except Stopped:
         if child is not None:
@@ -310,10 +429,12 @@ def main(argv: list[str]) -> int:
         say(f"{instance}: stopped")
     except OSError as e:
         say(f"{instance}: step {record['step']} could not start ({errno.errorcode.get(e.errno, 'error')})")
-        code = 127
+        record["step_status"] = 127
+        code = EXIT_FAILED
     finally:
         record.update({"finished_at": now(), "ok": code == 0, "exit": code, "state": "finished"})
         write_record(spec["runs_dir"], spec["job"], record)
+        os.close(release_fd)
     return code
 
 

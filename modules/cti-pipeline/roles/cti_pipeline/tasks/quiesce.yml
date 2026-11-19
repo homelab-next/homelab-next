@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# Block the lane's job units (cti_pipeline_quiesce_lane) for what the caller does next: each declared
+# instance is masked for this boot only (systemctl mask --runtime: the dispatcher's start then fails
+# and the controller retries it later), then the role waits until none of them runs, up to
+# cti_pipeline_quiesce_wait_s. The caller unmasks them (unquiesce.yml) in an always: block, so a
+# failure never leaves the lane blocked. Root works on a lane's tree only while its own code is not
+# running there.
+- name: Name the lane's units
+  ansible.builtin.set_fact:
+    cti_pipeline_quiesce_units: >-
+      {{ cti_pipeline_instances | selectattr('lane', 'equalto', cti_pipeline_quiesce_lane)
+         | map(attribute='unit') | list }}
+  tags: [export, backup, restore]
+
+- name: Block the lane's units from starting (for this boot only)
+  ansible.builtin.command:
+    argv: "{{ [cti_pipeline_systemctl_cli, 'mask', '--runtime'] + cti_pipeline_quiesce_units }}"
+  changed_when: true
+  when: cti_pipeline_quiesce_units | length > 0
+  tags: [export, backup, restore]
+
+- name: Wait until none of the lane's units runs
+  ansible.builtin.command:
+    argv: >-
+      {{ [cti_pipeline_systemctl_cli, 'list-units', '--plain', '--no-legend',
+          '--state=active,activating,deactivating,reloading'] + cti_pipeline_quiesce_units }}
+  register: cti_pipeline_quiesce_running
+  changed_when: false
+  until: cti_pipeline_quiesce_running.stdout | trim == ''
+  retries: "{{ (cti_pipeline_quiesce_wait_s | int / 10) | round(0, 'ceil') | int }}"
+  delay: 10
+  when: cti_pipeline_quiesce_units | length > 0
+  tags: [export, backup, restore]

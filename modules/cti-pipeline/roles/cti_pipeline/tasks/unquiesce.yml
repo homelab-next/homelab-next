@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Undo quiesce.yml: unmask the lane's units (the runtime masks only; nothing else is touched).
+- name: Let the lane's units start again
+  ansible.builtin.command:
+    argv: "{{ [cti_pipeline_systemctl_cli, 'unmask', '--runtime'] + (cti_pipeline_quiesce_units | default([])) }}"
+  changed_when: true
+  when: cti_pipeline_quiesce_units | default([]) | length > 0
+  tags: [export, backup, restore]

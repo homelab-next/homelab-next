@@ -5,7 +5,7 @@ argument_specs:
     options: &opts
       cti_pipeline_logical_id:
         type: str
-        description: The instance id, also the unit set's name (hnx-<id>@.service; the orchestration_job_units entry naming it).
+        description: The instance id (a slug of up to 24 characters), also the unit set's name (hnx-<id>@.service; the orchestration_job_units entry naming it).
         required: true
       cti_pipeline_artefact:
         type: path
@@ -100,8 +100,16 @@ argument_specs:
         default: ["data", "state", "podcast"]
       cti_pipeline_dispatch_dir:
         type: path
-        description: "The orchestration dispatcher's run-file directory (<orchestration data root>/dispatch); the unit loads <dir>/<id>/%i.json."
-        default: "/var/lib/hnx-modules/orchestration/dispatch"
+        description: "The orchestration dispatcher's run-file directory (contract v2): the job reads <dir>/<id>/%i.json itself, as its lane's user."
+        default: "/var/lib/hnx-dispatch"
+      cti_pipeline_dispatch_owner:
+        type: str
+        description: "The controller's user, which must own every run file (the job refuses one of another owner)."
+        default: "hnx-orchestrator"
+      cti_pipeline_dispatch_group:
+        type: str
+        description: "The run files' group, created by the orchestration role; the job units join it (SupplementaryGroups=)."
+        default: "hnx-job-{{ cti_pipeline_logical_id }}"
       cti_pipeline_job_logs_dir:
         type: path
         description: "The job units' log directory (<dir>/<id>/%i.log), pre-created by the orchestration role."
@@ -190,6 +198,10 @@ argument_specs:
         type: int
         description: "Each job unit's TasksMax."
         default: 512
+      cti_pipeline_quiesce_wait_s:
+        type: int
+        description: "Export and restore mask the lane's units and wait this long, in seconds, for a running one to finish."
+        default: 3600
       cti_pipeline_keep_exports:
         type: int
         description: "The backup hook's exports kept per lane."

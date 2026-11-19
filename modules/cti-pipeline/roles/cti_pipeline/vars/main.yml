@@ -11,9 +11,11 @@ cti_pipeline_refs_dir: "{{ cti_pipeline_config_dir }}/credentials"
 cti_pipeline_lake_ca_file: "{{ cti_pipeline_config_dir }}/lake-ca.pem"
 cti_pipeline_export_dir: "{{ cti_pipeline_data_root }}/export"
 cti_pipeline_runs_subdir: hnx-runs
+# each run id the lane consumed (the dispatcher's run file is read once: a replay is refused)
+cti_pipeline_consumed_subdir: hnx-consumed
 # what the app needs in a lane root besides its state: the staged items the publishing module takes
 # (publishable/), the rendered site (dist/), HOME and the cache, and the wrapper's run records
-cti_pipeline_lane_dirs: "{{ (cti_pipeline_state_dirs + ['publishable', 'dist', 'home', 'cache', cti_pipeline_runs_subdir]) | unique | list }}"
+cti_pipeline_lane_dirs: "{{ (cti_pipeline_state_dirs + ['publishable', 'dist', 'home', 'cache', cti_pipeline_runs_subdir, cti_pipeline_consumed_subdir]) | unique | list }}"
 # the publish mode the module forces in every lane: items are staged, never pushed
 cti_pipeline_stage_mode: stage
 # the drop-in each declared instance gets; only a file of this name is ever removed by the role
@@ -38,7 +40,7 @@ cti_pipeline_instances: >-
   {{ out }}
 cti_pipeline_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
 cti_pipeline_slug_pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
-cti_pipeline_set_pattern: '^(?=.{1,32}\Z)[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+cti_pipeline_set_pattern: '^(?=.{1,24}\Z)[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
 cti_pipeline_job_pattern: '^(?=.{1,48}\Z)[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
 cti_pipeline_env_pattern: '^[A-Z][A-Z0-9_]{0,63}\Z'
 cti_pipeline_user_pattern: '^[a-z_][a-z0-9_-]{0,31}\Z'
@@ -70,3 +72,8 @@ cti_pipeline_freshness_by_lane: >-
   {%- endif -%}
   {%- endfor -%}
   {{ out }}
+# the real lake schema as a token (validate.yml: never in a shadow-lane job's arguments or env): the
+# whole value, a word of it (space, =, comma, colon or a quote around it), or a table under it
+# (<schema>.<table>); a path segment or a hyphenated name that contains it is not the schema
+cti_pipeline_real_schema_token: >-
+  (^|[\s=,:'"]){{ cti_pipeline_lake_schema.real | regex_escape }}([.\s=,:'"]|$)

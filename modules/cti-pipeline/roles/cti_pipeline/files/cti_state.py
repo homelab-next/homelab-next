@@ -24,8 +24,14 @@ An export (format ``hnx-cti-state/1``) is a directory::
 
 ``export`` reads a lane root (or a copy of the old lab's working tree, the same layout:
 ``data/cti.db``, ``data/*.json``, ``state/``, ``podcast/``...) and writes DEST, which must not
-exist: it is built as ``.<name>.incoming`` beside it and renamed when complete.  A symbolic link
-or special file anywhere in an included directory is refused, never followed.
+exist: it is built as ``.<name>.incoming`` beside it and renamed when complete.  The source may be
+owned by the lane's user, who must never steer root: every directory is opened relative to its
+parent's descriptor with ``O_DIRECTORY|O_NOFOLLOW`` (and must be the entry that was listed, by
+device and inode), every file with ``O_NOFOLLOW``, and anything that is not a directory or a
+regular file, a link included, refuses the export.  The store is read the same way: ``cti.db``
+(and its ``-wal`` or ``-journal``) are copied through such descriptors into the root-owned
+staging directory, and only that copy is opened by the database library (the role blocks the
+lane's units while it runs, so the copy is quiescent; its integrity check refuses one that is not).
 
 ``check`` reads an export and writes nothing: every listed file is a single-link regular file of
 its size and sha256 and every file is listed; the store passes its integrity check; its row
@@ -33,10 +39,13 @@ counts equal counts.json exactly (and the counts in ``--expect-counts`` when giv
 own at copy time); it holds at least one table.  A zero-table or zero-file export is an error,
 never a pass.
 
-``restore`` runs the check, stages the store and the files into ``LANE_ROOT/.restore-<stamp>/``
-(owned by UID:GID), moves each replaced top-level directory aside as
-``<dir>.before-restore-<stamp>`` (refused when that name exists) and renames the staged one in.
-Nothing is deleted.
+``restore`` runs the check, stages the store and the files into a root-owned sibling of the lane
+root, ``<data root>/.restore-<lane>-<stamp>/`` (the data root is root's: the lane's user cannot
+touch it), gives the staged entries to UID:GID there, then, through descriptors of the lane root
+and the stage (``O_DIRECTORY|O_NOFOLLOW``), moves each replaced top-level entry aside as
+``<dir>.before-restore-<stamp>`` (refused when that name exists) and renames the staged one in. A
+rename never follows a link in its last component, so a link planted in the lane root is only
+moved aside.  Nothing is deleted.
 
 ``freshness`` reads each job's last-run record (``<runs dir>/<job>.json``, written by
 the job wrapper) and is fresh when the last run ended ok within its max age.
@@ -71,6 +80,7 @@ NF = os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
 JOB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z")
 INCLUDE_RE = re.compile(r"^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*\Z")
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | NF
 MAX_FILES = 200_000
 MAX_LISTING = 64 << 20
 
@@ -119,27 +129,69 @@ def sha256_fd(fd: int, out=None) -> tuple[str, int]:
         return h.hexdigest(), src.tell()
 
 
-def walk_files(root: str, rel_dir: str):
-    """(rel path, abs path) of every regular file under root/rel_dir; Refused on a link or a
-    special file."""
-    top = os.path.join(root, rel_dir)
-    if os.path.islink(top):
-        raise Refused(f"{rel_dir} is a link")
-    if not os.path.exists(top):
-        return
-    if not os.path.isdir(top):
-        raise Refused(f"{rel_dir} is not a directory")
-    for dirpath, dirs, files in os.walk(top, followlinks=False):
-        for d in dirs:
-            if os.path.islink(os.path.join(dirpath, d)):
-                raise Refused(f"{os.path.relpath(os.path.join(dirpath, d), root)} is a link")
-        for name in sorted(files):
-            full = os.path.join(dirpath, name)
-            st = os.lstat(full)
-            rel = os.path.relpath(full, root)
-            if not stat.S_ISREG(st.st_mode):
-                raise Refused(f"{rel} is a link or a special file")
-            yield rel, full
+def open_dir(name: str, dir_fd: int | None = None, what: str = "") -> int:
+    """A directory opened without following a link (relative to ``dir_fd`` when given)."""
+    try:
+        return os.open(name, DIR_FLAGS, dir_fd=dir_fd)
+    except OSError as e:
+        raise Refused(f"{what or name} is not a directory (or is a link): {e.strerror}") from e
+
+
+def open_path(root_fd: int, rel: str) -> int:
+    """``rel``'s directory under ``root_fd``, every component opened with O_NOFOLLOW."""
+    fd = os.dup(root_fd)
+    try:
+        for part in rel.split("/"):
+            nxt = open_dir(part, fd, rel)
+            os.close(fd)
+            fd = nxt
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def listdir_fd(fd: int) -> list[str]:
+    """The names in the directory ``fd`` (a seam for the tests' mid-walk swap)."""
+    return sorted(os.listdir(fd))
+
+
+def walk_fd(dir_fd: int, rel: str):
+    """(rel path, open file descriptor) of every regular file under ``dir_fd``, depth first. Each
+    entry is lstat'ed, then opened relative to its parent with O_NOFOLLOW and checked to be the
+    same inode; a link, a special file or an entry swapped meanwhile refuses the walk. The caller
+    closes each descriptor it receives."""
+    for name in listdir_fd(dir_fd):
+        path = f"{rel}/{name}"
+        try:
+            st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        except OSError as e:
+            raise Refused(f"{path} vanished or cannot be read: {e.strerror}") from e
+        if stat.S_ISDIR(st.st_mode):
+            sub = open_dir(name, dir_fd, path)
+            try:
+                if not same(os.fstat(sub), st):
+                    raise Refused(f"{path} was swapped while it was read")
+                yield from walk_fd(sub, path)
+            finally:
+                os.close(sub)
+        elif stat.S_ISREG(st.st_mode):
+            try:
+                fd = os.open(name, os.O_RDONLY | NF, dir_fd=dir_fd)
+            except OSError as e:
+                raise Refused(f"{path} is a link or cannot be opened: {e.strerror}") from e
+            if not same(os.fstat(fd), st):
+                os.close(fd)
+                raise Refused(f"{path} was swapped while it was read")
+            yield path, fd
+        else:
+            raise Refused(f"{path} is a link or a special file")
+
+
+def same(a: os.stat_result, b: os.stat_result) -> bool:
+    return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino) and stat.S_IFMT(a.st_mode) == stat.S_IFMT(
+        b.st_mode
+    )
 
 
 # ----------------------------------------------------------------------------- the store
@@ -166,6 +218,35 @@ def integrity(db_path: str) -> str:
         return con.execute("PRAGMA integrity_check").fetchone()[0]
     finally:
         con.close()
+
+
+def copy_raw_store(src_root_fd: int, stage: str) -> str:
+    """``data/cti.db`` and its -wal or -journal copied byte for byte through O_NOFOLLOW descriptors
+    into ``<stage>/.raw/``; the path of the copied store (which only this tool can write)."""
+    raw = os.path.join(stage, ".raw")
+    os.mkdir(raw, 0o700)
+    data_fd = open_path(src_root_fd, os.path.dirname(STORE))
+    try:
+        base = os.path.basename(STORE)
+        for name in (base, *(base + s for s in ("-wal", "-journal"))):
+            try:
+                fd = os.open(name, os.O_RDONLY | NF, dir_fd=data_fd)
+            except FileNotFoundError:
+                if name == base:
+                    raise Refused(f"the source has no store at {STORE}") from None
+                continue
+            except OSError as e:
+                raise Refused(f"{STORE}'s {name} is a link or cannot be opened") from e
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise Refused(f"{name} is not a regular file")
+                with open(os.path.join(raw, name), "xb") as out:
+                    sha256_fd(fd, out)
+            finally:
+                os.close(fd)
+    finally:
+        os.close(data_fd)
+    return os.path.join(raw, base)
 
 
 def copy_store(src: str, dest: str) -> None:
@@ -199,15 +280,19 @@ def export(src_root: str, dest: str, includes: list[str]) -> dict:
     for inc in includes:
         if not INCLUDE_RE.match(inc) or not rel_ok(inc):
             raise Refused(f"--include {inc!r} is not a relative directory inside the source")
-    store = os.path.join(src_root, STORE)
-    if os.path.islink(store) or not os.path.isfile(store):
-        raise Refused(f"the source has no store at {STORE}")
     stage = os.path.join(parent, "." + os.path.basename(dest.rstrip("/")) + ".incoming")
     if os.path.lexists(stage):
         raise Refused(f"{stage} exists (an interrupted export): move it aside first")
+    root_fd = open_dir(src_root, what="the source root")
     os.mkdir(stage, 0o700)
     try:
-        copy_store(store, os.path.join(stage, "cti.db"))
+        raw = copy_raw_store(root_fd, stage)
+        if integrity(raw) != "ok":
+            raise Refused(
+                "the store's copy fails its integrity check (was a unit of the lane running?)"
+            )
+        copy_store(raw, os.path.join(stage, "cti.db"))
+        shutil.rmtree(os.path.dirname(raw))
         counts = table_counts(os.path.join(stage, "cti.db"))
         if not counts:
             raise Refused("the store holds no table")
@@ -215,20 +300,27 @@ def export(src_root: str, dest: str, includes: list[str]) -> dict:
         skip = {STORE, *(STORE + s for s in STORE_SIDE)}
         listing = []
         for inc in sorted(set(includes)):
-            for rel, full in walk_files(src_root, inc):
-                if rel in skip:
-                    continue
-                out_path = os.path.join(stage, "files", rel)
-                os.makedirs(os.path.dirname(out_path), mode=0o700, exist_ok=True)
-                fd = os.open(full, os.O_RDONLY | NF)
-                try:
-                    with open(out_path, "xb") as out:
-                        digest, size = sha256_fd(fd, out)
-                finally:
-                    os.close(fd)
-                listing.append({"path": "files/" + rel, "size": size, "sha256": digest})
-                if len(listing) > MAX_FILES:
-                    raise Refused(f"more than {MAX_FILES} files")
+            try:
+                os.stat(inc.split("/")[0], dir_fd=root_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            inc_fd = open_path(root_fd, inc)
+            try:
+                for rel, fd in walk_fd(inc_fd, inc):
+                    try:
+                        if rel in skip:
+                            continue
+                        out_path = os.path.join(stage, "files", rel)
+                        os.makedirs(os.path.dirname(out_path), mode=0o700, exist_ok=True)
+                        with open(out_path, "xb") as out:
+                            digest, size = sha256_fd(fd, out)
+                    finally:
+                        os.close(fd)
+                    listing.append({"path": "files/" + rel, "size": size, "sha256": digest})
+                    if len(listing) > MAX_FILES:
+                        raise Refused(f"more than {MAX_FILES} files")
+            finally:
+                os.close(inc_fd)
         for name in ("cti.db", "counts.json"):
             fd = os.open(os.path.join(stage, name), os.O_RDONLY | NF)
             try:
@@ -251,6 +343,8 @@ def export(src_root: str, dest: str, includes: list[str]) -> dict:
         if os.path.isdir(stage) and not os.path.islink(stage) and os.path.dirname(stage) == parent:
             shutil.rmtree(stage)
         raise
+    finally:
+        os.close(root_fd)
     return {**manifest, "export": dest, "counts": counts}
 
 
@@ -363,10 +457,14 @@ def restore(
     verdict = check(source, expect_counts)
     source = deep_dir(source, "the export")
     lane_root = deep_dir(lane_root, "the lane root")
+    data_root = os.path.dirname(lane_root)
+    lane = os.path.basename(lane_root)
     if (lane_root + "/").startswith(source + "/") or (source + "/").startswith(lane_root + "/"):
         raise Refused("the export and the lane root are nested")
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    stage = os.path.join(lane_root, f".restore-{stamp}")
+    # the stage is a sibling in the data root (root's): the lane's user can neither swap it nor
+    # anything in it while root writes and chowns there
+    stage = os.path.join(data_root, f".restore-{lane}-{stamp}")
     if os.path.lexists(stage):
         raise Refused(f"{stage} exists")
     os.mkdir(stage, 0o700)
@@ -387,18 +485,36 @@ def restore(
     for dirpath, dirs, files in os.walk(stage):
         for name in dirs + files:
             os.lchown(os.path.join(dirpath, name), uid, gid)
-    os.lchown(stage, uid, gid)
-    for top in sorted(tops):
-        aside = os.path.join(lane_root, f"{top}.before-restore-{stamp}")
-        if os.path.lexists(aside):
-            raise Refused(f"{aside} exists")
+    lane_fd = open_dir(lane_root, what="the lane root")
+    stage_fd = open_dir(stage, what="the stage")
     moved = []
-    for top in sorted(tops):
-        live = os.path.join(lane_root, top)
-        if os.path.lexists(live):
-            os.rename(live, os.path.join(lane_root, f"{top}.before-restore-{stamp}"))
-            moved.append(top)
-        os.rename(os.path.join(stage, top), live)
+    try:
+        for top in sorted(tops):
+            try:
+                os.stat(f"{top}.before-restore-{stamp}", dir_fd=lane_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            raise Refused(f"{top}.before-restore-{stamp} exists in the lane root")
+        for top in sorted(tops):
+            try:
+                os.stat(top, dir_fd=lane_fd, follow_symlinks=False)
+                present = True
+            except FileNotFoundError:
+                present = False
+            if present:
+                os.rename(
+                    top, f"{top}.before-restore-{stamp}", src_dir_fd=lane_fd, dst_dir_fd=lane_fd
+                )
+                moved.append(top)
+            os.rename(top, top, src_dir_fd=stage_fd, dst_dir_fd=lane_fd)
+    except OSError as e:
+        raise Refused(
+            f"the restore stopped part way ({e.strerror}): moved aside {moved}; what was not moved in "
+            f"is still in {stage}"
+        ) from e
+    finally:
+        os.close(stage_fd)
+        os.close(lane_fd)
     os.rmdir(stage)
     return {**verdict, "restored": sorted(tops), "moved_aside": moved, "stamp": stamp}
 

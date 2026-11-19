@@ -390,12 +390,12 @@
     {
       "exit": {
         "0": "every step succeeded",
-        "1": "a step failed (its own non-zero exit status is passed on; the steps after it did not run)",
-        "143": "stopped (SIGTERM, the dispatcher's cancel)",
+        "1": "a step failed, could not start or was killed by a signal (its own status is in the run record; the steps after it did not run)",
+        "143": "stopped (SIGTERM to the wrapper, the dispatcher's cancel)",
         "2": "refused before any step ran (an untrusted or malformed spec, a lane mismatch, a missing credential)"
       },
       "id": "cti-pipeline-run",
-      "inputs": "the instance's job spec (root's), the dispatcher's run file and the lane's credentials (systemd credentials)",
+      "inputs": "the instance's job spec (root's), the dispatcher's run file (read and consumed as the lane's user) and the lane's credentials (systemd credentials)",
       "kind": "job",
       "language": "python",
       "outputs": "the steps' output on stdout (the unit's log file); <lane root>/hnx-runs/<job>.json, the last run's record",

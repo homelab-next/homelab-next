@@ -4,9 +4,11 @@ ansible run: jinja2 with the few filters they use).
 
 * Each job runs in each of its lanes as one instance, ``hnx-<id>@<job>-<lane>.service``.
 * The template unit is the orchestration dispatcher's interface (modules/orchestration README,
-  "Module job units": the run file loaded as the ``hnx-dispatch`` credential from
-  ``<dispatch dir>/<set>/%i.json``, the log appended to ``<log dir>/<set>/%i.log``), hardened, in
-  the module's slice, never enabled and writing nothing by itself.
+  "Module job units", contract v2: no run file loaded by PID 1, the run-file group joined, the spec
+  naming ``<dispatch dir>/<set>/%i.json`` and its owner for the job to read itself, the log
+  appended to ``<log dir>/<set>/%i.log``), hardened, in the module's slice, never enabled and
+  writing nothing by itself.
+* The real schema as a token: what the role refuses in a shadow job's arguments and env.
 * Each lane's drop-in and spec keep the lanes apart: the shadow lane's user, root and secrets only,
   its forced shadow schema and the stage-only publish mode, nothing of the real lane's; and the
   wrapper's own lane guard accepts what the role renders.
@@ -19,6 +21,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import re
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -36,6 +39,7 @@ ROLE = ROOT / "modules" / "cti-pipeline" / "roles" / "cti_pipeline"
 def _env(native: bool):
     cls = nativetypes.NativeEnvironment if native else jinja2.Environment
     env = cls(undefined=jinja2.StrictUndefined, trim_blocks=True, keep_trailing_newline=True)
+    env.filters["regex_escape"] = re.escape
     env.filters["combine"] = lambda a, *b: {k: v for d in (a, *b) for k, v in d.items()}
     env.filters["to_nice_json"] = lambda v: json.dumps(v, indent=4, sort_keys=True)
     env.filters["int"] = lambda v: int(v)
@@ -109,11 +113,9 @@ def test_the_template_unit_is_the_dispatchers_interface_and_hardened(site):
     ctx, _ = site
     unit = render("job.service.j2", ctx)
     lines = set(unit.splitlines())
-    # modules/orchestration (Module job units): the run file and the log, per set and instance
-    assert (
-        "LoadCredential=hnx-dispatch:/var/lib/hnx-modules/orchestration/dispatch/intel/%i.json"
-        in lines
-    )
+    # modules/orchestration (Module job units, contract v2): the job reads its own run file
+    assert not any(x.startswith("LoadCredential=") for x in lines)
+    assert "SupplementaryGroups=hnx-job-intel" in lines
     assert "StandardOutput=append:/var/log/hnx-jobs/intel/%i.log" in lines
     assert (
         "ExecStart=/opt/hnx/intel/bin/hnx-cti-run --spec /etc/hnx/intel/jobs/%i.json --instance %i"
@@ -181,3 +183,23 @@ def test_the_data_root_has_one_owner_and_each_lane_root_its_own_user(site):
         ctx["cti_pipeline_lane_dirs"]
     )
     assert ctx["cti_pipeline_lane_user"] == {"real": "hnx-intel", "shadow": "hnx-intel-shadow"}
+
+
+def test_the_spec_names_the_run_file_its_owner_and_the_lanes_consumed_runs(site):
+    ctx, inst = site
+    spec = json.loads(render("job-spec.json.j2", ctx, inst["fresh-shadow"]))
+    assert spec["run_file"] == "/var/lib/hnx-dispatch/intel/fresh-shadow.json"
+    assert spec["run_owner"] == "hnx-orchestrator"
+    assert spec["consumed_dir"] == "/var/lib/hnx-modules/intel/shadow/hnx-consumed"
+    assert spec["release_link"] == "/opt/hnx/intel/current" and spec["real_lake_schema"] == "cti"
+    assert "hnx-consumed" in ctx["cti_pipeline_lane_dirs"]
+
+
+@pytest.mark.parametrize(
+    ("text", "hit"),
+    [("cti", True), ("--schema=cti", True), ("cti.items", True), ("a cti b", True),
+     ("cti_shadow", False), ("cti-rollup", False), ("/var/cti/x", False), ("hnx-cti", False)],
+)  # fmt: skip
+def test_the_real_schema_token_the_role_refuses_in_a_shadow_job(site, text, hit):
+    ctx, _ = site
+    assert bool(re.search(ctx["cti_pipeline_real_schema_token"].strip(), text)) is hit

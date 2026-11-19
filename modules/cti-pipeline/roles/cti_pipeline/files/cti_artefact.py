@@ -40,6 +40,7 @@ CURRENT.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -65,17 +66,25 @@ class Refused(Exception):
     """The archive or the target is refused: exit 1, nothing replaced."""
 
 
-def sha256_of(path: str) -> str:
+def open_archive(path: str):
+    """The archive as a binary file object, opened without following a link; a regular file."""
     try:
         fd = os.open(path, os.O_RDONLY | NF)
     except OSError as e:
         raise Refused(f"{path} cannot be opened ({e.strerror}, or a link)") from e
+    f = os.fdopen(fd, "rb")
+    if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+        f.close()
+        raise Refused(f"{path} is not a regular file")
+    return f
+
+
+def sha256_of(f) -> str:
+    """The sha256 of the open archive ``f``, read from its start."""
+    f.seek(0)
     h = hashlib.sha256()
-    with os.fdopen(fd, "rb") as f:
-        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-            raise Refused(f"{path} is not a regular file")
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
+    for chunk in iter(lambda: f.read(1 << 20), b""):
+        h.update(chunk)
     return h.hexdigest()
 
 
@@ -112,19 +121,28 @@ def remove_inside(path: str, parent: str) -> None:
     shutil.rmtree(path)
 
 
-def extract(archive: str, dest: str) -> None:
-    """Every member of ``archive`` into ``dest`` (a new, empty directory), or Refused."""
+def extract(f, dest: str, label: str) -> None:
+    """Every member of the archive open as ``f`` (read from its start) into ``dest`` (a new, empty
+    directory), or Refused."""
+    f.seek(0)
     try:
-        with tarfile.open(archive, "r:*") as tf:
+        with tarfile.open(fileobj=f, mode="r:*") as tf:
             _extract_members(tf, dest)
     except (tarfile.TarError, EOFError) as e:
-        raise Refused(f"{archive} is not a readable tar archive: {e}") from e
+        raise Refused(f"{label} is not a readable tar archive: {e}") from e
     for root, dirs, _files in os.walk(dest):
         for d in dirs:
             os.chmod(os.path.join(root, d), 0o700)
 
 
 def _extract_members(tf: tarfile.TarFile, dest: str) -> None:
+    try:
+        _extract_each(tf, dest)
+    except OSError as e:  # a file where a directory is (or the reverse), or a write that failed
+        raise Refused(f"the archive does not unpack cleanly: {e.strerror} ({e.filename})") from e
+
+
+def _extract_each(tf: tarfile.TarFile, dest: str) -> None:
     seen: set[str] = set()
     total = 0
     for count, m in enumerate(tf, start=1):
@@ -205,11 +223,14 @@ def install(archive: str, pin: str, releases: str, python: str) -> dict:
     if not SHA_RE.match(pin):
         raise Refused("the pin is not 64 lowercase hex")
     releases = real_dir(releases, "the releases directory")
-    got = sha256_of(archive)
+    with open_archive(archive) as f:  # one descriptor: what is hashed is what is unpacked
+        return _install(f, os.path.basename(archive), pin, releases, python)
+
+
+def _install(f, label: str, pin: str, releases: str, python: str) -> dict:
+    got = sha256_of(f)
     if got != pin:
-        raise Refused(
-            f"{os.path.basename(archive)} hashes to {got}, the pin is {pin}; nothing was installed"
-        )
+        raise Refused(f"{label} hashes to {got}, the pin is {pin}; nothing was installed")
     name = pin[:16]
     final = os.path.join(releases, name)
     if os.path.lexists(final):
@@ -218,8 +239,8 @@ def install(archive: str, pin: str, releases: str, python: str) -> dict:
             raise Refused(
                 f"{final} exists but is not an installed release (no {MARKER}): move it aside"
             )
-        with open(marker, encoding="utf-8") as f:
-            if f.read().strip() != pin:
+        with open(marker, encoding="utf-8") as m:
+            if m.read().strip() != pin:
                 raise Refused(f"{final} records another pin: move it aside")
         return {"changed": False, "release": final}
     stage = os.path.join(releases, f".{name}.incoming")
@@ -227,11 +248,11 @@ def install(archive: str, pin: str, releases: str, python: str) -> dict:
         remove_inside(stage, releases)
     os.mkdir(stage, 0o700)
     try:
-        extract(archive, stage)
+        extract(f, stage, label)
         meta = check_layout(stage)
         build_venv(stage, python)
-        with open(os.path.join(stage, MARKER), "w", encoding="utf-8") as f:
-            f.write(pin + "\n")
+        with open(os.path.join(stage, MARKER), "w", encoding="utf-8") as m:
+            m.write(pin + "\n")
         os.rename(stage, final)
     except BaseException:
         if os.path.isdir(stage) and not os.path.islink(stage):
@@ -241,6 +262,9 @@ def install(archive: str, pin: str, releases: str, python: str) -> dict:
 
 
 def prune(releases: str, current: str, keep: int) -> dict:
+    """Release directories past the ``keep`` newest (the current one counted, never removed), each
+    removed only under an exclusive, non-blocking lock on its marker: a job holds a shared one for
+    its whole run (the job wrapper), so a release in use is skipped and kept for a later prune."""
     releases = real_dir(releases, "the releases directory")
     found = []
     for entry in os.scandir(releases):
@@ -251,11 +275,30 @@ def prune(releases: str, current: str, keep: int) -> dict:
         ):
             found.append((entry.stat(follow_symlinks=False).st_mtime, entry.name))
     found.sort(reverse=True)
-    removed = []
+    removed, in_use = [], []
     for _mtime, name in found[max(keep - 1, 0) :]:
-        remove_inside(os.path.join(releases, name), releases)
-        removed.append(name)
-    return {"changed": bool(removed), "removed": removed}
+        path = os.path.join(releases, name)
+        try:
+            fd = os.open(os.path.join(path, MARKER), os.O_RDONLY | NF)
+        except FileNotFoundError:
+            fd = None  # never finished installing: nothing can be running it
+        try:
+            if fd is not None:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    in_use.append(name)
+                    continue
+            gone = os.path.join(releases, f".{name}.removing")
+            if os.path.lexists(gone):
+                remove_inside(gone, releases)
+            os.rename(path, gone)  # under the lock: a job starting now finds no marker and retries
+            remove_inside(gone, releases)
+            removed.append(name)
+        finally:
+            if fd is not None:
+                os.close(fd)
+    return {"changed": bool(removed), "removed": removed, "in_use": in_use}
 
 
 def main(argv: list[str]) -> int:

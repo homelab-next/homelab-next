@@ -65,9 +65,12 @@ cti_pipeline_lane_refs:
 cti_pipeline_state_dirs: [data, state, podcast]
 
 # --- the orchestration dispatcher's interface (modules/orchestration, "Module job units") --------
-# where the dispatcher writes each run file (<dir>/<set>/<job>-<lane>.json): the orchestration
-# instance's data root plus dispatch/
-cti_pipeline_dispatch_dir: /var/lib/hnx-modules/orchestration/dispatch
+# the orchestration dispatcher's run files (contract v2): <dir>/<set>/<job>-<lane>.json, owned by
+# the controller's user (cti_pipeline_dispatch_owner), group hnx-job-<set>, which the job units join
+# (SupplementaryGroups=) to read them; the orchestration role creates the group and the directories
+cti_pipeline_dispatch_dir: /var/lib/hnx-dispatch
+cti_pipeline_dispatch_owner: hnx-orchestrator
+cti_pipeline_dispatch_group: "hnx-job-{{ cti_pipeline_logical_id }}"
 # where each unit appends its log (<dir>/<set>/<job>-<lane>.log, pre-created by the orchestration role)
 cti_pipeline_job_logs_dir: /var/log/hnx-jobs
 
@@ -106,3 +109,5 @@ cti_pipeline_memory_max: 6G
 cti_pipeline_tasks_max: 512
 # the backup hook's exports kept per lane (<data root>/export/<lane>-<stamp>/)
 cti_pipeline_keep_exports: 3
+# export and restore block the lane's units and wait this long for a running one to finish
+cti_pipeline_quiesce_wait_s: 3600

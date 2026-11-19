@@ -16,6 +16,15 @@
       ansible.builtin.assert:
         that: cti_pipeline_systemd_stat.stat.isdir | default(false)
         fail_msg: "cti-pipeline: the host does not run systemd (the jobs are units)"
+    - name: Look for the dispatcher's user and run-file group (the orchestration role creates them)
+      ansible.builtin.getent:
+        database: "{{ item.db }}"
+        key: "{{ item.key }}"
+      loop:
+        - {db: passwd, key: "{{ cti_pipeline_dispatch_owner }}"}
+        - {db: group, key: "{{ cti_pipeline_dispatch_group }}"}
+      loop_control:
+        label: "{{ item.db }} {{ item.key }}"
     - name: The interpreter can build a venv
       ansible.builtin.command:
         argv: ["{{ cti_pipeline_python }}", -c, "import venv, ensurepip, sqlite3"]

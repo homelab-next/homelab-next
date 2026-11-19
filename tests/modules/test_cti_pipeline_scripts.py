@@ -23,6 +23,7 @@ import importlib.util
 import io
 import json
 import os
+import pwd
 import sqlite3
 import sys
 import tarfile
@@ -115,6 +116,11 @@ def test_an_artefact_that_is_not_the_pin_is_refused_before_anything_is_written(t
         ({**GOOD, "venv/bin/python": b"x"}, None, "carries a venv"),
         ({"app/run.py": b"x"}, None, "no hnx-artefact.json"),
         ({**GOOD, "App/Run.py": b"x", "app/run.PY": b"y", "APP/RUN.PY": b"z"}, None, "repeats"),
+        (
+            {**GOOD, "app/run.py/inner": b"x"},
+            None,
+            "does not unpack cleanly",
+        ),  # a file, then a dir in it
     ],
 )
 def test_an_unsafe_or_malformed_artefact_is_refused_and_leaves_nothing(
@@ -141,10 +147,32 @@ def test_prune_keeps_the_newest_and_never_the_current_release(releases):
 
 # ----------------------------------------------------------------------------- the job wrapper
 
+USER = pwd.getpwuid(os.getuid()).pw_name
+
+
+def _release(install: Path, name: str) -> Path:
+    rel = install / "releases" / name
+    (rel / "app").mkdir(parents=True)
+    (rel / ".hnx-installed").write_text(name + "\n")
+    return rel
+
+
+def _point(install: Path, name: str) -> None:
+    tmp = install / ".current.new"
+    tmp.symlink_to(install / "releases" / name)
+    os.replace(tmp, install / "current")
+
 
 def _spec(tmp_path: Path, lane: str = "real", **over) -> tuple[Path, dict]:
     root = tmp_path / "var" / "lib" / "intel" / lane
     (root / "hnx-runs").mkdir(parents=True)
+    (root / "hnx-consumed").mkdir()
+    install = tmp_path / "opt" / "hnx" / "intel"
+    if not (install / "current").exists():
+        _release(install, "a" * 16)
+        _release(install, "b" * 16)
+        _point(install, "a" * 16)
+    (tmp_path / "run" / "intel").mkdir(parents=True, exist_ok=True)
     probe = tmp_path / "probe.py"
     probe.write_text(
         "import json, os, sys\n"
@@ -156,11 +184,14 @@ def _spec(tmp_path: Path, lane: str = "real", **over) -> tuple[Path, dict]:
     spec = {
         "version": 1, "set": "intel", "job": "fresh", "lane": lane, "instance": f"fresh-{lane}",
         "lane_root": str(root), "runs_dir": str(root / "hnx-runs"),
-        "steps": [["{python}", str(probe), "first"], ["{python}", str(probe), "{lane_root}"]],
+        "steps": [["{python}", str(probe), "first"], ["{python}", str(probe), "{lane_root}", "{app}"]],
         "env": {"APP_MODE": "x", "PROBE_OUT": str(tmp_path / "probe.jsonl")},
         "forced_env": {"LAKE_SCHEMA": "intel_shadow" if lane == "shadow" else "intel", "PUBLISH_MODE": "stage"},
-        "lake_schema_env": "LAKE_SCHEMA", "publish_mode_env": "PUBLISH_MODE",
-        "placeholders": {"python": sys.executable, "lane_root": str(root)},
+        "lake_schema_env": "LAKE_SCHEMA", "publish_mode_env": "PUBLISH_MODE", "real_lake_schema": "intel",
+        "release_link": str(install / "current"),
+        "run_file": str(tmp_path / "run" / "intel" / f"fresh-{lane}.json"), "run_owner": USER,
+        "consumed_dir": str(root / "hnx-consumed"),
+        "placeholders": {"python": sys.executable, "lane_root": str(root), "app": str(install / "current" / "app")},
     }  # fmt: skip
     spec.update(over)
     path = tmp_path / "etc" / f"fresh-{lane}.json"
@@ -170,13 +201,20 @@ def _spec(tmp_path: Path, lane: str = "real", **over) -> tuple[Path, dict]:
     return path, spec
 
 
-def _creds(tmp_path: Path, lane: str = "real") -> Path:
+def _run_file(spec: dict, run_id: str = "run-1", **over) -> Path:
+    body = {"version": 1, "run_id": run_id, "lane": spec["lane"], "agent_key": "intel-fresh",
+            "job": spec["job"], "unit": f"hnx-intel@{spec['instance']}.service", "task": "",
+            "dispatched_at": "2026-11-19T10:00:00Z", **over}  # fmt: skip
+    path = Path(spec["run_file"])
+    path.write_text(json.dumps(body))
+    path.chmod(0o640)
+    return path
+
+
+def _creds(tmp_path: Path) -> Path:
     d = tmp_path / "creds"
     d.mkdir(exist_ok=True)
     (d / "FEED_USER").write_text("alice\n")
-    (d / "hnx-dispatch").write_text(
-        json.dumps({"run_id": "run-1", "lane": lane, "agent_key": "intel-fresh"})
-    )
     return d
 
 
@@ -188,65 +226,170 @@ def _main(spec: Path, instance: str, creds: Path, monkeypatch) -> int:
     return run.main(["--spec", str(spec), "--instance", instance, "--spec-owner", str(os.getuid())])
 
 
+def _rows(tmp_path: Path) -> list[dict]:
+    p = tmp_path / "probe.jsonl"
+    return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
+
+
 def test_the_steps_run_in_the_lane_root_with_the_credentials_in_their_environment_only(
     tmp_path, monkeypatch, capsys
 ):
     spec, body = _spec(tmp_path)
+    _run_file(body)
     assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 0
-    rows = [json.loads(x) for x in (tmp_path / "probe.jsonl").read_text().splitlines()]
+    rows = _rows(tmp_path)
     assert [r["argv"][0] for r in rows] == ["first", body["lane_root"]]
     assert {r["cwd"] for r in rows} == {body["lane_root"]}
-    assert (
-        rows[0]["FEED_USER"] == "alice"
-        and rows[0]["APP_MODE"] == "x"
-        and rows[0]["HNX_RUN_ID"] == "run-1"
-    )
+    assert rows[0]["FEED_USER"] == "alice" and rows[0]["APP_MODE"] == "x"
+    assert rows[0]["HNX_RUN_ID"] == "run-1"
     assert rows[0]["LAKE_SCHEMA"] == "intel" and rows[0]["PUBLISH_MODE"] == "stage"
     assert "alice" not in capsys.readouterr().out  # never in the log
     rec = json.loads(Path(body["runs_dir"], "fresh.json").read_text())
-    assert (
-        rec["ok"] is True and rec["exit"] == 0 and rec["run_id"] == "run-1" and rec["finished_at"]
-    )
+    assert rec["ok"] is True and rec["exit"] == 0 and rec["run_id"] == "run-1"
+    assert (Path(body["consumed_dir"]) / "run-1").exists()
 
 
-def test_the_first_failing_step_ends_the_job_and_is_recorded(tmp_path, monkeypatch):
+def test_a_run_file_is_consumed_once(tmp_path, monkeypatch):
+    spec, body = _spec(tmp_path)
+    _run_file(body)
+    assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 0
+    _run_file(body)  # the same run id again: a replay
+    assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 2
+    assert len(_rows(tmp_path)) == 2  # the first run's two steps only
+
+
+def _hard_link(path: Path) -> None:
+    other = path.with_name("other.json")
+    os.link(path, other)
+
+
+@pytest.mark.parametrize(
+    "kind", ["symlink", "directory", "fifo", "hardlink", "writable", "foreign", "big"]
+)
+def test_a_run_file_that_is_not_the_dispatchers_is_refused_before_it_is_read(
+    tmp_path, monkeypatch, kind
+):
+    spec, body = _spec(tmp_path)
+    path = Path(body["run_file"])
+    if kind == "symlink":
+        real = _run_file(body).rename(tmp_path / "elsewhere.json")
+        path.symlink_to(real)
+    elif kind == "directory":
+        path.mkdir()
+    elif kind == "fifo":
+        os.mkfifo(path)  # O_NONBLOCK: the open never waits for a writer
+    elif kind == "hardlink":
+        _hard_link(_run_file(body))
+    elif kind == "writable":
+        _run_file(body).chmod(0o662)
+    elif kind == "foreign":
+        body["run_owner"] = "root" if os.getuid() != 0 else "nobody"
+        spec.write_text(json.dumps(body))
+        _run_file(body)
+    else:
+        _run_file(body, task="x" * (300 << 10))
+    with pytest.raises(run.Refused):
+        run.dispatch_run(body)
+    assert list(Path(body["consumed_dir"]).iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"lane": "shadow"},
+        {"job": "other"},
+        {"unit": "@".join(["hnx-other", "fresh-real.service"])},
+        {"version": 2},
+        {"run_id": "../x"},
+        {"agent_key": "Bad Key"},
+    ],
+)
+def test_a_run_file_for_another_run_or_malformed_is_refused(tmp_path, over):
+    _, body = _spec(tmp_path)
+    _run_file(body, **over)
+    with pytest.raises(run.Refused, match="not this instance's run"):
+        run.dispatch_run(body)
+
+
+def test_a_failing_step_ends_the_job_with_1_and_its_own_status_in_the_record(tmp_path, monkeypatch):
     probe = tmp_path / "probe.py"
     spec, body = _spec(tmp_path)
-    body["steps"] = [["{python}", str(probe), "3"], ["{python}", str(probe), "never"]]
+    for i, (status, steps) in enumerate(
+        [
+            (2, [["{python}", str(probe), "2"], ["{python}", str(probe), "never"]]),
+            (143, [["{python}", str(probe), "143"]]),
+            (-9, [["{python}", "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"]]),
+        ]
+    ):
+        body["steps"] = steps
+        spec.write_text(json.dumps(body))
+        _run_file(body, run_id=f"run-{i}")
+        assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 1  # never 2 or 143
+        rec = json.loads(Path(body["runs_dir"], "fresh.json").read_text())
+        assert rec["ok"] is False and rec["exit"] == 1 and rec["step_status"] == status
+    assert [r["argv"][0] for r in _rows(tmp_path)] == ["2", "143"]  # "never" never ran
+
+
+def test_the_release_is_pinned_at_start_and_never_pruned_while_a_job_runs_it(tmp_path, monkeypatch):
+    spec, body = _spec(tmp_path)
+    install = Path(body["release_link"]).parent
+    switch = (
+        "import os, sys; p = sys.argv[1]; t = p + '.new'; "
+        "os.symlink(sys.argv[2], t); os.replace(t, p)"
+    )
+    body["steps"] = [
+        [
+            "{python}",
+            "-c",
+            switch,
+            str(install / "current"),
+            str(install / "releases" / ("b" * 16)),
+        ],
+        ["{python}", str(tmp_path / "probe.py"), "{app}"],
+    ]
     spec.write_text(json.dumps(body))
-    assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 3
-    assert len((tmp_path / "probe.jsonl").read_text().splitlines()) == 1
-    rec = json.loads(Path(body["runs_dir"], "fresh.json").read_text())
-    assert rec["ok"] is False and rec["exit"] == 3 and rec["step"] == 1
+    _run_file(body)
+    assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 0
+    assert _rows(tmp_path)[0]["argv"] == [str(install / "releases" / ("a" * 16) / "app")]
+    # a job holding release a: prune (current b, keep 1) skips it, and removes it once released
+    held = dict(body, placeholders=dict(body["placeholders"]))
+    _point(install, "a" * 16)
+    fd = run.pin_release(held)
+    _point(install, "b" * 16)
+    out = art.prune(str(install / "releases"), "b" * 16, 1)
+    assert out["removed"] == [] and out["in_use"] == ["a" * 16]
+    os.close(fd)
+    assert art.prune(str(install / "releases"), "b" * 16, 1)["removed"] == ["a" * 16]
 
 
 @pytest.mark.parametrize(
     ("lane", "over", "why"),
     [
-        (
-            "shadow",
-            {"forced_env": {"LAKE_SCHEMA": "intel", "PUBLISH_MODE": "stage"}},
-            "not a shadow schema",
-        ),
-        (
-            "shadow",
-            {"forced_env": {"LAKE_SCHEMA": "intel_shadow", "PUBLISH_MODE": "live"}},
-            "never publishes",
-        ),
-        (
-            "real",
-            {"forced_env": {"LAKE_SCHEMA": "intel_shadow", "PUBLISH_MODE": "stage"}},
-            "is a shadow schema",
-        ),
+        ("shadow", {"forced_env": {"LAKE_SCHEMA": "intel", "PUBLISH_MODE": "stage"}}, "not a shadow schema"),
+        ("shadow", {"forced_env": {"LAKE_SCHEMA": "intel_shadow", "PUBLISH_MODE": "live"}}, "never publishes"),
+        ("real", {"forced_env": {"LAKE_SCHEMA": "intel_shadow", "PUBLISH_MODE": "stage"}}, "is a shadow schema"),
         ("real", {"forced_env": {"LAKE_SCHEMA": "intel"}}, "never publishes"),
         ("real", {"instance": "other-real"}, "another instance"),
+        ("shadow", {"steps": [["{python}", "load.py", "--schema", "intel"]]}, "names the real lake schema"),
+        ("shadow", {"steps": [["{python}", "load.py", "--schema=intel"]]}, "names the real lake schema"),
+        ("shadow", {"env": {"TABLE": "intel.items"}}, "names the real lake schema"),
+        ("shadow", {"real_lake_schema": ""}, "does not name the real lake schema"),
     ],
-)
+)  # fmt: skip
 def test_the_lane_guard_and_the_spec_checks_refuse_before_any_step(tmp_path, lane, over, why):
     spec, _ = _spec(tmp_path, lane, **over)
     with pytest.raises(run.Refused, match=why):
         run.load_spec(str(spec), os.getuid(), f"fresh-{lane}")
     assert not (tmp_path / "probe.jsonl").exists()
+
+
+def test_a_shadow_job_may_run_a_module_named_like_the_schema_and_paths_that_contain_it(tmp_path):
+    spec, _ = _spec(
+        tmp_path, "shadow",
+        steps=[["{python}", "-m", "intel.cve", "--all"], ["{python}", "/srv/intel/x.py", "intel-rollup"]],
+        env={"SITE": "intel-rollup", "DIR": "/var/intel/shadow"},
+    )  # fmt: skip
+    run.load_spec(str(spec), os.getuid(), "fresh-shadow")
 
 
 def test_a_spec_another_user_could_write_is_refused(tmp_path):
@@ -259,13 +402,10 @@ def test_a_spec_another_user_could_write_is_refused(tmp_path):
         run.load_spec(str(spec), os.getuid() + 1, "fresh-real")
 
 
-def test_a_run_for_the_other_lane_or_a_credential_named_like_an_env_value_is_refused(
-    tmp_path, monkeypatch, capsys
-):
-    spec, _ = _spec(tmp_path, "shadow")
-    creds = _creds(tmp_path, lane="real")  # the dispatcher says real; the unit is shadow
-    assert _main(spec, "fresh-shadow", creds, monkeypatch) == 2
-    (creds / "hnx-dispatch").write_text(json.dumps({"run_id": "run-2", "lane": "shadow"}))
+def test_a_credential_named_like_an_env_value_is_refused(tmp_path, monkeypatch, capsys):
+    spec, body = _spec(tmp_path, "shadow")
+    _run_file(body)
+    creds = _creds(tmp_path)
     (creds / "APP_MODE").write_text("from-the-store\n")  # loaded, and also the spec's env name
     assert _main(spec, "fresh-shadow", creds, monkeypatch) == 2
     assert not (tmp_path / "probe.jsonl").exists()
@@ -274,10 +414,10 @@ def test_a_run_for_the_other_lane_or_a_credential_named_like_an_env_value_is_ref
 
 
 def test_the_log_carries_no_value_from_the_spec_or_a_credential(tmp_path, monkeypatch, capsys):
-    spec, _ = _spec(tmp_path)
+    spec, body = _spec(tmp_path)
+    _run_file(body)
     assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 0
-    out = capsys.readouterr().out
-    assert out.splitlines() == [
+    assert capsys.readouterr().out.splitlines() == [
         "hnx-cti-run: fresh-real: started",
         "hnx-cti-run: fresh-real: step 1 started",
         "hnx-cti-run: fresh-real: step 2 started",
@@ -425,3 +565,68 @@ def test_prune_exports_keeps_the_newest_of_its_lane(tmp_path):
     out = state.prune_exports(str(d), "real", 2)
     assert sorted(out["removed"]) == names[:2]
     assert sorted(p.name for p in d.iterdir()) == sorted(names[2:])
+
+
+def test_an_export_never_follows_a_directory_swapped_for_a_link_mid_walk(tmp_path, monkeypatch):
+    root = _lane(tmp_path)
+    (root / "state" / "sub").mkdir()
+    (root / "state" / "sub" / "ok.json").write_text("{}")
+    secret = tmp_path / "secrets"
+    secret.mkdir()
+    (secret / "FEED_USER").write_text("alice")
+    listed = state.listdir_fd
+
+    def swap_after_listing(fd):
+        names = listed(fd)
+        if (
+            "sub" in names
+            and (root / "state" / "sub").is_dir()
+            and not (root / "state" / "sub").is_symlink()
+        ):
+            (root / "state" / "sub").rename(root / "state" / "sub.moved")
+            (root / "state" / "sub").symlink_to(secret)  # the lane swaps it after the listing
+        return names
+
+    monkeypatch.setattr(state, "listdir_fd", swap_after_listing)
+    exports = tmp_path / "var" / "lib" / "intel" / "export"
+    exports.mkdir(parents=True)
+    with pytest.raises(state.Refused, match="sub"):
+        state.export(str(root), str(exports / "real-1"), ["data", "state", "podcast"])
+    assert list(exports.iterdir()) == []  # the stage was removed; nothing of the secret copied
+
+
+@pytest.mark.parametrize("planted", ["data", "state", "state/inner"])
+def test_an_export_refuses_a_linked_directory_anywhere(tmp_path, planted):
+    root = _lane(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "cti.db").write_bytes((root / "data" / "cti.db").read_bytes())
+    target = root / planted
+    if target.exists():
+        target.rename(target.with_name(target.name + ".moved"))
+    target.symlink_to(outside)
+    exports = tmp_path / "var" / "lib" / "intel" / "export"
+    exports.mkdir(parents=True)
+    with pytest.raises(state.Refused, match=r"link|not a directory"):
+        state.export(str(root), str(exports / "real-1"), ["data", "state", "podcast"])
+    assert list(exports.iterdir()) == []
+
+
+def test_restore_stages_beside_the_lane_root_and_only_moves_a_planted_link_aside(tmp_path):
+    root = _lane(tmp_path)
+    dest = _export(tmp_path, root)
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("untouched")
+    import shutil as _shutil
+
+    _shutil.rmtree(root / "state")
+    (root / "state").symlink_to(victim)  # the lane plants a link where a directory is restored
+    out = state.restore(str(dest), str(root), os.getuid(), os.getgid())
+    assert (root / "state").is_dir() and not (root / "state").is_symlink()
+    assert (root / f"state.before-restore-{out['stamp']}").is_symlink()  # moved aside, not followed
+    assert sorted(p.name for p in victim.iterdir()) == ["keep.txt"]
+    assert (victim / "keep.txt").read_text() == "untouched"
+    data_root = root.parent
+    assert not [p for p in data_root.iterdir() if p.name.startswith(".restore-")]  # stage removed
+    assert not [p for p in root.iterdir() if p.name.startswith(".restore")]  # never inside the lane
