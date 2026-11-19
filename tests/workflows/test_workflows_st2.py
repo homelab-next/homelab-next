@@ -1576,6 +1576,7 @@ def test_every_fixture_request_is_one_the_handler_schema_accepts():
         (400, '{"reason": "input_unsupported"}', 1, None),
         (401, '{"reason": "unauthorized"}', 1, None),  # the token is missing or wrong
         (403, '{"reason": "forbidden"}', 1, None),  # the token lacks the jobs scope
+        (429, "the agent already has an unfinished shadow job", 0, None),  # back-pressure: a skip
         (503, "", 1, None),
         (None, "", 1, None),  # no answer
     ],
@@ -1623,7 +1624,9 @@ def test_the_submit_handler_maps_the_controllers_answers(tmp_path, code, body, e
         assert b"refused the token" in got.stderr
     if exit_code == 0:
         out = json.loads(got.stdout)
-        if refused:
+        if code == 429:
+            assert out == {"skipped": "back-pressure", "status": 429}
+        elif refused:
             assert out == {"refused": True, "status": code, "reason": refused}
             assert b"refused by the controller" in got.stderr
         else:

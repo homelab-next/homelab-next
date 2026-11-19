@@ -322,7 +322,55 @@ like `new-critical-alert`: a `lookup` step does not run on StackStorm yet and th
 are the site's, so they are not pinned in `workflows/deploy.yml` or bound in
 `workflows/stackstorm.yml` until both exist. The route-log record shape (`event`, `fallback`, `ts`)
 is a contract the app's `LLM_ROUTE_LOG` has to meet. The lake row-count query is
-`cti_watch.LAKE_ROWS_SQL` (the column name is the site's schema).
+`cti_watch.lake_rows_sql(schema)` (the schema must be a plain identifier; the column name is the
+site's). It buckets in explicit UTC (`at_timezone`, LL-392) and runs through the repository's lake
+client, which pins the session to UTC (`X-Trino-Time-Zone`). `site` reads the page's top-level
+`generated_at` of its embedded `DATA`, never a nested one, and a missing `extract_failed` makes `lake`
+stale. A 429 from the controller (shadow back-pressure) is a clean skip in the submit handler.
+
+**What the rules do not carry over from systemd.** The old timers all had `Persistent=true`, and
+the rules are a plain clock, so these differences are real:
+
+- **No catch-up after downtime.** A timer missed while the engine, its host or the bridge was down
+  ran once on the next start; a CronTimer that was not running when it was due simply does not fire.
+  After an outage the hourly jobs resume on the next hour; the daily, weekly, monthly and half-yearly
+  ones (`cti-cve`, the podcasts, `cti-country-landscape`) wait for their next period, so a missed
+  Monday episode or 1 January landscape is not made up. Run it by hand (`agent.job.submit` for the
+  agent key) or watch for it: `cti-watch` sees the stale site and lake, not a skipped episode.
+- **No jitter.** The old timers used `RandomizedDelaySec` (30 s to 10 min) to spread the load; every
+  rule fires on its exact minute, so `cti-fresh` (minute 0), `cti-podcast-*` and the `*/4` extract
+  start together at 00:00 UTC. The controller's admission queues them, which is the point of
+  going through it.
+- **No `.ldr.lock` serialisation across jobs.** The old podcast, rotation and landscape units ran
+  under `flock .ldr.lock`, so they ran one after another. Now two runs of the same agent serialise
+  on the module's unit instance (the dispatcher locks it), which covers the ten rotation slots
+  (one agent). It does not cover different agents: the podcast periods are five agents plus
+  `cti-country-landscape`, so they may overlap. The controller's one-unfinished-job-per-agent rule is
+  for the shadow lane only and is per agent, so it does not help either. Does it matter? On the 1st the
+  monthly episode (00:00, up to 5 h) overlaps the quarterly (02:00), semiannual (04:00) and yearly
+  (06:00) ones, and the weekly one when the 1st is a Monday. The quarterly, semiannual, yearly and
+  landscape profiles are `exclusive` (the controller gives each the backend alone), so they do not run
+  beside any other job on it. The weekly and monthly ones are not, so they can overlap each other and
+  one `exclusive` job waits for them. The cost is CPU and memory on the host (the voice synthesis
+  and renders of two episodes at once, against the plan's 12 vCPU and 32 GiB), not correctness: the
+  jobs write different files. LDR's own research calls were what the lock protected (LL-239). A
+  site that sees contention should stagger the episode crons further or give the podcast profiles
+  one shared `exclusive` tag.
+- **DST drift on the formerly local-time timers.** The old `cti-cve`, `cti-graph-sync`,
+  `cti-graph-report` and rotation timers followed the host's local time, and `cti-enrich-honeypot`
+  was pinned to `America/Los_Angeles`. The rules are fixed UTC converted at PST, so in daylight time
+  each runs an hour later by the clock on the wall: `cti-enrich-honeypot` at 14:30 PDT instead of
+  13:30. For it that is the safe direction (the honeypot load is at 12:00 PST and 13:00 PDT, so it
+  still runs after it); nothing else depends on the local hour. The podcasts and the landscape were
+  UTC already.
+- **A late refire after a restart can duplicate.** The event id, and so the controller's idempotency
+  key, comes from the schedule and the firing time the engine reports. A timer that fires twice for
+  the same time is one job, but if the engine restarts and fires a missed tick late, that is a
+  different time and a different key, so it can queue a second job for the same period. The rule's
+  coalesce window folds the second firing when it lands inside the window (half the period for the
+  hourly jobs, up to a day for the daily and longer ones); outside it, a duplicate is possible. A
+  repeated hourly or daily job is harmless work, but a repeated podcast period would make a second
+  episode.
 
 ## Redeliveries
 

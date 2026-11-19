@@ -9,7 +9,7 @@
 #   inputs: the validated params as JSON on stdin; the ORCHESTRATOR_JOBS_URL secret (the controller's POST /jobs URL); the ORCHESTRATOR_JOBS_TOKEN secret (a bearer token with the controller's jobs scope)
 #   outputs: the controller's answer as JSON on stdout, or a refused object (status, reason) for a final refusal
 #   exit:
-#     "0": queued, already queued (an idempotent replay), already retried, or refused for good (logged on stderr)
+#     "0": queued, already queued (an idempotent replay), already retried, skipped on back-pressure (429), or refused for good (logged on stderr)
 #     "1": no idempotency key or token, the controller could not be reached, refused the token (401, 403), or failed (400, 5xx)
 #
 # The workflow broker's handler for agent.job.submit (workflows/broker.manifest.json).  The broker
@@ -29,6 +29,9 @@
 #   payload_override, idempotency_key_mismatch), 404 unknown_run
 #                          the controller refuses this resubmit for good: a refusal, logged, exit 0
 #                          so nothing retries it
+#   429                    back-pressure (one unfinished shadow job per agent; the body is plain text):
+#                          a clean skip, `{"skipped": "back-pressure"}`, exit 0, so a firing that lands
+#                          while the last one runs is dropped, not retried or paged
 #   401, 403               the controller refused the token (missing, wrong, or without the jobs
 #                          scope): failure, logged, exit 1
 #   anything else (400 input_unsupported is a defect in the pack; 5xx; no answer): failure, exit 1
@@ -74,6 +77,10 @@ case $code in
       echo "agent.job.submit: refused by the controller: 409 ${reason:-unknown}" >&2
       printf '{"refused": true, "status": 409, "reason": "%s"}\n' "${reason:-unknown}"
     fi
+    ;;
+  429)
+    echo "agent.job.submit: the controller applied back-pressure (429): skipped" >&2
+    printf '{"skipped": "back-pressure", "status": 429}\n'
     ;;
   401 | 403)
     echo "agent.job.submit: the controller refused the token: $code (ORCHESTRATOR_JOBS_TOKEN missing, wrong, or without the jobs scope)" >&2

@@ -3,7 +3,7 @@
   "audit": true,
   "description": "Put one agent job on the orchestration controller's queue (POST /jobs); the controller admits it against live load.",
   "handler": "handlers/agent-job-submit.sh",
-  "handler_digest": "sha256:dc5f483db25720e98dd1ec79ebed76bdec813a9a814d714065a21b2b012cd543",
+  "handler_digest": "sha256:78ff282cc6c01b6c1f19484a41ad7156405ae59b5b3b86c747db93a62ebc11ae",
   "idempotent": true,
   "max_output_bytes": 65536,
   "params_schema": {

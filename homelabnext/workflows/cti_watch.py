@@ -45,14 +45,54 @@ FALLBACK_WINDOW_H = 3.0
 FALLBACK_THRESHOLD = 5
 
 # Rows of the reporting table per hour for the last 8 days (the caller turns them into the
-# `hourly` list of lake_check, newest first); the table's schema is the lake's, set by the site.
+# `hourly` list of lake_check, newest first).  Every time is explicit UTC (LL-392: a session in
+# another zone shifts the hour buckets): `at_timezone` needs a zone-aware column, so a naive
+# timestamp column fails loudly instead of bucketing in the wrong zone.  Build it with
+# ``lake_rows_sql`` and run it through the repository's lake client (``homelabnext.lake.trino_http``),
+# which pins the session time zone to UTC (the ``X-Trino-Time-Zone`` header), so both ends agree.
 LAKE_ROWS_SQL = (
-    "SELECT date_trunc('hour', ingested_at) AS hour, count(*) AS rows "
+    "SELECT to_iso8601(date_trunc('hour', at_timezone(ingested_at, 'UTC'))) AS hour, "
+    "count(*) AS rows "
     "FROM {schema}.reporting WHERE ingested_at > current_timestamp - INTERVAL '8' DAY "
     "GROUP BY 1 ORDER BY 1 DESC"
 )
+_IDENT = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
-_GENERATED_AT = re.compile(r'"generated_at"\s*:\s*"([^"]+)"')
+
+def lake_rows_sql(schema: str) -> str:
+    """``LAKE_ROWS_SQL`` for ``schema``, which must be a plain lower-case identifier (never spliced raw)."""
+    if not isinstance(schema, str) or not _IDENT.fullmatch(schema):
+        raise ValueError(f"lake schema {schema!r} is not a plain identifier")
+    return LAKE_ROWS_SQL.format(schema=schema)
+
+
+_DATA_ASSIGN = re.compile(r"\bDATA\s*=\s*")
+
+
+def page_generated_at(page: str) -> Any:
+    """The TOP-LEVEL ``generated_at`` of the page's embedded ``DATA`` object (or of a bare JSON page).
+
+    Parsed, not searched for: a nested ``generated_at`` (a run, an item) must never stand in for the
+    page's own, or a stale page with one fresh nested record would read fresh.
+    """
+    text = page.strip()
+    dec = json.JSONDecoder()
+    doc = None
+    if text.startswith("{"):
+        try:
+            doc, _ = dec.raw_decode(text)
+        except ValueError:
+            doc = None
+    if doc is None:
+        for m in _DATA_ASSIGN.finditer(page):
+            try:
+                cand, _ = dec.raw_decode(page, m.end())
+            except ValueError:
+                continue
+            if isinstance(cand, dict):
+                doc = cand
+                break
+    return doc.get("generated_at") if isinstance(doc, dict) else None
 
 
 def parse_ts(value: Any) -> datetime | None:
@@ -92,8 +132,7 @@ def site_check(
         return _row(
             "site", True, "cti site: the page could not be fetched or was empty", None, max_age_h
         )
-    m = _GENERATED_AT.search(page)
-    ts = parse_ts(m.group(1)) if m else None
+    ts = parse_ts(page_generated_at(page))
     if ts is None:
         return _row("site", True, "cti site: no readable generated_at on the page", None, max_age_h)
     age = round((now - ts).total_seconds() / 3600, 2)
@@ -125,6 +164,12 @@ def lake_check(
     ``hourly`` is (hour start, rows) for hours that had rows; an hour absent had none.
     ``extract_failed`` is the ``failed`` count of the latest extract runs, newest first.
     """
+    if (
+        extract_failed is None
+    ):  # not provided: the failed-streak leg cannot be judged, so fail closed
+        return _row(
+            "lake", True, "cti lake: the extract failed counts were not provided", None, ratio
+        )
     if hourly is None or len(hourly) == 0:
         return _row(
             "lake",
@@ -151,11 +196,7 @@ def lake_check(
         reasons.append(f"no new rows in {dead_air_h:g} h")
     if median > 0 and last < ratio * median:
         reasons.append(f"{last} rows in {window_h:g} h against a trailing median of {median:g}")
-    if (
-        extract_failed is not None
-        and len(extract_failed) >= failed_runs
-        and all(f > 0 for f in extract_failed[:failed_runs])
-    ):
+    if len(extract_failed) >= failed_runs and all(f > 0 for f in extract_failed[:failed_runs]):
         reasons.append(f"extract reported failed > 0 in each of the last {failed_runs} runs")
     if reasons:
         return _row("lake", True, "cti lake: " + "; ".join(reasons), last, ratio)
@@ -253,7 +294,9 @@ def main(argv: list[str] | None = None, clock=datetime.now) -> int:
         try:
             doc = json.loads(raw)
             hourly = [(t, int(n)) for h, n in doc["hourly"] if (t := parse_ts(h)) is not None]
-            extract_failed = [int(x) for x in doc.get("extract_failed", [])]
+            extract_failed = (
+                [int(x) for x in doc["extract_failed"]] if "extract_failed" in doc else None
+            )
         except (ValueError, KeyError, TypeError):
             hourly = None
     table = build_table(
