@@ -78,6 +78,31 @@
         llamacpp_extra_args.tensor_split is not defined or llamacpp_gpu_indices is string or llamacpp_gpu_indices | length == 0
         or llamacpp_extra_args.tensor_split | length == llamacpp_gpu_indices | length
       - llamacpp_mode == 'generate' or llamacpp_extra_args.keys() | list | intersect(llamacpp_generate_only_args) | length == 0
+      # the long-context settings: the KV cache's types from the allow-list, a quantized one with flash attention on
+      - llamacpp_extra_args.cache_type_k is not defined or (llamacpp_extra_args.cache_type_k is string and llamacpp_extra_args.cache_type_k in llamacpp_cache_types)
+      - llamacpp_extra_args.cache_type_v is not defined or (llamacpp_extra_args.cache_type_v is string and llamacpp_extra_args.cache_type_v in llamacpp_cache_types)
+      - >-
+        llamacpp_flash_attn == 'on'
+        or [llamacpp_extra_args.cache_type_k | default('f16'), llamacpp_extra_args.cache_type_v | default('f16')]
+           | intersect(llamacpp_quantized_cache_types) | length == 0
+      # YaRN: all three or none, a finite factor above 1 and at most 8, the trained context an integer 256 to 1M
+      - >-
+        llamacpp_extra_args.keys() | list | intersect(['rope_scaling', 'rope_scale', 'yarn_orig_ctx']) | length in [0, 3]
+      - llamacpp_extra_args.rope_scaling is not defined or (llamacpp_extra_args.rope_scaling is string and llamacpp_extra_args.rope_scaling in llamacpp_rope_scalings)
+      - >-
+        llamacpp_extra_args.rope_scale is not defined
+        or ((llamacpp_extra_args.rope_scale is integer or llamacpp_extra_args.rope_scale is float) and llamacpp_extra_args.rope_scale is not boolean
+            and llamacpp_extra_args.rope_scale | float | string is not search('(?i)inf|nan')
+            and llamacpp_extra_args.rope_scale > 1 and llamacpp_extra_args.rope_scale <= llamacpp_rope_scale_max)
+      - >-
+        llamacpp_extra_args.yarn_orig_ctx is not defined
+        or (llamacpp_extra_args.yarn_orig_ctx is integer and llamacpp_extra_args.yarn_orig_ctx is not boolean
+            and llamacpp_extra_args.yarn_orig_ctx >= 256 and llamacpp_extra_args.yarn_orig_ctx <= 1048576)
+      # the most one request may hold (the context per slot, or with kv_unified the shared pool, both
+      # llamacpp_context_size) within what YaRN extends the trained context to
+      - >-
+        llamacpp_extra_args.rope_scale is not defined or llamacpp_extra_args.yarn_orig_ctx is not defined
+        or llamacpp_context_size | int <= (llamacpp_extra_args.yarn_orig_ctx | int * llamacpp_extra_args.rope_scale | float) | int
       - llamacpp_backend in llamacpp_gpu_backends or llamacpp_extra_args.keys() | list | intersect(llamacpp_gpu_only_args) | length == 0
     fail_msg: >-
       llamacpp: a registry id, a mode (generate or decision), a backend (vulkan, sycl, cuda or cpu) with that backend's image
@@ -91,7 +116,10 @@
       llamacpp_extra_args with only batch_size and ubatch_size (integers, ubatch at most batch),
       kv_unified (a boolean), split_mode (none, layer or row) and tensor_split (a list of 1 to 16
       finite non-negative numbers, one per card when the cards are listed), threads and threads_batch
-      (integers 1 to 256), batch_size, ubatch_size and kv_unified in generate mode only and split_mode and tensor_split on a GPU
+      (integers 1 to 256), cache_type_k and cache_type_v (f16, q8_0 or q4_0; a quantized one with flash attention on),
+      rope_scaling (yarn) with rope_scale (a number above 1, at most 8) and yarn_orig_ctx (an integer 256 to 1048576), all
+      three or none, the context per slot (or the shared pool) at most yarn_orig_ctx times rope_scale,
+      batch_size, ubatch_size, kv_unified and the long-context settings in generate mode only and split_mode and tensor_split on a GPU
       backend only, group ids that are not 0, a power limit of 200 W at most (the operator's rule: a setting can only tighten it) and the hwmon attributes
       that carry it
   tags: [health, backup, restore, export, upgrade]

@@ -37,7 +37,9 @@ llamacpp_model_store_id: clef-q4-k-m
 llamacpp_model_digest: "sha256:e29796ca3b3e2b31cdd32f32347a464d562ae9efaa74f82e21d6610f84b6bf02"
 # the id /v1/models lists and a reply names: the role table's model id for this backend
 llamacpp_served_model_name: clef
-# the context each parallel slot gets, in tokens; the server is started with this times the slots
+# the most one request may hold, in tokens. By default each parallel slot gets this much of its
+# own and the server is started with it times the slots; with llamacpp_extra_args.kv_unified it is
+# the ONE pool all slots share (-c is this, not this times the slots), and any slot may fill it
 llamacpp_context_size: 8192
 llamacpp_parallel: 2
 # layers kept in VRAM: a count, all or auto; 99 puts every layer of any model this size on the card
@@ -65,8 +67,13 @@ llamacpp_gpu_indices: []
 # llamacpp_context_size), split_mode (-sm none|layer|row, how a model spreads over several GPUs)
 # and tensor_split (-ts, a list of per-GPU proportions), threads and threads_batch (-t and -tb,
 # the CPU threads for generation and for prompt processing, 1 to 256: keep them within the
-# placement's footprint cpu, the slice's CPUQuota, or they contend for it). batch_size, ubatch_size and kv_unified
-# are generate mode only (decision mode fixes them); split_mode and tensor_split need a GPU backend.
+# placement's footprint cpu, the slice's CPUQuota, or they contend for it). The long-context settings:
+# cache_type_k and cache_type_v (--cache-type-k/-v, the KV cache's types: f16, q8_0 or q4_0; a
+# quantized one needs llamacpp_flash_attn: on), rope_scaling (yarn), rope_scale (the factor the
+# context grows by, above 1 and at most 8) and yarn_orig_ctx (the model's trained context), the
+# last three together or not at all, with llamacpp_context_size at most yarn_orig_ctx x rope_scale.
+# batch_size, ubatch_size, kv_unified and the long-context settings are generate mode only
+# (decision mode fixes them); split_mode and tensor_split need a GPU backend.
 llamacpp_extra_args: {}
 # the model store's group id (read from the model's directory when empty): the container reads the
 # weights through it and can write none
