@@ -1853,7 +1853,7 @@
     },
     {
       "exit": {
-        "0": "queued, already queued (an idempotent replay), already retried, or refused for good (logged on stderr)",
+        "0": "queued, already queued (an idempotent replay), already retried, skipped on back-pressure (429), or refused for good (logged on stderr)",
         "1": "no idempotency key or token, the controller could not be reached, refused the token (401, 403), or failed (400, 5xx)"
       },
       "id": "workflow-broker-agent-job-submit",

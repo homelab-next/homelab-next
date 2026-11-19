@@ -225,3 +225,82 @@ def test_watch_packs_validate_and_notify_only_on_a_stale_row(name, action):
     # the pack is a reference pack, as new-critical-alert is: not pinned or bound until its
     # lookup runs on the engine and the site's notify handlers exist
     assert doc["pack"] not in {p["pack"] for p in load_doc(ROOT / "workflows/deploy.yml")["pins"]}
+
+
+# ------------------------------------------------------------------ follow-up: literal expectations
+# (rule id, UTC cron, agent key), written out by hand and independent of cti_schedules.TIMERS, so a
+# wrong regeneration (a table edit and `--write`) fails here instead of quietly shipping.
+EXPECTED_RULES = [
+    ("C01", "0 * * * *", "cti-fresh"),
+    ("C02", "20 * * * *", "cti-publish"),
+    ("C03", "10 */4 * * *", "cti-extract"),
+    ("C04", "0 14 * * *", "cti-cve"),
+    ("C05", "30 21 * * *", "cti-enrich-honeypot"),
+    ("C06", "0 13 * * *", "cti-graph-sync"),
+    ("C07", "30 13 * * 0", "cti-graph-report"),
+    ("C08", "40 11 * * *", "cti-rotation"),
+    ("C09", "58 11 * * *", "cti-rotation"),
+    ("C10", "16 12 * * *", "cti-rotation"),
+    ("C11", "34 12 * * *", "cti-rotation"),
+    ("C12", "52 12 * * *", "cti-rotation"),
+    ("C13", "10 13 * * *", "cti-rotation"),
+    ("C14", "28 13 * * *", "cti-rotation"),
+    ("C15", "46 13 * * *", "cti-rotation"),
+    ("C16", "4 14 * * *", "cti-rotation"),
+    ("C17", "22 14 * * *", "cti-rotation"),
+    ("C18", "0 0 * * 1", "cti-podcast-weekly"),
+    ("C19", "0 0 1 * *", "cti-podcast-monthly"),
+    ("C20", "0 2 1 * *", "cti-podcast-quarterly"),
+    ("C21", "0 4 1 * *", "cti-podcast-semiannual"),
+    ("C22", "0 6 1 * *", "cti-podcast-yearly"),
+    ("C23", "0 5 1 1,7 *", "cti-country-landscape"),
+]
+
+
+def test_the_23_rules_match_the_literal_expectations(tmp_path):
+    binding = tmp_path / "b.yml"
+    binding.write_text(cs.binding_text())
+    ours = [r for r in load_doc(binding)["rules"] if r["pack"].startswith(cs.PREFIX)]
+    assert [(r["id"], r["schedule"]["cron"]) for r in ours] == [
+        (i, c) for i, c, _ in EXPECTED_RULES
+    ]
+    for r, (_i, cron, agent) in zip(ours, EXPECTED_RULES, strict=True):
+        doc = load_doc(ROOT / "workflows/packs" / f"{r['pack']}.yml")
+        assert doc["steps"][0]["params"]["agent_key"] == agent
+        assert doc["trigger"]["where"][0]["equals"] == r["schedule"]["id"]
+        assert f"`{cron}`" in (ROOT / "workflows/packs" / f"{r['pack']}.yml").read_text()
+
+
+# ------------------------------------------------------------------ follow-up: cti-watch hardening
+def test_site_reads_the_top_level_generated_at_of_the_embedded_data():
+    stale_top = (
+        '<script>const DATA = {"runs": [{"generated_at": "2026-01-01T11:59:00Z"}], '
+        '"generated_at": "2026-01-01T06:00:00Z"};</script>'
+    )
+    assert cw.site_check(stale_top, NOW)["stale"] is True  # the nested fresh one must not stand in
+    assert cw.site_check(stale_top, NOW)["value"] == 6.0
+    nested_only = (
+        '<script>const DATA = {"runs": [{"generated_at": "2026-01-01T11:59:00Z"}]};</script>'
+    )
+    assert cw.site_check(nested_only, NOW)["stale"] is True  # no top-level one at all
+    assert (
+        cw.site_check('const DATA = {"generated_at": "2026-01-01T11:30:00Z"}', NOW)["stale"]
+        is False
+    )
+    assert cw.site_check('{"x": {"generated_at": "2026-01-01T11:30:00Z"}}', NOW)["stale"] is True
+
+
+def test_lake_without_extract_failed_fails_closed(tmp_path, capsys):
+    assert cw.lake_check(_hourly(10, 24 * 8), None, NOW)["stale"] is True
+    lake = tmp_path / "lake.json"
+    lake.write_text(json.dumps({"hourly": [[h.isoformat(), n] for h, n in _hourly(10, 24 * 8)]}))
+    cw.main(["--now", NOW.isoformat(), "--lake-json", str(lake)])
+    assert json.loads(capsys.readouterr().out)["cti-watch-lake"]["stale"] is True
+
+
+def test_the_lake_query_is_utc_and_the_schema_is_an_identifier():
+    sql = cw.lake_rows_sql("cti")
+    assert "at_timezone(ingested_at, 'UTC')" in sql and "{" not in sql
+    for bad in ("cti; DROP TABLE x", "cti.reporting", "Cti", "", "a b", "cti\n", "1cti", None):
+        with pytest.raises(ValueError):
+            cw.lake_rows_sql(bad)
