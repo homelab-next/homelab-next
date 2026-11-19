@@ -146,12 +146,17 @@ class Rig:
             env=self.env(**env), timeout=60, check=False,
         )  # fmt: skip
 
-    def start(self, **env):
-        """The dispatcher in its own process group, as the exec runner starts a session."""
-        return subprocess.Popen(
+    def start(self, task="", **env):
+        """The dispatcher in its own process group, as the exec runner starts a session, with the
+        task written to its stdin and closed (stdin is then None: communicate() never touches it)."""
+        p = subprocess.Popen(
             self.argv(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, env=self.env(**env), start_new_session=True,
         )  # fmt: skip
+        p.stdin.write(task)
+        p.stdin.close()
+        p.stdin = None
+        return p
 
     def calls(self) -> list[str]:
         p = self.state / "calls.log"
@@ -232,9 +237,7 @@ def test_a_unit_already_running_is_a_wait_and_is_never_started_twice(rig):
 def test_a_cancel_stops_the_unit_and_resets_its_failed_state(rig):
     unit = U("hnx-cti", "podcast-real.service")
     rig.set("block")
-    p = rig.start(agent="cti-podcast")
-    p.stdin.write("t")
-    p.stdin.close()
+    p = rig.start(task="t", agent="cti-podcast")
     rig.wait_for(lambda: f"start --wait {unit}" in rig.calls(), "the start")
     os.killpg(p.pid, signal.SIGTERM)  # the runner's cancel: SIGTERM to the session's group
     _, err = p.communicate(timeout=30)
@@ -253,7 +256,6 @@ def test_a_cancel_before_the_start_starts_nothing(rig):
     with open(lock, "w") as held:
         fcntl.flock(held, fcntl.LOCK_EX)  # another session of this instance holds it
         p = rig.start()
-        p.stdin.close()
         time.sleep(0.3)
         os.killpg(p.pid, signal.SIGTERM)
         _, err = p.communicate(timeout=30)
@@ -266,10 +268,8 @@ def test_two_sessions_of_one_instance_run_one_after_the_other(rig):
     unit = U("hnx-cti", "fresh-real.service")
     rig.set("block")
     first = rig.start(run_id="run-a")
-    first.stdin.close()
     rig.wait_for(lambda: f"start --wait {unit}" in rig.calls(), "the first start")
     second = rig.start(run_id="run-b")
-    second.stdin.close()
     time.sleep(0.5)
     assert second.poll() is None
     assert rig.calls().count(f"start --wait {unit}") == 1  # the second waits, never merges
