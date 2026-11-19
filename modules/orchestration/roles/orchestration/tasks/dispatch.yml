@@ -1,0 +1,161 @@
+# SPDX-License-Identifier: Apache-2.0
+# Module job units (README "Module job units"): the dispatcher and the run-file reader, the
+# dispatch table, the lock directories, each set's group and run directory, the units' log files,
+# and one polkit rule per unit set granting the service user start, stop, ref and reset-failed on
+# exactly that set's units. The two scripts are installed whatever the settings (they do nothing
+# until the dispatcher is the runner's command); a set the site no longer declares loses its rule
+# (only a rule this role wrote, by its first line); its run directory and logs are kept.
+- name: Install the session dispatcher and the run-file reader
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_owner_group }}"
+    mode: "0755"
+  loop:
+    - {src: hnx-session-dispatch, dest: "{{ orchestration_dispatch_bin }}"}
+    - {src: hnx-dispatch-read, dest: "{{ orchestration_dispatch_read_bin }}"}
+  loop_control:
+    label: "{{ item.src }}"
+
+- name: Write the dispatch table (root's, read by the service group; the dispatcher refuses any other owner)
+  ansible.builtin.template:
+    src: dispatch.json.j2
+    dest: "{{ orchestration_dispatch_table }}"
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_group }}"
+    mode: "0640"
+
+- name: Create the lock directories (the service user's alone)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ orchestration_user }}"
+    group: "{{ orchestration_group }}"
+    mode: "0700"
+  loop: "{{ [orchestration_dispatch_dir] + (orchestration_job_units | map(attribute='name') | map('regex_replace', '^', orchestration_dispatch_dir ~ '/') | list) }}"
+
+# The run file is read by the job's own process as the module's user (never by PID 1 as root,
+# never LoadCredential=): the set's directory <run root>/<service>/<set> is the service user's,
+# group hnx-<service>_<set>, setgid 2750, so the controller writes and the module's unit
+# (SupplementaryGroups=hnx-<service>_<set>) reads,
+# and anything planted there reaches only what the module's user could read anyway.
+- name: Create each unit set's group
+  ansible.builtin.group:
+    name: "{{ orchestration_job_group_prefix }}{{ item }}"
+    system: true
+  loop: "{{ orchestration_job_units | map(attribute='name') | list }}"
+  when: orchestration_manage_accounts | bool and orchestration_job_run_group == ''
+
+- name: Create the run root and this service's directory under it (root's)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_owner_group }}"
+    mode: "0755"
+  loop:
+    - "{{ orchestration_dispatch_run_root }}"
+    - "{{ orchestration_dispatch_service_run_dir }}"
+  when: orchestration_job_units | length > 0
+
+- name: Create each unit set's run directory (the service user's, the set's group, setgid)
+  ansible.builtin.file:
+    path: "{{ orchestration_dispatch_service_run_dir }}/{{ item }}"
+    state: directory
+    owner: "{{ orchestration_user }}"
+    group: "{{ orchestration_job_run_group if orchestration_job_run_group != '' else orchestration_job_group_prefix ~ item }}"
+    mode: "02750"
+  loop: "{{ orchestration_job_units | map(attribute='name') | list }}"
+
+- name: Create the job log directory (root's)
+  ansible.builtin.file:
+    path: "{{ orchestration_job_logs_dir }}"
+    state: directory
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_owner_group }}"
+    mode: "0755"
+  when: orchestration_job_units | length > 0
+
+- name: Create each unit set's log directory (root's, read by the service group)
+  ansible.builtin.file:
+    path: "{{ orchestration_job_logs_dir }}/{{ item }}"
+    state: directory
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_group }}"
+    mode: "0750"
+  loop: "{{ orchestration_job_units | map(attribute='name') | list }}"
+
+# The unit appends with StandardOutput=append:, which PID 1 opens before it drops to the unit's
+# user, so a file made here keeps this owner and mode: the controller's group reads it, never the
+# journal (a journal reader sees every unit's logs).
+- name: Create each job unit's log file
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ orchestration_job_logs_dir }}/{{ item.set }}/{{ item.instance }}.log"
+    force: false
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_group }}"
+    mode: "0640"
+  loop: "{{ orchestration_job_instances }}"
+  loop_control:
+    label: "{{ item.set }}/{{ item.instance }}.log"
+
+- name: Hold each job unit's log file to its owner and mode
+  ansible.builtin.file:
+    path: "{{ orchestration_job_logs_dir }}/{{ item.set }}/{{ item.instance }}.log"
+    state: file
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_group }}"
+    mode: "0640"
+  loop: "{{ orchestration_job_instances }}"
+  loop_control:
+    label: "{{ item.set }}/{{ item.instance }}.log"
+
+- name: Look for the polkit rules directory
+  ansible.builtin.stat:
+    path: "{{ orchestration_polkit_rules_dir }}"
+  register: orchestration_polkit_dir_stat
+
+- name: Refuse job units on a host without polkit
+  ansible.builtin.assert:
+    that: orchestration_polkit_dir_stat.stat.isdir | default(false)
+    fail_msg: >-
+      orchestration: {{ orchestration_polkit_rules_dir }} is missing: the job units
+      (orchestration_job_units) are started through polkit, which is not installed here
+  when: orchestration_job_units | length > 0
+
+- name: Write each unit set's polkit rule
+  ansible.builtin.template:
+    src: job-units.rules.j2
+    dest: "{{ orchestration_polkit_rules_dir }}/{{ orchestration_polkit_rule_prefix }}{{ item.name }}.rules"
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_owner_group }}"
+    mode: "0644"
+  loop: "{{ orchestration_job_units }}"
+  loop_control:
+    label: "{{ orchestration_polkit_rule_prefix }}{{ item.name }}.rules"
+
+- name: Find the polkit rules this role wrote
+  ansible.builtin.find:
+    paths: "{{ orchestration_polkit_rules_dir }}"
+    patterns: ["49-hnx-*.rules"]
+    # the marker on the FIRST line only (\A with the whole file read), naming this service
+    contains: '\A{{ orchestration_polkit_marker | regex_escape }}, service {{ orchestration_logical_id | regex_escape }}, '
+    read_whole_file: true
+    file_type: file
+    recurse: false
+  register: orchestration_polkit_rules_found
+  when: orchestration_polkit_dir_stat.stat.isdir | default(false)
+
+- name: Remove the rule of a unit set the site no longer declares
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: >-
+    {{ orchestration_polkit_rules_found.files | default([]) | rejectattr('path', 'in',
+         orchestration_job_units | map(attribute='name')
+         | map('regex_replace', '^(.*)$', orchestration_polkit_rules_dir ~ '/' ~ orchestration_polkit_rule_prefix ~ '\1.rules') | list)
+       | list }}
+  loop_control:
+    label: "{{ item.path | basename }}"

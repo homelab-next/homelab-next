@@ -195,6 +195,62 @@ func TestCheck_UsageAndUnreadable(t *testing.T) {
 	}
 }
 
+// A profile whose backend_affinity no local backend can meet never runs when it has no cloud leg
+// (local_only, or no backends.cloud): the check says so by agent, naming each backend's window,
+// instead of the job failing with no local capacity at every submit. A cloud leg makes it a job
+// that runs there, and a window that meets it (or no constraint) passes; exclusive alone narrows
+// nothing.
+func TestCheck_AProfileNoBackendCanHoldIsRefusedWithoutACloudLeg(t *testing.T) {
+	profileWith := func(t *testing.T, body string) string {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "big.yaml"), "agent_key: big\ntoolsets: {real: big, shadow: big}\n"+body, 0o600)
+		return dir
+	}
+	const window = "needs_interlock: false, max_context: 131072}"
+	const big = "backend_affinity: {min_context: 262144, exclusive: true}\n"
+	for name, c := range map[string]struct {
+		profile string
+		cloud   bool
+		want    string // "" passes
+	}{
+		"local only, over every window": {"local_only: true\n" + big, false, "profile big: backend_affinity (min_context 262144) is met by no local backend (engine-a max_context 131072)"},
+		"no cloud leg configured":       {big, false, "no cloud leg"},
+		"a cloud leg runs it":           {big, true, ""},
+		"local only, cloud configured":  {"local_only: true\n" + big, true, "profile big"},
+		"within the window":             {"local_only: true\nbackend_affinity: {min_context: 131072, exclusive: true}\n", false, ""},
+		"a tag no backend has":          {"local_only: true\nbackend_affinity: {require_tags: [gpu]}\n", false, "profile big"},
+		"exclusive only":                {"local_only: true\nbackend_affinity: {exclusive: true}\n", false, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := profileWith(t, c.profile)
+			edits := []func(string) string{
+				replace(examples+"/mcp/clients/orchestrator/profiles", dir),
+				replace("grants_catalog: "+examples+"/mcp/clients/orchestrator/mcp_catalog.yaml\n", ""),
+				replace("needs_interlock: false}", window),
+			}
+			if c.cloud {
+				edits = append(edits, replace("  local: {", "  cloud: {name: cloud-a, home: home-c, needs_interlock: false}\n  local: {"))
+			}
+			cfg, _ := siteConfig(t, func(s string) string {
+				for _, e := range edits {
+					s = e(s)
+				}
+				return s
+			})
+			code, out, errs := runCmd(t, "check", "--config", cfg)
+			if c.want == "" {
+				if code != exitOK {
+					t.Fatalf("check = %d, want 0\n%s%s", code, out, errs)
+				}
+				return
+			}
+			if code != exitProblem || !strings.Contains(out, c.want) {
+				t.Fatalf("check = %d, want 1 naming %q\n%s%s", code, c.want, out, errs)
+			}
+		})
+	}
+}
+
 // A configuration without a runner loads (a migrated one has none until its runner lands) and
 // says so; serve refuses it.
 func TestCheck_NoRunnerIsANote(t *testing.T) {
