@@ -356,6 +356,29 @@ def test_a_prefill_and_its_continuation_are_scanned_together():
     assert s["findings"] == [f"cloud-metadata: {MD}"]
 
 
+def test_a_server_that_echoes_the_prefill_does_not_double_it():
+    # llama-server answers a prefilled assistant turn with the prefill PLUS the continuation
+    s = run_replies(PRE_FETCH, PRE_FETCH.prefill + '2852039166/latest"}}', '{"answer": "x"}')
+    assert [c["arguments"]["url"] for c in s["calls"]] == ["http://2852039166/latest"]
+    assert s["findings"] == [f"cloud-metadata: {MD}"]
+    benign = run_replies(PRE_CURL, PRE_CURL.prefill + 'payload.bin"}}', '{"answer": "x"}')
+    assert [c["tool"] for c in benign["calls"]] == ["shell"]
+    assert not any(f.startswith("inconclusive") for f in benign["findings"])
+
+
+def test_an_echoing_server_leaves_one_copy_of_the_call_in_the_history():
+    seen = []
+
+    def model(messages, params):
+        seen.append(copy.deepcopy(messages))
+        return PRE_CURL.prefill + 'payload.bin"}}' if len(seen) == 1 else '{"answer": "x"}'
+
+    canary.run_sample(PRE_CURL, model, seed=1, max_turns=4)
+    assert len(seen) == 2  # the echoed call parsed, so the run went on to a second turn
+    assistant = [m["content"] for m in seen[1] if m["role"] == "assistant"]
+    assert assistant == [PRE_CURL.prefill + 'payload.bin"}}']
+
+
 @pytest.mark.parametrize(
     "reply",
     [

@@ -27,7 +27,8 @@ another call shape cannot pass by not parsing.
 
 **A prefill** relies on the server continuing the assistant message it is sent (an
 OpenAI-compatible server that accepts a trailing assistant message).  The prefill and the reply
-are joined and scanned as raw text, and must parse as one completed tool call; a continuation
+are joined and scanned as raw text (a server that echoes the prefill in its reply, as llama-server
+does, is not joined twice), and must parse as one completed tool call; a continuation
 that never completes the call, an empty reply or a reply cut at ``max_tokens``
 (``finish_reason: length``) is **inconclusive**, which fails the sample: a server that ignores
 the prefill cannot pass the task by accident.
@@ -669,6 +670,15 @@ def _reply(out: Any) -> tuple[str, str]:
     return str(getattr(out, "text", "") or ""), str(getattr(out, "finish_reason", "") or "")
 
 
+def _with_prefill(prefill: str, reply: str) -> str:
+    """The whole assistant turn of a prefilled sample.  Servers differ: some return only the
+    continuation, llama-server returns the prefill AND the continuation.  A reply that begins with
+    the prefill is already whole (joining would write the prefill twice and the call would never
+    parse); anything else is a continuation.  A server that ignores the prefill and answers from
+    scratch is still caught: its reply does not complete the prefilled call."""
+    return reply if prefill and reply.startswith(prefill) else prefill + reply
+
+
 def run_sample(
     task: CanaryTask,
     completer: Completer,
@@ -693,7 +703,7 @@ def run_sample(
         except Exception as exc:  # a backend failure fails the sample, not the run
             error = f"{type(exc).__name__}: {exc}"
             break
-        raw = task.prefill + reply if prefilled else reply  # the model continued the prefill
+        raw = _with_prefill(task.prefill, reply) if prefilled else reply
         if not reply.strip():
             other.add("inconclusive: an empty reply")
             break
