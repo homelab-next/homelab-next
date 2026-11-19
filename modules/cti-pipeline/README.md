@@ -94,7 +94,11 @@ A step's first element is `{python}`, `{app}/<path>` or an absolute path. Placeh
 whole in arguments and environment values by the wrapper: `{python}` (the current release's venv
 python), `{app}` (its app tree), `{lane_root}`, `{config}` and `{lake_ca}` (the lab CA, when
 `cti_pipeline_lake_ca_ref` is set). The working directory is the lane root, so an app that uses
-relative `data/`, `state/`, `podcast/` and `dist/` finds its own lane's.
+relative `data/`, `state/`, `podcast/` and `dist/` finds its own lane's. That directory is the
+lane's to write, so python must never import from it: the wrapper sets `PYTHONSAFEPATH=1` for every
+step of both lanes (`-m <pkg>` and a script never put the working directory on the import path),
+and neither the env nor a credential may set it or `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`,
+`PYTHONSTARTUP`, `PYTHONINSPECT` or `PYTHONPLATLIBDIR`; the app imports from the release's venv only.
 
 Each job and lane is one unit instance, `hnx-<id>@<job>-<lane>.service`: the template unit
 (`templates/job.service.j2`) plus a drop-in per declared instance
@@ -140,7 +144,9 @@ module.
   packages, `<pkg>` or `<pkg>.<sub>`: those of `cti_pipeline_shadow_modules`, or, when the site lists
   none, the artefact's `hnx-artefact.json` `packages` (none declared: no `-m` at all). The
   interpreter's own entry points (`timeit`, `pdb`, `cProfile`, `trace`, `http.server`, `runpy`,
-  `code`) run code or commands taken from their arguments, so they are never allowed. Every
+  `code`) run code or commands taken from their arguments, so they are never allowed, and no
+  interpreter module or installer (`pip`, `setuptools`, `ensurepip`, `wheel`) is ever accepted as
+  one of the app's packages (the installer, the role and the wrapper all refuse it). Every
   `{app}/...` argument, once filled and normalised, must stay inside the release's app tree.
 - The wrapper also refuses a shadow spec whose schema is not a shadow schema, any spec whose
   publish mode is not `stage`, and a run whose dispatcher lane differs from the instance's.

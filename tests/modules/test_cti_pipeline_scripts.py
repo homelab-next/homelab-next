@@ -872,3 +872,71 @@ def test_the_artefact_declares_its_packages_as_names_only(tmp_path, releases):
     sha = _tar(tmp_path / "p.tar.gz", {**GOOD, "hnx-artefact.json": json.dumps(meta).encode()})
     with pytest.raises(art.Refused, match="packages"):
         art.install(str(tmp_path / "p.tar.gz"), sha, str(releases), sys.executable)
+
+
+@pytest.mark.parametrize("lane", ["real", "shadow"])
+def test_a_package_planted_in_the_lane_root_never_runs_with_m(tmp_path, monkeypatch, lane):
+    """The steps run in the lane root, which the lane writes: PYTHONSAFEPATH keeps python from
+    importing from it, so a planted ``<pkg>/__main__.py`` never runs (either lane)."""
+    spec, body = _spec(
+        tmp_path, lane, steps=[["{python}", "-m", "planted"]], shadow_modules=["planted"]
+    )
+    pkg = Path(body["lane_root"]) / "planted"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "__main__.py").write_text(f"open({str(tmp_path / 'pwned')!r}, 'w').write('ran')\n")
+    _run_file(body)
+    assert _main(spec, f"fresh-{lane}", _creds(tmp_path), monkeypatch) == 1  # no such module
+    assert not (tmp_path / "pwned").exists()
+
+
+def test_the_steps_get_pythonsafepath_and_no_spec_or_credential_can_unset_it(tmp_path, monkeypatch):
+    probe = tmp_path / "env.py"
+    probe.write_text(
+        f"import os; open({str(tmp_path / 'env.out')!r}, 'w').write(os.environ.get('PYTHONSAFEPATH', ''))\n"
+    )
+    spec, body = _spec(tmp_path, steps=[["{python}", str(probe)]])
+    _run_file(body)
+    assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 0
+    assert (tmp_path / "env.out").read_text() == "1"
+    for name in ("PYTHONSAFEPATH", "PYTHONPATH", "PYTHONHOME"):
+        bad, _ = _spec(tmp_path / name, env={name: "x"})
+        with pytest.raises(run.Refused, match="reserved"):
+            run.load_spec(str(bad), os.getuid(), "fresh-real")
+    creds = _creds(tmp_path)
+    (creds / "PYTHONPATH").write_text("/tmp\n")
+    _run_file(body, dispatch="e" * 32)
+    assert _main(spec, "fresh-real", creds, monkeypatch) == 2
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [[["{python}", "-m", "timeit", "1"]], [["{python}", "{app}/run.py", "{app}/..{lane_root}"]]],
+)
+def test_main_refuses_a_shadow_stdlib_module_and_an_escaping_app_path_before_any_step(
+    tmp_path, monkeypatch, steps
+):
+    spec, body = _spec(tmp_path, "shadow", steps=steps)
+    install = Path(body["release_link"]).parent
+    for rel in ("a" * 16, "b" * 16):
+        (install / "releases" / rel / "hnx-artefact.json").write_text(
+            json.dumps({"name": "intel-app", "version": "1", "packages": ["intel"]})
+        )
+    _run_file(body)
+    assert _main(spec, "fresh-shadow", _creds(tmp_path), monkeypatch) == 2
+    assert not (tmp_path / "probe.jsonl").exists()
+
+
+@pytest.mark.parametrize("name", ["timeit", "pip", "setuptools", "ensurepip", "wheel", "os"])
+def test_an_interpreter_module_is_never_one_of_the_apps_packages(tmp_path, releases, name):
+    meta = {"name": "intel-app", "version": "1.0", "packages": ["intel", name]}
+    sha = _tar(tmp_path / "p.tar.gz", {**GOOD, "hnx-artefact.json": json.dumps(meta).encode()})
+    with pytest.raises(art.Refused, match="never the interpreter"):
+        art.install(str(tmp_path / "p.tar.gz"), sha, str(releases), sys.executable)
+    _, body = _spec(tmp_path, "shadow", steps=[["{python}", "-m", name]], shadow_modules=[name])
+    fd = run.pin_release(body)
+    try:
+        with pytest.raises(run.Refused, match="package names"):
+            run.check_release_paths(body)
+    finally:
+        os.close(fd)

@@ -49,7 +49,14 @@ cti_pipeline_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]{0,134}\Z'
 cti_pipeline_namespace_pattern: '^cti-pipeline/'
 cti_pipeline_schema_pattern: '^[a-z][a-z0-9_]{0,62}\Z'
 # names the environment never sets: the wrapper's own, and those the systemd unit owns
-cti_pipeline_reserved_env: [PATH, HOME, XDG_CACHE_HOME, LANG, CREDENTIALS_DIRECTORY, HNX_RUN_ID, HNX_LANE, HNX_JOB]
+# (and where python imports from: the wrapper pins PYTHONSAFEPATH=1, so -m never imports from the
+# lane root it runs in)
+cti_pipeline_reserved_env: [PATH, HOME, XDG_CACHE_HOME, LANG, CREDENTIALS_DIRECTORY, HNX_RUN_ID, HNX_LANE, HNX_JOB,
+                            PYTHONSAFEPATH, PYTHONPATH, PYTHONHOME, PYTHONUSERBASE, PYTHONSTARTUP, PYTHONINSPECT,
+                            PYTHONPLATLIBDIR]
+# never one of the app's packages (cti_pipeline_shadow_modules): besides the interpreter's own
+# modules (read from cti_pipeline_python by validate.yml), its installers
+cti_pipeline_not_app_packages: [pip, setuptools, ensurepip, wheel]
 # every lane secret: {lane, name, ref}, one per name of each deployed lane
 cti_pipeline_ref_items: >-
   {%- set out = [] -%}

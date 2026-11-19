@@ -183,3 +183,35 @@ def test_a_quiesce_marker_the_role_did_not_write_is_ignored():
     assert render(facts["cti_pipeline_foreign_markers"], **variables) == ["real"]
     assert render(facts["cti_pipeline_busy_lanes"], **variables) == ["shadow"]
     assert render(facts["cti_pipeline_stale_markers"], **variables) == []
+
+
+@pytest.mark.parametrize(
+    ("modules", "ok"), [(["intel"], True), (["intel", "timeit"], False), (["pip"], False)]
+)
+def test_the_role_refuses_an_interpreter_module_as_an_app_package(modules, ok):
+    that = _task(
+        "validate.yml",
+        "Refuse an interpreter module or installer named as one of the app's packages",
+    )["ansible.builtin.assert"]["that"][0]
+    verdict = render(
+        "{{ " + that + " }}",
+        cti_pipeline_shadow_modules=modules,
+        cti_pipeline_stdlib_names={"stdout": '["os", "sys", "timeit"]'},
+        cti_pipeline_not_app_packages=VARS["cti_pipeline_not_app_packages"],
+    )
+    assert verdict is ok
+
+
+@pytest.mark.parametrize(
+    ("owner", "ok"), [("root", True), ("hnx-cti", False), ("hnx-cti-shadow", False)]
+)
+def test_the_owner_is_never_a_lane_user(owner, ok):
+    that = ld.load_yaml(ROLE / "tasks" / "validate.yml")[0]["ansible.builtin.assert"]["that"]
+    expr = next(x for x in that if x.startswith("cti_pipeline_owner not in"))
+    verdict = render(
+        "{{ " + expr + " }}",
+        cti_pipeline_owner=owner,
+        cti_pipeline_user="hnx-cti",
+        cti_pipeline_shadow_user="hnx-cti-shadow",
+    )
+    assert verdict is ok

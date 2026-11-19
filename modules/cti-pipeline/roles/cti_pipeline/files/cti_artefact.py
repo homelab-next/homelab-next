@@ -56,6 +56,7 @@ import unicodedata
 NF = os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 PACKAGE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
+NOT_APP_PACKAGES = set(sys.stdlib_module_names) | {"pip", "setuptools", "ensurepip", "wheel"}
 RELEASE_RE = re.compile(r"^[0-9a-f]{16}\Z")
 MAX_ENTRIES = 20_000
 MAX_BYTES = 2 << 30
@@ -189,9 +190,12 @@ def check_layout(stage: str) -> dict:
         raise Refused(f"{META} must name the app and its version")
     pkgs = meta.get("packages", [])
     if not isinstance(pkgs, list) or not all(
-        isinstance(p, str) and PACKAGE_RE.match(p) for p in pkgs
+        isinstance(p, str) and PACKAGE_RE.match(p) and p not in NOT_APP_PACKAGES for p in pkgs
     ):
-        raise Refused(f"{META} packages must be a list of top-level package names")
+        raise Refused(
+            f"{META} packages must be a list of the app's own top-level package names "
+            "(never the interpreter's modules or its installers)"
+        )
     if os.path.lexists(os.path.join(stage, "venv")):
         raise Refused("the archive carries a venv/: it is built on the host, never shipped")
     return meta
