@@ -9,6 +9,9 @@
   'audience': publishing_gate_audience,
   'access_control': publishing_gate_access_control,
   'posture_rules': publishing_gate_posture_rules | bool,
+  'snapshots_keep': publishing_gate_snapshots_keep | int,
+  'snapshots_min_age_s': publishing_gate_snapshots_min_age_s | int,
+  'legacy_exceptions': publishing_gate_legacy_exceptions,
 } %}
 {% if publishing_gate_pages_project != '' %}
 {% set _ = cfg.update({'pages': {

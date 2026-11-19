@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,6 +77,9 @@ class Config:
     feed: fd.FeedConfig | None
     notify_url: str
     notify_topic: str
+    snapshots_keep: int = 5
+    snapshots_min_age_s: float = 3600.0
+    legacy_exceptions: dict[str, str] | None = None
 
 
 def _abs(doc: dict, key: str) -> Path:
@@ -83,6 +87,24 @@ def _abs(doc: dict, key: str) -> Path:
     if not isinstance(v, str) or not os.path.isabs(v) or ".." in Path(v).parts:
         raise ConfigError(f"{key} is an absolute path without ..")
     return Path(v)
+
+
+def _legacy(items: object) -> dict[str, str]:
+    """``[{key, sha256}]`` -> {key: sha256}: reviewed, already-public legacy metadata objects."""
+    out: dict[str, str] = {}
+    if not isinstance(items, list):
+        raise ConfigError("legacy_exceptions is a list of {key, sha256}")
+    for it in items:
+        if (
+            not isinstance(it, dict)
+            or not re.fullmatch(
+                r"episodes/[a-z0-9][a-z0-9-]{0,63}_\d{4}-\d{2}-\d{2}\.json", str(it.get("key", ""))
+            )
+            or not re.fullmatch(r"[0-9a-f]{64}", str(it.get("sha256", "")))
+        ):
+            raise ConfigError("a legacy exception needs an episode metadata key and its sha256")
+        out[it["key"]] = it["sha256"]
+    return out
 
 
 def load(path: Path, mode_override: str | None = None) -> Config:
@@ -141,4 +163,7 @@ def load(path: Path, mode_override: str | None = None) -> Config:
         feed=feed,
         notify_url=notify.get("url", ""),
         notify_topic=notify.get("topic", ""),
+        snapshots_keep=int(doc.get("snapshots_keep", 5)),
+        snapshots_min_age_s=float(doc.get("snapshots_min_age_s", 3600)),
+        legacy_exceptions=_legacy(doc.get("legacy_exceptions", [])),
     )

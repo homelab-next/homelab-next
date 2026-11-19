@@ -20,6 +20,7 @@ import hashlib
 import json
 import re
 import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -129,12 +130,13 @@ def deploy_argv(cfg: PagesConfig, dist_dir: Path) -> list[str]:
     return argv
 
 
-def _env(cfg: PagesConfig, token: str, account_id: str, home: Path) -> dict[str, str]:
+def _env(cfg: PagesConfig, token: str, account_id: str, home: Path, cwd: str) -> dict[str, str]:
     env = {
         "PATH": f"{cfg.node.parent}:/usr/bin:/bin",
         "HOME": str(home),
         "CI": "true",
         "WRANGLER_SEND_METRICS": "false",
+        "WRANGLER_LOG_PATH": f"{cwd}/logs",  # its own logs go with the directory
         "CLOUDFLARE_API_TOKEN": token,
     }
     if account_id:
@@ -149,12 +151,14 @@ def deploy(
     token: str,
     account_id: str,
     home: Path,
-    workdir: Path,
     runner: Runner = subprocess_runner,
 ) -> str:
-    """Verify the pin, check the running version, deploy ``dist_dir`` (a gated snapshot) with
-    ``workdir`` (an empty directory of the gate's) as the working directory, so no ``wrangler.toml``
-    or ``functions/`` is ever found.  Returns wrangler's output (token-free)."""
+    """Verify the pin, check the running version, deploy ``dist_dir`` (a gated snapshot).
+
+    wrangler runs in a fresh directory made for this one deploy (under the temporary directory,
+    which has no ``wrangler.toml``, ``package.json`` or ``functions/`` above it) and removed
+    afterwards: wrangler 4.157.0 leaves ``.wrangler/tmp`` in its working directory, so a directory
+    that outlived a deploy would not be empty for the next.  Returns wrangler's output (token-free)."""
     verify_pin(cfg)
     if dist_dir.is_symlink() or not dist_dir.is_dir():
         raise PagesError("the deploy directory is not a plain directory")
@@ -163,17 +167,15 @@ def deploy(
         for n in ("wrangler.toml", "wrangler.json", "wrangler.jsonc", "functions", "_worker.js")
     ):
         raise PagesError("the deploy directory holds a deploy configuration or code (refused)")
-    if any(workdir.iterdir()):
-        raise PagesError("the working directory is not empty")
-    env = _env(cfg, token, account_id, home)
-    cwd = str(workdir)
-    code, out = runner([str(cfg.node), str(cfg.bin.resolve()), "--version"], env, 60, cwd)
-    shown = set(re.findall(r"\b\d+\.\d+\.\d+\b", _ANSI.sub("", out)))
-    if code != 0 or shown != {cfg.wrangler_version}:
-        raise PagesError(
-            f"wrangler --version printed {sorted(shown)}, the pin is {cfg.wrangler_version}"
-        )
-    code, out = runner(deploy_argv(cfg, dist_dir), env, cfg.timeout_s, cwd)
+    with tempfile.TemporaryDirectory(prefix="hnx-wrangler-") as cwd:
+        env = _env(cfg, token, account_id, home, cwd)
+        code, out = runner([str(cfg.node), str(cfg.bin.resolve()), "--version"], env, 60, cwd)
+        shown = set(re.findall(r"\b\d+\.\d+\.\d+\b", _ANSI.sub("", out)))
+        if code != 0 or shown != {cfg.wrangler_version}:
+            raise PagesError(
+                f"wrangler --version printed {sorted(shown)}, the pin is {cfg.wrangler_version}"
+            )
+        code, out = runner(deploy_argv(cfg, dist_dir), env, cfg.timeout_s, cwd)
     out = out.replace(token, "[redacted]") if token else out
     if code != 0:
         raise PagesError(f"wrangler pages deploy failed (exit {code}): {out[-600:]}")

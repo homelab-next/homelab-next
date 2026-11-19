@@ -61,16 +61,8 @@ def sniff(suffix: str, data: bytes) -> bool:
         return head.startswith(PNG_SIG)
     if suffix in (".jpg", ".jpeg"):
         return head.startswith(b"\xff\xd8\xff")
-    if suffix == ".gif":
-        return head[:6] in (b"GIF87a", b"GIF89a")
-    if suffix == ".webp":
-        return head[:4] == b"RIFF" and head[8:12] == b"WEBP"
     if suffix == ".ico":
         return head[:4] == b"\x00\x00\x01\x00"
-    if suffix == ".woff":
-        return head[:4] == b"wOFF"
-    if suffix == ".woff2":
-        return head[:4] == b"wOF2"
     return False
 
 
@@ -90,15 +82,55 @@ def _syncsafe(b: bytes) -> int:
 _ENC = {0: "latin-1", 1: "utf-16", 2: "utf-16-be", 3: "utf-8"}
 
 
+_ENC = {0: "latin-1", 1: "utf-16", 2: "utf-16-be", 3: "utf-8"}
+_TEXT_FRAMES = ("T", "W")
+_OTHER_FRAMES = ("COMM", "USLT", "APIC", "COM", "ULT", "PIC")
+# the registered ancillary PNG chunks; anything else (a private chunk) is refused
+_PNG_KNOWN = frozenset(
+    {
+        b"tRNS",
+        b"gAMA",
+        b"cHRM",
+        b"sRGB",
+        b"sBIT",
+        b"bKGD",
+        b"hIST",
+        b"pHYs",
+        b"sPLT",
+        b"tIME",
+        b"tEXt",
+        b"zTXt",
+        b"iTXt",
+        b"eXIf",
+        b"iCCP",
+        b"cICP",
+        b"mDCV",
+        b"cLLI",
+        b"acTL",
+        b"fcTL",
+        b"fdAT",
+    }
+)
+_PNG_CRITICAL = frozenset({b"IHDR", b"PLTE", b"IDAT", b"IEND"})
+
+
 def _id3_frame_text(fid: str, payload: bytes) -> str:
     out = [printable_text(payload)]
-    if fid[0] == "T" or fid in ("COMM", "USLT", "TXXX", "WXXX", "COM", "ULT", "TXX", "WXX"):
+    if fid[0] == "T" or fid in ("COMM", "USLT", "COM", "ULT"):
         enc = _ENC.get(payload[0]) if payload else None
         if enc is None:
             raise MediaError("an unknown text encoding")
         out.append(payload[1:].decode(enc, errors="replace").replace("\x00", "\n"))
     elif fid[0] == "W":
         out.append(payload.decode("latin-1"))
+    elif fid in ("APIC", "PIC"):  # an attached picture is read as the image it is, or refused
+        for sig, suffix in ((PNG_SIG, ".png"), (b"\xff\xd8\xff", ".jpg")):
+            at = payload.find(sig)
+            if at >= 0:
+                out += metadata_texts_of(suffix, payload[at:])
+                break
+        else:
+            raise MediaError("an attached picture that is not a PNG or a JPEG")
     return "\n".join(out)
 
 
@@ -110,6 +142,8 @@ def _mp3(data: bytes) -> list[str]:
         ver, flags = data[3], data[5]
         if ver not in (2, 3, 4):
             raise MediaError("an unknown ID3 version")
+        if flags & 0x80:
+            raise MediaError("an unsynchronised ID3 tag")
         size = _syncsafe(data[6:10])
         tag = data[10 : 10 + size]
         if len(tag) != size:
@@ -127,8 +161,17 @@ def _mp3(data: bytes) -> list[str]:
             fid = tag[pos : pos + idlen].decode("latin-1")
             if not re.fullmatch(r"[A-Z0-9]+", fid):
                 raise MediaError("an ID3 frame id that is not an id")
+            if not (fid.startswith(_TEXT_FRAMES) or fid in _OTHER_FRAMES):
+                raise MediaError("an ID3 frame type outside the accepted set")
             raw = tag[pos + idlen : pos + hdr - (0 if ver == 2 else 2)]
             fsize = int.from_bytes(raw, "big") if ver != 4 else _syncsafe(raw)
+            if ver >= 3:
+                f2 = tag[pos + 9]
+                compressed, encrypted = (
+                    (f2 & 0x80, f2 & 0x40) if ver == 3 else (f2 & 0x08, f2 & 0x04)
+                )
+                if compressed or encrypted or (ver == 4 and f2 & 0x03):
+                    raise MediaError("a compressed, encrypted or unsynchronised ID3 frame")
             body = tag[pos + hdr : pos + hdr + fsize]
             if len(body) != fsize:
                 raise MediaError("an ID3 frame longer than its tag")
@@ -138,7 +181,6 @@ def _mp3(data: bytes) -> list[str]:
             raise MediaError("an ID3 tag with no frame")
     if len(data) >= 128 and data[-128:-125] == b"TAG":
         texts.append(data[-128:].decode("latin-1"))
-    texts.append(printable_text(data[-4096:]))  # APE and lyrics tags live at the end
     return texts
 
 
@@ -154,11 +196,16 @@ def _png(data: bytes) -> list[str]:
             raise MediaError("a PNG chunk longer than the file")
         if struct.unpack(">I", crc)[0] != zlib.crc32(ctype + body):
             raise MediaError("a PNG chunk with a bad checksum")
+        if ctype not in _PNG_CRITICAL and ctype not in _PNG_KNOWN:
+            raise MediaError("a PNG chunk that is not registered (private or unknown)")
         if ctype == b"tEXt":
             texts.append(body.decode("latin-1").replace("\x00", "\n"))
         elif ctype == b"zTXt":
             kw, _, rest = body.partition(b"\x00")
             texts.append(kw.decode("latin-1") + "\n" + _inflate(rest[1:]))
+        elif ctype == b"iCCP":
+            kw, _, rest = body.partition(b"\x00")
+            texts.append(kw.decode("latin-1") + "\n" + printable_text(_inflate_bytes(rest[1:])))
         elif ctype == b"iTXt":
             kw, _, rest = body.partition(b"\x00")
             if len(rest) < 2:
@@ -171,9 +218,7 @@ def _png(data: bytes) -> list[str]:
                 + "\n"
                 + (_inflate(text) if flag else text.decode("utf-8", "replace"))
             )
-        elif (
-            ctype == b"eXIf" or ctype[0:1].islower()
-        ):  # ancillary chunks: any printable text in them
+        elif ctype not in _PNG_CRITICAL:
             texts.append(printable_text(body))
         pos += 12 + length
         if ctype == b"IEND":
@@ -181,21 +226,29 @@ def _png(data: bytes) -> list[str]:
             break
     if not seen_end:
         raise MediaError("a PNG without IEND")
+    if pos != len(data):
+        raise MediaError("bytes after the PNG IEND chunk")
     return texts
 
 
-def _inflate(blob: bytes) -> str:
+def _inflate_bytes(blob: bytes) -> bytes:
     d = zlib.decompressobj()
     try:
         out = d.decompress(blob, 1 << 20)
     except zlib.error as exc:
-        raise MediaError("a compressed text chunk that does not inflate") from exc
+        raise MediaError("compressed data that does not inflate") from exc
     if d.unconsumed_tail:
-        raise MediaError("a compressed text chunk over 1 MiB")
-    return out.decode("utf-8", "replace")
+        raise MediaError("compressed data over 1 MiB")
+    return out
+
+
+def _inflate(blob: bytes) -> str:
+    return _inflate_bytes(blob).decode("utf-8", "replace")
 
 
 def _jpeg(data: bytes) -> list[str]:
+    if not data.endswith(b"\xff\xd9"):
+        raise MediaError("a JPEG without its end marker as the last bytes (or bytes after it)")
     texts: list[str] = []
     pos = 2
     while pos + 2 <= len(data):
@@ -209,6 +262,8 @@ def _jpeg(data: bytes) -> list[str]:
             pos += 2
             continue
         if marker == 0xD9:
+            if pos + 2 != len(data):
+                raise MediaError("bytes after the JPEG end marker")
             return texts
         if pos + 4 > len(data):
             raise MediaError("a truncated JPEG segment")
@@ -216,10 +271,9 @@ def _jpeg(data: bytes) -> list[str]:
         seg = data[pos + 4 : pos + 2 + length]
         if length < 2 or len(seg) != length - 2:
             raise MediaError("a JPEG segment longer than the file")
-        if marker == 0xFE or 0xE0 <= marker <= 0xEF or marker == 0xED:
+        if marker == 0xFE or 0xE0 <= marker <= 0xEF:
             texts.append(printable_text(seg))
-        if marker == 0xDA:  # scan data follows; metadata after it is read as printable runs
-            texts.append(printable_text(data[pos + 2 + length :][-65536:]))
+        if marker == 0xDA:  # entropy-coded data follows, to the end marker checked above
             return texts
         pos += 2 + length
     raise MediaError("a JPEG with no end")
@@ -233,15 +287,23 @@ def metadata_texts(suffix: str, path: Path) -> list[str]:
 
 
 def metadata_texts_of(suffix: str, data: bytes) -> list[str]:
+    """Every text in the file: the structured metadata, and every printable run of the WHOLE file
+    (a payload placed anywhere is found).  Data hidden inside compressed sample or pixel data is
+    out of scope; so is any format not accepted at all (GIF, WebP, fonts are refused outright)."""
     if not sniff(suffix, data):
         raise MediaError("content that is not the type its suffix says")
+    if suffix == ".ico" and PNG_SIG in data:
+        raise MediaError("an icon that holds a compressed PNG image")
     try:
         if suffix == ".mp3":
-            return _mp3(data)
-        if suffix == ".png":
-            return _png(data)
-        if suffix in (".jpg", ".jpeg"):
-            return _jpeg(data)
+            texts = _mp3(data)
+        elif suffix == ".png":
+            texts = _png(data)
+        elif suffix in (".jpg", ".jpeg"):
+            texts = _jpeg(data)
+        else:
+            texts = []
     except (struct.error, IndexError) as exc:
         raise MediaError("a structure that does not parse") from exc
-    return [printable_text(data)]
+    texts.append(printable_text(data))
+    return texts

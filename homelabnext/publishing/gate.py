@@ -49,9 +49,8 @@ TEXT_SUFFIXES = frozenset(
         ".csv",
     }
 )
-BINARY_SUFFIXES = frozenset(
-    {".mp3", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2"}
-)
+# GIF, WebP and fonts are refused outright: their bodies are compressed, so their text cannot be read
+BINARY_SUFFIXES = frozenset({".mp3", ".png", ".jpg", ".jpeg", ".ico"})
 MAX_TEXT_BYTES = 32 * 1024 * 1024
 _HEX64 = re.compile(r"^[0-9a-f]{64}\Z")
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -295,6 +294,42 @@ def load_item(root: Path, kind: str) -> Item:
     return Item(root.name, kind, root, sidecar, tuple(files))
 
 
+def _read_tree(root: Path, files: tuple[str, ...]) -> dict[str, bytes]:
+    """The bytes of ``files`` under ``root``, every path component opened with ``O_NOFOLLOW`` through
+    directory file descriptors, so a directory swapped for a link after the listing is refused, not
+    read through."""
+    held: dict[str, bytes] = {}
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for rel in files:
+            *dirs, leaf = rel.split("/")
+            fds = [root_fd]
+            try:
+                for part in dirs:
+                    fds.append(
+                        os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fds[-1])
+                    )
+                fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fds[-1])
+                try:
+                    st = os.fstat(fd)
+                    if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1 or st.st_size > _MAX_FILE:
+                        raise GateError(f"{root.name}: {rel} changed or is too large")
+                    with os.fdopen(fd, "rb", closefd=False) as fh:
+                        held[rel] = fh.read()
+                finally:
+                    os.close(fd)
+            except OSError as exc:
+                raise GateError(
+                    f"{root.name}: {rel} cannot be opened without following links"
+                ) from exc
+            finally:
+                for extra in fds[1:]:
+                    os.close(extra)
+    finally:
+        os.close(root_fd)
+    return held
+
+
 def snapshot_item(root: Path, kind: str, snapshots: Path) -> Item:
     """Copy an item into a private snapshot under ``snapshots`` and return the copy.
 
@@ -304,29 +339,25 @@ def snapshot_item(root: Path, kind: str, snapshots: Path) -> Item:
     content, built beside and renamed in; an existing one must hold the same bytes.  Nothing is
     deleted."""
     src = load_item(root, kind)
-    held: dict[str, bytes] = {}
-    for rel in src.files:
-        fd = os.open(root / rel, os.O_RDONLY | os.O_NOFOLLOW)
-        try:
-            st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1 or st.st_size > _MAX_FILE:
-                raise GateError(f"{root.name}: {rel} changed or is too large")
-            with os.fdopen(fd, "rb", closefd=False) as fh:
-                held[rel] = fh.read()
-        finally:
-            os.close(fd)
+    held = _read_tree(root, src.files)
     digest = hashlib.sha256(
         "".join(f"{r}\0{_sha256_bytes(held[r])}\n" for r in sorted(held)).encode()
     ).hexdigest()[:16]
+    for d in (snapshots, snapshots / kind):  # private: created 0700 whatever the umask
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(d, 0o700)
     base = snapshots / kind
-    base.mkdir(parents=True, exist_ok=True, mode=0o700)
     final = base / f"{root.name}-{digest}"
     if (
         final.exists()
     ):  # the same content was copied before: reused only if every byte still matches
+        present = {p.relative_to(final).as_posix() for p in final.rglob("*") if not p.is_dir()}
+        if present != set(held):  # an extra file there would be published
+            raise GateError(f"{root.name}: the existing snapshot holds other files than the source")
         for rel, data in held.items():
             if (final / rel).read_bytes() != data:
                 raise GateError(f"{root.name}: the existing snapshot differs from the source")
+        os.utime(final)  # in use now: the pruner goes by age
         return Item(root.name, kind, final, src.sidecar, src.files)
     tmp = base / f".tmp-{secrets.token_hex(6)}"
     tmp.mkdir(mode=0o700)
@@ -341,33 +372,58 @@ def snapshot_item(root: Path, kind: str, snapshots: Path) -> Item:
 
 
 # ----------------------------------------------------------------------------- the gate
-def _scan(unit: str, variants: list[str], policy: Policy, reasons: list[Reason]) -> None:
+def _scan(
+    unit: str,
+    variants: list[str],
+    policy: Policy,
+    reasons: list[Reason],
+    *,
+    names: bool = True,
+    shapes: bool = True,
+) -> None:
+    """``names``: the deny-list and the posture phrases; ``shapes``: the secret shapes."""
     for variant in variants:
-        for i in policy.deny_list.hits(variant):
-            reasons.append(Reason("deny-list", unit, f"line #{i + 1} of the deny-list"))
-        for name, pat in _SECRET_SHAPES:
-            if pat.search(variant):
-                reasons.append(Reason("secret-shape", unit, name))
-        if policy.posture_rules:
-            for name, pat in _POSTURE:
+        if names:
+            for i in policy.deny_list.hits(variant):
+                reasons.append(Reason("deny-list", unit, f"line #{i + 1} of the deny-list"))
+            if policy.posture_rules:
+                for name, pat in _POSTURE:
+                    if pat.search(variant):
+                        reasons.append(Reason("posture", unit, name))
+        if shapes:
+            for name, pat in _SECRET_SHAPES:
                 if pat.search(variant):
-                    reasons.append(Reason("posture", unit, name))
+                    reasons.append(Reason("secret-shape", unit, name))
+
+
+def _variants(text: str, reasons: list[Reason], unit: str) -> list[str]:
+    try:
+        return normalise.variants(text)
+    except normalise.NotConverged:  # text that will not decode to a fixed point is refused
+        reasons.append(Reason("decoding-not-converged", unit))
+        return [text]
 
 
 def _unit_variants(suffix: str, text: str, reasons: list[Reason], unit: str) -> list[str]:
-    out = normalise.variants(text)
+    out = _variants(text, reasons, unit)
     if suffix in (".json", ".webmanifest"):
         try:
-            out += normalise.variants(normalise.json_text(text))
+            out += _variants(normalise.json_text(text), reasons, unit)
         except ValueError:
             reasons.append(Reason("json-invalid", unit))
     return out
 
 
 def judge(
-    claimed: object, units: dict[str, list[str]], policy: Policy, reasons: list[Reason]
+    claimed: object,
+    units: dict[str, list[str]],
+    policy: Policy,
+    reasons: list[Reason],
+    names_units: dict[str, list[str]] | None = None,
 ) -> str:
-    """The label ``claimed`` and every marker in every variant leave under, and the rule hits."""
+    """The label ``claimed`` and every marker in every variant leave under, and the rule hits.
+    ``names_units`` (default ``units``) is what the deny-list and posture rules read: a reviewed
+    exception may blank already-public text there, never for the label or the secret shapes."""
     body = [v for vs in units.values() for v in vs]
     decision = tlp_egress.egress_check(
         policy.ceiling, claimed, recorded=tlp_egress.NO_RECORD, body=body
@@ -375,15 +431,23 @@ def judge(
     if not decision.allowed:
         reasons.append(Reason("tlp-above-ceiling", "", f"{decision.label} over {policy.ceiling}"))
     for unit, vs in units.items():
-        _scan(unit, vs, policy, reasons)
+        _scan(unit, vs, policy, reasons, names=names_units is None)
+    for unit, vs in (names_units or {}).items():
+        _scan(unit, vs, policy, reasons, shapes=False)
     return str(decision.label)
 
 
-def gate_artifact(name: str, text: str, policy: Policy) -> Verdict:
-    """Gate a generated artefact (the feed) before it is uploaded: the same rules, claim clear."""
+def gate_artifact(name: str, text: str, policy: Policy, names_text: str | None = None) -> Verdict:
+    """Gate a generated artefact (the feed) before it is uploaded: the same rules, claim clear.
+    ``names_text``: the same text with reviewed, already-public passages blanked, which the
+    deny-list and posture rules read instead (TLP markers and secret shapes read ``text``)."""
     reasons: list[Reason] = []
     suffix = Path(name).suffix.lower()
-    label = judge("clear", {name: _unit_variants(suffix, text, reasons, name)}, policy, reasons)
+    full = {name: _unit_variants(suffix, text, reasons, name)}
+    names = None
+    if names_text is not None:
+        names = {name: _unit_variants(suffix, names_text, reasons, name)}
+    label = judge("clear", full, policy, reasons, names)
     uniq = tuple(dict.fromkeys(reasons))
     return Verdict(name, "artefact", not uniq, label, uniq)
 
@@ -394,11 +458,11 @@ def evaluate(item: Item, policy: Policy) -> Verdict:
     units: dict[str, list[str]] = {}
     # what becomes a public URL or a visible field is content too: names, the id, the sidecar's text
     for n, rel in enumerate(item.files):
-        units[f"name-of-file-{n + 1}"] = normalise.variants(rel)
-    units["item-id"] = normalise.variants(item.id)
+        units[f"name-of-file-{n + 1}"] = _variants(rel, reasons, f"name-of-file-{n + 1}")
+    units["item-id"] = _variants(item.id, reasons, "item-id")
     for key in ("producer", "title"):
         if isinstance(item.sidecar.get(key), str):
-            units[f"sidecar-{key}"] = normalise.variants(item.sidecar[key])
+            units[f"sidecar-{key}"] = _variants(item.sidecar[key], reasons, f"sidecar-{key}")
     for rel in item.files:
         suffix = Path(rel).suffix.lower()
         path = item.path(rel)
@@ -416,7 +480,7 @@ def evaluate(item: Item, policy: Policy) -> Verdict:
             except media.MediaError as exc:
                 reasons.append(Reason("media-invalid", rel, str(exc)))
                 continue
-            units[rel] = [v for t in extracted for v in normalise.variants(t)]
+            units[rel] = [v for t in extracted for v in _variants(t, reasons, rel)]
             continue
         if suffix not in TEXT_SUFFIXES:
             reasons.append(Reason("unknown-file-type", rel, suffix or "no suffix"))

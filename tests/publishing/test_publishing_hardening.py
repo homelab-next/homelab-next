@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -155,7 +156,7 @@ def test_a_feed_refused_by_the_gate_is_a_blocked_item_in_a_live_run(tmp_path):
 # ----------------------------------------------------------------------------- B2
 def test_a_text_payload_named_as_audio_or_image_is_refused(tmp_path):
     for n, (name, body) in enumerate(
-        (("a.mp3", b"TLP:RED secrethost"), ("a.png", b"TLP:RED"), ("a.woff2", b"secrethost"))
+        (("a.mp3", b"TLP:RED secrethost"), ("a.png", b"TLP:RED"), ("a.ico", b"secrethost"))
     ):
         v = verdict(tmp_path / str(n), {name: body})
         assert "media-invalid" in rules(v), name
@@ -406,31 +407,25 @@ def test_a_hard_linked_file_is_refused(tmp_path):
 
 
 # ----------------------------------------------------------------------------- S3
-def test_wrangler_runs_on_the_verified_node_in_an_empty_directory(tmp_path):
+def test_wrangler_runs_on_the_verified_node_in_a_directory_of_its_own(tmp_path):
     d = install_wrangler(tmp_path)
-    dist, work = tmp_path / "dist", tmp_path / "work"
+    dist = tmp_path / "dist"
     dist.mkdir()
-    work.mkdir()
     r = Runner()
-    pg.deploy(pcfg(d), dist, token="t" * 5, account_id="", home=tmp_path, workdir=work, runner=r)
+    pg.deploy(pcfg(d), dist, token="t" * 5, account_id="", home=tmp_path, runner=r)
     argv, env, cwd = r.calls[-1]
-    assert argv[0] == str(pcfg(d).node) and cwd == str(work)
+    assert argv[0] == str(pcfg(d).node) and cwd.startswith(tempfile.gettempdir())
     assert env["PATH"].split(":")[0] == str(pcfg(d).node.parent)
-    (work / "wrangler.toml").write_text("x")
-    with pytest.raises(pg.PagesError, match="not empty"):
-        pg.deploy(pcfg(d), dist, token="t", account_id="", home=tmp_path, workdir=work, runner=r)
+    assert not Path(cwd).exists()  # removed after the deploy
 
 
 def test_the_deploy_refuses_a_directory_holding_configuration(tmp_path):
     d = install_wrangler(tmp_path)
-    dist, work = tmp_path / "dist", tmp_path / "work"
+    dist = tmp_path / "dist"
     dist.mkdir()
-    work.mkdir()
     (dist / "wrangler.toml").write_text("name = 'x'")
     with pytest.raises(pg.PagesError, match="configuration"):
-        pg.deploy(
-            pcfg(d), dist, token="t", account_id="", home=tmp_path, workdir=work, runner=Runner()
-        )
+        pg.deploy(pcfg(d), dist, token="t", account_id="", home=tmp_path, runner=Runner())
 
 
 # ----------------------------------------------------------------------------- S4

@@ -59,16 +59,24 @@ gate` / `Publishing: the gate passes every item again`), state-diffed, never per
 
 The gate is a literal, **normalised** matcher: every rule runs over the text as written and as a reader
 sees it (HTML entities and percent escapes decoded up to three layers, NFKC, zero-width, soft-hyphen and other
-format characters removed, look-alike Cyrillic and Greek letters folded to Latin, base64 `data:` URIs decoded),
-and over JSON after decoding (keys and string values). It does not run scripts or rebuild strings a page
+format characters removed, look-alike Cyrillic, Greek, Coptic, Cherokee and small-capital letters folded to Latin, variation selectors and bidi
+controls removed (a bidi-overridden text is also read reversed), base64 `data:` URIs decoded),
+over the text a browser renders (markup removed, so a name split by `<span>` is whole again), with JS and CSS
+escapes (`\\x68`, `\\u0068`, `\\68 `) resolved, with combining marks stripped, and over JSON after decoding
+(keys and string values). Decoding runs to a fixed point; text that still changes after 8 layers is blocked. It does not run scripts or rebuild strings a page
 assembles at run time. It also judges:
 
 * **names**: every file and directory name, the item id and the sidecar's `producer` and `title` (they become
   public URLs or visible fields); a reason names the file's number, never the matched text;
-* **binaries by content**: a suffix proves nothing. Magic bytes must match the type (MP3, PNG, JPEG, GIF, WebP,
-  ICO, WOFF/WOFF2), a text file may not hold binary, and the text a media file carries is scanned: ID3 frames
-  (and the ID3v1 and tail tags), PNG `tEXt`/`iTXt`/`zTXt`/`eXIf` and ancillary chunks, JPEG comment and APPn
-  (EXIF, XMP) segments, and every printable run of the other formats. What does not parse is refused;
+* **binaries by content**: a suffix proves nothing. The accepted media are MP3, PNG, JPEG and ICO; GIF, WebP
+  and fonts are **refused outright** (their bodies are compressed, so their text cannot be read, and a CTI site
+  does not need them). Magic bytes must match the type, a text file may not hold binary, and **every printable
+  run of the whole file** (ASCII and both UTF-16 orders) is scanned, wherever it sits, plus the structured
+  metadata: ID3 frames (compressed, encrypted or unsynchronised frames, and frame types outside text, URL,
+  comment, lyrics and picture are refused; an attached picture is read as the PNG or JPEG it is), PNG text,
+  `iCCP` and `eXIf` chunks, JPEG comment and APPn (EXIF, XMP) segments. Any byte after a PNG `IEND` or a JPEG
+  end marker, an unregistered (private or unknown) PNG chunk, and an ICO holding a PNG are refused, as is
+  anything that does not parse. Data hidden inside compressed sample or pixel data is out of scope;
 * **what the adapters generate**: the `feed.xml` a run would write is gated like an item (claim clear) before any
   upload; a feed that does not pass (for example one built from an episode already in the bucket) blocks the run
   and nothing is written;
@@ -82,7 +90,27 @@ into `state/snapshots/<kind>/<id>-<digest>/` (owned by the module's user, `0700`
 `O_NOFOLLOW`, hashed as read and written from the same bytes (a symlinked item or kind directory, a symlink and a
 hard link are refused), then gated **there**, and only the snapshot is deployed or uploaded (R2 stamps the sha256
 of the bytes it sends). The sidecar is not copied. A snapshot is named by its content, so an unchanged item
-reuses it; old ones are not deleted by the module (prune `state/snapshots/` by age).
+reuses it (an extra file in a reused one is refused). Each path component is opened with `O_NOFOLLOW` through
+directory file descriptors. **Pruning is part of every run**: the newest `snapshots_keep` (5) per kind, anything
+younger than `snapshots_min_age_s` (3600), every item id still in `publishable/` and every id named by the
+last 50 manifest lines are kept; only directories the module named and made (a snapshot or `.tmp-` name, a plain
+directory directly under the snapshot root, never a link) are removed. Staged items under `staging/` (shadow
+output) are not pruned.
+
+## Legacy episodes and the cutover pass criterion
+
+The feed is gated as a whole, so an episode **already public** in the bucket whose metadata fails the current
+deny-list or posture rules would block every future feed write, and the module cannot change the bucket.
+Fail-closed is the default; the escape hatch is an operator-reviewed list in the configuration
+(`publishing_gate_legacy_exceptions`: `{key, sha256}` of each such metadata object). The deny-list and posture
+rules skip that object's text only while its bytes still hash to the reviewed value; **TLP markers and secret
+shapes are always enforced**, and a plan reports what was excused (`excused_legacy`).
+
+**A `dry-run` against the real bucket is a cutover pass criterion**: it must finish with the computed feed
+accepted (or every legacy blocker listed and reviewed into the exceptions) before `live` is enabled. `stage`
+never reads the bucket and does **not** gate the feed: the only new text in a feed is the item's own
+`metadata.json`, which stage gates through the same normaliser; the rest (remote, already-public text and the
+operator's feed settings) is judged by `dry-run`.
 
 ## Modes
 
@@ -118,7 +146,7 @@ Enforced at three layers, each tested:
   `wrangler --version` all say the pin;
 * the argv is the installed binary, never `npx`, never `@latest`, and always `--branch=<production branch>`.
 
-wrangler runs on the node the role verified (`pages.node`, first on `PATH`) with an empty directory of the gate's as its working directory, so it never finds a `wrangler.toml` or `functions/`. A deploy whose tree digest equals the last published one for the project is skipped (idempotent). To bump:
+wrangler runs on the node the role verified (`pages.node`, first on `PATH`) in a **fresh directory made for that one deploy** under the temporary directory (no `wrangler.toml`, `package.json` or `functions/` above it) and removed afterwards: wrangler 4.157.0 leaves `.wrangler/tmp` in its working directory, so one that outlived a deploy would break the next. A deploy whose tree digest equals the last published one for the project is skipped (idempotent). To bump:
 generate a new lockfile, set the version and its sha256 together, run `playbooks/upgrade.yml`.
 
 ## The `r2-feed` adapter (the podcast feed)

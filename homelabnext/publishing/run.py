@@ -24,7 +24,7 @@ from homelabnext.notify import Message, Notifier, default_sender
 from homelabnext.publishing import config as cf
 from homelabnext.publishing import gate as gt
 from homelabnext.publishing import pages as pg
-from homelabnext.publishing import r2, stage
+from homelabnext.publishing import r2, snapshots, stage
 from homelabnext.publishing.transport import NoNetwork, ReadOnly, Transport, Urllib
 from homelabnext.state import StateStore
 
@@ -167,6 +167,16 @@ def run(
                     "failed": f"{type(exc).__name__}: {exc}",
                 },
             )
+    try:  # snapshots go by age: the newest few per kind, what is current, what was last published
+        snapshots.prune(
+            cfg.state_dir / "snapshots",
+            keep=cfg.snapshots_keep,
+            min_age_s=cfg.snapshots_min_age_s,
+            protect_ids={p.name for _k, p in entries} | snapshots.referenced_ids(manifest),
+            now=clock(),
+        )
+    except OSError as exc:
+        _append(gate_log, {"ts": clock(), "prune_failed": type(exc).__name__})
     # stage mode makes no network call at all, a notification included; and a notification that
     # cannot be sent never takes the run down (the verdicts are already logged and returned)
     if notifier is not None and cfg.mode != "stage":
@@ -208,16 +218,13 @@ def _handle(cfg, item, verdict, net, runner, manifest, clock, policy) -> dict:
         }
         if cfg.mode == "live" and not same:
             home = cfg.state_dir / "home"
-            workdir = cfg.state_dir / "wrangler-cwd"  # empty, ours: no wrangler.toml or functions/
             home.mkdir(parents=True, exist_ok=True)
-            workdir.mkdir(parents=True, exist_ok=True)
             pg.deploy(
                 cfg.pages,
                 item.root,
                 token=cf.read_credential(cfg.credentials_dir, cf.CRED_PAGES_TOKEN),
                 account_id=cfg.pages_account_id,
                 home=home,
-                workdir=workdir,
                 runner=runner,
             )
             _append(
@@ -256,7 +263,7 @@ def _handle(cfg, item, verdict, net, runner, manifest, clock, policy) -> dict:
                 cf.read_credential(cfg.credentials_dir, cf.CRED_R2_SECRET),
                 net,
             )
-            p = r2.plan_episode(client, item, cfg.feed, policy)
+            p = r2.plan_episode(client, item, cfg.feed, policy, cfg.legacy_exceptions)
             plan = {
                 "adapter": "r2-feed",
                 "bucket": cfg.r2.bucket,
@@ -265,12 +272,13 @@ def _handle(cfg, item, verdict, net, runner, manifest, clock, policy) -> dict:
                 "feed_changes": p.feed_changes,
                 "episodes": p.episodes,
                 "unverified_by_size_only": list(p.unverified),
+                "excused_legacy": list(p.excused),
             }
             if cfg.mode == "live":
                 try:
                     written = r2.apply_plan(client, p)
                 except r2.PreconditionFailed:  # the feed moved under us: read it again, once
-                    p = r2.plan_episode(client, item, cfg.feed, policy)
+                    p = r2.plan_episode(client, item, cfg.feed, policy, cfg.legacy_exceptions)
                     written = r2.apply_plan(client, p)
                 if written:
                     _append(

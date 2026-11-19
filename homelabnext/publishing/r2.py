@@ -15,6 +15,7 @@ import hmac
 import json
 import urllib.parse
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -225,6 +226,7 @@ class Plan:
     episodes: int
     feed_etag: str | None = None  # the ETag of the feed the plan read (None: there was none)
     unverified: tuple[str, ...] = ()  # existing keys compared by size only (no sha256 stamp)
+    excused: tuple[str, ...] = ()  # legacy metadata whose text a reviewed exception excuses
 
 
 def episode_files(item: Item) -> tuple[str, str, str, str]:
@@ -239,9 +241,17 @@ def episode_files(item: Item) -> tuple[str, str, str, str]:
 
 
 def plan_episode(
-    client: R2Client, item: Item, feed_cfg: fd.FeedConfig, policy: gate.Policy
+    client: R2Client,
+    item: Item,
+    feed_cfg: fd.FeedConfig,
+    policy: gate.Policy,
+    legacy: Mapping[str, str] | None = None,
 ) -> Plan:
-    """Reads the bucket (listing, metadata, the feed); writes nothing."""
+    """Reads the bucket (listing, metadata, the feed); writes nothing.  ``legacy`` maps the key of
+    an already-public metadata object to its sha256: an operator-reviewed exception whose text the
+    deny-list and posture rules do not read (TLP markers and secret shapes still do)."""
+    legacy = legacy or {}
+    excused: set[str] = set()
     stem, _date, meta_rel, mp3_rel = episode_files(item)
     mp3_key, json_key = f"episodes/{stem}.mp3", f"episodes/{stem}.json"
     local = {}
@@ -279,6 +289,8 @@ def plan_episode(
             continue  # malformed remote metadata is skipped here, as the old builder did
         if key == f"episodes/{s}.json":
             metas[s] = doc
+            if legacy.get(key) == hashlib.sha256(raw or b"").hexdigest():
+                excused.add(s)
     metas[stem] = json.loads(local[json_key][0])
     sizes[mp3_key] = len(local[mp3_key][0])
     episodes = []
@@ -297,7 +309,14 @@ def plan_episode(
     if not episodes:
         raise R2Error("zero episodes: refusing to publish an empty feed")
     new_xml = fd.build_feed(episodes, feed_cfg)
-    verdict = gate.gate_artifact(FEED_KEY, new_xml, policy)
+    names_xml = None
+    if excused:
+        blanked = [
+            fd.Episode(e.stem, e.date, "-", "", e.size) if e.stem in excused else e
+            for e in episodes
+        ]
+        names_xml = fd.build_feed(blanked, feed_cfg)
+    verdict = gate.gate_artifact(FEED_KEY, new_xml, policy, names_xml)
     if not verdict.ok:  # the rendered feed is content too: it must pass what the items passed
         rules = sorted({r.rule for r in verdict.reasons})
         raise FeedBlocked(
@@ -319,6 +338,7 @@ def plan_episode(
         len(episodes),
         etag or None,
         tuple(unverified),
+        tuple(sorted(f"episodes/{e}.json" for e in excused)),
     )
 
 

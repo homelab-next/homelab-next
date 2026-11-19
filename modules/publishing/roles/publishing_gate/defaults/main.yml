@@ -32,3 +32,6 @@ publishing_gate_notify_cred: ""
 publishing_gate_export_dir: /var/lib/hnx-modules/publishing/export
 publishing_gate_restore_source: ""
 publishing_gate_target_wrangler_version: ""
+publishing_gate_snapshots_keep: 5
+publishing_gate_snapshots_min_age_s: 3600
+publishing_gate_legacy_exceptions: []

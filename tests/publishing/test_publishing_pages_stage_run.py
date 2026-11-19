@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -47,12 +48,6 @@ def dist(tmp_path) -> Path:
     return d
 
 
-def work(tmp_path) -> Path:
-    d = tmp_path / "work"
-    d.mkdir(exist_ok=True)
-    return d
-
-
 def pcfg(d, version=VERSION):
     return pg.PagesConfig("site-x", "pages", version, PIN, d)
 
@@ -83,12 +78,11 @@ def test_a_valid_pin_deploys_with_the_installed_binary_and_never_npx(tmp_path):
         token="t" * 5,
         account_id="a1",
         home=tmp_path,
-        workdir=work(tmp_path),
         runner=r,
     )
     argv = r.calls[-1][0]
     assert argv[0] == str(pcfg(d).node) and argv[1].endswith("wrangler")
-    assert "--branch=pages" in argv and r.calls[-1][2] == str(work(tmp_path))
+    assert "--branch=pages" in argv and r.calls[-1][2].startswith(tempfile.gettempdir())
     assert not any("npx" in a or "@latest" in a for c in r.calls for a in c[0])
 
 
@@ -125,7 +119,6 @@ def test_a_binary_that_reports_another_version_is_refused_before_any_deploy(tmp_
             token="t",
             account_id="",
             home=tmp_path,
-            workdir=work(tmp_path),
             runner=r,
         )
     assert len(r.calls) == 1
@@ -144,7 +137,6 @@ def test_a_failed_deploy_does_not_leak_the_token(tmp_path):
             token=tok,
             account_id="",
             home=tmp_path,
-            workdir=work(tmp_path),
             runner=run,
         )
     assert tok not in str(e.value)

@@ -130,6 +130,19 @@ argument_specs:
         type: str
         description: The notify token's secret reference; empty when notify needs none.
         default: ""
+      publishing_gate_snapshots_keep:
+        type: int
+        description: Snapshots kept per kind besides the current items and what the newest manifest lines name; older ones go once past the minimum age.
+        default: 5
+      publishing_gate_snapshots_min_age_s:
+        type: int
+        description: A snapshot younger than this many seconds is never pruned.
+        default: 3600
+      publishing_gate_legacy_exceptions:
+        type: list
+        elements: dict
+        description: Reviewed, already-public legacy episode metadata objects, each {key, sha256}; the deny-list and posture rules skip their text (TLP markers and secret shapes still apply).
+        default: []
       publishing_gate_export_dir:
         type: str
         description: Where the export writes the published-manifest copy.
