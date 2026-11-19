@@ -1,0 +1,207 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: orchestration-dispatch-read
+#   kind: job
+#   purpose: Read and check, as a job unit's own user, the run file the session dispatcher wrote for it, refusing anything planted or replayed.
+#   owner: platform
+#   trigger: [role:orchestration]
+#   inputs: the set's run directory, the unit's instance (%i), the controller's user, a directory of consumed dispatch ids the job's user owns
+#   outputs: the run file's JSON on stdout; the refusal on stderr; one marker per consumed dispatch id, pruned after the keep window
+#   installs_to: /opt/hnx/orchestration/bin/hnx-dispatch-read
+#   exit:
+#     "0": the run file is the dispatcher's, for this instance, and not consumed before
+#     "1": "refused: missing, a link, not a regular file, more than one link, not the controller's, too large, malformed, for another instance, older than the keep window, or a dispatch id already consumed"
+#     "2": usage error
+"""The job side of the dispatcher's run file (modules/orchestration README, "Module job units").
+
+A module's job unit runs this as its first step, as the module's own user (never as root, never
+through ``LoadCredential=``): ``hnx-dispatch-read --dir /var/lib/hnx-dispatch/<service>/<set>
+--instance %i --owner hnx-orchestrator --consumed-dir <a directory of the job's>``. It opens
+``<dir>/<instance>.json`` with ``O_NOFOLLOW | O_NONBLOCK`` and checks, on the open descriptor:
+a regular file (never a directory, FIFO, socket or device), one link, owned by the controller's
+user, writable by no one but it, at most 256 KiB. Then the content: version 2, the instance's own
+job and lane, the unit's own name, a run id and a dispatch id of the dispatcher's shape, a dispatch
+time inside the keep window, the other fields of their types. Last, the **dispatch id** (a fresh
+random 128-bit value per dispatch; the run id is the controller's and is shared by a run's retries
+and failovers, so it is never the replay key) is recorded as consumed, a marker created exclusively
+in ``--consumed-dir``: a dispatch id seen before is refused, so a stale or copied run file never runs
+twice. Markers older than ``--keep-days`` (30) are pruned on each read; a run file dispatched before
+that window is refused, so a pruned marker never reopens a replay. The checked JSON goes to stdout;
+anything else is a refusal (exit 1) that reads nothing more.
+
+A link or a planted file can therefore reach only what the module's user could read anyway, and
+nothing is read with root's rights.
+"""
+
+from __future__ import annotations
+
+import argparse
+import calendar
+import json
+import os
+import pwd
+import re
+import stat
+import sys
+import time
+
+MAX_RUN_FILE_BYTES = 256 << 10
+INSTANCE_RE = re.compile(r"^(?P<job>[a-z][a-z0-9]*(-[a-z0-9]+)*)-(?P<lane>real|shadow)\Z")
+SET_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z")
+AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+DISPATCH_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
+STAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
+FUTURE_SLACK_SECONDS = 3600
+
+
+class Refused(Exception):
+    pass
+
+
+def dispatched_at(stamp) -> float | None:
+    if not isinstance(stamp, str) or not STAMP_RE.match(stamp):
+        return None
+    try:
+        return float(calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")))
+    except ValueError:
+        return None
+
+
+def read_run_file(
+    directory: str, instance: str, owner_uid: int, keep_days: int = 30, now: float | None = None
+) -> dict:
+    m = INSTANCE_RE.match(instance)
+    if not m:
+        raise Refused(f"the instance {instance!r} is not <job>-<real|shadow>")
+    set_name = os.path.basename(os.path.normpath(directory))
+    if not SET_RE.match(set_name):
+        raise Refused(f"the run directory {directory} is not a set's (<run root>/<set>)")
+    path = os.path.join(directory, instance + ".json")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError as e:
+        raise Refused(f"{path} cannot be opened ({e.strerror}; a link is never followed)") from e
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise Refused(f"{path} is not a regular file")
+        if st.st_nlink != 1:
+            raise Refused(f"{path} has {st.st_nlink} links (one expected)")
+        if st.st_uid != owner_uid:
+            raise Refused(f"{path} belongs to uid {st.st_uid}, not the controller's ({owner_uid})")
+        if st.st_mode & 0o022:
+            raise Refused(f"{path} is writable by group or others")
+        if st.st_size > MAX_RUN_FILE_BYTES:
+            raise Refused(f"{path} is larger than {MAX_RUN_FILE_BYTES} bytes")
+        raw = b""
+        while len(raw) <= MAX_RUN_FILE_BYTES:
+            chunk = os.read(fd, 1 << 16)
+            if not chunk:
+                break
+            raw += chunk
+    finally:
+        os.close(fd)
+    if len(raw) > MAX_RUN_FILE_BYTES:
+        raise Refused(f"{path} grew past {MAX_RUN_FILE_BYTES} bytes while read")
+    try:
+        doc = json.loads(raw)
+    except (ValueError, RecursionError):  # RecursionError: nesting deeper than the parser goes
+        raise Refused(f"{path} is not JSON (or nested too deep)") from None
+    unit = f"hnx-{set_name}@{instance}.service"
+    checks = [
+        (isinstance(doc, dict), "is not an object"),
+        (isinstance(doc, dict) and doc.get("version") == 2, "is not version 2"),
+        (isinstance(doc, dict) and doc.get("job") == m["job"], "names another job"),
+        (isinstance(doc, dict) and doc.get("lane") == m["lane"], "names another lane"),
+        (isinstance(doc, dict) and doc.get("unit") == unit, "names another unit"),
+        (isinstance(doc, dict) and isinstance(doc.get("run_id"), str) and bool(RUN_ID_RE.match(doc["run_id"])), "has no run id"),
+        (isinstance(doc, dict) and isinstance(doc.get("agent_key"), str) and bool(AGENT_RE.match(doc["agent_key"])), "has no agent key"),
+        (isinstance(doc, dict) and isinstance(doc.get("task"), str), "has no task"),
+        (isinstance(doc, dict) and isinstance(doc.get("dispatch_id"), str) and bool(DISPATCH_ID_RE.match(doc["dispatch_id"])), "has no dispatch id (32 lower-case hex)"),
+        (isinstance(doc, dict) and dispatched_at(doc.get("dispatched_at")) is not None, "has no dispatch time"),
+    ]  # fmt: skip
+    for ok, why in checks:
+        if not ok:
+            raise Refused(f"{path} {why}")
+    at = dispatched_at(doc["dispatched_at"])
+    now = time.time() if now is None else now
+    if at < now - keep_days * 86400 or at > now + FUTURE_SLACK_SECONDS:
+        raise Refused(f"{path} was dispatched outside the keep window ({keep_days} days)")
+    return doc
+
+
+def prune(consumed_dir: str, keep_days: int, now: float | None = None) -> None:
+    """Remove consumed markers older than the keep window: only regular files named like a dispatch
+    id, never a link or anything else; a run file that old is refused anyway."""
+    cutoff = (time.time() if now is None else now) - keep_days * 86400
+    try:
+        names = os.listdir(consumed_dir)
+    except OSError:
+        return
+    for name in names:
+        if not DISPATCH_ID_RE.match(name):
+            continue
+        path = os.path.join(consumed_dir, name)
+        try:
+            st = os.lstat(path)
+            if stat.S_ISREG(st.st_mode) and st.st_mtime < cutoff:
+                os.unlink(path)
+        except OSError:
+            continue
+
+
+def consume(consumed_dir: str, dispatch_id: str, now: float | None = None) -> None:
+    """Record the dispatch id as consumed; a dispatch id recorded before is a replay."""
+    try:
+        fd = os.open(
+            os.path.join(consumed_dir, dispatch_id),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+        )
+    except FileExistsError as e:
+        raise Refused(f"dispatch id {dispatch_id} was consumed before (a replayed run file)") from e
+    except OSError as e:
+        raise Refused(
+            f"the consumed-run directory {consumed_dir} is not usable ({e.strerror})"
+        ) from e
+    try:
+        if now is not None:  # the marker's age is what pruning reads: on the same clock
+            os.utime(fd, (now, now))
+    finally:
+        os.close(fd)
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="hnx-dispatch-read")
+    ap.add_argument("--dir", required=True)
+    ap.add_argument("--instance", required=True)
+    who = ap.add_mutually_exclusive_group(required=True)
+    who.add_argument("--owner", help="the controller's user name")
+    who.add_argument("--owner-uid", type=int)
+    ap.add_argument("--consumed-dir", required=True)
+    ap.add_argument("--keep-days", type=int, default=30)
+    ap.add_argument("--now", type=float, default=None, help=argparse.SUPPRESS)  # tests: the clock
+    args = ap.parse_args(argv)
+    if args.keep_days < 1:
+        print("hnx-dispatch-read: --keep-days is at least 1", file=sys.stderr)
+        return 2
+    try:
+        uid = args.owner_uid if args.owner is None else pwd.getpwnam(args.owner).pw_uid
+    except KeyError:
+        print(f"hnx-dispatch-read: no user {args.owner}", file=sys.stderr)
+        return 2
+    try:
+        doc = read_run_file(args.dir, args.instance, uid, args.keep_days, args.now)
+        prune(args.consumed_dir, args.keep_days, args.now)
+        consume(args.consumed_dir, doc["dispatch_id"], args.now)
+    except Refused as e:
+        print(f"hnx-dispatch-read: refused: {e}", file=sys.stderr)
+        return 1
+    sys.stdout.write(json.dumps(doc, sort_keys=True) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -41,6 +41,10 @@ RuntimeDirectory=hnx-{{ orchestration_logical_id }}
 RuntimeDirectoryMode=0700
 UMask=0077
 ReadWritePaths={{ orchestration_data_root }}
+{% if orchestration_job_units | length > 0 %}
+# the module job units' run files (README "The run file"): the controller writes them, each job reads its own
+ReadWritePaths={{ orchestration_dispatch_service_run_dir }}
+{% endif %}
 TasksMax={{ orchestration_tasks_max | int }}
 MemoryMax={{ orchestration_memory_max }}
 NoNewPrivileges=yes

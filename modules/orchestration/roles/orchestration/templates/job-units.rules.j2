@@ -1,0 +1,24 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+{{ orchestration_polkit_marker }}, service {{ orchestration_logical_id }}, job unit set {{ item.name }}); local changes are overwritten.
+// The orchestration controller's user may start, stop, ref (systemctl start --wait pins the unit
+// while it waits) and reset-failed exactly this set's job units (hnx-{{ item.name }}@<job>-<lane>.service,
+// listed below) and nothing else: no other unit, no other verb (never restart, reload, kill,
+// set-property or clean), never manage-unit-files or reload-daemon. Every
+// other request falls through (NOT_HANDLED) to polkit's default, which asks for authentication.
+polkit.addRule(function(action, subject) {
+  if (action.id !== {{ orchestration_job_unit_action | to_json }}) {
+    return polkit.Result.NOT_HANDLED;
+  }
+  if (subject.user !== {{ orchestration_user | to_json }}) {
+    return polkit.Result.NOT_HANDLED;
+  }
+  var units = {{ orchestration_job_instances | selectattr('set', 'equalto', item.name) | map(attribute='unit') | list | to_json }};
+  var verbs = {{ orchestration_job_unit_verbs | to_json }};
+  var unit = action.lookup("unit");
+  var verb = action.lookup("verb");
+  if (typeof unit === "string" && typeof verb === "string" &&
+      units.indexOf(unit) !== -1 && verbs.indexOf(verb) !== -1) {
+    return polkit.Result.YES;
+  }
+  return polkit.Result.NOT_HANDLED;
+});

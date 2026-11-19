@@ -28,6 +28,24 @@
       loop:
         - "{{ orchestration_config_dir | default('/etc/hnx/orchestration') }}/api-tokens.yaml"
         - "{{ orchestration_config_dir | default('/etc/hnx/orchestration') }}/events.token"
+    # the grants go with the controller: no rule may let a user that no longer runs anything start
+    # a module's units (only a rule this role wrote, by its first line); run directories and logs are kept
+    - name: Find the polkit rules the role wrote for the module job units
+      ansible.builtin.find:
+        paths: "{{ orchestration_polkit_rules_dir | default('/etc/polkit-1/rules.d') }}"
+        patterns: ["49-hnx-*.rules"]
+        contains: '\A// Managed by homelabnext \(role orchestration, service {{ orchestration_logical_id | regex_escape }}, '
+        read_whole_file: true
+        file_type: file
+        recurse: false
+      register: orchestration_remove_rules
+    - name: Delete those polkit rules and the dispatch table
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: >-
+        {{ (orchestration_remove_rules.files | map(attribute='path') | list)
+           + [(orchestration_config_dir | default('/etc/hnx/orchestration')) ~ '/dispatch.json'] }}
     - name: Reload systemd
       ansible.builtin.command:
         argv: ["{{ orchestration_systemctl_cli | default('systemctl') }}", daemon-reload]

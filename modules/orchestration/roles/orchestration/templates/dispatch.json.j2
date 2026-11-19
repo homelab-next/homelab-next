@@ -1,0 +1,14 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+{% set units = {} %}
+{% for s in orchestration_job_units %}
+{% set _ = units.update({s.name: {
+    'jobs': s.jobs,
+    'lanes': s.lanes | default(orchestration_job_unit_lanes),
+    'log_dir': orchestration_job_logs_dir ~ '/' ~ s.name}}) %}
+{% endfor %}
+{{ {'version': 2,
+    'managed_by': 'homelabnext role orchestration, service ' ~ orchestration_logical_id,
+    'dispatch_dir': orchestration_dispatch_dir,
+    'run_root': orchestration_dispatch_service_run_dir,
+    'systemctl': orchestration_dispatch_systemctl,
+    'units': units} | to_nice_json }}
