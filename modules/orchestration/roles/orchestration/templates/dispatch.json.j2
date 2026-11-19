@@ -9,6 +9,6 @@
 {{ {'version': 2,
     'managed_by': 'homelabnext role orchestration, service ' ~ orchestration_logical_id,
     'dispatch_dir': orchestration_dispatch_dir,
-    'run_root': orchestration_dispatch_run_root,
+    'run_root': orchestration_dispatch_service_run_dir,
     'systemctl': orchestration_dispatch_systemctl,
     'units': units} | to_nice_json }}

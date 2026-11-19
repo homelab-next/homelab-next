@@ -304,5 +304,9 @@ orchestration_job_set_pattern: '^(?=.{1,24}\Z)[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
 orchestration_job_name_pattern: '^(?=.{1,48}\Z)[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
 orchestration_agent_key_pattern: '^[a-z0-9][a-z0-9_-]{0,63}\Z'
 orchestration_dispatch_read_bin: "{{ orchestration_install_dir }}/bin/hnx-dispatch-read"
-orchestration_job_group_prefix: hnx-job-
+# each set's group, by service and set (the slugs hold no "_", so the name is unambiguous); at most
+# 32 characters, the system's limit, which validate.yml holds
+orchestration_job_group_prefix: "hnx-{{ orchestration_logical_id }}_"
+# this service's run directories: <run root>/<service>/<set>
+orchestration_dispatch_service_run_dir: "{{ orchestration_dispatch_run_root }}/{{ orchestration_logical_id }}"
 orchestration_polkit_rule_prefix: "49-hnx-{{ orchestration_logical_id }}-"

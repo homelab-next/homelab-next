@@ -98,9 +98,9 @@ orchestration_job_units:
 | the run-file reader the job runs | `/opt/hnx/orchestration/bin/hnx-dispatch-read` | root, 0755 |
 | the dispatch table (agent key -> set and job) | `/etc/hnx/orchestration/dispatch.json` | root:service group, 0640; the dispatcher refuses one owned by anyone else or writable by group or others |
 | one polkit rule per set | `/etc/polkit-1/rules.d/49-hnx-<service>-<set>.rules` | root, 0644 |
-| each set's group | `hnx-job-<set>` (a system group; the set name is at most 24 characters) | created by the role |
-| the run directory of a set | `/var/lib/hnx-dispatch/<set>/` (parent root 0755) | service user : `hnx-job-<set>`, **2750** (setgid) |
-| the run file of each instance | `/var/lib/hnx-dispatch/<set>/<job>-<lane>.json` | service user : `hnx-job-<set>`, 0640; removed when the run ends |
+| each set's group | `hnx-<service>_<set>` (a system group; at most 32 characters, so the set name is at most 32 - 5 - len(service); 15 with the default service `orchestrator`) | created by the role |
+| the run directory of a set | `/var/lib/hnx-dispatch/<service>/<set>/` (parents root 0755) | service user : `hnx-<service>_<set>`, **2750** (setgid) |
+| the run file of each instance | `/var/lib/hnx-dispatch/<service>/<set>/<job>-<lane>.json` | service user : `hnx-<service>_<set>`, 0640; removed when the run ends |
 | the lock of each instance | `/var/lib/hnx-modules/orchestration/dispatch/<set>/<job>-<lane>.lock` | service user, 0700 / 0600 |
 | the log file of each instance | `/var/log/hnx-jobs/<set>/<job>-<lane>.log` | root:service group, 0640 (directory root, 0750) |
 
@@ -134,13 +134,15 @@ user owns would let that user point a link at any file, directory or socket and 
 into the module's unit.) What a link or a planted file can reach is then only what the module's user
 could read anyway.
 
-* **Path**: `/var/lib/hnx-dispatch/<set>/<job>-<lane>.json` (`orchestration_dispatch_run_root`),
-  i.e. `/var/lib/hnx-dispatch/<set>/%i.json` in the unit.
-* **Access**: the directory is the controller's (`orchestration_user`), group `hnx-job-<set>`,
-  2750; the file 0640, group `hnx-job-<set>` by the setgid directory. The module's unit gets read
-  access with `SupplementaryGroups=hnx-job-<set>`; nothing else changes on the module's user.
-* **Format**: one JSON object, UTF-8, at most 256 KiB:
-  `{"version": 1, "run_id": str, "lane": "real"|"shadow", "agent_key": str, "job": str,
+* **Path**: `/var/lib/hnx-dispatch/<service>/<set>/<job>-<lane>.json` (`orchestration_dispatch_run_root`,
+  then the controller's service id, `orchestrator` by default), i.e.
+  `/var/lib/hnx-dispatch/<service>/<set>/%i.json` in the unit.
+* **Access**: the directory is the controller's (`orchestration_user`), group
+  `hnx-<service>_<set>` (the slugs hold no `_`, so the name is unambiguous), 2750; the file 0640,
+  same group by the setgid directory. The module's unit gets read access with
+  `SupplementaryGroups=hnx-<service>_<set>`; nothing else changes on the module's user.
+* **Format** (contract v3, run file `version` 2): one JSON object, UTF-8, at most 256 KiB:
+  `{"version": 2, "dispatch_id": 32 lower-case hex (fresh and random per dispatch), "run_id": str, "lane": "real"|"shadow", "agent_key": str, "job": str,
   "unit": "hnx-<set>@<job>-<lane>.service", "task": str (at most 64 KiB), "dispatched_at":
   "YYYY-MM-DDTHH:MM:SSZ"}`.
 * **Validation, before anything is used** (all of it is `hnx-dispatch-read`):
@@ -149,11 +151,17 @@ could read anyway.
   writable by group or others, `st_size` at most 256 KiB; then the content: `version` 1, `job` and
   `lane` equal to the instance's (`%i` = `<job>-<lane>`), `unit` equal to the unit's own name,
   `run_id` matching `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`, `agent_key` an agent key, `task` and
-  `dispatched_at` strings. Anything else is refused and nothing more is read.
-* **Replay**: the run id is recorded as consumed, a marker created with `O_CREAT | O_EXCL` in a
-  directory of the job's own (`--consumed-dir`); a run id seen before is refused. The dispatcher
-  also removes the run file when the run ends (and on a cancel), so a start without a dispatcher
-  finds none.
+  `dispatch_id` matching `[0-9a-f]{32}`, `dispatched_at` `YYYY-MM-DDTHH:MM:SSZ` no older than the
+  keep window (30 days) and no more than an hour ahead. A JSON error of any kind, nesting too deep
+  included, is the same refusal. Anything else is refused and nothing more is read.
+* **Replay**: the **dispatch id** (never the run id: the controller keeps a run's id across its
+  retries and failovers, and each of those is a new dispatch that must run) is recorded as consumed,
+  a marker created with `O_CREAT | O_EXCL | O_NOFOLLOW` in a directory of the job's own
+  (`--consumed-dir`); a dispatch id seen before is refused. The dispatcher also removes the run file
+  when the run ends (and on a cancel), so a start without a dispatcher finds none.
+* **Pruning**: on each read, markers older than the keep window (`--keep-days`, 30) are removed
+  (only regular files named like a dispatch id; a link is never followed). A run file dispatched
+  before that window is refused, so a pruned marker never reopens a replay.
 
 The reader the role installs does all of it and prints the checked JSON:
 
@@ -161,9 +169,9 @@ The reader the role installs does all of it and prints the checked JSON:
 [Service]
 Type=oneshot
 User=<the module's own user>
-SupplementaryGroups=hnx-job-<set>
+SupplementaryGroups=hnx-<service>_<set>
 # the job's first step, as the module's user: exit 1 and nothing read on any refusal
-ExecStart=/bin/sh -c 'run=$(/opt/hnx/orchestration/bin/hnx-dispatch-read --dir /var/lib/hnx-dispatch/<set> --instance %i --owner hnx-orchestrator --consumed-dir <a directory of the job's>) && exec <the job> ...'
+ExecStart=/bin/sh -c 'run=$(/opt/hnx/orchestration/bin/hnx-dispatch-read --dir /var/lib/hnx-dispatch/<service>/<set> --instance %i --owner hnx-orchestrator --consumed-dir <a directory of the job's>) && exec <the job> ...'
 # opened by PID 1 before it drops to the unit's user, in a root directory the controller cannot
 # write: the file the role made keeps its owner and mode, so the controller's group reads it and the
 # controller is never in the journal's group
@@ -204,7 +212,10 @@ the first run's result), which is why the dispatcher locks and checks `is-active
 the runner's own `orchestration_runner_argv`, `_usage_args` and `_toolsets_args` left at their
 defaults (the dispatcher is the whole command); the health check's round trip does not run through
 it (its agent has no unit), so `orchestration_health_job: yes` is refused with it. The controller's
-unit gains `ReadWritePaths=` on the run root when job units are declared (a restart).
+unit gains `ReadWritePaths=` on its run directory (`<run root>/<service>`) when job units are
+declared (a restart). Two controllers on one host declaring the same set get separate directories
+and groups (and rule files); the unit names `hnx-<set>@...` and the log directory stay per set, so
+those two would still share units: do not declare one set in two services.
 `orchestration_job_logs_dir`, `orchestration_polkit_rules_dir`, `orchestration_dispatch_run_root`,
 `orchestration_job_run_group`, `orchestration_dispatch_systemctl` and
 `orchestration_dispatch_table_owner_uid` (0) exist for tests.

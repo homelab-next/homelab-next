@@ -167,11 +167,11 @@ argument_specs:
         default: /var/log/hnx-jobs
       orchestration_dispatch_run_root:
         type: path
-        description: Where each set's run directory is (<root>/<set>, the service user's, group hnx-job-<set>, setgid 2750).
+        description: Where each set's run directory is (<root>/<service>/<set>, the service user's, group hnx-<service>_<set>, setgid 2750).
         default: /var/lib/hnx-dispatch
       orchestration_job_run_group:
         type: str
-        description: The group of every set's run directory instead of hnx-job-<set> (a test's own group); empty on a host.
+        description: The group of every set's run directory instead of hnx-<service>_<set> (a test's own group); empty on a host.
         default: ''
       orchestration_polkit_rules_dir:
         type: path

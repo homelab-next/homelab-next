@@ -1409,15 +1409,15 @@
     {
       "exit": {
         "0": "the run file is the dispatcher's, for this instance, and not consumed before",
-        "1": "refused: missing, a link, not a regular file, more than one link, not the controller's, too large, malformed, for another instance, or a run id already consumed",
+        "1": "refused: missing, a link, not a regular file, more than one link, not the controller's, too large, malformed, for another instance, older than the keep window, or a dispatch id already consumed",
         "2": "usage error"
       },
       "id": "orchestration-dispatch-read",
-      "inputs": "the set's run directory, the unit's instance (%i), the controller's user, a directory of consumed run ids the job's user owns",
+      "inputs": "the set's run directory, the unit's instance (%i), the controller's user, a directory of consumed dispatch ids the job's user owns",
       "installs_to": "/opt/hnx/orchestration/bin/hnx-dispatch-read",
       "kind": "job",
       "language": "python",
-      "outputs": "the run file's JSON on stdout; the refusal on stderr; one marker per consumed run id",
+      "outputs": "the run file's JSON on stdout; the refusal on stderr; one marker per consumed dispatch id, pruned after the keep window",
       "owner": "platform",
       "path": "modules/orchestration/roles/orchestration/files/hnx-dispatch-read",
       "purpose": "Read and check, as a job unit's own user, the run file the session dispatcher wrote for it, refusing anything planted or replayed.",

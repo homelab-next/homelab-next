@@ -29,14 +29,15 @@ with ``systemctl start --wait``, under a polkit rule the role renders that lets 
 user start, stop, ref and reset-failed exactly those units and nothing else. The unit runs under
 PID 1 in its own cgroup, as its own user, with its own sandbox and credentials.
 
-Before the start it writes the run file ``<run root>/<set>/<job>-<lane>.json`` (the run id, the
-lane, the agent key, the job, the task text; the controller's, group ``hnx-job-<set>``, 0640, in
+Before the start it writes the run file ``<run root>/<service>/<set>/<job>-<lane>.json`` (a fresh
+random dispatch id, the run id, the lane, the agent key, the job, the task text; the controller's,
+group ``hnx-<service>_<set>``, 0640, in
 a setgid directory 2750 of the controller's). The job's own process, as the module's user (a
 member of that group through ``SupplementaryGroups=``), opens and checks it itself
 (``hnx-dispatch-read``): no root reads it, so nothing the controller's user plants there is ever
 read with root's rights. When the unit has ended (or the run is cancelled) the run file is
 removed, so a later start without a dispatcher has nothing to replay; the reader also refuses a
-run id it has consumed before.
+dispatch id it has consumed before (never the run id, which a run's retries share).
 
 After the unit ends it reads the unit's result (``systemctl show``, no polkit) and the tail of what
 this run appended to the unit's log file (``StandardOutput=append:<log dir>/<set>/%i.log``,
@@ -61,6 +62,7 @@ import fcntl
 import json
 import os
 import re
+import secrets
 import signal
 import stat
 import subprocess
@@ -310,7 +312,8 @@ def main(argv: list[str]) -> int:
     rundir = os.path.join(table["run_root"], name)
     run_path = os.path.join(rundir, instance + ".json")
     log_path = os.path.join(entry["log_dir"], instance + ".log")
-    body = {**base, "unit": unit, "job": job}
+    dispatch_id = secrets.token_hex(16)
+    body = {**base, "unit": unit, "job": job, "dispatch_id": dispatch_id}
     started = written = False
     offset = 0
     try:
@@ -351,7 +354,10 @@ def main(argv: list[str]) -> int:
                 rundir,
                 instance,
                 {
-                    "version": 1,
+                    "version": 2,
+                    # the replay key the job consumes: fresh per dispatch, unlike the run id,
+                    # which a run's retries and failovers share
+                    "dispatch_id": dispatch_id,
                     **base,
                     "job": job,
                     "unit": unit,

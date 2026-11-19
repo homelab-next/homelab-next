@@ -36,8 +36,9 @@
   loop: "{{ [orchestration_dispatch_dir] + (orchestration_job_units | map(attribute='name') | map('regex_replace', '^', orchestration_dispatch_dir ~ '/') | list) }}"
 
 # The run file is read by the job's own process as the module's user (never by PID 1 as root,
-# never LoadCredential=): the set's directory is the service user's, group hnx-job-<set>, setgid
-# 2750, so the controller writes and the module's unit (SupplementaryGroups=hnx-job-<set>) reads,
+# never LoadCredential=): the set's directory <run root>/<service>/<set> is the service user's,
+# group hnx-<service>_<set>, setgid 2750, so the controller writes and the module's unit
+# (SupplementaryGroups=hnx-<service>_<set>) reads,
 # and anything planted there reaches only what the module's user could read anyway.
 - name: Create each unit set's group
   ansible.builtin.group:
@@ -46,18 +47,21 @@
   loop: "{{ orchestration_job_units | map(attribute='name') | list }}"
   when: orchestration_manage_accounts | bool and orchestration_job_run_group == ''
 
-- name: Create the run root (root's)
+- name: Create the run root and this service's directory under it (root's)
   ansible.builtin.file:
-    path: "{{ orchestration_dispatch_run_root }}"
+    path: "{{ item }}"
     state: directory
     owner: "{{ orchestration_owner }}"
     group: "{{ orchestration_owner_group }}"
     mode: "0755"
+  loop:
+    - "{{ orchestration_dispatch_run_root }}"
+    - "{{ orchestration_dispatch_service_run_dir }}"
   when: orchestration_job_units | length > 0
 
 - name: Create each unit set's run directory (the service user's, the set's group, setgid)
   ansible.builtin.file:
-    path: "{{ orchestration_dispatch_run_root }}/{{ item }}"
+    path: "{{ orchestration_dispatch_service_run_dir }}/{{ item }}"
     state: directory
     owner: "{{ orchestration_user }}"
     group: "{{ orchestration_job_run_group if orchestration_job_run_group != '' else orchestration_job_group_prefix ~ item }}"
