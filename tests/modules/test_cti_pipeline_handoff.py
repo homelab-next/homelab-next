@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
 
 import pytest
@@ -59,7 +58,7 @@ def _with_handoff(tmp_path, lane="shadow", keep=2):
     spec_path, body = _spec(tmp_path, lane)
     dest = tmp_path / "var" / "lib" / "handoff" / "intel" / lane
     dest.mkdir(parents=True)
-    os.chmod(dest, 0o2750)
+    os.chmod(dest, 0o700)  # the group read is the role's (dirs.yml); the wrapper test needs none
     body["handoff"] = {
         "source": body["lane_root"] + "/publishable",
         "dest": str(dest),
@@ -193,7 +192,10 @@ def test_nothing_younger_than_an_hour_is_pruned_and_a_current_item_never_is(tmp_
 
     for n in range(3):
         shutil.rmtree(root / "publishable" / "site" / f"b{n}")
-    assert _hand(body, now=time.time())["pruned"] == 0  # just made: younger than an hour
+    just_made = (
+        (dest / "site" / "b0").stat().st_mtime
+    )  # the filesystem's own clock, not the wall clock
+    assert _hand(body, now=just_made + 10)["pruned"] == 0  # just made: younger than an hour
     assert len(list((dest / "site").iterdir())) == 3
     _item(root, "site", "b0")  # staged again: current, however old
     for p in (dest / "site").iterdir():
