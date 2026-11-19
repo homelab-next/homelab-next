@@ -122,3 +122,95 @@ def test_cli_report_then_check_and_a_tampered_fake_report(tmp_path, capsys):
     roles.write_text(json.dumps(t))
     assert golden_main(["pins", "check", *args]) == 1
     assert golden_main(["pins", "check", "--roles", str(roles), "--report", "/nonexistent"]) == 1
+
+
+# ---- the canary's output budget is the role's own (params.max_tokens), not a fixed suite value
+def _budget_recorder():
+    from homelabnext.golden import canary
+
+    seen: dict[str, set] = {}
+
+    def factory(role, binding):
+        def completer(messages, params):
+            seen.setdefault(role, set()).add(params["max_tokens"])
+            return canary.benign_model(messages, params)
+
+        return completer, "fake"
+
+    return seen, factory
+
+
+def _run_with(doc, factory):
+    t = RoleTable.from_dict(doc)
+    return t, pins.run_eval(
+        t, SUITES, pins.fake_factory, model_name="fake-golden", canary_factory=factory
+    )
+
+
+def test_the_canary_runs_a_chat_role_at_its_declared_output_budget():
+    from homelabnext.golden import canary
+
+    doc = table_doc()
+    doc["roles"]["main-reasoner"]["params"] = {"max_tokens": 8192}
+    seen, factory = _budget_recorder()
+    _, rep = _run_with(doc, factory)
+    assert seen["main-reasoner"] == {8192}
+    # a role that declares a budget gets it; the suite's default is only for one that does not
+    assert seen["fast-classifier"] == {256}
+    entry = rep["canary"]["main-reasoner"]["bindings"][0]
+    assert entry["max_tokens"] == 8192
+    del doc["roles"]["main-reasoner"]["params"]
+    seen, factory = _budget_recorder()
+    _, rep = _run_with(doc, factory)
+    default = canary.load_suite(canary.DEFAULT_SUITE).max_tokens
+    assert seen["main-reasoner"] == {default}
+    assert rep["canary"]["main-reasoner"]["bindings"][0]["max_tokens"] == default
+
+
+def test_a_canary_entry_run_at_another_budget_is_stale():
+    doc = table_doc()
+    doc["roles"]["main-reasoner"]["params"] = {"max_tokens": 8192}
+    t, rep = fresh(doc)
+    assert pins.check_report(rep, t, SUITES) == []
+    entry = rep["canary"]["main-reasoner"]["bindings"][0]
+    entry["max_tokens"] = 512
+    assert any(
+        "mdl:main-reasoner" in p and "output budget" in p for p in pins.check_report(rep, t, SUITES)
+    )
+    # an entry from before the budget was recorded counts as the suite's default budget
+    del entry["max_tokens"]
+    assert any("output budget" in p for p in pins.check_report(rep, t, SUITES))
+
+
+@pytest.mark.parametrize("budget", [8, 131072])
+def test_a_budget_the_canary_cannot_run_is_refused(budget):
+    doc = table_doc()
+    doc["roles"]["main-reasoner"]["params"] = {"max_tokens": budget}
+    doc["roles"]["main-reasoner"]["max_context_tokens"] = 131072
+    with pytest.raises(ValueError, match="max_tokens"):
+        fresh(doc)
+
+
+# ---- a live run waits as long as the budget needs: the client timeout is a run option
+def test_live_runs_take_a_client_timeout_and_refuse_a_nonpositive_one(capsys, monkeypatch):
+    from homelabnext.golden import cli as gcli
+
+    seen = {}
+
+    def fake_live(registry, table, client_kwargs=None):
+        seen.update(client_kwargs or {})
+        raise ValueError("stop here")
+
+    monkeypatch.setattr(gcli, "_live", fake_live)
+    base = ["pins", "report", "--roles", str(ROLES), "--report", "/nonexistent/r.json"]
+    with pytest.raises(ValueError, match="stop here"):
+        golden_main([*base, "--registry", "services.yml", "--timeout", "900"])
+    assert seen["timeout"] == 900.0
+    seen.clear()
+    with pytest.raises(ValueError, match="stop here"):
+        golden_main([*base, "--registry", "services.yml"])
+    assert seen["timeout"] == 30.0  # the client's own default when none is given
+    for bad in ("0", "-5", "nan"):
+        with pytest.raises(SystemExit):
+            golden_main([*base, "--registry", "services.yml", "--timeout", bad])
+    capsys.readouterr()
