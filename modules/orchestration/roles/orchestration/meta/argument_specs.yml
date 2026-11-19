@@ -152,6 +152,35 @@ argument_specs:
         type: str
         description: Systemd MemoryMax over the controller and its sessions together.
         default: 2G
+      orchestration_job_units:
+        type: list
+        elements: dict
+        description: 'Module job units: a list of {name, jobs, lanes}; each set''s units hnx-<name>@<job>-<lane>.service get a polkit rule (start, stop, reset-failed by the service user, nothing else), a dispatch table entry and pre-created log files.'
+        default: []
+      orchestration_runner_dispatch:
+        type: bool
+        description: The exec runner's command is the dispatcher, which runs each agent's module job unit (orchestration_job_units).
+        default: false
+      orchestration_job_logs_dir:
+        type: path
+        description: Where the job units' log files are (<dir>/<set>/<job>-<lane>.log).
+        default: /var/log/hnx-jobs
+      orchestration_polkit_rules_dir:
+        type: path
+        description: Where the polkit rules are written (49-hnx-<set>.rules).
+        default: /etc/polkit-1/rules.d
+      orchestration_dispatch_systemctl:
+        type: path
+        description: The systemctl the dispatcher runs (a stand-in in tests).
+        default: /usr/bin/systemctl
+      orchestration_dispatch_table_owner_uid:
+        type: int
+        description: The uid that must own the dispatch table (0 on a host; a test's own uid).
+        default: 0
+      orchestration_dispatch_tail_bytes:
+        type: int
+        description: The most of a run's log the dispatcher returns as the answer.
+        default: 16384
       orchestration_scope:
         type: dict
         description: 'The shared tree''s zones: denied_roots, findings_root, shared_write and reserved_names, each present.'

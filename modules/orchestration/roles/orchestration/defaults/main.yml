@@ -74,6 +74,31 @@ orchestration_runner_kill_grace_seconds: 0
 orchestration_tasks_max: 512
 orchestration_memory_max: 2G
 
+# --- module job units (README "Module job units"): the dispatcher and its polkit rules --------
+# A module whose jobs run as its own systemd units declares them here: [{name, jobs, lanes?}].
+# name is the unit set (the module instance, a slug): its units are hnx-<name>@<job>-<lane>.service
+# (the module ships that template). jobs maps each agent key (a profile's agent_key) to the job it
+# runs (a slug, the instance's first part); several agents may share a job. lanes is a subset of
+# [real, shadow] (default both). Each set gets a polkit rule that lets the controller's user start,
+# stop and reset-failed exactly its declared units, an entry in the dispatch table, a directory for
+# its run files and locks under the data root, and a log file per unit the unit appends to.
+orchestration_job_units: []
+# the exec runner's command becomes the dispatcher (hnx-session-dispatch): every agent's session
+# then runs its module's job unit. Leave orchestration_runner_argv, _usage_args and
+# _toolsets_args at their defaults with this on; exit status 75 (a unit found running) is classed
+# concurrency-limited unless orchestration_runner_exit_classes names 75 itself.
+orchestration_runner_dispatch: false
+# where the module job units' log files are (<dir>/<set>/<job>-<lane>.log, root's, read by the
+# service group); the unit names its file with StandardOutput=append:
+orchestration_job_logs_dir: /var/log/hnx-jobs
+# where the polkit rules are written (49-hnx-<set>.rules); polkit must be installed
+orchestration_polkit_rules_dir: /etc/polkit-1/rules.d
+# the systemctl the dispatcher runs, and the uid that must own the dispatch table (root on a host)
+orchestration_dispatch_systemctl: /usr/bin/systemctl
+orchestration_dispatch_table_owner_uid: 0
+# the most of a run's log the dispatcher returns as the answer (the end of it)
+orchestration_dispatch_tail_bytes: 16384
+
 # --- profiles, scope, grants ----------------------------------------------------------------------
 # the shared tree's zones: every key present, even when empty
 orchestration_scope:

@@ -12,7 +12,7 @@ orchestration_health_agent_key: hnx-health
 orchestration_health_answer: hnx-orchestration-ok
 orchestration_health_job_on: >-
   {{ orchestration_health_job == 'yes' or
-     (orchestration_health_job == 'auto' and orchestration_runner_argv == orchestration_smoke_argv) }}
+     (orchestration_health_job == 'auto' and orchestration_runner_argv_effective == orchestration_smoke_argv) }}
 orchestration_slug_pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
 orchestration_backend_name_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z'
 orchestration_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
@@ -260,3 +260,45 @@ orchestration_restore_script: |
               os.rename(kept + suffix, live + suffix)
           raise
   print(json.dumps(sorted(listed)))
+# Module job units (README "Module job units"). The dispatcher is the runner's command when
+# orchestration_runner_dispatch is on; it reads the dispatch table (root's) and runs, per session,
+# hnx-<set>@<job>-<lane>.service, which the set's polkit rule lets the service user start, stop and
+# reset-failed, and nothing else.
+orchestration_dispatch_bin: "{{ orchestration_install_dir }}/bin/hnx-session-dispatch"
+orchestration_dispatch_table: "{{ orchestration_config_dir }}/dispatch.json"
+orchestration_dispatch_dir: "{{ orchestration_data_root }}/dispatch"
+orchestration_dispatch_argv:
+  - "{{ orchestration_dispatch_bin }}"
+  - --table
+  - "{{ orchestration_dispatch_table }}"
+  - --table-owner
+  - "{{ orchestration_dispatch_table_owner_uid | int }}"
+  - --tail-bytes
+  - "{{ orchestration_dispatch_tail_bytes | int }}"
+orchestration_runner_argv_effective: >-
+  {{ orchestration_dispatch_argv if orchestration_runner_dispatch | bool else orchestration_runner_argv }}
+# a unit found running (started outside the dispatcher) is a wait, never a fault
+orchestration_runner_exit_classes_effective: >-
+  {{ ({75: 'concurrency-limited'} | combine(orchestration_runner_exit_classes))
+     if orchestration_runner_dispatch | bool else orchestration_runner_exit_classes }}
+# the polkit action and the only verbs a rule grants; never manage-unit-files or reload-daemon
+orchestration_job_unit_action: org.freedesktop.systemd1.manage-units
+orchestration_job_unit_verbs: [start, stop, reset-failed]
+orchestration_job_unit_lanes: [real, shadow]
+# the first line every rule the role writes carries: only such a file is ever removed by the role
+orchestration_polkit_marker: "// Managed by homelabnext (role orchestration"
+# every declared unit: {set, job, lane, instance, unit}, one per job and lane of each set
+orchestration_job_instances: >-
+  {%- set out = [] -%}
+  {%- for s in orchestration_job_units -%}
+  {%- for job in (s.jobs | dict2items | map(attribute='value') | unique | sort) -%}
+  {%- for lane in (s.lanes | default(orchestration_job_unit_lanes)) -%}
+  {%- set _ = out.append({'set': s.name, 'job': job, 'lane': lane, 'instance': job ~ '-' ~ lane,
+                          'unit': 'hnx-' ~ s.name ~ '@' ~ job ~ '-' ~ lane ~ '.service'}) -%}
+  {%- endfor -%}
+  {%- endfor -%}
+  {%- endfor -%}
+  {{ out }}
+orchestration_job_set_pattern: '^(?=.{1,32}\Z)[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+orchestration_job_name_pattern: '^(?=.{1,48}\Z)[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+orchestration_agent_key_pattern: '^[a-z0-9][a-z0-9_-]{0,63}\Z'

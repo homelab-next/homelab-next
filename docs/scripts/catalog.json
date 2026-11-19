@@ -1408,6 +1408,28 @@
     },
     {
       "exit": {
+        "0": "the unit ran and ended successfully",
+        "1": "the unit failed, or was never started (systemctl refused the start)",
+        "143": "cancelled (SIGTERM, SIGINT or SIGHUP), the unit was stopped",
+        "2": "usage or configuration error (an untrusted or malformed table, an agent key with no job, a lane or run id refused)",
+        "75": "the unit is already active (started outside this dispatcher), a wait the controller retries"
+      },
+      "id": "orchestration-session-dispatch",
+      "inputs": "the dispatch table (root's), the session's HNX_AGENT_KEY, HNX_LANE and HNX_RUN_ID, the task on stdin",
+      "installs_to": "/opt/hnx/orchestration/bin/hnx-session-dispatch",
+      "kind": "job",
+      "language": "python",
+      "outputs": "one JSON answer on stdout (success) or stderr (failure, refusal, cancel); the run file the unit loads as a credential",
+      "owner": "platform",
+      "path": "modules/orchestration/roles/orchestration/files/hnx-session-dispatch",
+      "purpose": "Run one controller session as a module-declared job unit (start it, wait, return its result and log tail; stop it on cancel).",
+      "status": "active",
+      "trigger": [
+        "role:orchestration"
+      ]
+    },
+    {
+      "exit": {
         "0": "the job is the manual deploy from main; it may run",
         "1": "any other job; the runner fails it before its first step"
       },
