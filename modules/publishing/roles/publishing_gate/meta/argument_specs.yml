@@ -12,6 +12,10 @@ argument_specs:
         description: stage (gate and write the would-be set, no network), dry-run (reads only) or live.
         default: stage
         choices: [stage, dry-run, live]
+      publishing_gate_hosting_provider:
+        type: str
+        description: The logical id of the static-hosting provider the site selected; required for mode live (the role fails closed without it, because the loader's site rule cannot see a group_var mode), unused otherwise.
+        default: ""
       publishing_gate_tlp_allowed:
         type: str
         description: The most permissive TLP the gate lets out (clear or green).

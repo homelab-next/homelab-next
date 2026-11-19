@@ -590,7 +590,7 @@ def prune_handoff(dest_kind_dir: str, current: set, keep: int, now_s: float) -> 
     return removed
 
 
-def handoff(spec: dict, now_s: float | None = None) -> dict | None:
+def handoff(spec: dict, now_s: float | None = None, ids: dict | None = None) -> dict | None:
     """Carry this lane's staged items to the lane's handoff directory (``spec["handoff"]``), where the
     publishing module's group reads them.  Runs as the lane's user after the steps all succeeded.
 
@@ -600,11 +600,14 @@ def handoff(spec: dict, now_s: float | None = None) -> dict | None:
     0750 whatever the unit's umask, into a ``.tmp-`` directory and renamed in.  Links, devices and
     hard-linked files, or a missing sidecar, refuse the item (``refused``); entries that are not item
     directories are ``skipped``.  Returns the counters (copied, unchanged, conflicts, refused, skipped,
-    pruned), or None without a handoff block; raises :class:`HandoffError` for what it cannot judge."""
+    pruned), or None without a handoff block; raises :class:`HandoffError` for what it cannot judge.  ``ids``, when given, is filled with the
+    ``conflicts`` and ``refused`` item names (never content)."""
     h = spec.get("handoff")
     if h is None:
         return None
     now_s = time.time() if now_s is None else now_s
+    if ids is not None:
+        ids.update({"conflicts": [], "refused": []})
     counts = {"copied": 0, "unchanged": 0, "conflicts": 0, "refused": 0, "skipped": 0, "pruned": 0}
     for kind in HANDOFF_KINDS:
         sdir = os.path.join(h["source"], kind)
@@ -632,6 +635,8 @@ def handoff(spec: dict, now_s: float | None = None) -> dict | None:
                     raise HandoffError("no sidecar")
             except (OSError, HandoffError):
                 counts["refused"] += 1
+                if ids is not None:
+                    ids["refused"].append(name)
                 continue
             final = os.path.join(ddir, name)
             if os.path.lexists(final):
@@ -639,6 +644,8 @@ def handoff(spec: dict, now_s: float | None = None) -> dict | None:
                     counts["unchanged"] += 1
                 else:
                     counts["conflicts"] += 1
+                    if ids is not None:
+                        ids["conflicts"].append(name)
                 continue
             _copy_item(src, files, ddir, name)
             counts["copied"] += 1
@@ -710,7 +717,8 @@ def main(argv: list[str]) -> int:
                 break
         if code == EXIT_OK:  # the job delivered: carry its staged items where publishing reads them
             try:
-                counts = handoff(spec)
+                ids: dict = {}
+                counts = handoff(spec, ids=ids)
             except (OSError, HandoffError) as e:
                 say(f"{instance}: handoff failed ({type(e).__name__})")
                 record["handoff_error"] = type(e).__name__
@@ -719,9 +727,12 @@ def main(argv: list[str]) -> int:
                 if counts is not None:
                     record["handoff"] = counts
                     say(f"{instance}: handoff " + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+                    # a conflict or a refusal does not fail the job (its work is done and the other
+                    # items were carried): the ids go in the run record and the health hook fails
+                    # while the last run reports any (README, "Handoff": clearing one)
                     if counts["conflicts"] or counts["refused"]:
-                        say(f"{instance}: handoff refused or conflicting items; see the counters")
-                        code = EXIT_FAILED
+                        record["handoff_conflicts"] = ids["conflicts"]
+                        record["handoff_refused"] = ids["refused"]
     except Stopped:
         if child is not None:
             child.terminate()

@@ -130,6 +130,9 @@ lab, and the slot may have no provider module) still places this module and runs
 would-be publish set. What must not happen is `live` with nowhere to push: the loader's site rules refuse a
 selection whose `mode` (its config value, else the manifest default) is `live` while the site selects no
 `static-hosting` provider (`features.publishing.config.mode: live pushes through cap:static-hosting ...`).
+That rule cannot see the role's own mode, which a site sets as the group_var `publishing_gate_mode`, so the role
+**fails closed** as well: `live` needs `publishing_gate_hosting_provider` (the selected provider's logical id)
+and validate refuses it without one.
 A preference still counts as reaching the slot, so `grants.publish` and the egress rules apply unchanged.
 The role itself refuses `live` without the hosting credentials (readiness) and does not install wrangler
 (or ask for node and npm) in any other mode.
@@ -150,6 +153,13 @@ read group (`publishing_gate_extra_groups`). Each lane source is:
   own, so the same item id in two lanes stays two items, and neither mixes with the publishable area;
 * **named everywhere**: the report and the blocked list carry `<lane>:<id>`, the gate log and `plan.json` carry
   `lane`. A lane item the gate blocks pages like any other and runs the same notify pair.
+
+An absent lane directory is an empty lane (nothing handed off yet); one that cannot be read (the service user
+is not yet in its read group, a file in its place) is **reported**: `<lane>:unreadable` in the run's `failed`
+list and the gate log, and the other sources still run. A lane directory may not be, link to, or nest with
+another lane's, `publishable_dir`, `staging_dir`, `state_dir` or `credentials_dir` (compared by real path), and
+its items are opened by descriptor chain from the lane directory with `O_NOFOLLOW` (and leaf files with
+`O_NONBLOCK`, so a file swapped for a FIFO is refused, never waited on).
 
 The lane's directory is read, never written or pruned, by this module (the producer owns it). Cutover of the
 real lane is a deliberate later change (repoint `publishable_dir`), not something a lane source can do.

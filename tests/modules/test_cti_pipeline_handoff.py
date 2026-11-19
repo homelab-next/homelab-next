@@ -29,6 +29,7 @@ from tests.modules.test_cti_pipeline_scripts import (  # noqa: F401
     _run_file,
     _spec,
     run,
+    state,
 )
 from tests.modules.test_cti_pipeline_units import LANES_SITE, ROLE, render, role_vars
 
@@ -244,17 +245,49 @@ def test_a_job_hands_off_only_after_every_step_succeeded(tmp_path, monkeypatch):
     assert (dest / "site" / "b1" / "sidecar.json").exists()
 
 
-def test_a_conflict_fails_the_job_and_says_so_in_the_record(tmp_path, monkeypatch, capsys):
-    spec_path, body, root, _dest = _with_handoff(tmp_path, lane="real")
+def test_a_conflict_does_not_fail_the_job_but_is_recorded_and_fails_health_until_cleared(
+    tmp_path, monkeypatch, capsys
+):
+    spec_path, body, root, dest = _with_handoff(tmp_path, lane="real")
     src = _item(root, "site", "b1")
+    _item(root, "site", "nosidecar", sidecar=False)
     _hand(body)
     (src / "index.html").write_text("MARKER-CONTENT")
     _run_file(body)
-    assert _main(spec_path, "fresh-real", _creds(tmp_path), monkeypatch) == 1
+    assert (
+        _main(spec_path, "fresh-real", _creds(tmp_path), monkeypatch) == 0
+    )  # the job's work is done
     rec = json.loads(Path(body["runs_dir"], "fresh.json").read_text())
-    assert rec["ok"] is False and rec["handoff"]["conflicts"] == 1
+    assert rec["ok"] is True and rec["handoff"]["conflicts"] == 1
+    assert rec["handoff_conflicts"] == ["b1"] and rec["handoff_refused"] == ["nosidecar"]
     out = capsys.readouterr().out
-    assert "handoff" in out and "MARKER-CONTENT" not in out  # counters only, never content
+    assert (
+        "handoff" in out and "MARKER-CONTENT" not in out and "b1" not in out
+    )  # counters only in the log
+    # ... but the health judgement fails while the last run reports any, naming the ids
+    verdict = state.handoff_health(body["runs_dir"])
+    assert verdict["ok"] is False
+    assert verdict["jobs"] == {
+        "fresh": {"handoff_conflicts": ["b1"], "handoff_refused": ["nosidecar"]}
+    }
+    assert state.main(["handoff-health", body["runs_dir"]]) == 1
+    # the clear step: remove the stale handed-off item and the unusable one; the next run reports none
+    import shutil
+
+    shutil.rmtree(dest / "site" / "b1")
+    shutil.rmtree(root / "publishable" / "site" / "nosidecar")
+    _run_file(body, dispatch="2" * 32)
+    assert _main(spec_path, "fresh-real", _creds(tmp_path), monkeypatch) == 0
+    assert state.handoff_health(body["runs_dir"])["ok"] is True
+    assert state.main(["handoff-health", body["runs_dir"]]) == 0
+
+
+def test_handoff_health_is_ok_with_no_records_and_ignores_unreadable_ones(tmp_path):
+    assert state.handoff_health(str(tmp_path / "absent"))["ok"] is True
+    (tmp_path / "bad.json").write_text("{not json")
+    (tmp_path / "list.json").write_text("[]")
+    (tmp_path / "fine.json").write_text(json.dumps({"ok": True, "handoff_conflicts": []}))
+    assert state.handoff_health(str(tmp_path))["ok"] is True
 
 
 def test_a_spec_without_a_handoff_block_hands_nothing_off(tmp_path):
@@ -356,3 +389,30 @@ def test_the_handoff_directories_are_traversable_not_listable_and_each_lanes_is_
     ]
     assert grp["ansible.builtin.group"]["system"] is True
     assert "cti_pipeline_handoff_enabled" in grp["when"]
+
+
+def test_without_account_management_the_handoff_groups_must_already_exist():
+    tasks = _tasks()
+    t = tasks[
+        "Without account management, each lane's handoff group must already exist (the directories chown to it)"
+    ]
+    assert t["ansible.builtin.getent"]["database"] == "group"
+    assert (
+        "not (cti_pipeline_manage_accounts | bool)" in t["when"]
+        and "cti_pipeline_handoff_enabled" in t["when"]
+    )
+    names = list(tasks)
+    assert names.index(
+        next(n for n in names if n.startswith("Without account management"))
+    ) < names.index(next(n for n in names if n.startswith("Create each lane's handoff directory")))
+
+
+def test_health_judges_the_handoff_per_active_lane_and_names_the_clear_step():
+    from homelabnext.modules import loader as ld
+
+    tasks = {t["name"]: t for t in ld.load_yaml(ROLE / "tasks" / "health.yml")[0]["block"]}
+    judge = next(t for n, t in tasks.items() if n.startswith("Judge each active lane's handoff"))
+    assert "handoff-health" in judge["ansible.builtin.command"]["argv"]
+    assert judge["failed_when"] is False
+    check = tasks["No handoff conflict or refusal is outstanding"]
+    assert "Remove the" in check["ansible.builtin.assert"]["fail_msg"]

@@ -154,3 +154,105 @@ def test_lane_staging_is_pruned_apart_from_the_primary(tmp_path):
     left = {p.name.split("-")[0] for p in lane_staging.iterdir()}
     assert left == {"e1"}  # the old ones went; the newest is kept
     assert len(list(primary_staging.iterdir())) == 1  # the primary is pruned by its own run
+
+
+# ---- review fixes: unreadable lane, FIFO swap, link-y lane directories
+
+
+def test_an_unreadable_lane_directory_is_reported_failed_never_silent(tmp_path):
+    base, _pub, dirs, cfg = _lab(tmp_path, lanes=("shadow", "other"))
+    make_item(dirs["other"], "site", "o1", {"index.html": "<p>ok</p>"})
+    make_item(dirs["shadow"], "site", "s1", {"index.html": "<p>x</p>"})
+    os.chmod(dirs["shadow"], 0)
+    try:
+        if os.access(dirs["shadow"], os.R_OK):
+            pytest.skip("running as a user that ignores directory modes")
+        rep = rn.run(cfg)
+    finally:
+        os.chmod(dirs["shadow"], 0o700)
+    assert rep.failed == ["shadow:unreadable"] and rep.code == 1
+    assert [d["item"] for d in rep.done] == ["other:o1"]  # the other lane still ran
+    rows = [json.loads(x) for x in (base / "state" / "gate.jsonl").read_text().splitlines()]
+    assert any(r.get("lane") == "shadow" and "lane-unreadable" in r.get("failed", "") for r in rows)
+
+
+def test_a_file_where_the_lane_directory_belongs_is_reported_too(tmp_path):
+    _base, _pub, dirs, cfg = _lab(tmp_path)
+    dirs["shadow"].parent.mkdir(parents=True)
+    dirs["shadow"].write_text("not a directory")
+    assert rn.run(cfg).failed == ["shadow:unreadable"]
+
+
+def test_a_file_swapped_for_a_fifo_after_the_listing_is_refused_not_waited_on(tmp_path):
+    import signal
+
+    from homelabnext.publishing import gate as gt
+
+    root = make_item(tmp_path, "site", "b1", {"index.html": "<p>x</p>"})
+    item = gt.load_item(root, "site")
+    (root / "index.html").unlink()
+    os.mkfifo(root / "index.html", 0o600)  # a lane user swaps the regular file after the listing
+    signal.signal(
+        signal.SIGALRM, lambda *_: (_ for _ in ()).throw(AssertionError("blocked on the FIFO"))
+    )
+    signal.alarm(5)
+    try:
+        with pytest.raises(gt.GateError):
+            gt.snapshot_item(root, "site", tmp_path / "snap")
+        with pytest.raises(gt.GateError):
+            gt._read_tree(root, item.files)
+    finally:
+        signal.alarm(0)
+
+
+def test_a_fifo_as_the_sidecar_is_refused_not_waited_on(tmp_path):
+    import signal
+
+    from homelabnext.publishing import gate as gt
+
+    root = make_item(tmp_path, "site", "b1", {"index.html": "<p>x</p>"})
+    (root / "sidecar.json").unlink()
+    os.mkfifo(root / "sidecar.json", 0o600)
+    signal.signal(
+        signal.SIGALRM, lambda *_: (_ for _ in ()).throw(AssertionError("blocked on the FIFO"))
+    )
+    signal.alarm(5)
+    try:
+        with pytest.raises(gt.GateError):
+            gt.load_item(root, "site")
+    finally:
+        signal.alarm(0)
+
+
+def test_a_kind_directory_swapped_for_a_link_is_refused_through_the_lane_anchor(tmp_path):
+    from homelabnext.publishing import gate as gt
+
+    lane = tmp_path / "lane"
+    make_item(lane, "site", "b1", {"index.html": "<p>x</p>"})
+    item = gt.load_item(lane / "site" / "b1", "site")
+    elsewhere = tmp_path / "elsewhere"
+    (lane / "site").rename(elsewhere)  # the lane user swaps its kind directory for a link
+    (lane / "site").symlink_to(elsewhere)
+    with pytest.raises(gt.GateError):
+        gt._read_tree(lane / "site" / "b1", item.files, anchor=lane)
+
+
+@pytest.mark.parametrize("target", ["publishable", "staging", "state", "creds"])
+def test_a_lane_dir_that_is_or_links_to_another_directory_of_the_run_is_refused(tmp_path, target):
+    base, pub, _cfg = setup_lab(tmp_path, "stage")
+    real = {
+        "publishable": pub,
+        "staging": base / "staging",
+        "state": base / "state",
+        "creds": base / "creds",
+    }[target]
+    real.mkdir(parents=True, exist_ok=True)
+    link = tmp_path / "linkdir"
+    link.symlink_to(real)
+    doc = json.loads((base / "config.json").read_text())
+    for bad in (str(link), str(real) + "//", str(real / "inside")):
+        (base / "config.json").write_text(
+            json.dumps({**doc, "lane_sources": [{"lane": "a", "dir": bad}]})
+        )
+        with pytest.raises(cf.ConfigError, match="own"):
+            cf.load(base / "config.json")

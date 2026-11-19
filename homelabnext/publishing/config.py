@@ -126,7 +126,11 @@ def _legacy(items: object) -> dict[str, str]:
     return out
 
 
-def _lanes(items: object, publishable: Path) -> tuple[LaneSource, ...]:
+def _nested(a: str, b: str) -> bool:
+    return a == b or a.startswith(b.rstrip("/") + "/") or b.startswith(a.rstrip("/") + "/")
+
+
+def _lanes(items: object, others: list[Path]) -> tuple[LaneSource, ...]:
     """``[{lane, dir}]``: stage-only producer lanes (see :class:`LaneSource`)."""
     if not isinstance(items, list):
         raise ConfigError("lane_sources is a list of {lane, dir}")
@@ -142,9 +146,12 @@ def _lanes(items: object, publishable: Path) -> tuple[LaneSource, ...]:
         d = _abs(it, "dir")
         if any(x.lane == lane for x in out):
             raise ConfigError(f"lane source {lane!r} is listed twice")
-        if any(d == x.dir for x in out) or d == publishable:
+        real = os.path.realpath(d)  # a link or a doubled slash is the same directory
+        taken = [os.path.realpath(x.dir) for x in out] + [os.path.realpath(o) for o in others]
+        if any(_nested(real, t) for t in taken):
             raise ConfigError(
-                "a lane source's dir is its own (not another lane's or publishable_dir)"
+                "a lane source's dir is its own: not nested with another lane's, publishable_dir, "
+                "staging_dir, state_dir or credentials_dir"
             )
         out.append(LaneSource(lane, d))
     return tuple(out)
@@ -211,5 +218,11 @@ def load(path: Path, mode_override: str | None = None) -> Config:
         legacy_exceptions=_legacy(doc.get("legacy_exceptions", [])),
         staging_keep=int(doc.get("staging_keep", 48)),
         staging_min_age_s=float(doc.get("staging_min_age_s", 172800)),
-        lane_sources=_lanes(doc.get("lane_sources", []), _abs(doc, "publishable_dir")),
+        lane_sources=_lanes(
+            doc.get("lane_sources", []),
+            [
+                _abs(doc, k)
+                for k in ("publishable_dir", "staging_dir", "state_dir", "credentials_dir")
+            ],
+        ),
     )

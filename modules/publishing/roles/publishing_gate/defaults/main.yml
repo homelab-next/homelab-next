@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 publishing_gate_mode: stage
+# The logical id of the static-hosting provider the site selected (its slot instance). REQUIRED for
+# mode live and unused otherwise: the loader's site rule sees only the selection's config.mode, while
+# the role's mode is a group_var it cannot see, so live fails closed here (validate.yml) unless the site
+# says which provider it pushes through.
+publishing_gate_hosting_provider: ""
 publishing_gate_tlp_allowed: clear
 publishing_gate_audience: public
 publishing_gate_access_control: ""

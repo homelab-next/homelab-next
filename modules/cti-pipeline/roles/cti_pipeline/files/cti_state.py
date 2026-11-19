@@ -589,6 +589,29 @@ def freshness(runs_dir: str, jobs: dict[str, int], now: float) -> dict:
     return {"ok": all(v["fresh"] for v in out.values()), "jobs": out}
 
 
+def handoff_health(runs_dir: str) -> dict:
+    """Outstanding handoff conflicts or refusals: the last run of any job in ``runs_dir`` that
+    reported some (ids, never content).  A later run that no longer reports them clears the job."""
+    out = {}
+    try:
+        names = sorted(
+            n for n in os.listdir(runs_dir) if n.endswith(".json") and not n.startswith(".")
+        )
+    except OSError:
+        names = []
+    for name in names:
+        try:
+            rec = load_json(os.path.join(runs_dir, name))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(rec, dict):
+            continue
+        bad = {k: rec[k] for k in ("handoff_conflicts", "handoff_refused") if rec.get(k)}
+        if bad:
+            out[name[: -len(".json")]] = bad
+    return {"ok": not out, "jobs": out}
+
+
 # ----------------------------------------------------------------------------- the gateway
 
 
@@ -659,6 +682,8 @@ def main(argv: list[str]) -> int:
     f.add_argument("runs_dir")
     f.add_argument("jobs", nargs="+")
     f.add_argument("--now", type=float)
+    h = sub.add_parser("handoff-health")
+    h.add_argument("runs_dir")
     g = sub.add_parser("probe-gateway")
     g.add_argument("url")
     g.add_argument("model")
@@ -687,6 +712,8 @@ def main(argv: list[str]) -> int:
                     return 2
                 jobs[job] = int(age)
             out = freshness(args.runs_dir, jobs, args.now if args.now is not None else time.time())
+        elif args.cmd == "handoff-health":
+            out = handoff_health(args.runs_dir)
         else:
             key = sys.stdin.read().strip()
             if not key:

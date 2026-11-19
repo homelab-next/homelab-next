@@ -274,8 +274,14 @@ publishing: publishing_gate_lane_sources [{lane, dir}] -> gated, STAGED ONLY und
   with the same bytes is left alone; **a changed item under a name already handed off is a conflict** and is
   never overwritten (a published id never changes); a symlink, hard link, device or an item with no
   `sidecar.json` is `refused`; entries that are not item directories (a `latest` link the app keeps) are
-  `skipped`. Conflicts and refusals **fail the job** (exit 1, counters in the run record and the log, never
-  content), because a job that cannot deliver its output has not done its work.
+  `skipped`. **A conflict or refusal does not fail the job** (its work is done and the other items are
+  carried): the counters go in the run record and the log (never content) and the **item ids** go in the run
+  record (`handoff_conflicts`, `handoff_refused`). The **health hook fails** while the last run of any job in an
+  active lane reports any (`cti_state.py handoff-health`), naming the ids. **To clear one:** remove the stale
+  `<handoff dir>/<lane>/<kind>/<id>` (a conflict: the already handed-off copy no longer matches the lane's
+  item), or fix or drop the unusable item in the lane's `publishable/` (a refusal); the next run of that job no
+  longer reports it, and health passes. With `cti_pipeline_manage_accounts: false` the per-lane groups must
+  already exist (the role asserts it instead of chowning to a missing group).
 * **Pruning.** Handed-off items the lane no longer stages are pruned (the newest `cti_pipeline_handoff_keep`
   of them stay, nothing younger than an hour goes, half-built leftovers go after a day); what the lane still
   stages is never pruned (it would only be copied again). Only directories the wrapper made, directly

@@ -233,9 +233,15 @@ def tree_digest(item: Item) -> str:
 def _read_sidecar(root: Path) -> dict:
     sc = root / SIDECAR
     try:
-        if sc.is_symlink():
-            raise GateError(f"{root.name}: the sidecar is a symlink")
-        doc = json.loads(sc.read_text(encoding="utf-8"))
+        # O_NOFOLLOW|O_NONBLOCK: a link is refused and a FIFO at this name never blocks the run
+        fd = os.open(sc, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as fh:
+            if (
+                not stat.S_ISREG(os.fstat(fh.fileno()).st_mode)
+                or os.fstat(fh.fileno()).st_size > _MAX_FILE
+            ):
+                raise GateError(f"{root.name}: the sidecar is not a regular file")
+            doc = json.loads(fh.read().decode("utf-8"))
     except (OSError, ValueError) as exc:
         raise GateError(f"{root.name}: no readable {SIDECAR} ({type(exc).__name__})") from exc
     if not isinstance(doc, dict) or set(doc) - {"tlp", "producer", "sha256s", "title"}:
@@ -294,12 +300,38 @@ def load_item(root: Path, kind: str) -> Item:
     return Item(root.name, kind, root, sidecar, tuple(files))
 
 
-def _read_tree(root: Path, files: tuple[str, ...]) -> dict[str, bytes]:
+def _open_root(root: Path, anchor: Path | None) -> int:
+    """A descriptor for ``root``.  With an ``anchor`` (a lane directory) every component from it down
+    is opened with ``O_NOFOLLOW`` through descriptors, so a kind or item directory swapped for a
+    link after the listing is refused rather than read through."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    if anchor is None:
+        return os.open(root, flags)
+    try:
+        parts = root.relative_to(anchor).parts
+    except ValueError as exc:
+        raise GateError(f"{root.name}: not under its source directory") from exc
+    fd = os.open(anchor, flags)
+    try:
+        for part in parts:
+            nxt = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_tree(root: Path, files: tuple[str, ...], anchor: Path | None = None) -> dict[str, bytes]:
     """The bytes of ``files`` under ``root``, every path component opened with ``O_NOFOLLOW`` through
     directory file descriptors, so a directory swapped for a link after the listing is refused, not
     read through."""
     held: dict[str, bytes] = {}
-    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        root_fd = _open_root(root, anchor)
+    except OSError as exc:
+        raise GateError(f"{root.name}: cannot be opened without following links") from exc
     try:
         for rel in files:
             *dirs, leaf = rel.split("/")
@@ -309,7 +341,9 @@ def _read_tree(root: Path, files: tuple[str, ...]) -> dict[str, bytes]:
                     fds.append(
                         os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fds[-1])
                     )
-                fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fds[-1])
+                # O_NONBLOCK: a file swapped for a FIFO after the listing is refused by the S_ISREG check below,
+                # never waited on (a blocking open of a FIFO with no writer hangs the whole run)
+                fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fds[-1])
                 try:
                     st = os.fstat(fd)
                     if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1 or st.st_size > _MAX_FILE:
@@ -330,7 +364,7 @@ def _read_tree(root: Path, files: tuple[str, ...]) -> dict[str, bytes]:
     return held
 
 
-def snapshot_item(root: Path, kind: str, snapshots: Path) -> Item:
+def snapshot_item(root: Path, kind: str, snapshots: Path, anchor: Path | None = None) -> Item:
     """Copy an item into a private snapshot under ``snapshots`` and return the copy.
 
     Every byte is read once with ``O_NOFOLLOW``, hashed as read and written from the same bytes, so
@@ -339,7 +373,7 @@ def snapshot_item(root: Path, kind: str, snapshots: Path) -> Item:
     content, built beside and renamed in; an existing one must hold the same bytes.  Nothing is
     deleted."""
     src = load_item(root, kind)
-    held = _read_tree(root, src.files)
+    held = _read_tree(root, src.files, anchor)
     digest = hashlib.sha256(
         "".join(f"{r}\0{_sha256_bytes(held[r])}\n" for r in sorted(held)).encode()
     ).hexdigest()[:16]

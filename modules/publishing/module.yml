@@ -47,7 +47,8 @@ prefers:
     # network call and `dry-run` only reads, so a lab with no hosting provider selected (a hosted
     # Pages project is not a host in the lab, and the slot may have no provider module yet) still
     # runs the gate and the would-be publish set. `mode: live` WITHOUT a selected provider is refused
-    # by the loader's site rules (rules._live_publishing_problems), so the downgrade cannot reach
+    # by the loader's site rules (rules._live_publish_problems) when the selection's config says live, and
+    # by the role's validate (publishing_gate_hosting_provider) when only a group_var does, so the downgrade cannot reach
     # production by accident. A preference still counts as reaching the slot, so grants.publish
     # and the egress rules apply unchanged.
     - cap: cap:static-hosting

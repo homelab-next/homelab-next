@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -126,6 +127,7 @@ def _gate_source(
     clock: Callable[[], float],
     snapshots_dir: Path,
     lane: str | None,
+    anchor: Path | None = None,
 ) -> None:
     """Gate and handle one source's items: the publishable area (``lane`` None) or one producer
     lane's output.  A lane's items are tagged with it everywhere: the report (``<lane>:<id>``),
@@ -151,7 +153,7 @@ def _gate_source(
             continue
         try:
             # what is gated and published is a private copy: every byte read once, hashed as read
-            item = gt.snapshot_item(root, kind, snapshots_dir)
+            item = gt.snapshot_item(root, kind, snapshots_dir, anchor)
             verdict = gt.evaluate(item, policy)
         except (gt.GateError, OSError) as exc:
             report.blocked.append(tag(root.name))
@@ -250,6 +252,27 @@ def run(
     for src in cfg.lane_sources:
         # a producer lane's items: gated like any other, then STAGED ONLY, whatever the run's mode
         # (no transport, no runner, no hosting credential): its own snapshots and staging area
+        try:
+            os.listdir(
+                src.dir
+            )  # absent: nothing handed off yet.  Anything else is reported, never silent
+            lane_entries = discover(src.dir)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:  # no read access yet (the read group), a file in its place, ...
+            report.failed.append(f"{src.lane}:unreadable")
+            _append(
+                cfg.state_dir / "gate.jsonl",
+                {
+                    "ts": clock(),
+                    "lane": src.lane,
+                    "item": f"lane-{src.lane}",
+                    "kind": "lane",
+                    "ok": True,
+                    "failed": f"lane-unreadable: {type(exc).__name__}",
+                },
+            )
+            continue
         _gate_source(
             dataclasses.replace(
                 cfg,
@@ -257,7 +280,7 @@ def run(
                 publishable_dir=src.dir,
                 staging_dir=cfg.staging_dir / f"lane-{src.lane}",
             ),
-            discover(src.dir),
+            lane_entries,
             net=NoNetwork(),
             runner=_no_runner,
             policy=policy,
@@ -265,6 +288,7 @@ def run(
             clock=clock,
             snapshots_dir=cfg.state_dir / f"snapshots-{src.lane}",
             lane=src.lane,
+            anchor=src.dir,
         )
     # stage mode makes no network call at all, a notification included; and a notification that
     # cannot be sent never takes the run down (the verdicts are already logged and returned)

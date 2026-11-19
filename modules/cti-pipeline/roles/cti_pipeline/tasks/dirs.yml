@@ -33,6 +33,14 @@
   when: cti_pipeline_manage_accounts | bool and cti_pipeline_handoff_enabled | bool
   tags: [backup, export, restore, upgrade]
 
+- name: Without account management, each lane's handoff group must already exist (the directories chown to it)
+  ansible.builtin.getent:
+    database: group
+    key: "{{ cti_pipeline_handoff_group[item] }}"
+  loop: "{{ cti_pipeline_lanes }}"
+  when: not (cti_pipeline_manage_accounts | bool) and cti_pipeline_handoff_enabled | bool
+  tags: [backup, export, restore, upgrade]
+
 - name: Create the data root (root's, read by the module's group) and the export directory (root's)
   ansible.builtin.file:
     path: "{{ item.path }}"

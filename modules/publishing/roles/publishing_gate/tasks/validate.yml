@@ -49,6 +49,16 @@
       values) and absolute canonical paths are required
   tags: [health, backup, restore, export, upgrade, readiness]
 
+- name: Live needs a named static-hosting provider (it fails closed, because the loader cannot see this mode)
+  ansible.builtin.assert:
+    that:
+      - publishing_gate_mode != 'live' or publishing_gate_hosting_provider is match(publishing_gate_lane_pattern)
+    fail_msg: >-
+      publishing: mode live pushes through the static-hosting slot, and publishing_gate_hosting_provider (the
+      selected provider's logical id) is empty or malformed. Select a static-hosting provider in the site and
+      name it; stage and dry-run need none
+  tags: [health, backup, restore, export, upgrade, readiness]
+
 - name: A live or dry-run mode has what it needs to reach a destination
   ansible.builtin.assert:
     that:

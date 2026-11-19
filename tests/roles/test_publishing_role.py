@@ -88,6 +88,7 @@ def test_validate_accepts_a_pinned_pages_project_and_a_community_green_publicati
         "publishing_gate_audience": "community",
         "publishing_gate_access_control": "members-only",
         "publishing_gate_mode": "live",
+        "publishing_gate_hosting_provider": "site-hosting",
     }
     r = run_role(tmp_path, ROLE, "validate", v)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -115,7 +116,11 @@ def test_credentials_are_written_by_name_0600_and_only_what_the_mode_needs(tmp_p
     assert oct((creds / "deny-list").stat().st_mode & 0o777) == "0o600"
     assert "t" * 12 not in r.stdout
 
-    live = {**good(tmp_path), "publishing_gate_mode": "live"}
+    live = {
+        **good(tmp_path),
+        "publishing_gate_mode": "live",
+        "publishing_gate_hosting_provider": "site-hosting",
+    }
     r = run_role(tmp_path, ROLE, "credentials", live, env=env)
     assert r.returncode == 0, r.stdout + r.stderr
     assert sorted(p.name for p in creds.iterdir()) == [
@@ -279,6 +284,7 @@ def test_readiness_names_the_unset_secret_reference_and_never_a_value(tmp_path):
         **good(tmp_path),
         **_readiness_bins(tmp_path),
         "publishing_gate_mode": "live",
+        "publishing_gate_hosting_provider": "site-hosting",
         "publishing_gate_r2_bucket": "podcast",
         "publishing_gate_cloudflare_account_id": "acct1",
         "publishing_gate_feed_public_base_url": "https://cdn.example.test",
@@ -418,7 +424,7 @@ def test_stage_and_dry_run_need_neither_node_nor_npm_but_live_with_pages_does(tm
     r = run_role(tmp_path, ROLE, "readiness", dry, env=creds)
     assert r.returncode == 0, r.stdout + r.stderr
     # live with a Pages project: the missing node is named
-    live = {**v, "publishing_gate_mode": "live"}
+    live = {**v, "publishing_gate_mode": "live", "publishing_gate_hosting_provider": "site-hosting"}
     env_live = {
         **env,
         "HNX_SECRET_PUBLISHING_CLOUDFLARE_API_TOKEN": "t" * 12,
@@ -439,3 +445,34 @@ def test_main_installs_wrangler_only_for_a_live_pages_project(tmp_path):
         ROOT / "modules" / "publishing" / "roles" / "publishing_gate" / "vars" / "main.yml"
     ).read_text()
     assert "publishing_gate_pages_project != '' and publishing_gate_mode == 'live'" in vars_text
+
+
+def test_live_with_a_destination_and_credentials_but_no_provider_is_refused(tmp_path):
+    """The loader sees only the selection's config.mode; a group_var live must fail closed here."""
+    v = {
+        **good(tmp_path),
+        "publishing_gate_mode": "live",
+        "publishing_gate_r2_bucket": "podcast",
+        "publishing_gate_cloudflare_account_id": "acct1",
+        "publishing_gate_feed_public_base_url": "https://cdn.example.test",
+        "publishing_gate_feed_title": "T",
+        "publishing_gate_feed_description": "D",
+        "publishing_gate_feed_author": "A",
+        "publishing_gate_feed_owner_email": "a@example.test",
+    }
+    r = run_role(tmp_path, ROLE, "validate", v)
+    out = " ".join((r.stdout + r.stderr).split())
+    assert (
+        r.returncode != 0 and "publishing_gate_hosting_provider" in out and "static-hosting" in out
+    )
+    for bad in ("", "Bad Id", "a b"):
+        r = run_role(tmp_path, ROLE, "validate", {**v, "publishing_gate_hosting_provider": bad})
+        assert r.returncode != 0, bad
+    ok = run_role(
+        tmp_path, ROLE, "validate", {**v, "publishing_gate_hosting_provider": "site-hosting"}
+    )
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    # stage and dry-run need no provider
+    for mode in ("stage", "dry-run"):
+        r = run_role(tmp_path, ROLE, "validate", {**v, "publishing_gate_mode": mode})
+        assert r.returncode == 0, (mode, r.stdout + r.stderr)
