@@ -41,6 +41,7 @@ import hmac
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import sqlite3
@@ -297,6 +298,35 @@ def check_app_key(cfg: dict) -> dict:
     return {"secret_key": "fresh"}
 
 
+# a ``\\`` or a code point: \XXXX or \uXXXX (4 hex), \+XXXXXX (6), \UXXXXXXXX (8)
+_UNISTR_ESCAPE = re.compile(r"\\(?:(\\)|u?([0-9A-Fa-f]{4})|\+([0-9A-Fa-f]{6})|U([0-9A-Fa-f]{8}))")
+
+
+def _unistr(text):
+    """SQLite's ``unistr()`` (3.50 and later), for a library without it: the product's dumper
+    writes a string holding a control character as a ``unistr('...')`` literal. Any backslash
+    that is not one of SQLite's escapes, or a code point past U+10FFFF, is an error, as in
+    SQLite."""
+    if text is None:
+        return None
+    out, pos = [], 0
+    for m in _UNISTR_ESCAPE.finditer(text):
+        if "\\" in text[pos : m.start()]:
+            break
+        out.append(text[pos : m.start()])
+        if m.group(1):
+            out.append("\\")
+        else:
+            cp = int(next(g for g in m.groups()[1:] if g), 16)
+            if cp > 0x10FFFF:
+                raise ValueError("unistr: code point out of range")
+            out.append(chr(cp))
+        pos = m.end()
+    if "\\" in text[pos:]:
+        raise ValueError("unistr: invalid escape")
+    return "".join(out) + text[pos:]
+
+
 def sql_connection(path: str) -> sqlite3.Connection:
     """A connection fit to run SQL that came out of an export: ATTACH (and with it VACUUM INTO) can
     write a file anywhere the process may, so an authorizer refuses it, and the number of attachable
@@ -311,6 +341,8 @@ def sql_connection(path: str) -> sqlite3.Connection:
         return sqlite3.SQLITE_OK
 
     conn.set_authorizer(deny)
+    if sqlite3.sqlite_version_info < (3, 50, 0):  # older libraries lack unistr()
+        conn.create_function("unistr", 1, _unistr, deterministic=True)
     return conn
 
 
