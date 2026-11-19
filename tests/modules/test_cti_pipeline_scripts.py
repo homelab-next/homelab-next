@@ -25,6 +25,7 @@ import json
 import os
 import pwd
 import sqlite3
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -692,3 +693,56 @@ def test_restore_stages_beside_the_lane_root_and_only_moves_a_planted_link_aside
     data_root = root.parent
     assert not [p for p in data_root.iterdir() if p.name.startswith(".restore-")]  # stage removed
     assert not [p for p in root.iterdir() if p.name.startswith(".restore")]  # never inside the lane
+
+
+READER = (
+    ROOT / "modules" / "orchestration" / "roles" / "orchestration" / "files" / "hnx-dispatch-read"
+)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["ok", "replay", "symlink", "directory", "fifo", "hardlink", "writable", "big", "old", "future",
+     "version", "dispatch", "lane", "unit", "nested"],
+)  # fmt: skip
+def test_the_wrapper_accepts_and_refuses_exactly_what_the_reference_reader_does(tmp_path, case):
+    """The orchestration module's own reader (contract v3) is the reference: on every case the
+    wrapper's verdict is the reader's."""
+    _, body = _spec(tmp_path)
+    path = Path(body["run_file"])
+    over = {"old": {"dispatched_at": "2026-10-01T10:00:00Z"},
+            "future": {"dispatched_at": "2026-11-19T12:30:00Z"}, "version": {"version": 1},
+            "dispatch": {"dispatch_id": "D" * 32}, "lane": {"lane": "shadow"},
+            "unit": {"unit": "@".join(["hnx-other", "fresh-real.service"])},
+            "big": {"task": "x" * (300 << 10)},
+            "nested": {"_raw": "[" * 100_000 + "]" * 100_000}}.get(case, {})  # fmt: skip
+    if case == "symlink":
+        path.symlink_to(_run_file(body).rename(tmp_path / "elsewhere.json"))
+    elif case == "directory":
+        path.mkdir()
+    elif case == "fifo":
+        os.mkfifo(path)
+    elif case == "hardlink":
+        _hard_link(_run_file(body))
+    elif case == "writable":
+        _run_file(body).chmod(0o662)
+    else:
+        _run_file(body, **over)
+    theirs = tmp_path / "reader-consumed"
+    theirs.mkdir()
+    if case == "replay":
+        (theirs / ("d" * 32)).write_text("")
+        (Path(body["consumed_dir"]) / ("d" * 32)).write_text("")
+    r = subprocess.run(
+        [sys.executable, "-I", str(READER), "--dir", str(path.parent), "--instance", "fresh-real",
+         "--owner-uid", str(os.getuid()), "--consumed-dir", str(theirs), "--now", str(NOW)],
+        capture_output=True, text=True, timeout=60, check=False,
+    )  # fmt: skip
+    assert r.returncode in (0, 1), r.stderr
+    try:
+        run.dispatch_run(body)
+        ours = 0
+    except run.Refused:
+        ours = 1
+    assert ours == r.returncode, (case, r.stderr)
+    assert (case == "ok") == (ours == 0)
