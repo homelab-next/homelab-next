@@ -73,7 +73,7 @@ argument_specs:
         default: clef
       llamacpp_context_size: &a_context_size
         type: int
-        description: The context each parallel slot gets, in tokens (the server is started with this times the slots; with llamacpp_extra_args.kv_unified it is the one cache all slots share, and each may use all of it); K-14 compares it with /v1/models meta.n_ctx.
+        description: The most one request may hold, in tokens. By default each parallel slot gets this much (the server is started with this times the slots); with llamacpp_extra_args.kv_unified it is the one pool all slots share (-c is this total), and each may use all of it. K-14 compares it with /v1/models meta.n_ctx.
         default: 8192
       llamacpp_parallel: &a_parallel
         type: int
@@ -109,7 +109,7 @@ argument_specs:
         default: []
       llamacpp_extra_args: &a_extra_args
         type: dict
-        description: 'Throughput settings by name, never a raw flag: batch_size (-b), ubatch_size (-ub, at most batch_size), kv_unified (true: one shared cache of llamacpp_context_size tokens), split_mode (-sm none|layer|row), tensor_split (-ts, per-GPU proportions), threads (-t) and threads_batch (-tb), CPU threads 1 to 256; batch_size, ubatch_size and kv_unified in generate mode only, split_mode and tensor_split on a GPU backend only.'
+        description: 'Throughput settings by name, never a raw flag: batch_size (-b), ubatch_size (-ub, at most batch_size), kv_unified (true: one shared cache of llamacpp_context_size tokens), split_mode (-sm none|layer|row), tensor_split (-ts, per-GPU proportions), threads (-t) and threads_batch (-tb), CPU threads 1 to 256; the long-context settings cache_type_k and cache_type_v (--cache-type-k/-v: f16, q8_0 or q4_0, a quantized one with llamacpp_flash_attn on), rope_scaling (--rope-scaling yarn), rope_scale (--rope-scale, above 1 and at most 8) and yarn_orig_ctx (--yarn-orig-ctx, 256 to 1048576), the last three together, llamacpp_context_size at most yarn_orig_ctx x rope_scale; batch_size, ubatch_size, kv_unified and the long-context settings in generate mode only, split_mode and tensor_split on a GPU backend only.'
         default: {}
       llamacpp_models_gid: &a_models_gid
         type: str

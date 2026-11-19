@@ -90,9 +90,11 @@ address, VM id or secret value.
   `llamacpp_model_store_id` / `llamacpp_model_digest` name the store entry (default: the
   fast-classifier's `ggml-org/Clef-GGUF`, `Clef-Q4_K_M.gguf`, entry digest
   `sha256:e29796ca...`), `llamacpp_served_model_name` is the id `/v1/models` lists (the role
-  table's model id for this backend), `llamacpp_context_size` is the context **each slot** gets
-  (the server is started with `-c` = that times `llamacpp_parallel`, with `--no-kv-unified`, so
-  a slot's share is fixed; see `kv_unified` below for one shared cache), `llamacpp_n_gpu_layers`
+  table's model id for this backend), `llamacpp_context_size` is the most **one request** may
+  hold: by default the context each slot gets (the server is started with `-c` = that times
+  `llamacpp_parallel`, with `--no-kv-unified`, so a slot's share is fixed); with `kv_unified`
+  (below) it is the **one shared pool** (`-c` = `llamacpp_context_size`, not times the slots),
+  `llamacpp_n_gpu_layers`
   is a count, `all` or `auto` (default 99).
 - **A split model, in a subdirectory.** `llamacpp_model_file` is a path relative to the entry's
   directory (`<store>/gguf/<repo>/`), so it may sit in a subdirectory of the repository
@@ -129,6 +131,51 @@ address, VM id or secret value.
   llamacpp_parallel: 16
   llamacpp_extra_args: {batch_size: 4096, ubatch_size: 2048, kv_unified: true}
   ```
+
+- **Long context: KV-cache types and YaRN.** Five more named keys of `llamacpp_extra_args`, all
+  generate mode only (refused in decision mode, which fixes the per-slot cache):
+  - `cache_type_k` / `cache_type_v` (`--cache-type-k` / `--cache-type-v`): the KV cache's element
+    type, `f16` (the engine's default), `q8_0` (about half the bytes of f16) or `q4_0` (about a
+    quarter). b12033 also accepts f32, bf16, q4_1, iq4_nl, q5_0 and q5_1; the role allows the
+    three a placement is sized with. A quantized type requires `llamacpp_flash_attn: on`: the
+    engine refuses a quantized V cache with flash attention off, and with `auto` it fails at
+    load when the backend cannot run it, so the role refuses it before a file exists (`auto` and
+    `off` with `q8_0`/`q4_0` on either cache are refused).
+  - `rope_scaling: yarn` (`--rope-scaling`), `rope_scale` (`--rope-scale`, the factor the context
+    grows by: a number above 1 and at most 8) and `yarn_orig_ctx` (`--yarn-orig-ctx`, the model's
+    trained context, an integer 256 to 1048576): all three or none (YaRN without its trained
+    context or its factor is refused, and so is a factor or a trained context alone). Only `yarn`
+    is allowed. YaRN is engine-wide: every slot and every request runs scaled, and it lowers
+    short-context quality a little, so measure the ordinary jobs at the new setting too.
+  - **How they compose with the context and the slots.** `llamacpp_context_size` is the most one
+    request may hold either way: per slot by default, the shared pool with `kv_unified: true`.
+    With YaRN the role refuses a `llamacpp_context_size` above `yarn_orig_ctx x rope_scale`.
+    What `-c` costs is the KV bytes per token times `-c`: per token, the full-attention layers x
+    the KV heads x the head dims x 2 (K and V) x the element size (2 bytes for f16, ~1.06 for
+    q8_0, ~0.56 for q4_0). Without `kv_unified` that is `llamacpp_context_size x
+    llamacpp_parallel` tokens of cache, so a long context per slot multiplies by the slots; with
+    it, one pool of `llamacpp_context_size` that the slots share (16 slots in a 262k pool do not
+    each get 262k at once: they get what is free). For example, a hybrid model with 12 of 48
+    layers on full attention and 2 KV heads of 256 dims holds 12 x 2 x 256 x 2 x 2 B = 24 KiB per
+    token at f16, so a 262,144-token pool is 6 GiB at f16 and about 3.2 GiB at q8_0. A model
+    trained to 262,144 and served at 524,288 in one pool shared by 4 slots:
+
+  ```yaml
+  llamacpp_flash_attn: "on"
+  llamacpp_context_size: 524288
+  llamacpp_parallel: 4
+  llamacpp_extra_args:
+    kv_unified: true
+    cache_type_k: q8_0
+    cache_type_v: q8_0
+    rope_scaling: yarn
+    rope_scale: 2
+    yarn_orig_ctx: 262144
+  ```
+
+  renders `-c 524288 -np 4 --kv-unified ... -fa on ... --cache-type-k q8_0 --cache-type-v q8_0
+  --rope-scaling yarn --rope-scale 2 --yarn-orig-ctx 262144`. Unset, none of these flags is
+  rendered: an existing placement's command line is unchanged.
 
 - **Footprint, per placement.** The manifest's `server` footprint (8 vCPU, 16 GiB, 20 GB) is
   the module's **minimum**, and by default its slice: `hnx-llamacpp-server.slice` with
