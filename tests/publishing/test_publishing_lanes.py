@@ -256,3 +256,29 @@ def test_a_lane_dir_that_is_or_links_to_another_directory_of_the_run_is_refused(
         )
         with pytest.raises(cf.ConfigError, match="own"):
             cf.load(base / "config.json")
+
+
+def test_run_refuses_a_lane_item_whose_kind_dir_is_swapped_for_a_link_after_the_check(
+    tmp_path, monkeypatch
+):
+    """Through run(): the lane user swaps its kind directory for a link between the item check and the
+    read.  Only the descriptor chain from the lane directory (anchor) refuses it; with the
+    final-component O_NOFOLLOW alone the files are read through the link and the item passes."""
+    from homelabnext.publishing import gate as gt
+
+    base, _pub, dirs, cfg = _lab(tmp_path)
+    make_item(dirs["shadow"], "site", "s1", {"index.html": "<p>shadow</p>"})
+    real_load = gt.load_item
+    elsewhere = tmp_path / "elsewhere"
+
+    def load_then_swap(root, kind):
+        item = real_load(root, kind)
+        if root.parent.parent == dirs["shadow"] and not elsewhere.exists():
+            (dirs["shadow"] / "site").rename(elsewhere)  # same bytes, now behind a link
+            (dirs["shadow"] / "site").symlink_to(elsewhere)
+        return item
+
+    monkeypatch.setattr(gt, "load_item", load_then_swap)
+    rep = rn.run(cfg)
+    assert rep.blocked == ["shadow:s1"] and rep.done == []
+    assert not list((base / "staging" / "lane-shadow").glob("site/*"))
