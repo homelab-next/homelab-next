@@ -8,6 +8,11 @@
 # every key the config names can be placed on a secret: reference.
 - name: Render the configuration with the generator (on the controller)
   block:
+    - name: Name the checkout the spec's role table must stay inside
+      ansible.builtin.set_fact:
+        # the generator looks for that checkout only between the spec and ITS working directory, and
+        # a play runs from the deploy directory, outside the site's checkout: say it, never rely on cwd
+        gateway_root_args: "{{ ['--root', gateway_spec_root] if gateway_spec_root | length > 0 else [] }}"
     - name: Make a scratch directory on the controller
       ansible.builtin.tempfile:
         state: directory
@@ -19,14 +24,14 @@
       register: gateway_scratch
     - name: Render the gateway configuration from the spec
       ansible.builtin.command:
-        argv: "{{ gateway_hnx_cli + ['gen', 'gateway', 'render', gateway_spec, gateway_scratch.path] }}"
+        argv: "{{ gateway_hnx_cli + ['gen', 'gateway', 'render', gateway_spec, gateway_scratch.path] + gateway_root_args }}"
       delegate_to: localhost
       become: false
       check_mode: false
       changed_when: false
     - name: Audit what was rendered against the spec and the locality rule
       ansible.builtin.command:
-        argv: "{{ gateway_hnx_cli + ['gen', 'gateway', 'render', gateway_spec, gateway_scratch.path, '--check'] }}"
+        argv: "{{ gateway_hnx_cli + ['gen', 'gateway', 'render', gateway_spec, gateway_scratch.path, '--check'] + gateway_root_args }}"
       delegate_to: localhost
       become: false
       check_mode: false
