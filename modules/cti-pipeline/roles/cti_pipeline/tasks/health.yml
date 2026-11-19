@@ -34,6 +34,18 @@
         fail_msg: >-
           cti-pipeline: missing {{ cti_pipeline_unit_files.results | rejectattr('stat.exists') | map(attribute='item') | list }}
           (run the install)
+    - name: Read each job unit's load state
+      ansible.builtin.command:
+        argv: "{{ [cti_pipeline_systemctl_cli, 'show', '--property=Id,LoadState'] + (cti_pipeline_instances | map(attribute='unit') | list) }}"
+      register: cti_pipeline_load_states
+      changed_when: false
+    - name: No job unit is masked (an export or restore that died before it unmasked them)
+      ansible.builtin.assert:
+        that: "'LoadState=masked' not in cti_pipeline_load_states.stdout_lines"
+        fail_msg: >-
+          cti-pipeline: a job unit is masked, so the dispatcher's starts fail: run the install (it
+          lifts the runtime masks) or systemctl unmask --runtime them
+          ({{ cti_pipeline_load_states.stdout | truncate(400) }})
     - name: The release imports the app
       ansible.builtin.command:
         argv: ["{{ cti_pipeline_current }}/venv/bin/python", -c, "import importlib, sys; importlib.import_module(sys.argv[1])", "{{ cti_pipeline_import_check }}"]

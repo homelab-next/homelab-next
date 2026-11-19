@@ -436,6 +436,13 @@ def test_the_release_is_pinned_at_start_and_never_pruned_while_a_job_runs_it(tmp
         ("shadow", {"steps": [["{python}", "load.py", "--schema", "intel"]]}, "names the real lake schema"),
         ("shadow", {"steps": [["{python}", "load.py", "--schema=intel"]]}, "names the real lake schema"),
         ("shadow", {"env": {"TABLE": "intel.items"}}, "names the real lake schema"),
+        *[("shadow", {"steps": [["{python}", "load.py", arg]]}, "names the real lake schema")
+          for arg in ["INTEL", "--schema=INTEL", "Intel.items", "lake.intel.items", "`intel`", "(intel)",
+                      "[intel]", "intel;", "{intel}", 'in""tel', "in\\tel", "'intel'"]],
+        ("shadow", {"steps": [["/bin/sh", "-c", "run --schema in''tel"]]}, "runs inline code or a shell"),
+        ("shadow", {"steps": [["/usr/bin/env", "python3", "x.py"]]}, "runs inline code or a shell"),
+        ("shadow", {"steps": [["{python}", "-c", "print(1)"]]}, "runs inline code or a shell"),
+        ("shadow", {"steps": [["/opt/tool", "-m", "intel.items"]]}, "names the real lake schema"),
         ("shadow", {"real_lake_schema": ""}, "does not name the real lake schema"),
     ],
 )  # fmt: skip
@@ -630,6 +637,16 @@ def test_prune_exports_keeps_the_newest_of_its_lane(tmp_path):
     assert sorted(p.name for p in d.iterdir()) == sorted(names[2:])
 
 
+def test_an_export_refuses_a_file_with_more_than_one_link(tmp_path):
+    root = _lane(tmp_path)
+    os.link(root / "state" / "zero_runs.json", root / "state" / "second.json")
+    exports = tmp_path / "var" / "lib" / "intel" / "export"
+    exports.mkdir(parents=True)
+    with pytest.raises(state.Refused, match="more than one link"):
+        state.export(str(root), str(exports / "real-1"), ["data", "state", "podcast"])
+    assert list(exports.iterdir()) == []
+
+
 def test_an_export_never_follows_a_directory_swapped_for_a_link_mid_walk(tmp_path, monkeypatch):
     root = _lane(tmp_path)
     (root / "state" / "sub").mkdir()
@@ -703,7 +720,8 @@ READER = (
 @pytest.mark.parametrize(
     "case",
     ["ok", "replay", "symlink", "directory", "fifo", "hardlink", "writable", "big", "old", "future",
-     "version", "dispatch", "lane", "unit", "nested"],
+     "version", "dispatch", "lane", "unit", "nested", "job", "run_id", "agent_key", "task",
+     "dispatched_at", "owner"],
 )  # fmt: skip
 def test_the_wrapper_accepts_and_refuses_exactly_what_the_reference_reader_does(tmp_path, case):
     """The orchestration module's own reader (contract v3) is the reference: on every case the
@@ -715,7 +733,14 @@ def test_the_wrapper_accepts_and_refuses_exactly_what_the_reference_reader_does(
             "dispatch": {"dispatch_id": "D" * 32}, "lane": {"lane": "shadow"},
             "unit": {"unit": "@".join(["hnx-other", "fresh-real.service"])},
             "big": {"task": "x" * (300 << 10)},
-            "nested": {"_raw": "[" * 100_000 + "]" * 100_000}}.get(case, {})  # fmt: skip
+            "nested": {"_raw": "[" * 100_000 + "]" * 100_000}, "job": {"job": "other"},
+            "run_id": {"run_id": "../x"}, "agent_key": {"agent_key": "Bad Key"},
+            "task": {"task": 7}, "dispatched_at": {"dispatched_at": "2026-11-19 10:00:00"},
+            }.get(case, {})  # fmt: skip
+    owner_uid = os.getuid()
+    if case == "owner":  # a run file of the right shape, but the controller's user is another
+        body["run_owner"] = "root" if os.getuid() != 0 else "nobody"
+        owner_uid = pwd.getpwnam(body["run_owner"]).pw_uid
     if case == "symlink":
         path.symlink_to(_run_file(body).rename(tmp_path / "elsewhere.json"))
     elif case == "directory":
@@ -735,7 +760,7 @@ def test_the_wrapper_accepts_and_refuses_exactly_what_the_reference_reader_does(
         (Path(body["consumed_dir"]) / ("d" * 32)).write_text("")
     r = subprocess.run(
         [sys.executable, "-I", str(READER), "--dir", str(path.parent), "--instance", "fresh-real",
-         "--owner-uid", str(os.getuid()), "--consumed-dir", str(theirs), "--now", str(NOW)],
+         "--owner-uid", str(owner_uid), "--consumed-dir", str(theirs), "--now", str(NOW)],
         capture_output=True, text=True, timeout=60, check=False,
     )  # fmt: skip
     assert r.returncode in (0, 1), r.stderr

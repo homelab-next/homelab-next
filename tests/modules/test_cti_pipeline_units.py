@@ -198,6 +198,8 @@ def test_the_spec_names_the_run_file_its_owner_and_the_lanes_consumed_runs(site)
 @pytest.mark.parametrize(
     ("text", "hit"),
     [("cti", True), ("--schema=cti", True), ("cti.items", True), ("a cti b", True),
+     ("CTI", True), ("--schema=CTI", True), ("Cti.items", True), ("lake.cti.items", True),
+     ("`cti`", True), ("(cti)", True), ("[cti]", True), ("cti;", True), ("{cti}", True),
      ("cti_shadow", False), ("cti-rollup", False), ("/var/cti/x", False), ("hnx-cti", False)],
 )  # fmt: skip
 def test_the_real_schema_token_the_role_refuses_in_a_shadow_job(site, text, hit):
@@ -213,3 +215,38 @@ def test_the_run_file_group_fits_its_32_characters_only_with_a_short_enough_id()
     assert len(long["cti_pipeline_dispatch_group"]) == 33  # validate.yml refuses it (at most 32)
     validate = (ROLE / "tasks" / "validate.yml").read_text()
     assert "cti_pipeline_dispatch_group | length <= 32" in validate
+
+
+def test_a_converge_lifts_runtime_masks_and_health_refuses_a_masked_unit():
+    """An export or restore that died before its always: leaves the lane's units masked; the
+    install unmasks every declared instance, and health fails while one is masked."""
+    main = ld.load_yaml(ROLE / "tasks" / "main.yml")
+    lift = next(t for t in main if t["name"].startswith("Lift any runtime mask"))
+    argv = lift["ansible.builtin.command"]["argv"]
+    assert (
+        "'unmask', '--runtime'" in argv and "cti_pipeline_instances | map(attribute='unit')" in argv
+    )
+    health = ld.load_yaml(ROLE / "tasks" / "health.yml")[0]["block"]
+    names = [t["name"] for t in health]
+    show = health[names.index("Read each job unit's load state")]["ansible.builtin.command"]["argv"]
+    assert "--property=Id,LoadState" in show
+    check = health[
+        names.index(
+            "No job unit is masked (an export or restore that died before it unmasked them)"
+        )
+    ]
+    assert (
+        check["ansible.builtin.assert"]["that"]
+        == "'LoadState=masked' not in cti_pipeline_load_states.stdout_lines"
+    )
+
+
+def test_quiesce_also_blocks_a_loaded_instance_the_site_no_longer_declares():
+    tasks = ld.load_yaml(ROLE / "tasks" / "quiesce.yml")
+    listing = tasks[0]["ansible.builtin.command"]["argv"]
+    assert listing[1:5] == ["list-units", "--all", "--plain", "--no-legend"]
+    assert (
+        listing[5] == "hnx-{{ cti_pipeline_logical_id }}@*-{{ cti_pipeline_quiesce_lane }}.service"
+    )
+    names = tasks[1]["ansible.builtin.set_fact"]["cti_pipeline_quiesce_units"]
+    assert "cti_pipeline_quiesce_loaded.stdout_lines" in names and "unique" in names

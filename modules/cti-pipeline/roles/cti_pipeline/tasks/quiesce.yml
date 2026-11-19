@@ -5,11 +5,30 @@
 # cti_pipeline_quiesce_wait_s. The caller unmasks them (unquiesce.yml) in an always: block, so a
 # failure never leaves the lane blocked. Root works on a lane's tree only while its own code is not
 # running there.
+# systemd's own list as well as the declared one: an instance of a job the site just removed may
+# still be running, and it writes the same lane root
+- name: List the lane's loaded units (declared or not)
+  ansible.builtin.command:
+    argv:
+      - "{{ cti_pipeline_systemctl_cli }}"
+      - list-units
+      - --all
+      - --plain
+      - --no-legend
+      - "hnx-{{ cti_pipeline_logical_id }}@*-{{ cti_pipeline_quiesce_lane }}.service"
+  register: cti_pipeline_quiesce_loaded
+  changed_when: false
+  tags: [export, backup, restore]
+
 - name: Name the lane's units
   ansible.builtin.set_fact:
     cti_pipeline_quiesce_units: >-
-      {{ cti_pipeline_instances | selectattr('lane', 'equalto', cti_pipeline_quiesce_lane)
-         | map(attribute='unit') | list }}
+      {{ (cti_pipeline_instances | selectattr('lane', 'equalto', cti_pipeline_quiesce_lane)
+          | map(attribute='unit') | list)
+         + (cti_pipeline_quiesce_loaded.stdout_lines | map('trim') | map('split') | map('first')
+            | select('match', '^hnx-' ~ (cti_pipeline_logical_id | regex_escape) ~ '@[a-z0-9-]+-'
+                     ~ cti_pipeline_quiesce_lane ~ '\.service\Z') | list)
+         | unique | sort | list }}
   tags: [export, backup, restore]
 
 - name: Block the lane's units from starting (for this boot only)
