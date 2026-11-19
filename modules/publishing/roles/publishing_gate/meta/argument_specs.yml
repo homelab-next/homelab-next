@@ -138,6 +138,14 @@ argument_specs:
         type: int
         description: A snapshot younger than this many seconds is never pruned.
         default: 3600
+      publishing_gate_staging_keep:
+        type: int
+        description: Staged items (the shadow lane's output) kept per kind; older ones go once past the minimum age.
+        default: 48
+      publishing_gate_staging_min_age_s:
+        type: int
+        description: A staged item younger than this many seconds is never pruned.
+        default: 172800
       publishing_gate_legacy_exceptions:
         type: list
         elements: dict

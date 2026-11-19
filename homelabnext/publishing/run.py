@@ -175,6 +175,15 @@ def run(
             protect_ids={p.name for _k, p in entries} | snapshots.referenced_ids(manifest),
             now=clock(),
         )
+        if cfg.staging_dir.is_dir():  # shadow output: by age, nothing refers to it
+            snapshots.prune(
+                cfg.staging_dir,
+                keep=cfg.staging_keep,
+                min_age_s=cfg.staging_min_age_s,
+                protect_ids=set(),
+                now=clock(),
+                digest_len=12,
+            )
     except OSError as exc:
         _append(gate_log, {"ts": clock(), "prune_failed": type(exc).__name__})
     # stage mode makes no network call at all, a notification included; and a notification that

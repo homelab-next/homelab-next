@@ -59,10 +59,10 @@ gate` / `Publishing: the gate passes every item again`), state-diffed, never per
 
 The gate is a literal, **normalised** matcher: every rule runs over the text as written and as a reader
 sees it (HTML entities and percent escapes decoded up to three layers, NFKC, zero-width, soft-hyphen and other
-format characters removed, look-alike Cyrillic, Greek, Coptic, Cherokee and small-capital letters folded to Latin, variation selectors and bidi
+format characters removed, look-alike Cyrillic, Greek, Coptic, Cherokee, Armenian and small-capital letters folded to Latin, variation selectors and bidi
 controls removed (a bidi-overridden text is also read reversed), base64 `data:` URIs decoded),
-over the text a browser renders (markup removed, so a name split by `<span>` is whole again), with JS and CSS
-escapes (`\\x68`, `\\u0068`, `\\68 `) resolved, with combining marks stripped, and over JSON after decoding
+over the text a browser renders (markup removed with an HTML tokeniser, so a name split by `<span>` is whole again and a `>` inside a quoted attribute does not end the tag), with JS and CSS
+escapes (`\\x68`, `\\u0068`, `\\68 `) resolved, with combining marks stripped (and the Hangul, Khmer and grapheme-joiner fillers, which draw nothing), and over JSON after decoding
 (keys and string values). Decoding runs to a fixed point; text that still changes after 8 layers is blocked. It does not run scripts or rebuild strings a page
 assembles at run time. It also judges:
 
@@ -94,8 +94,7 @@ reuses it (an extra file in a reused one is refused). Each path component is ope
 directory file descriptors. **Pruning is part of every run**: the newest `snapshots_keep` (5) per kind, anything
 younger than `snapshots_min_age_s` (3600), every item id still in `publishable/` and every id named by the
 last 50 manifest lines are kept; only directories the module named and made (a snapshot or `.tmp-` name, a plain
-directory directly under the snapshot root, never a link) are removed. Staged items under `staging/` (shadow
-output) are not pruned.
+directory directly under the snapshot root, never a link) are removed. Staged items under `staging/` (shadow output) are pruned by age by the same rules (a plain directory directly under the staging root, named like a staged item or a `.tmp-`/`.failed-` leftover, never a link).
 
 ## Legacy episodes and the cutover pass criterion
 
@@ -103,7 +102,7 @@ The feed is gated as a whole, so an episode **already public** in the bucket who
 deny-list or posture rules would block every future feed write, and the module cannot change the bucket.
 Fail-closed is the default; the escape hatch is an operator-reviewed list in the configuration
 (`publishing_gate_legacy_exceptions`: `{key, sha256}` of each such metadata object). The deny-list and posture
-rules skip that object's text only while its bytes still hash to the reviewed value; **TLP markers and secret
+rules skip that object's text (never the item being published: its own key is not excusable) only while its bytes still hash to the reviewed value; **TLP markers and secret
 shapes are always enforced**, and a plan reports what was excused (`excused_legacy`).
 
 **A `dry-run` against the real bucket is a cutover pass criterion**: it must finish with the computed feed
@@ -189,6 +188,19 @@ A selection of `publishing` placed on the publisher host; `grants.egress: {publi
 (for `dry-run`/`live`); group variables for the mode, `pages_project`, `r2_bucket`, the account id, the feed
 identity; the five secrets above. Producers write items into `/var/lib/hnx-modules/publishing/publishable/`.
 Start the lab in `stage`; move to `dry-run` to compare the computed feed with the live one, then `live`.
+
+### Shadow pass criteria (the `stage` window)
+
+* every scheduled run ends with exit code 0 or a **blocked** item that is understood (a blocked item is the gate
+  working; an unexplained one is a defect in a producer or a rule);
+* **real episodes pass the gate in `stage`**: MP3 files produced by the real ffmpeg/libmp3lame pipeline (its
+  ID3 tag, encoder string and any cover art), not only hand-built fixtures, must come out `ok` with the real
+  deny-list; a producer whose real files are refused (an ID3 frame type outside the accepted set, say) is fixed
+  or the rule is reviewed, before `live`;
+* the staged items and their `plan.json` match what the old pipeline publishes (the cutover plan's parity
+  criteria), and `staging/` stays bounded (it is pruned by age: `publishing_gate_staging_keep` newest per kind,
+  nothing younger than `publishing_gate_staging_min_age_s`, so a multi-day window keeps its history);
+* then the `dry-run` against the real bucket above.
 
 ## Not done here
 
