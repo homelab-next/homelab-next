@@ -128,7 +128,11 @@ def test_the_current_examples_pass(site, capsys):
         capsys=capsys,
     )
     assert (rc, err) == (0, ""), err
-    assert "bindings: 0 problem(s); 1 role table(s), 1 report(s), 5 pack(s), 0 target(s), " in out
+    n_packs = len(list((ROOT / "workflows/packs").glob("*.yml")))
+    assert (
+        f"bindings: 0 problem(s); 1 role table(s), 1 report(s), {n_packs} pack(s), 0 target(s), "
+        in out
+    )
     assert "3 gateway spec(s)" in out
 
 

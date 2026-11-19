@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+# cti-watch-lake: every 30 minutes (UTC) look up the cti-watch-lake row of table:cti.watch and page when it is stale.
+# LL-542 (and LL-134's dead air): the reporting table gained no rows in 2 h, far fewer than its trailing median in 3 h, or extract failed 3 runs running.
+# The row comes from homelabnext.workflows.cti_watch (the checks and their thresholds, tested
+# there).  Like new-critical-alert this pack is a reference pack: a lookup step does not run on
+# the workflow engine yet and notify.page's handler is the site's, so it is not pinned in deploy.yml
+# or bound in the binding until both exist.  Schedule: `*/30 * * * *`, schedule id cti-watch-lake.
+pack: cti-watch-lake
+version: 1
+description: Notify when the cti lake check is stale.
+trigger:
+  event: homelabnext.schedule.fired
+  where:
+    - {ref: $event.data.schedule, equals: cti-watch-lake}
+actor: profile:workflow-soc
+broker_manifest: workflows/broker.manifest.json
+steps:
+  - id: check
+    kind: enrich
+    op: lookup
+    table: table:cti.watch
+    key: $event.data.schedule
+  - id: notify
+    kind: action
+    action: notify.page
+    target: svc:notify
+    when:
+      - {ref: $steps.check.found, equals: true}
+      - {ref: $steps.check.row.stale, equals: true}
+    params:
+      rota: cti-watch
+      alert_id: cti-watch-lake
+      title: $steps.check.row.summary
+fixtures:
+  - name: stale-notifies
+    event:
+      specversion: "1.0"
+      id: evt-cti-watch-lake-stale-notifies
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:00:00Z"
+      data: {schedule: cti-watch-lake, fired_at: "2026-01-01T12:00:00Z", cron: "*/30 * * * *"}
+    lookups:
+      table:cti.watch:
+        cti-watch-lake: {check: lake, stale: true, summary: "cti lake: no new rows in 2 h", value: 1, threshold: 1}
+    expect:
+      calls:
+        - action: notify.page
+          target: svc:notify
+          params:
+            rota: cti-watch
+            alert_id: cti-watch-lake
+            title: "cti lake: no new rows in 2 h"
+          result: executed
+  - name: fresh-is-quiet
+    event:
+      specversion: "1.0"
+      id: evt-cti-watch-lake-fresh-is-quiet
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:00:00Z"
+      data: {schedule: cti-watch-lake, fired_at: "2026-01-01T12:00:00Z", cron: "*/30 * * * *"}
+    lookups:
+      table:cti.watch:
+        cti-watch-lake: {check: lake, stale: false, summary: "cti lake: 40 rows in 3 h (trailing median 38)", value: 1, threshold: 1}
+    expect:
+      calls: []
+  - name: another-schedule-ignored
+    event:
+      specversion: "1.0"
+      id: evt-cti-watch-lake-other
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:00:00Z"
+      data: {schedule: not-cti-watch-lake, fired_at: "2026-01-01T12:00:00Z"}
+    expect:
+      triggered: false
+      calls: []
