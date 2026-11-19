@@ -9,6 +9,12 @@
 # gateway_image (required): repository:tag@sha256:<digest> of the image built from this repository
 #   (modules/gateway/README.md, "The image"); no default: there is no published image to pin
 gateway_hnx_cli: [hnx]
+# gateway_spec_root: the site's checkout (absolute path, on the controller) that the spec and the role
+#   table it names live in, passed to the generator as --root. Required whenever the spec names a role
+#   table outside its own directory and the play does not run from inside that checkout (a deploy
+#   directory): without it the generator refuses "role table ... outside the root". Empty: the
+#   generator's own default (the checkout around the spec, only when the play runs inside it).
+gateway_spec_root: ""
 # the reference of the admin key: the spec's master_key (the generated config names its variable and
 # main refuses a spec that names another); health lists the served roles with it
 gateway_admin_key_ref: secret:gateway/master-key

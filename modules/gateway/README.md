@@ -170,7 +170,9 @@ The overlay carries every real value ([selection](../../docs/modules/selection.m
    The names are the spec's; the role places each environment variable the config names on the reference
    it finds in the spec's text.
 6. **The role's variables** (the overlay's `group_vars/mod_gateway_server.yml`): `gateway_logical_id`,
-   `gateway_spec` (an absolute path on the controller), `gateway_image` (above), `gateway_cloud_hosts_allowed:
+   `gateway_spec` (an absolute path on the controller), `gateway_spec_root` (the checkout the spec and its
+   role table live in, an absolute path: the render runs from the deploy directory, outside it, and refuses a
+   role table it cannot place inside a root), `gateway_image` (above), `gateway_cloud_hosts_allowed:
    [<the provider's API host>]`, and the lab's `gateway_refused_hosts`.
 7. **Apply**: `docker_engine` on `mod_gateway_server`, then the rendered `modules.yml` twice (the second
    `changed=0`), then `checks/gateway.yml`.

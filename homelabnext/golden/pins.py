@@ -8,9 +8,13 @@ and gold set the replay gate uses (:func:`inputs_of`).  It holds:
 * one golden-suite run per suite, against the suite's role;
 * the K-12 replay of the synthetic gold set through the change-review cascade, with its gate;
 * the egress canary (:mod:`homelabnext.golden.canary`) for **every binding** of every role, each
-  entry recording the pin it ran against, the role's sampling params, its ``kind`` and whether it
-  ran **live** (a real model through the resolver) or against the **fake**
-  (:func:`fake_canary_factory`).
+  entry recording the pin it ran against, the role's sampling params, its ``kind``, the output
+  budget it ran at and whether it ran **live** (a real model through the resolver) or against the
+  **fake** (:func:`fake_canary_factory`).  A chat binding's budget is the role's own
+  ``params.max_tokens`` when it declares one (:func:`canary_budget`): a reasoning model that
+  thinks before it answers would otherwise fill the suite's small default with reasoning and
+  answer nothing, which the canary must count as inconclusive, so the canary would judge a budget
+  the role never runs at.
 
 **Decision roles** (``kind: decision``: a model that answers noul questions on
 ``POST /v1/systemone`` and refuses chat) are evaluated through a *decider*, never a completer: a
@@ -47,6 +51,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -152,6 +157,27 @@ def fake_decision_canary_factory(role: str, binding: Binding) -> tuple[Decider, 
     from .canary import benign_decider
 
     return benign_decider, "fake"
+
+
+def canary_budget(role: Any, suite: Any) -> int:
+    """The output budget (``max_tokens`` per reply) the egress canary gives a chat binding of
+    ``role``: the role's own ``params.max_tokens`` when it declares one, else the suite's
+    ``max_tokens``.  Every call through the role sends its params, so the canary judges the replies
+    the role really gets.  A budget under 16 tokens cannot hold a tool call, and one that does not
+    fit the role's ``max_context_tokens`` cannot be served: both are refused (``ValueError``)."""
+    params = role.params if isinstance(role.params, Mapping) else {}
+    budget = params.get("max_tokens")
+    if budget is None:
+        return int(suite.max_tokens)
+    if isinstance(budget, bool) or not isinstance(budget, int) or budget < 16:
+        raise ValueError(f"params.max_tokens {budget!r}: the canary needs an integer of 16 or more")
+    ceiling = getattr(role, "max_context_tokens", None)
+    if ceiling is not None and budget >= ceiling:
+        raise ValueError(
+            f"params.max_tokens {budget} does not fit max_context_tokens {ceiling}: "
+            "the canary cannot run at it"
+        )
+    return budget
 
 
 def eval_kind(role_kind: str) -> str:
@@ -293,6 +319,8 @@ def run_eval(
     for role, r in sorted(table.roles.items()):
         entries = []
         kind = eval_kind(r.kind)
+        budget = canary_budget(r, canary_suite) if kind == "chat" else None
+        budgeted = replace(canary_suite, max_tokens=budget) if budget else canary_suite
         for b, pin in zip(r.bindings, table.pins()[role], strict=True):
             ident = pin_digest(pin)
             if kind == "decision":
@@ -300,7 +328,7 @@ def run_eval(
                 run_one = partial(run_decision_canary, canary_suite, decider)
             else:
                 completer, mode = canary_factory(role, b)
-                run_one = partial(run_canary, canary_suite, completer)
+                run_one = partial(run_canary, budgeted, completer)
             if mode not in CANARY_MODES:
                 raise ValueError(f"canary factory mode {mode!r}: one of {CANARY_MODES}")
             rep_c = run_one(role=role, model_id=ident)
@@ -313,6 +341,7 @@ def run_eval(
                     "kind": kind,
                     "mode": mode,
                     "report": rep_c,
+                    **({"max_tokens": budget} if budget else {}),
                 }
             )
         canary[role] = {
@@ -464,6 +493,18 @@ def canary_problems(
         for pin, e in zip(pins[role], entries, strict=False):
             where = f"mdl:{role} -> {pin['backend']} {pin['model_id']}"
             out += [f"{where}: {p}" for p in _entry_problems(e, pin, dict(r.params), suite)]
+            if eval_kind(r.kind) == "chat" and isinstance(e, Mapping):
+                try:
+                    want = canary_budget(r, suite)
+                except ValueError as exc:
+                    out.append(f"{where}: {exc}")
+                else:
+                    if e.get("max_tokens", suite.max_tokens) != want:
+                        out.append(
+                            f"{where}: the canary ran at an output budget of "
+                            f"{e.get('max_tokens', suite.max_tokens)} tokens, the role's is {want}; "
+                            "rerun it"
+                        )
             if isinstance(e, Mapping) and e.get("kind", "chat") != eval_kind(r.kind):
                 out.append(
                     f"{where}: the canary ran as a {e.get('kind', 'chat')!r} binding, the role is "

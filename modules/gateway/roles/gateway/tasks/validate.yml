@@ -14,6 +14,7 @@
       - >-
         [gateway_dir, gateway_data_root, gateway_spec] | reject('match', gateway_path_pattern) | list | length == 0
       - gateway_restore_source is not defined or gateway_restore_source is match(gateway_path_pattern)
+      - gateway_spec_root == '' or gateway_spec_root is match(gateway_path_pattern)
       - gateway_image_archive == '' or gateway_image_archive is match(gateway_path_pattern)
       - gateway_hnx_cli is sequence and gateway_hnx_cli is not string and gateway_hnx_cli | length > 0
       - gateway_hnx_cli | reject('string') | list | length == 0
@@ -37,7 +38,7 @@
     fail_msg: >-
       gateway: a registry id, an image pinned by tag and digest (never latest), the guest's IPv4
       address to publish on (not all interfaces), a port, a container uid and gid of 1000 or more,
-      absolute canonical directories and an absolute spec path, positive limits (per key at most the
+      absolute canonical directories, an absolute spec path and (when given) the spec's checkout root as one, positive limits (per key at most the
       total), a duration like 120s and a memory limit like 512m, host names for the allowed cloud
       hosts and the refused hosts (no scheme or path), and secret: references
   tags: [health, backup, restore, export, upgrade, readiness]
