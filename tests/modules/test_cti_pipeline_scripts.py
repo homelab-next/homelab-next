@@ -160,7 +160,6 @@ def _spec(tmp_path: Path, lane: str = "real", **over) -> tuple[Path, dict]:
         "env": {"APP_MODE": "x", "PROBE_OUT": str(tmp_path / "probe.jsonl")},
         "forced_env": {"LAKE_SCHEMA": "intel_shadow" if lane == "shadow" else "intel", "PUBLISH_MODE": "stage"},
         "lake_schema_env": "LAKE_SCHEMA", "publish_mode_env": "PUBLISH_MODE",
-        "credentials": ["FEED_USER"],
         "placeholders": {"python": sys.executable, "lane_root": str(root)},
     }  # fmt: skip
     spec.update(over)
@@ -237,8 +236,7 @@ def test_the_first_failing_step_ends_the_job_and_is_recorded(tmp_path, monkeypat
             "is a shadow schema",
         ),
         ("real", {"forced_env": {"LAKE_SCHEMA": "intel"}}, "never publishes"),
-        ("real", {"env": {"FEED_USER": "x"}}, "share a name"),
-        ("real", {"instance": "other-real"}, "the unit's instance"),
+        ("real", {"instance": "other-real"}, "another instance"),
     ],
 )
 def test_the_lane_guard_and_the_spec_checks_refuse_before_any_step(tmp_path, lane, over, why):
@@ -258,14 +256,29 @@ def test_a_spec_another_user_could_write_is_refused(tmp_path):
         run.load_spec(str(spec), os.getuid() + 1, "fresh-real")
 
 
-def test_a_run_for_the_other_lane_or_a_missing_credential_is_refused(tmp_path, monkeypatch):
+def test_a_run_for_the_other_lane_or_a_credential_named_like_an_env_value_is_refused(
+    tmp_path, monkeypatch, capsys
+):
     spec, _ = _spec(tmp_path, "shadow")
     creds = _creds(tmp_path, lane="real")  # the dispatcher says real; the unit is shadow
     assert _main(spec, "fresh-shadow", creds, monkeypatch) == 2
     (creds / "hnx-dispatch").write_text(json.dumps({"run_id": "run-2", "lane": "shadow"}))
-    (creds / "FEED_USER").unlink()
+    (creds / "APP_MODE").write_text("from-the-store\n")  # loaded, and also the spec's env name
     assert _main(spec, "fresh-shadow", creds, monkeypatch) == 2
     assert not (tmp_path / "probe.jsonl").exists()
+    out = capsys.readouterr().out
+    assert "share a name" in out and "from-the-store" not in out and "alice" not in out
+
+
+def test_the_log_carries_no_value_from_the_spec_or_a_credential(tmp_path, monkeypatch, capsys):
+    spec, _ = _spec(tmp_path)
+    assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 0
+    out = capsys.readouterr().out
+    assert out.splitlines() == [
+        "hnx-cti-run: fresh-real: started",
+        "hnx-cti-run: fresh-real: step 1 started",
+        "hnx-cti-run: fresh-real: step 2 started",
+    ]
 
 
 # ----------------------------------------------------------------------------- the state

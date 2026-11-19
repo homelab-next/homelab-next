@@ -111,8 +111,11 @@ own namespace (`cti-pipeline/<name>` in the secret store). The role
 writes each value to `<config>/credentials/<lane>/<NAME>` (root-only, 0600: the module's one
 on-disk form), and the instance's drop-in loads it with `LoadCredential=NAME:<that file>`. PID 1
 reads it as root and places it in the unit's private credentials directory; `hnx-cti-run` reads it
-from there and exports it **only into the job's step processes** (never a file, an argument or the
-log). A name is either an env value or a credential, never both. A file the site no longer
+from there (every credential the unit loaded: the job spec holds no credential name) and exports
+it **only into the job's step processes** (never a file, an argument or the log). A name is either
+an env value or a credential, never both (the role refuses it, and the wrapper again at start). The
+wrapper's log carries constants, the instance and counters only: nothing read from the spec, the
+environment, the run file or a credential reaches it. A file the site no longer
 declares is removed.
 
 ## Health, readiness

@@ -1,7 +1,7 @@
 {# SPDX-License-Identifier: Apache-2.0 -#}
+{# no credential names here: the instance's drop-in loads them, and hnx-cti-run takes what was loaded #}
 {% set job = cti_pipeline_jobs[item.job] %}
 {% set lane_root = cti_pipeline_data_root ~ '/' ~ item.lane %}
-{% set lane_refs = (cti_pipeline_lane_refs[item.lane] | default({})).keys() | list | sort %}
 {% set placeholders = {'app': cti_pipeline_current ~ '/app',
                        'python': cti_pipeline_current ~ '/venv/bin/python',
                        'lane_root': lane_root,
@@ -23,5 +23,4 @@
                    cti_pipeline_publish_mode_env: cti_pipeline_stage_mode},
     'lake_schema_env': cti_pipeline_lake_schema_env,
     'publish_mode_env': cti_pipeline_publish_mode_env,
-    'credentials': (job.refs | sort) if job.refs is defined else lane_refs,
     'placeholders': placeholders} | to_nice_json }}

@@ -138,14 +138,17 @@ def test_the_lanes_are_kept_apart_and_the_shadow_lane_never_publishes(site):
     rspec = json.loads(render("job-spec.json.j2", ctx, inst["fresh-real"]))
     assert sspec["forced_env"] == {"CTI_LAKE_SCHEMA": "cti_shadow", "PUBLISH_MODE": "stage"}
     assert rspec["forced_env"] == {"CTI_LAKE_SCHEMA": "cti", "PUBLISH_MODE": "stage"}
-    assert sspec["lane_root"] == "/var/lib/hnx-modules/intel/shadow" and sspec["credentials"] == [
-        "FEED_USER"
-    ]
+    assert sspec["lane_root"] == "/var/lib/hnx-modules/intel/shadow" and "credentials" not in sspec
     assert sspec["env"] == {"APP_MODE": "trial"} and "/intel/real" not in json.dumps(sspec)
-    assert rspec["credentials"] == ["FEED_USER", "SOCIAL_HANDLE"]
-    cve = json.loads(render("job-spec.json.j2", ctx, inst["cve-real"]))
-    assert cve["credentials"] == ["SOCIAL_HANDLE"]  # a job's refs narrow its lane's
-    assert "LoadCredential=FEED_USER" not in render("job-lane.conf.j2", ctx, inst["cve-real"])
+    loads = lambda conf: [x for x in conf.splitlines() if x.startswith("LoadCredential=")]  # noqa: E731
+    assert [x.split(":")[0] for x in loads(real)] == [
+        "LoadCredential=FEED_USER",
+        "LoadCredential=SOCIAL_HANDLE",
+    ]
+    cve = loads(render("job-lane.conf.j2", ctx, inst["cve-real"]))
+    assert [x.split(":")[0] for x in cve] == [
+        "LoadCredential=SOCIAL_HANDLE"
+    ]  # a job's refs narrow its lane's
     # what the role renders, the wrapper accepts: its own lane guard passes both specs
     loader = SourceFileLoader("hnx_cti_run_units", str(ROLE / "files" / "hnx-cti-run"))
     run = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))

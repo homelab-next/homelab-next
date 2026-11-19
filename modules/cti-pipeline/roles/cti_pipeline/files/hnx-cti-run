@@ -22,10 +22,15 @@ The unit ``hnx-<set>@<job>-<lane>.service`` runs::
 as the lane's user, in the lane's sandbox.  The spec (written by the role, root's, writable by no
 one else) names the job's steps (argv lists), the lane, the lane's root (the working directory),
 the non-secret environment, the forced environment (the lane's lake schema and the stage-only
-publish mode, applied last so nothing overrides them) and the names of the lane's credentials.
-Each credential is a systemd credential (``LoadCredential=``, read by PID 1 from a root-only
-file): this wrapper reads it from ``$CREDENTIALS_DIRECTORY`` and puts it in the environment of the
-step processes only, never in a file, an argument or the log.
+publish mode, applied last so nothing overrides them).  The instance's drop-in loads the lane's
+credentials it is given as systemd credentials (``LoadCredential=``, read by PID 1 from root-only
+files): this wrapper takes every one in ``$CREDENTIALS_DIRECTORY`` (the dispatcher's run file
+apart) and puts it in the environment of the step processes only, never in a file, an argument
+or the log.
+
+The log carries constants, the instance (the unit's own ``%i``, an argument) and counters only:
+nothing read from the spec, the environment, the run file or a credential reaches it, so a value
+can never be logged by a message that names it.
 
 The dispatcher's run file (``LoadCredential=hnx-dispatch:...``) carries the run id and the lane:
 a lane that differs from the instance's is refused.  A shadow spec whose publish mode is not the
@@ -43,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import json
 import os
 import re
@@ -58,6 +64,7 @@ MAX_CRED = 64 << 10
 LANES = ("real", "shadow")
 ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}\Z")
 JOB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z")
+INSTANCE_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*-(real|shadow)\Z")
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 PLACEHOLDERS = ("app", "python", "lane_root", "config", "lake_ca")
 STAGE_MODE = "stage"
@@ -104,16 +111,14 @@ def load_spec(path: str, owner: int, instance: str) -> dict:
     try:
         spec = json.loads(read_trusted(path, owner, MAX_SPEC))
     except ValueError as e:
-        raise Refused(f"the spec {path} is not JSON: {e}") from e
+        raise Refused("the spec is not JSON") from e
     if not isinstance(spec, dict) or spec.get("version") != 1:
         raise Refused("the spec is not version 1")
     job, lane = spec.get("job"), spec.get("lane")
     if not isinstance(job, str) or not JOB_RE.match(job) or lane not in LANES:
         raise Refused("the spec's job or lane is malformed")
     if instance != f"{job}-{lane}" or spec.get("instance") != instance:
-        raise Refused(
-            f"the spec is for {spec.get('instance')!r}, the unit's instance is {instance!r}"
-        )
+        raise Refused("the spec is for another instance than the unit's")
     for key in ("lane_root", "runs_dir"):
         if not isinstance(spec.get(key), str) or not spec[key].startswith("/"):
             raise Refused(f"the spec's {key} is not an absolute path")
@@ -129,17 +134,8 @@ def load_spec(path: str, owner: int, instance: str) -> dict:
             isinstance(k, str) and isinstance(v, str) for k, v in spec[key].items()
         ):
             raise Refused(f"the spec's {key} is not a mapping of strings")
-    bad = [k for k in [*spec["env"], *spec["forced_env"]] if not ENV_RE.match(k)]
-    if bad:
-        raise Refused(f"the spec names environment variables that are not NAME_LIKE_THIS: {bad}")
-    creds = spec.get("credentials")
-    if not isinstance(creds, list) or not all(
-        isinstance(c, str) and ENV_RE.match(c) for c in creds
-    ):
-        raise Refused("the spec's credentials are not a list of variable names")
-    clash = set(creds) & (set(spec["env"]) | set(spec["forced_env"]))
-    if clash:
-        raise Refused(f"a credential and an environment variable share a name: {sorted(clash)}")
+    if not all(ENV_RE.match(k) for k in [*spec["env"], *spec["forced_env"]]):
+        raise Refused("the spec names an environment variable that is not NAME_LIKE_THIS")
     if set(spec["placeholders"]) - set(PLACEHOLDERS):
         raise Refused("the spec names an unknown placeholder")
     lane_guard(spec)
@@ -153,29 +149,44 @@ def lane_guard(spec: dict) -> None:
     if not isinstance(publish_env, str) or not isinstance(schema_env, str):
         raise Refused("the spec does not name its publish-mode and lake-schema variables")
     if forced.get(publish_env) != STAGE_MODE:
-        raise Refused(f"{publish_env} is not forced to {STAGE_MODE}: this module never publishes")
+        raise Refused("the publish mode is not forced to stage: this module never publishes")
     schema = forced.get(schema_env, "")
     if spec["lane"] == "shadow" and not schema.endswith(SHADOW_SUFFIX):
-        raise Refused(f"the shadow lane's {schema_env} ({schema!r}) is not a shadow schema")
+        raise Refused("the shadow lane's lake schema is not a shadow schema")
     if spec["lane"] == "real" and schema.endswith(SHADOW_SUFFIX):
-        raise Refused(f"the real lane's {schema_env} ({schema!r}) is a shadow schema")
+        raise Refused("the real lane's lake schema is a shadow schema")
 
 
-def read_credential(directory: str, name: str) -> str:
-    path = os.path.join(directory, name)
+def loaded_names(directory: str) -> list[str]:
+    """The names of the credentials the unit loaded (the dispatcher's run file apart)."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        names = sorted(n for n in os.listdir(directory) if n != DISPATCH_CRED)
     except OSError as e:
-        raise Refused(f"credential {name} is not loaded ({e.strerror})") from e
+        raise Refused("the credentials directory cannot be listed") from e
+    if not all(ENV_RE.match(n) for n in names):
+        raise Refused("a loaded credential's name is not NAME_LIKE_THIS")
+    return names
+
+
+def read_loaded(directory: str, name: str) -> str:
+    """One loaded credential's value; refused (by a message that never carries it) unless it is one
+    line of at most 64 KiB."""
+    try:
+        fd = os.open(os.path.join(directory, name), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as e:
+        raise Refused("a loaded credential cannot be read") from e
     with os.fdopen(fd, "rb") as f:
         raw = f.read(MAX_CRED + 1)
     if len(raw) > MAX_CRED:
-        raise Refused(f"credential {name} is too large")
-    value = raw.decode("utf-8", "strict")
+        raise Refused("a loaded credential is too large")
+    try:
+        value = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError as e:
+        raise Refused("a loaded credential is not UTF-8") from e
     if value.endswith("\n"):
         value = value[:-1]
     if not value or "\x00" in value or "\n" in value:
-        raise Refused(f"credential {name} is empty or holds a line break or a NUL")
+        raise Refused("a loaded credential is empty or holds a line break or a NUL")
     return value
 
 
@@ -185,11 +196,11 @@ def dispatch_run(directory: str, lane: str) -> dict:
         with open(path, "rb") as f:
             run = json.loads(f.read(MAX_SPEC))
     except (OSError, ValueError) as e:
-        raise Refused(f"the dispatcher's run file is not loaded or not JSON ({e})") from e
+        raise Refused("the dispatcher's run file is not loaded or not JSON") from e
     if not isinstance(run, dict):
         raise Refused("the dispatcher's run file is not an object")
     if run.get("lane") != lane:
-        raise Refused(f"the run is for lane {run.get('lane')!r}, this unit runs {lane!r}")
+        raise Refused("the run is for the other lane than this unit's")
     if not isinstance(run.get("run_id"), str) or not RUN_ID_RE.match(run["run_id"]):
         raise Refused("the dispatcher's run file has no run id")
     return run
@@ -201,7 +212,9 @@ def fill(value: str, placeholders: dict) -> str:
     return value
 
 
-def environment(spec: dict, run: dict, creds: dict) -> dict:
+def environment(spec: dict, run: dict, directory: str) -> dict:
+    """The step processes' environment: the base, the spec's env, the forced env, then every
+    loaded credential, refused when a credential's name is also an environment name."""
     ph = spec["placeholders"]
     root = spec["lane_root"]
     env = {
@@ -217,7 +230,11 @@ def environment(spec: dict, run: dict, creds: dict) -> dict:
         env["PATH"] = os.path.dirname(ph["python"]) + ":" + BASE_PATH
     env.update({k: fill(v, ph) for k, v in spec["env"].items()})
     env.update(spec["forced_env"])
-    env.update(creds)
+    names = loaded_names(directory)
+    if set(names) & set(env):
+        raise Refused("a loaded credential and an environment variable share a name")
+    for name in names:
+        env[name] = read_loaded(directory, name)
     return env
 
 
@@ -245,6 +262,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--spec-owner", type=int, default=0)
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_term)
+    if not INSTANCE_RE.match(args.instance):
+        say("refused: the instance is not <job>-<lane>")
+        return EXIT_REFUSED
+    instance = args.instance
     try:
         spec = load_spec(args.spec, args.spec_owner, args.instance)
         cred_dir = os.environ.get("CREDENTIALS_DIRECTORY", "")
@@ -253,11 +274,10 @@ def main(argv: list[str]) -> int:
                 "no credentials directory: the unit loads the run file and the credentials"
             )
         run = dispatch_run(cred_dir, spec["lane"])
-        creds = {name: read_credential(cred_dir, name) for name in spec["credentials"]}
-        env = environment(spec, run, creds)
+        env = environment(spec, run, cred_dir)
         os.chdir(spec["lane_root"])
     except Refused as e:
-        say(f"refused: {e}")
+        say(f"{instance}: refused: {e}")
         return EXIT_REFUSED
     except Stopped:
         return EXIT_STOPPED
@@ -265,19 +285,19 @@ def main(argv: list[str]) -> int:
     record = {"job": spec["job"], "lane": spec["lane"], "run_id": run["run_id"],
               "started_at": now(), "finished_at": None, "ok": False, "exit": None, "step": 0}  # fmt: skip
     write_record(spec["runs_dir"], spec["job"], {**record, "state": "running"})
-    say(f"job {spec['job']} lane {spec['lane']}: {len(spec['steps'])} step(s)")
+    say(f"{instance}: started")
     code = EXIT_OK
     child = None
     try:
         for i, step in enumerate(spec["steps"], start=1):
             argv_ = [fill(a, spec["placeholders"]) for a in step]
             record["step"] = i
-            say(f"step {i}: {os.path.basename(argv_[0])} {' '.join(argv_[1:])[:400]}")
+            say(f"{instance}: step {i} started")
             child = subprocess.Popen(argv_, env=env, stdin=subprocess.DEVNULL)
             code = child.wait()
             child = None
             if code != 0:
-                say(f"step {i} failed with exit status {code}; the steps after it did not run")
+                say(f"{instance}: step {i} failed with exit status {int(code)}; the steps after it did not run")
                 break
     except Stopped:
         if child is not None:
@@ -287,9 +307,9 @@ def main(argv: list[str]) -> int:
             except subprocess.TimeoutExpired:
                 child.kill()
         code = EXIT_STOPPED
-        say("stopped")
+        say(f"{instance}: stopped")
     except OSError as e:
-        say(f"step {record['step']} could not start: {e}")
+        say(f"{instance}: step {record['step']} could not start ({errno.errorcode.get(e.errno, 'error')})")
         code = 127
     finally:
         record.update({"finished_at": now(), "ok": code == 0, "exit": code, "state": "finished"})
