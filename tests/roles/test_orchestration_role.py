@@ -678,16 +678,17 @@ def test_module_job_units_get_a_narrow_polkit_rule_a_table_logs_and_the_dispatch
     table = json.loads((etc / "dispatch.json").read_text())
     assert oct((etc / "dispatch.json").stat().st_mode & 0o777) == "0o640"
     assert table["version"] == 2 and table["dispatch_dir"] == str(var / "dispatch")
-    assert table["run_root"] == str(tmp_path / "var" / "hnx-dispatch")
+    # namespaced by service: <run root>/<service>/<set>
+    assert table["run_root"] == str(tmp_path / "var" / "hnx-dispatch" / "orchestrator")
     reader = bin_.parent / "hnx-dispatch-read"
     assert oct(reader.stat().st_mode & 0o777) == "0o755"
     # the run directories: the service user's, the set's group, setgid 2750 (the job reads its own
     # run file as the module's user; no root ever reads it); the controller may write them
     for s_ in ("cti", "voice"):
-        d = tmp_path / "var" / "hnx-dispatch" / s_
+        d = tmp_path / "var" / "hnx-dispatch" / "orchestrator" / s_
         assert oct(d.stat().st_mode & 0o7777) == "0o2750"
     unit_text = (tmp_path / "units" / "hnx-orchestrator.service").read_text()
-    assert f"ReadWritePaths={tmp_path}/var/hnx-dispatch" in unit_text
+    assert f"ReadWritePaths={tmp_path}/var/hnx-dispatch/orchestrator\n" in unit_text
     assert "LoadCredential=hnx-dispatch" not in unit_text
     assert table["systemctl"] == str(systemctl)
     assert table["units"]["cti"] == {
@@ -784,13 +785,16 @@ def test_malformed_job_units_and_a_dispatcher_beside_another_command_are_refused
     good = [{"name": "cti", "jobs": {"cti-hourly": "fresh"}}]
     cases = [
         {"orchestration_job_units": good, "orchestration_runner_dispatch": True},  # the control
-        {"orchestration_job_units": [{"name": "c" * 24, "jobs": {"a": "fresh"}}],
-         "orchestration_runner_dispatch": True},  # the longest set name: accepted
+        {"orchestration_job_units": [{"name": "c" * 15, "jobs": {"a": "fresh"}}],
+         "orchestration_runner_dispatch": True},  # hnx-orchestrator_ + 15 = 32: the longest group
         # no grant without the dispatcher: a runner of arbitrary agent code never holds it
         {"orchestration_job_units": good},
         {"orchestration_job_units": [{"name": "CTI", "jobs": {"a": "fresh"}}]},
         {"orchestration_job_units": [{"name": "cti_x", "jobs": {"a": "fresh"}}]},
         {"orchestration_job_units": [{"name": "c" * 25, "jobs": {"a": "fresh"}}]},
+        {"orchestration_job_units": [{"name": "c" * 16, "jobs": {"a": "fresh"}}]},  # a 33-character group
+        # the set's group hnx-<service>_<set> must fit 32 characters: a long service shortens the set
+        {"orchestration_job_units": good, "orchestration_logical_id": "orchestration-controller-x"},
         {"orchestration_job_units": good, "orchestration_runner_dispatch": True,
          "orchestration_dispatch_run_root": "/var"},
         {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "fresh@x"}}]},

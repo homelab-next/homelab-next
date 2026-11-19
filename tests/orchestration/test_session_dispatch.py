@@ -14,7 +14,9 @@ stand-in systemctl that plays a oneshot job unit whose first step is the real re
 * an unknown agent, a lane or run id that could not be a unit's or a file's name, a task over the
   bound and a table that its reader could rewrite are refused before anything is started;
 * the reader refuses a link, a directory, a FIFO, a hard link, a file of another owner, an oversized
-  or foreign run file and a run id consumed before, and reads nothing of what it refuses.
+  or foreign run file (each content check on its own) and a dispatch id consumed before, reads
+  nothing of what it refuses, and prunes consumed markers past the keep window; a run's retries
+  share its run id and each runs (the replay key is the dispatch id).
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import signal
 import stat
 import subprocess
@@ -224,7 +227,8 @@ def test_a_session_starts_its_unit_which_reads_its_own_run_file_then_the_file_is
     # the run file is gone once the run ended: nothing is left to replay
     assert out["run_file_removed"] is True
     assert list((rig.runs / "cti").iterdir()) == []
-    assert (rig.state / "consumed" / "run-0001").exists()
+    assert [m.name for m in (rig.state / "consumed").iterdir()] == [out["dispatch_id"]]
+    assert re.fullmatch(r"[0-9a-f]{32}", out["dispatch_id"])
     assert r.stderr == ""
 
 
@@ -266,16 +270,37 @@ def test_a_failed_unit_is_exit_1_with_its_status_and_its_failed_state_is_reset(r
     assert rig.run(run_id="run-0002").returncode == 0
 
 
-def test_a_start_with_no_dispatcher_finds_nothing_and_a_replayed_run_id_is_refused(rig):
-    assert rig.run().returncode == 0
+def test_a_run_s_retries_share_its_run_id_and_each_runs(rig):
+    # the controller keeps the run id across a run's attempts and failovers: never a replay
+    first, second = rig.run(), rig.run()
+    assert first.returncode == 0 and second.returncode == 0, second.stderr
+    ids = {json.loads(first.stdout)["dispatch_id"], json.loads(second.stdout)["dispatch_id"]}
+    assert len(ids) == 2
+    assert sorted(m.name for m in (rig.state / "consumed").iterdir()) == sorted(ids)
+
+
+def test_a_start_with_no_dispatcher_finds_nothing_and_a_re_presented_run_file_is_refused(rig):
+    unit = U("hnx-cti", "fresh-real.service")
+    run = rig.runs / "cti" / "fresh-real.json"
+    rig.set("block")
+    p = rig.start(task="t")
+    rig.wait_for(run.exists, "the run file")
+    rig.wait_for(lambda: f"start --wait {unit}" in rig.calls(), "the start")
+    kept = run.read_bytes()  # a copy of the run file, as a replay would present it
+    rig.set("release")
+    p.communicate(timeout=30)
+    assert p.returncode == 0 and not run.exists()
+    (rig.state / "block").unlink()
+    fake = [str(rig.systemctl), "start", "--wait", unit]
+    log = rig.logs / "cti" / "fresh-real.log"
     # a start by hand after the run: the run file is gone, the job refuses
-    fake = [str(rig.systemctl), "start", "--wait", U("hnx-cti", "fresh-real.service")]
     assert subprocess.run(fake, check=False).returncode == 1
-    assert "cannot be opened" in (rig.logs / "cti" / "fresh-real.log").read_text()
-    # the same run id dispatched again (a copied or stale run file): the job refuses it as consumed
-    r = rig.run()
-    assert r.returncode == 1
-    assert "consumed before" in json.loads(r.stderr)["log_tail"]
+    assert "cannot be opened" in log.read_text()
+    # the same run file presented again (same dispatch id): refused as consumed
+    run.write_bytes(kept)
+    run.chmod(0o640)
+    assert subprocess.run(fake, check=False).returncode == 1
+    assert "was consumed before" in log.read_text()
 
 
 def test_a_unit_already_running_is_a_wait_and_is_never_started_twice(rig):
@@ -394,10 +419,21 @@ def test_a_refusal_starts_nothing(rig, case, env, table):
 # ----------------------------------------------------------------------------- the job's reader
 
 
+#: the reader's clock in these tests (injected with --now): 2027-01-15T08:00:00Z
+NOW = 1_800_000_000
+
+
+def stamp(offset_seconds: float = 0) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(NOW + offset_seconds))
+
+
+DISPATCH_ID = "0123456789abcdef" * 2
+
+
 def run_doc(**over) -> dict:
-    doc = {"version": 1, "run_id": "r-1", "lane": "real", "agent_key": "cti-hourly",
-           "job": "fresh", "unit": U("hnx-cti", "fresh-real.service"), "task": "t",
-           "dispatched_at": "2026-11-19T00:00:00Z"}  # fmt: skip
+    doc = {"version": 2, "dispatch_id": DISPATCH_ID, "run_id": "r-1", "lane": "real",
+           "agent_key": "cti-hourly", "job": "fresh", "unit": U("hnx-cti", "fresh-real.service"),
+           "task": "t", "dispatched_at": stamp()}  # fmt: skip
     doc.update(over)
     return doc
 
@@ -407,7 +443,7 @@ def read_run(tmp: Path, owner_uid=None):
     return subprocess.run(
         [sys.executable, "-I", str(READER), "--dir", str(tmp / "cti"), "--instance", "fresh-real",
          "--owner-uid", str(os.getuid() if owner_uid is None else owner_uid),
-         "--consumed-dir", str(tmp / "consumed")],
+         "--consumed-dir", str(tmp / "consumed"), "--now", str(NOW)],
         capture_output=True, text=True, timeout=30, check=False,
     )  # fmt: skip
 
@@ -423,7 +459,8 @@ def test_the_reader_returns_a_good_run_file_once(runs):
     (runs / "cti" / "fresh-real.json").chmod(0o640)
     r = read_run(runs)
     assert r.returncode == 0, r.stderr
-    assert json.loads(r.stdout) == run_doc()
+    assert json.loads(r.stdout)["dispatch_id"] == DISPATCH_ID
+    assert [m.name for m in (runs / "consumed").iterdir()] == [DISPATCH_ID]
     again = read_run(runs)
     assert again.returncode == 1 and "consumed before" in again.stderr and again.stdout == ""
 
@@ -436,7 +473,19 @@ def plant(runs: Path, kind: str) -> None:
     target = runs / "elsewhere.json"
     target.write_text(json.dumps(run_doc(task=SECRET)))
     target.chmod(0o640)
-    if kind == "symlink":
+    content = {
+        "job only": {"job": "publish"},
+        "lane only": {"lane": "shadow"},
+        "unit only": {"unit": U("hnx-tts", "fresh-real.service")},
+        "bad run id": {"run_id": "../x"},
+        "bad dispatch id": {"dispatch_id": "ABC"},
+        "dispatched too long ago": {"dispatched_at": stamp(-40 * 86400)},
+        "dispatched in the future": {"dispatched_at": stamp(2 * 86400)},
+        "version 1": {"version": 1},
+    }
+    if kind in content:
+        path.write_text(json.dumps(run_doc(task=SECRET, **content[kind])))
+    elif kind == "symlink":
         path.symlink_to(target)
     elif kind == "directory":
         path.mkdir()
@@ -455,29 +504,68 @@ def plant(runs: Path, kind: str) -> None:
         path.chmod(0o662)
     elif kind == "oversized":
         path.write_text(json.dumps(run_doc(task="x" * (300 << 10))))
-    elif kind == "another instance":
-        path.write_text(
-            json.dumps(run_doc(job="publish", unit=U("hnx-cti", "publish-real.service")))
-        )
-    elif kind == "another unit":
-        path.write_text(json.dumps(run_doc(unit=U("hnx-tts", "fresh-real.service"))))
-    elif kind == "bad run id":
-        path.write_text(json.dumps(run_doc(run_id="../x")))
     elif kind == "not json":
         path.write_text("{" + SECRET)
+    elif kind == "nested too deep":
+        path.write_text("[" * 200000)
+    # every file the case wrote is otherwise sound (the umask may leave group write on)
+    if kind not in ("writable", "symlink", "directory", "fifo", "socket", "hardlink"):
+        path.chmod(0o640)
 
 
-PLANTED = ["symlink", "directory", "fifo", "hardlink", "socket", "writable", "oversized",
-           "another instance", "another unit", "bad run id", "not json"]  # fmt: skip
+# each case with the reason its own check gives, so every check is load-bearing on its own
+PLANTED = {
+    "symlink": "cannot be opened",
+    "socket": "cannot be opened",
+    "directory": "is not a regular file",
+    "fifo": "is not a regular file",
+    "hardlink": "has 2 links",
+    "writable": "writable by group or others",
+    "oversized": "is larger than",
+    "job only": "names another job",
+    "lane only": "names another lane",
+    "unit only": "names another unit",
+    "bad run id": "has no run id",
+    "bad dispatch id": "has no dispatch id",
+    "dispatched too long ago": "outside the keep window",
+    "dispatched in the future": "outside the keep window",
+    "version 1": "is not version 2",
+    "not json": "is not JSON",
+    "nested too deep": "is not JSON",
+}
 
 
-@pytest.mark.parametrize("kind", PLANTED)
+@pytest.mark.parametrize("kind", sorted(PLANTED))
 def test_the_reader_refuses_what_was_planted_and_reads_nothing_of_it(runs, kind):
     plant(runs, kind)
     r = read_run(runs)
     assert r.returncode == 1, r.stdout + r.stderr
-    assert "refused" in r.stderr and r.stdout == "" and SECRET not in r.stderr
+    assert "refused" in r.stderr and PLANTED[kind] in r.stderr, r.stderr
+    assert r.stdout == "" and SECRET not in r.stderr and "Traceback" not in r.stderr
     assert list((runs / "consumed").iterdir()) == []
+
+
+def test_the_reader_prunes_consumed_markers_past_the_keep_window_and_nothing_else(runs):
+    consumed = runs / "consumed"
+    consumed.mkdir()
+    old, fresh = "a" * 32, "b" * 32
+    for name in (old, fresh, "not-a-dispatch-id"):
+        (consumed / name).write_text("")
+    os.utime(consumed / old, (NOW - 31 * 86400,) * 2)
+    os.utime(consumed / fresh, (NOW - 86400,) * 2)
+    os.utime(consumed / "not-a-dispatch-id", (NOW - 31 * 86400,) * 2)
+    elsewhere = runs / "keep-me"
+    elsewhere.write_text("x")
+    os.utime(elsewhere, (NOW - 31 * 86400,) * 2)
+    (consumed / ("c" * 32)).symlink_to(elsewhere)  # a link named like a marker: never followed
+    (runs / "cti" / "fresh-real.json").write_text(json.dumps(run_doc()))
+    (runs / "cti" / "fresh-real.json").chmod(0o640)
+    r = read_run(runs)
+    assert r.returncode == 0, r.stderr
+    assert sorted(p.name for p in consumed.iterdir()) == sorted(
+        [DISPATCH_ID, fresh, "c" * 32, "not-a-dispatch-id"]
+    )
+    assert elsewhere.exists()
 
 
 def test_the_reader_refuses_a_run_file_of_another_owner(runs):
