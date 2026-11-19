@@ -149,3 +149,80 @@
       host name (never an address); http only with orchestration_allow_plain_http: true, which sends
       the bearer token in clear on the LAN
   tags: [readiness, health, backup, restore, export, upgrade]
+
+# Module job units: each set's units are hnx-<name>@<job>-<lane>.service, granted to the service
+# user by a polkit rule, so every part of the name is a plain slug the rule matches exactly.
+- name: Validate the module job units
+  ansible.builtin.assert:
+    that:
+      - orchestration_job_units is sequence and orchestration_job_units is not string
+      - orchestration_job_units | reject('mapping') | list | length == 0
+      - >-
+        orchestration_job_units | map('dict2items') | flatten | map(attribute='key')
+        | reject('in', ['name', 'jobs', 'lanes']) | list | length == 0
+      - orchestration_job_units | map(attribute='name', default='') | map('string') | reject('match', orchestration_job_set_pattern) | list | length == 0
+      - orchestration_job_units | map(attribute='name') | unique | list | length == orchestration_job_units | length
+      - orchestration_job_units | map(attribute='jobs', default='') | reject('mapping') | list | length == 0
+      - orchestration_job_units | map(attribute='jobs') | map('length') | select('lt', 1) | list | length == 0
+      - >-
+        orchestration_job_units | map(attribute='jobs') | map('dict2items') | flatten | map(attribute='key')
+        | map('string') | reject('match', orchestration_agent_key_pattern) | list | length == 0
+      - >-
+        orchestration_job_units | map(attribute='jobs') | map('dict2items') | flatten | map(attribute='value')
+        | map('string') | reject('match', orchestration_job_name_pattern) | list | length == 0
+      # an agent's session runs one job: an agent key is declared by one set only
+      - >-
+        (orchestration_job_units | map(attribute='jobs') | map('dict2items') | flatten | map(attribute='key') | unique | list | length)
+        == (orchestration_job_units | map(attribute='jobs') | map('dict2items') | flatten | list | length)
+      - >-
+        orchestration_job_units | selectattr('lanes', 'defined') | map(attribute='lanes')
+        | reject('sequence') | list | length == 0
+      - >-
+        orchestration_job_units | selectattr('lanes', 'defined') | map(attribute='lanes') | map('length')
+        | select('lt', 1) | list | length == 0
+      - >-
+        orchestration_job_units | selectattr('lanes', 'defined') | map(attribute='lanes') | flatten
+        | reject('in', orchestration_job_unit_lanes) | list | length == 0
+      - >-
+        [orchestration_job_logs_dir, orchestration_polkit_rules_dir, orchestration_dispatch_run_root]
+        | reject('match', orchestration_path_pattern) | list | length == 0
+      - orchestration_dispatch_run_root not in [orchestration_data_root, orchestration_config_dir, orchestration_job_logs_dir]
+      - orchestration_job_run_group == '' or orchestration_job_run_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      # each set's group hnx-<service>_<set> fits the system's 32 characters
+      - >-
+        orchestration_job_units | map(attribute='name', default='') | map('string')
+        | map('regex_replace', '^', orchestration_job_group_prefix) | map('length') | select('gt', 32) | list | length == 0
+      # the polkit grant exists only for the dispatcher: without it the runner's sessions are
+      # arbitrary agent code, which must never hold the grant or write the run directories
+      - orchestration_job_units | length == 0 or orchestration_runner_dispatch | bool
+      - orchestration_job_logs_dir != orchestration_data_root and orchestration_job_logs_dir != orchestration_config_dir
+      - orchestration_dispatch_systemctl is match(orchestration_path_pattern)
+      - orchestration_dispatch_table_owner_uid | int >= 0
+      - orchestration_dispatch_tail_bytes | int >= 256 and orchestration_dispatch_tail_bytes | int <= 262144
+    fail_msg: >-
+      orchestration: orchestration_job_units is a list of {name, jobs, lanes}: a distinct name
+      (a slug of up to 24 characters, the unit set hnx-<name>@ and its group hnx-job-<name>), jobs mapping one or more agent keys
+      (a profile's agent_key) to a job (a slug of up to 48 characters), each agent key declared by one
+      set only, and lanes a non-empty subset of real and shadow; job units need
+      orchestration_runner_dispatch: true; the log, run and polkit directories are
+      canonical absolute paths of three components or more, each set's group hnx-<service>_<set> is at
+      most 32 characters, and the dispatcher's tail is 256 to 262144 bytes
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Refuse a dispatcher that would share the runner's command with another
+  ansible.builtin.assert:
+    that:
+      - orchestration_job_units | length > 0
+      # the dispatcher is the whole command: a second command or extra arguments are ambiguous
+      - orchestration_runner_argv == orchestration_smoke_argv
+      - orchestration_runner_usage_args | length == 0
+      - orchestration_runner_toolsets_args | length == 0
+      # the health check's agent has no job unit: its round trip cannot run through the dispatcher
+      - orchestration_health_job != 'yes'
+    fail_msg: >-
+      orchestration: orchestration_runner_dispatch makes the dispatcher the runner's whole command:
+      declare the job units (orchestration_job_units), leave orchestration_runner_argv,
+      _usage_args and _toolsets_args at their defaults, and do not force the health job
+      (orchestration_health_job: yes), whose agent has no job unit
+  when: orchestration_runner_dispatch | bool
+  tags: [readiness, health, backup, restore, export, upgrade]

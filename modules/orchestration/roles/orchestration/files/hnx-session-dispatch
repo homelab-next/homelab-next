@@ -1,0 +1,417 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: orchestration-session-dispatch
+#   kind: job
+#   purpose: Run one controller session as a module-declared job unit (start it, wait, return its result and log tail; stop it on cancel).
+#   owner: platform
+#   trigger: [role:orchestration]
+#   inputs: the dispatch table (root's), the session's HNX_AGENT_KEY, HNX_LANE and HNX_RUN_ID, the task on stdin
+#   outputs: one JSON answer on stdout (success) or stderr (failure, refusal, cancel); the run file the job reads itself, removed when the run ends
+#   installs_to: /opt/hnx/orchestration/bin/hnx-session-dispatch
+#   exit:
+#     "0": the unit ran and ended successfully
+#     "1": "the unit failed, or was never started (systemctl refused or timed out)"
+#     "2": usage or configuration error (an untrusted or malformed table, an agent key with no job, a lane, run id or task refused)
+#     "75": "the unit is already active (started outside this dispatcher), a wait the controller retries"
+#     "143": "cancelled (SIGTERM, SIGINT or SIGHUP), the unit was stopped"
+"""The orchestration controller's exec runner for module-owned job units (modules/orchestration
+README, "Module job units").
+
+The controller's ``runner.exec.argv`` is one command for every agent. This dispatcher is that
+command: it maps the session's agent key (``HNX_AGENT_KEY``) to the job a module declared for it
+in the dispatch table (``orchestration_job_units``, rendered by the role, root's), and runs the
+module's own unit for it:
+
+    hnx-<set>@<job>-<lane>.service       (the lane, real or shadow, is the instance's last part)
+
+with ``systemctl start --wait``, under a polkit rule the role renders that lets the controller's
+user start, stop, ref and reset-failed exactly those units and nothing else. The unit runs under
+PID 1 in its own cgroup, as its own user, with its own sandbox and credentials.
+
+Before the start it writes the run file ``<run root>/<service>/<set>/<job>-<lane>.json`` (a fresh
+random dispatch id, the run id, the lane, the agent key, the job, the task text; the controller's,
+group ``hnx-<service>_<set>``, 0640, in
+a setgid directory 2750 of the controller's). The job's own process, as the module's user (a
+member of that group through ``SupplementaryGroups=``), opens and checks it itself
+(``hnx-dispatch-read``): no root reads it, so nothing the controller's user plants there is ever
+read with root's rights. When the unit has ended (or the run is cancelled) the run file is
+removed, so a later start without a dispatcher has nothing to replay; the reader also refuses a
+dispatch id it has consumed before (never the run id, which a run's retries share).
+
+After the unit ends it reads the unit's result (``systemctl show``, no polkit) and the tail of what
+this run appended to the unit's log file (``StandardOutput=append:<log dir>/<set>/%i.log``,
+pre-created by the role in a root directory, group-readable by the controller's group). On
+SIGTERM (the controller's cancel) it queues the unit's stop (``stop --no-block``, so the runner's
+kill grace cannot cut it off), waits a bounded time for it, resets a failed state and exits 143.
+Every outcome, a systemctl that times out included, is one JSON answer.
+
+One run of an instance at a time: the dispatcher holds an exclusive lock on the instance while it
+waits for the unit, so a second session for the same job and lane waits its turn, and a unit
+found active (started by hand) is a refusal with exit 75, never a second start that would merge
+into someone else's run.
+
+Usage: hnx-session-dispatch --table FILE [--table-owner UID] [--tail-bytes N] [--systemctl-timeout S]
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import fcntl
+import json
+import os
+import re
+import secrets
+import signal
+import stat
+import subprocess
+import sys
+import time
+
+EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_BUSY, EXIT_CANCELLED = 0, 1, 2, 75, 143
+MAX_TABLE_BYTES = 1 << 20
+MAX_TASK_BYTES = 64 << 10
+MAX_SYSTEMCTL_ERR = 2 << 10
+LANES = ("real", "shadow")
+BUSY_STATES = {"active", "activating", "deactivating", "reloading", "refreshing"}
+SET_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z")
+JOB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z")
+AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+SYSTEMCTL_TIMEOUT = 30
+STOP_WAIT_SECONDS = 4.0
+SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+
+
+class Refused(Exception):
+    """A usage or configuration error: exit 2, nothing started."""
+
+
+class Cancelled(BaseException):
+    """The controller's cancel (a signal) arrived."""
+
+
+def _on_signal(signum, _frame):
+    # the first signal is the cancel; every later one is ignored from here on, so the cleanup it
+    # starts (the stop, the answer) is never interrupted by a second signal
+    for s in SIGNALS:
+        signal.signal(s, signal.SIG_IGN)
+    raise Cancelled(signum)
+
+
+def answer(stream, body: dict) -> None:
+    stream.write(json.dumps(body, sort_keys=True) + "\n")
+    stream.flush()
+
+
+def load_table(path: str, owner: int) -> dict:
+    """The dispatch table, opened without following a link, owned by ``owner`` and writable by no
+    one else (the controller's own user cannot rewrite where its sessions go)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as e:
+        raise Refused(
+            f"the dispatch table {path} cannot be opened ({e.strerror}, or a link)"
+        ) from e
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise Refused(f"the dispatch table {path} is not a regular file")
+        if st.st_uid != owner or st.st_mode & 0o022:
+            raise Refused(
+                f"the dispatch table {path} must belong to uid {owner} and be writable by no one else"
+            )
+        raw = f.read(MAX_TABLE_BYTES + 1)
+    if len(raw) > MAX_TABLE_BYTES:
+        raise Refused("the dispatch table is too large")
+    try:
+        table = json.loads(raw)
+    except ValueError as e:
+        raise Refused(f"the dispatch table is not JSON: {e}") from e
+    if not isinstance(table, dict) or table.get("version") != 2:
+        raise Refused("the dispatch table is not version 2")
+    for key in ("dispatch_dir", "run_root", "systemctl"):
+        if not isinstance(table.get(key), str) or not table[key].startswith("/"):
+            raise Refused(f"the dispatch table's {key} is not an absolute path")
+    if not isinstance(table.get("units"), dict):
+        raise Refused("the dispatch table has no units")
+    return table
+
+
+def resolve(table: dict, agent_key: str, lane: str, run_id: str) -> tuple[str, str, dict]:
+    """(set name, job, the set's entry) for the session, or Refused."""
+    if not AGENT_RE.match(agent_key or ""):
+        raise Refused(f"HNX_AGENT_KEY {agent_key!r} is not an agent key")
+    if lane not in LANES:
+        raise Refused(f"HNX_LANE {lane!r} is not real or shadow")
+    if not RUN_ID_RE.match(run_id or ""):
+        raise Refused(f"HNX_RUN_ID {run_id!r} is not a run id")
+    found = []
+    for name, entry in table["units"].items():
+        jobs = entry.get("jobs") if isinstance(entry, dict) else None
+        if not SET_RE.match(name) or not isinstance(jobs, dict):
+            raise Refused(f"the dispatch table's unit set {name!r} is malformed")
+        if agent_key in jobs:
+            found.append((name, jobs[agent_key], entry))
+    if not found:
+        raise Refused(f"no module job unit is declared for agent {agent_key}")
+    if len(found) > 1:
+        raise Refused(f"agent {agent_key} is declared by more than one unit set")
+    name, job, entry = found[0]
+    if not isinstance(job, str) or not JOB_RE.match(job):
+        raise Refused(f"the job {job!r} of agent {agent_key} is malformed")
+    if lane not in entry.get("lanes", []):
+        raise Refused(f"unit set {name} does not run the {lane} lane")
+    if not isinstance(entry.get("log_dir"), str) or not entry["log_dir"].startswith("/"):
+        raise Refused(f"unit set {name} has no absolute log_dir")
+    return name, job, entry
+
+
+class Done:
+    """A systemctl call's outcome; a timeout is returncode 124 with the reason in stderr."""
+
+    def __init__(self, returncode: int, stdout: str = "", stderr: str = ""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def systemctl(table: dict, *args: str, timeout: float | None = -1.0) -> Done:
+    if timeout is not None and timeout < 0:
+        timeout = SYSTEMCTL_TIMEOUT
+    try:
+        r = subprocess.run(
+            [table["systemctl"], "--no-ask-password", *args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return Done(124, "", f"systemctl {args[0]} timed out after {timeout} s")
+    except OSError as e:
+        return Done(127, "", f"systemctl cannot be run ({e.strerror})")
+    return Done(r.returncode, r.stdout, r.stderr)
+
+
+def unit_state(table: dict, unit: str) -> dict:
+    r = systemctl(table, "show", "--property=ActiveState,Result,ExecMainStatus,ExecMainCode", unit)
+    out = {}
+    for line in r.stdout.splitlines():
+        k, sep, v = line.partition("=")
+        if sep:
+            out[k] = v
+    return out
+
+
+def write_run_file(directory: str, instance: str, body: dict) -> str:
+    """The run file, written beside its final name and renamed into place, 0640: the directory is
+    setgid, so the file takes the set's group, which the module's user reads it through."""
+    final = os.path.join(directory, instance + ".json")
+    tmp = os.path.join(directory, "." + instance + ".json.tmp")
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(body, f, sort_keys=True)
+        f.write("\n")
+        f.flush()
+        os.fchmod(f.fileno(), 0o640)
+    os.replace(tmp, final)
+    return final
+
+
+def remove_run_file(path: str) -> bool:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def log_size(path: str) -> int:
+    try:
+        return os.stat(path).st_size
+    except OSError:
+        return 0
+
+
+def log_tail(path: str, offset: int, tail_bytes: int) -> tuple[str, str | None]:
+    """What this run appended to the unit's log (from ``offset``), its last ``tail_bytes`` bytes;
+    and a note when the file cannot be read."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as e:
+        return "", f"the unit's log {path} cannot be read ({e.strerror})"
+    with os.fdopen(fd, "rb") as f:
+        size = os.fstat(f.fileno()).st_size
+        if size < offset:  # rotated or truncated meanwhile: all of it is this run's
+            offset = 0
+        f.seek(max(offset, size - tail_bytes))
+        data = f.read(tail_bytes)
+    return data.decode("utf-8", "replace"), None
+
+
+def stop_unit(table: dict, unit: str, body: dict) -> None:
+    """The cancel: the stop is queued in PID 1 at once (--no-block), then waited for a bounded
+    time; a failed state left behind is reset."""
+    stop = systemctl(table, "stop", "--no-block", unit)
+    body["stop_status"] = stop.returncode
+    if stop.returncode:
+        body["systemctl_error"] = stop.stderr[-MAX_SYSTEMCTL_ERR:]
+    end = time.monotonic() + STOP_WAIT_SECONDS
+    state = ""
+    while time.monotonic() < end:
+        state = systemctl(table, "is-active", unit, timeout=STOP_WAIT_SECONDS).stdout.strip()
+        if state not in BUSY_STATES:
+            break
+        time.sleep(0.1)
+    body["active_state"] = state
+    if state == "failed":
+        body["reset_failed"] = systemctl(table, "reset-failed", unit).returncode == 0
+
+
+def main(argv: list[str]) -> int:
+    global SYSTEMCTL_TIMEOUT
+    # the cancel is honoured from the first instruction on: before anything is read or started
+    for s in SIGNALS:
+        signal.signal(s, _on_signal)
+    ap = argparse.ArgumentParser(prog="hnx-session-dispatch")
+    ap.add_argument("--table", required=True)
+    ap.add_argument("--table-owner", type=int, default=0)
+    ap.add_argument("--tail-bytes", type=int, default=16384)
+    ap.add_argument("--systemctl-timeout", type=float, default=SYSTEMCTL_TIMEOUT)
+    args = ap.parse_args(argv)
+    SYSTEMCTL_TIMEOUT = args.systemctl_timeout
+
+    env = os.environ
+    base = {
+        "agent_key": env.get("HNX_AGENT_KEY", ""),
+        "lane": env.get("HNX_LANE", ""),
+        "run_id": env.get("HNX_RUN_ID", ""),
+    }
+    try:
+        raw = sys.stdin.buffer.read(MAX_TASK_BYTES + 1)
+        if len(raw) > MAX_TASK_BYTES:
+            raise Refused(f"the task is larger than {MAX_TASK_BYTES} bytes (never cut short)")
+        task = raw.decode("utf-8", "replace")
+        table = load_table(args.table, args.table_owner)
+        name, job, entry = resolve(table, base["agent_key"], base["lane"], base["run_id"])
+    except Refused as e:
+        answer(sys.stderr, {**base, "outcome": "refused", "error": str(e)})
+        return EXIT_USAGE
+    except Cancelled:
+        answer(sys.stderr, {**base, "outcome": "cancelled", "started": False})
+        return EXIT_CANCELLED
+
+    instance = f"{job}-{base['lane']}"
+    unit = f"hnx-{name}@{instance}.service"
+    lockdir = os.path.join(table["dispatch_dir"], name)
+    rundir = os.path.join(table["run_root"], name)
+    run_path = os.path.join(rundir, instance + ".json")
+    log_path = os.path.join(entry["log_dir"], instance + ".log")
+    dispatch_id = secrets.token_hex(16)
+    body = {**base, "unit": unit, "job": job, "dispatch_id": dispatch_id}
+    started = written = False
+    offset = 0
+    try:
+        try:
+            lock_fd = os.open(
+                os.path.join(lockdir, instance + ".lock"),
+                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+            )
+        except OSError as e:
+            answer(
+                sys.stderr,
+                {
+                    **body,
+                    "outcome": "refused",
+                    "error": f"the dispatch directory {lockdir} is not usable ({e.strerror})",
+                },
+            )
+            return EXIT_USAGE
+        # one run of an instance at a time: a second session for the same job and lane waits here
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        probe = systemctl(table, "is-active", unit)
+        state = probe.stdout.strip()
+        if probe.returncode == 124 or state in BUSY_STATES:
+            answer(
+                sys.stderr,
+                {
+                    **body,
+                    "outcome": "busy",
+                    "active_state": state,
+                    "error": probe.stderr
+                    or f"{unit} is already {state} (started outside the dispatcher)",
+                },
+            )
+            return EXIT_BUSY
+        try:
+            write_run_file(
+                rundir,
+                instance,
+                {
+                    "version": 2,
+                    # the replay key the job consumes: fresh per dispatch, unlike the run id,
+                    # which a run's retries and failovers share
+                    "dispatch_id": dispatch_id,
+                    **base,
+                    "job": job,
+                    "unit": unit,
+                    "task": task,
+                    "dispatched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+        except OSError as e:
+            answer(
+                sys.stderr,
+                {
+                    **body,
+                    "outcome": "refused",
+                    "error": f"the run directory {rundir} is not usable ({e.strerror})",
+                },
+            )
+            return EXIT_USAGE
+        written = True
+        offset = log_size(log_path)
+        started = True
+        r = systemctl(table, "start", "--wait", unit, timeout=None)
+        st = unit_state(table, unit)
+        tail, note = log_tail(log_path, offset, args.tail_bytes)
+        body.update(
+            {
+                "result": st.get("Result", ""),
+                "exec_main_status": st.get("ExecMainStatus", ""),
+                "start_status": r.returncode,
+                "log_tail": tail,
+            }
+        )
+        if note:
+            body["log_note"] = note
+        if r.returncode == 0:
+            body["run_file_removed"] = remove_run_file(run_path)
+            answer(sys.stdout, {**body, "outcome": "done"})
+            return EXIT_OK
+        body["systemctl_error"] = r.stderr[-MAX_SYSTEMCTL_ERR:]
+        if st.get("ActiveState") == "failed":
+            body["reset_failed"] = systemctl(table, "reset-failed", unit).returncode == 0
+        body["run_file_removed"] = remove_run_file(run_path)
+        answer(sys.stderr, {**body, "outcome": "failed"})
+        return EXIT_FAILED
+    except Cancelled:
+        body.update({"outcome": "cancelled", "started": started})
+        if started:
+            stop_unit(table, unit, body)
+            tail, _ = log_tail(log_path, offset, args.tail_bytes)
+            body["log_tail"] = tail
+        if written:
+            body["run_file_removed"] = remove_run_file(run_path)
+        answer(sys.stderr, body)
+        return EXIT_CANCELLED
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

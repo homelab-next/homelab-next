@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, logging_fake, run_role
+from rolerun import fake, logging_fake, run_cases, run_role
 
 from conformance.fakes.openai_server import LOOPBACK
 from tests.modules.single_model_server import SingleModelServer
@@ -174,6 +174,14 @@ def test_main_renders_the_container_the_unit_and_converges(tmp_path):
     )  # inside the container; published on the guest only
     assert svc["environment"]["XDG_CACHE_HOME"] == "/cache"
     assert not any(k for k in svc["environment"] if "KEY" in k or "TOKEN" in k)
+    # the whole command line of a placement that sets nothing new: the long-context settings add
+    # no flag unless one is set, so an existing placement renders byte-for-byte what it did
+    assert cmd == [
+        "-m", f"/models/{MODEL_FILE}", "-a", DEFAULTS[f"{MID}_served_model_name"],
+        "--host", "0.0.0.0", "--port", "8080", "-c", str(CTX * SLOTS), "-np", str(SLOTS),
+        "--no-kv-unified", "-ngl", "99", "-fa", "auto",
+        "--metrics", "--no-webui", "--no-slots", "--offline",
+    ]  # fmt: skip
     # the unit: the check first, with the pinned digest and the power rule, then the foreground up
     unit = next((tmp_path / "units").glob("*.service")).read_text()
     pre = next(line for line in unit.splitlines() if line.startswith("ExecStartPre="))
@@ -322,6 +330,84 @@ def test_main_passes_the_allow_listed_throughput_settings_by_name(tmp_path):
     assert cmd[cmd.index("-c") + 1] == str(CTX * 16) and "--no-kv-unified" in cmd
     assert cmd[cmd.index("-b") + 1] == "512" and "-ub" not in cmd and "-sm" not in cmd
     assert "-t" not in cmd and "-tb" not in cmd  # llama-server's own count unless one is set
+
+
+# the long-context settings: a quantized KV cache and YaRN, one 512k cache shared by 4 slots
+LONG = {"kv_unified": True, "cache_type_k": "q8_0", "cache_type_v": "q8_0",
+        "rope_scaling": "yarn", "rope_scale": 2, "yarn_orig_ctx": 262144}  # fmt: skip
+
+
+def test_main_passes_the_long_context_settings_by_name(tmp_path):
+    v = role_vars(tmp_path, context_size=524288, parallel=4, flash_attn="on", extra_args=LONG)
+    r = run_role(tmp_path, ROLE, "main", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    cmd = compose(tmp_path)["command"]
+    # the pool: -c is the one cache every slot may fill, not 512k x 4
+    assert cmd[cmd.index("-c") + 1] == "524288" and "--kv-unified" in cmd
+    assert cmd[cmd.index("-fa") + 1] == "on"
+    assert cmd[cmd.index("--cache-type-k") + 1] == "q8_0"
+    assert cmd[cmd.index("--cache-type-v") + 1] == "q8_0"
+    assert cmd[cmd.index("--rope-scaling") + 1] == "yarn"
+    assert cmd[cmd.index("--rope-scale") + 1] == "2"
+    assert cmd[cmd.index("--yarn-orig-ctx") + 1] == "262144"
+    for flag in ("--cache-type-k", "--cache-type-v", "--rope-scaling", "--rope-scale"):
+        assert cmd.count(flag) == 1, flag
+
+
+def _long(ctx=CTX, parallel=SLOTS, fa="auto", mode="generate", **extra) -> dict:
+    return {
+        f"{MID}_context_size": ctx,
+        f"{MID}_parallel": parallel,
+        f"{MID}_flash_attn": fa,
+        f"{MID}_mode": mode,
+        f"{MID}_extra_args": extra,
+    }
+
+
+_YARN = {"rope_scaling": "yarn", "rope_scale": 2, "yarn_orig_ctx": 262144}
+# (case, the settings, accepted)
+LONG_CASES = [
+    ("an unquantized cache, flash attention auto", _long(cache_type_k="f16", cache_type_v="f16"), True),
+    ("quantized K and V with flash attention on", _long(fa="on", cache_type_k="q4_0", cache_type_v="q8_0"), True),
+    ("YaRN x2 over 256k: a 512k pool", _long(524288, 4, kv_unified=True, **_YARN), True),
+    ("YaRN: a per-slot context within the extension", _long(524288, 2, **_YARN), True),
+    ("YaRN x1.5 as a float", _long(393216, 1, **{**_YARN, "rope_scale": 1.5}), True),
+    ("a cache type the role does not allow", _long(cache_type_k="q5_1"), False),
+    ("a cache type in capitals", _long(fa="on", cache_type_v="Q8_0"), False),
+    ("a cache type that is not a string", _long(cache_type_k=8), False),
+    ("a quantized V cache with flash attention auto", _long(cache_type_v="q8_0"), False),
+    ("a quantized K cache with flash attention off", _long(fa="off", cache_type_k="q4_0"), False),
+    ("a rope scaling the role does not allow", _long(**{**_YARN, "rope_scaling": "linear"}), False),
+    ("YaRN without the original context", _long(rope_scaling="yarn", rope_scale=2), False),
+    ("YaRN without a scale", _long(rope_scaling="yarn", yarn_orig_ctx=262144), False),
+    ("a rope scale without YaRN", _long(rope_scale=2), False),
+    ("an original context without YaRN", _long(yarn_orig_ctx=262144), False),
+    ("a rope scale that extends nothing", _long(**{**_YARN, "rope_scale": 1}), False),
+    ("a rope scale above 8", _long(**{**_YARN, "rope_scale": 9}), False),
+    ("a rope scale that is a boolean", _long(**{**_YARN, "rope_scale": True}), False),
+    ("a rope scale as a string", _long(**{**_YARN, "rope_scale": "2"}), False),
+    ("a rope scale that is not a number", _long(**{**_YARN, "rope_scale": float("nan")}), False),
+    ("an original context as a string", _long(**{**_YARN, "yarn_orig_ctx": "262144"}), False),
+    ("an original context that is a boolean", _long(**{**_YARN, "yarn_orig_ctx": True}), False),
+    ("an original context below 256", _long(**{**_YARN, "yarn_orig_ctx": 128}), False),
+    ("an original context above 1M", _long(**{**_YARN, "yarn_orig_ctx": 2097152}), False),
+    ("a pool past what YaRN extends to", _long(1048576, 2, kv_unified=True, **_YARN), False),
+    ("a per-slot context past what YaRN extends to", _long(524288, 2, **{**_YARN, "rope_scale": 1.5}), False),
+    ("a cache type in decision mode", _long(mode="decision", cache_type_k="f16"), False),
+    ("YaRN in decision mode", _long(mode="decision", **_YARN), False),
+]  # fmt: skip
+
+
+def test_validate_takes_the_long_context_settings_and_refuses_bad_ones(tmp_path):
+    """Every case in one ansible-playbook process (tests/roles runs near its time budget)."""
+    results = run_cases(tmp_path, ROLE, "validate", role_vars(tmp_path),
+                        [over for _, over, _ in LONG_CASES], parallel=True)  # fmt: skip
+    wrong = [
+        (name, msg)
+        for (name, _, ok), (failed, msg) in zip(LONG_CASES, results, strict=True)
+        if failed == ok
+    ]
+    assert not wrong, wrong
 
 
 def test_main_reads_the_groups_from_the_store_and_the_render_node(tmp_path):

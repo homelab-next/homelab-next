@@ -15,6 +15,9 @@
 - name: Render the configuration, the token digests, the profiles and the homes
   ansible.builtin.include_tasks: config.yml
 
+- name: Install the dispatcher and the module job units' table, directories, logs and polkit rules
+  ansible.builtin.include_tasks: dispatch.yml
+
 - name: Have the controller check what was rendered
   ansible.builtin.include_tasks: check.yml
 

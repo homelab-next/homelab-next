@@ -41,15 +41,16 @@ orphan_grace_seconds: {{ orchestration_orphan_grace_seconds | int }}
 runner:
   kind: exec
   exec:
-    argv: {{ orchestration_runner_argv | to_json }}
+    argv: {{ orchestration_runner_argv_effective | map('string') | list | to_json }}
 {% if orchestration_runner_usage_args | length > 0 %}
     usage_args: {{ orchestration_runner_usage_args | to_json }}
 {% endif %}
 {% if orchestration_runner_toolsets_args | length > 0 %}
     toolsets_args: {{ orchestration_runner_toolsets_args | to_json }}
 {% endif %}
-{% if orchestration_runner_exit_classes | length > 0 %}
-    exit_classes: {{ orchestration_runner_exit_classes | to_json }}
+{% if orchestration_runner_exit_classes_effective | length > 0 %}
+{# integer keys: the controller reads exit_classes as a map of exit status to class name #}
+    exit_classes: {{ '{' }}{% set ec = orchestration_runner_exit_classes_effective %}{% for k in ec | list | map('int') | unique | sort %}{{ k }}: {{ (ec[k | string] if (k | string) in ec else ec[k]) | to_json }}{{ ', ' if not loop.last else '' }}{% endfor %}{{ '}' }}
 {% endif %}
 {% if orchestration_runner_max_response_bytes | int > 0 %}
     max_response_bytes: {{ orchestration_runner_max_response_bytes | int }}
