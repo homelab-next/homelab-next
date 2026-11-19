@@ -290,6 +290,9 @@ def _repo_lines(ctx: _Ctx, ep: Endpoint) -> list[str]:
     return [ln.strip() for ln in out.splitlines() if ln.strip()]
 
 
+_TOP_LEVEL = "forge-migrate:top-level"  # never a section of the product's
+
+
 def _key_values(ctx: _Ctx, ep: Endpoint, helper) -> tuple[dict, str]:
     """The endpoint's three application secrets, read from its configuration file in memory (never
     printed, never written), and where its ``SECRET_KEY`` comes from: ``configured``, or
@@ -298,10 +301,14 @@ def _key_values(ctx: _Ctx, ep: Endpoint, helper) -> tuple[dict, str]:
     Any other secret the file does not hold in plain text (a ``*_URI`` file reference, say) is an
     error, not a skipped check."""
     text = _in(ctx, ep, ["cat", ep.config]).decode("utf-8", "replace")
+    text = text.removeprefix("\ufeff")  # a byte-order mark would hide the first section header
     ini = configparser.ConfigParser(interpolation=None, strict=False, allow_no_value=True)
     ini.optionxform = str  # type: ignore[assignment]  # the product's keys are case-sensitive
     try:
-        ini.read_string(text)
+        # the product's app.ini opens with section-less keys (APP_NAME, RUN_MODE, WORK_PATH: go-ini's
+        # default section), which configparser refuses without a header: read them into a section of
+        # their own (not configparser's DEFAULT, whose keys would answer for every section)
+        ini.read_string(f"[{_TOP_LEVEL}]\n" + text)
     except configparser.Error as exc:
         raise MigrateError(
             f"{ep.config}: not readable as a configuration ({type(exc).__name__})"
