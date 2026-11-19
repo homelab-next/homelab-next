@@ -1,0 +1,31 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+{# no credential names here: the instance's drop-in loads them, and hnx-cti-run takes what was loaded #}
+{% set job = cti_pipeline_jobs[item.job] %}
+{% set lane_root = cti_pipeline_data_root ~ '/' ~ item.lane %}
+{% set placeholders = {'app': cti_pipeline_current ~ '/app',
+                       'python': cti_pipeline_current ~ '/venv/bin/python',
+                       'lane_root': lane_root,
+                       'config': cti_pipeline_config_dir} %}
+{% if cti_pipeline_lake_ca_ref != '' %}
+{% set _ = placeholders.update({'lake_ca': cti_pipeline_lake_ca_file}) %}
+{% endif %}
+{{ {'version': 1,
+    'managed_by': cti_pipeline_marker ~ ', service ' ~ cti_pipeline_logical_id ~ ')',
+    'set': cti_pipeline_logical_id,
+    'job': item.job,
+    'lane': item.lane,
+    'instance': item.instance,
+    'lane_root': lane_root,
+    'runs_dir': lane_root ~ '/' ~ cti_pipeline_runs_subdir,
+    'steps': job.steps,
+    'env': (cti_pipeline_env[item.lane] | default({})) | combine(job.env | default({})),
+    'forced_env': {cti_pipeline_lake_schema_env: cti_pipeline_lake_schema[item.lane],
+                   cti_pipeline_publish_mode_env: cti_pipeline_stage_mode},
+    'lake_schema_env': cti_pipeline_lake_schema_env,
+    'real_lake_schema': cti_pipeline_lake_schema.real,
+    'release_link': cti_pipeline_current,
+    'run_file': cti_pipeline_dispatch_dir ~ '/' ~ cti_pipeline_dispatch_service ~ '/' ~ cti_pipeline_logical_id ~ '/' ~ item.instance ~ '.json',
+    'run_owner': cti_pipeline_dispatch_owner,
+    'consumed_dir': lane_root ~ '/' ~ cti_pipeline_consumed_subdir,
+    'publish_mode_env': cti_pipeline_publish_mode_env,
+    'placeholders': placeholders} | to_nice_json }}

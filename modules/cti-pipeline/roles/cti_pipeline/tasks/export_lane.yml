@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# One lane's export (export.yml), with the lane's units blocked meanwhile (quiesce.yml): the store
+# is copied byte for byte, which is consistent only while nothing writes it.
+- name: "Export lane {{ cti_pipeline_quiesce_lane }}"
+  block:
+    - name: Block the lane's units and wait until none runs
+      ansible.builtin.include_tasks: quiesce.yml
+    - name: Export the lane's store and state
+      ansible.builtin.command:
+        argv: >-
+          {{ ['python3', '-I', '-c', lookup('ansible.builtin.file', 'cti_state.py'), 'export',
+              cti_pipeline_data_root ~ '/' ~ cti_pipeline_quiesce_lane,
+              cti_pipeline_export_dir ~ '/' ~ cti_pipeline_quiesce_lane ~ '-' ~ cti_pipeline_export_stamp]
+             + (cti_pipeline_state_dirs | map('regex_replace', '^', '--include=') | list) }}
+      changed_when: true
+  always:
+    - name: Let the lane's units start again
+      ansible.builtin.include_tasks: unquiesce.yml
+  tags: [export, backup, restore]

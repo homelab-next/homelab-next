@@ -1,0 +1,221 @@
+# SPDX-License-Identifier: Apache-2.0
+# The settings, refused by name before anything is written. The wrapper checks the job spec again
+# when a unit starts (hnx-cti-run), so a value that slipped past here still never half-applies.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - cti_pipeline_logical_id is defined and cti_pipeline_logical_id is match(cti_pipeline_set_pattern)
+      - cti_pipeline_dispatch_owner is match(cti_pipeline_user_pattern)
+      - cti_pipeline_dispatch_service is match(cti_pipeline_slug_pattern)
+      - cti_pipeline_dispatch_group is match('^[a-z][a-z0-9_-]{0,31}\Z')
+      - cti_pipeline_dispatch_group | length <= 32
+      - cti_pipeline_artefact is defined and cti_pipeline_artefact is match(cti_pipeline_path_pattern)
+      - cti_pipeline_artefact_sha256 is defined and cti_pipeline_artefact_sha256 is match('^[0-9a-f]{64}\Z')
+      - >-
+        [cti_pipeline_install_dir, cti_pipeline_config_dir, cti_pipeline_data_root, cti_pipeline_python,
+         cti_pipeline_dispatch_dir, cti_pipeline_job_logs_dir, cti_pipeline_unit_dir]
+        | reject('match', cti_pipeline_path_pattern) | list | length == 0
+      - >-
+        [cti_pipeline_install_dir, cti_pipeline_config_dir, cti_pipeline_data_root, cti_pipeline_dispatch_dir,
+         cti_pipeline_job_logs_dir] | map('split', '/') | map('select') | map('list') | map('length') | select('lt', 3) | list | length == 0
+      - not (cti_pipeline_data_root ~ '/').startswith(cti_pipeline_install_dir ~ '/')
+      - not (cti_pipeline_install_dir ~ '/').startswith(cti_pipeline_data_root ~ '/')
+      - not (cti_pipeline_data_root ~ '/').startswith(cti_pipeline_config_dir ~ '/')
+      - not (cti_pipeline_config_dir ~ '/').startswith(cti_pipeline_data_root ~ '/')
+      - >-
+        [cti_pipeline_user, cti_pipeline_shadow_user, cti_pipeline_group, cti_pipeline_owner, cti_pipeline_owner_group]
+        | reject('match', cti_pipeline_user_pattern) | list | length == 0
+      - cti_pipeline_user != cti_pipeline_shadow_user
+      - cti_pipeline_user != 'root' and cti_pipeline_shadow_user != 'root'
+      - cti_pipeline_manage_accounts is boolean and cti_pipeline_reload_systemd is boolean
+      - cti_pipeline_allow_plain_http is boolean
+      - cti_pipeline_keep_releases | int >= 1 and cti_pipeline_keep_releases | int <= 20
+      - cti_pipeline_memory_max is match('^[1-9][0-9]{0,5}[KMG]\Z')
+      - cti_pipeline_tasks_max | int >= 16
+      - cti_pipeline_health_timeout | int >= 1
+      - cti_pipeline_gateway_probe_timeout_s | int >= 10
+    fail_msg: >-
+      cti-pipeline: an instance id (a slug of up to 24 characters: the unit set hnx-<id>@), the
+      dispatcher's service (a slug), user and run-file group (hnx-<service>_<id>, at most 32
+      characters: with the default service orchestrator the id is at most 15), the
+      artefact's path on the control host and its sha256 (64 lowercase hex), canonical absolute paths
+      three components deep with the data root, the install and the configuration directories apart,
+      distinct lane users (never root), 1 to 20 kept releases, a memory limit like 6G
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Validate the lanes, the lake schemas and the forced names
+  ansible.builtin.assert:
+    that:
+      - cti_pipeline_lanes is sequence and cti_pipeline_lanes is not string and cti_pipeline_lanes | length >= 1
+      - cti_pipeline_lanes | difference(cti_pipeline_lane_names) | length == 0
+      - cti_pipeline_lanes | unique | length == cti_pipeline_lanes | length
+      - cti_pipeline_active_lanes is sequence and cti_pipeline_active_lanes is not string
+      - cti_pipeline_active_lanes | difference(cti_pipeline_lanes) | length == 0
+      - cti_pipeline_lake_schema is mapping
+      - cti_pipeline_lake_schema.keys() | list | sort == cti_pipeline_lane_names
+      - cti_pipeline_lake_schema.values() | reject('match', cti_pipeline_schema_pattern) | list | length == 0
+      - cti_pipeline_lake_schema.shadow is match('.*_shadow\Z')
+      - cti_pipeline_lake_schema.real is not match('.*_shadow\Z')
+      - cti_pipeline_lake_schema.real != cti_pipeline_lake_schema.shadow
+      - cti_pipeline_lake_schema_env is match(cti_pipeline_env_pattern)
+      - cti_pipeline_publish_mode_env is match(cti_pipeline_env_pattern)
+      - cti_pipeline_lake_schema_env != cti_pipeline_publish_mode_env
+      - cti_pipeline_state_dirs is sequence and cti_pipeline_state_dirs is not string
+      - cti_pipeline_state_dirs | length >= 1 and 'data' in cti_pipeline_state_dirs
+      - cti_pipeline_state_dirs | reject('match', '^[a-z][a-z0-9_-]{0,31}\Z') | list | length == 0
+      - cti_pipeline_state_dirs | intersect(['publishable', 'dist', 'home', 'cache', cti_pipeline_runs_subdir, 'export']) | length == 0
+    fail_msg: >-
+      cti-pipeline: lanes a subset of real and shadow (active lanes among them); a lake schema per
+      lane, the shadow one ending in _shadow and the real one not, never the same; two distinct
+      variable names for the schema and the publish mode; state directories (plain names, data
+      among them, never publishable, dist, home, cache, hnx-runs or export)
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Validate the environment and the secret references of each lane
+  ansible.builtin.assert:
+    that:
+      - cti_pipeline_env is mapping and cti_pipeline_lane_refs is mapping
+      - cti_pipeline_env.keys() | difference(cti_pipeline_lane_names) | length == 0
+      - cti_pipeline_lane_refs.keys() | difference(cti_pipeline_lane_names) | length == 0
+      - cti_pipeline_env.values() | reject('mapping') | list | length == 0
+      - cti_pipeline_lane_refs.values() | reject('mapping') | list | length == 0
+      - >-
+        cti_pipeline_env.values() | map('dict2items') | flatten | map(attribute='key')
+        | reject('match', cti_pipeline_env_pattern) | list | length == 0
+      - >-
+        cti_pipeline_env.values() | map('dict2items') | flatten | map(attribute='value')
+        | reject('string') | list | length == 0
+      - >-
+        cti_pipeline_env.values() | map('dict2items') | flatten | map(attribute='key')
+        | select('in', cti_pipeline_reserved_env + [cti_pipeline_lake_schema_env, cti_pipeline_publish_mode_env])
+        | list | length == 0
+      - >-
+        cti_pipeline_env.values() | map('dict2items') | flatten | map(attribute='key')
+        | select('match', '^HNX_') | list | length == 0
+      - >-
+        cti_pipeline_lane_refs.values() | map('dict2items') | flatten | map(attribute='key')
+        | reject('match', cti_pipeline_env_pattern) | list | length == 0
+      - >-
+        cti_pipeline_lane_refs.values() | map('dict2items') | flatten | map(attribute='key')
+        | select('in', cti_pipeline_reserved_env + [cti_pipeline_lake_schema_env, cti_pipeline_publish_mode_env])
+        | list | length == 0
+      - >-
+        cti_pipeline_lane_refs.values() | map('dict2items') | flatten | map(attribute='value')
+        | map('string') | reject('match', cti_pipeline_ref_pattern) | list | length == 0
+      - >-
+        cti_pipeline_lane_refs.values() | map('dict2items') | flatten | map(attribute='value')
+        | map('string') | map('split', ':', 1) | map('last') | reject('match', cti_pipeline_namespace_pattern) | list | length == 0
+      - cti_pipeline_lake_ca_ref == '' or cti_pipeline_lake_ca_ref is match(cti_pipeline_ref_pattern)
+      - cti_pipeline_lake_ca_ref == '' or cti_pipeline_lake_ca_ref.split(':', 1)[1] is match(cti_pipeline_namespace_pattern)
+      - cti_pipeline_gateway_key_ref is match(cti_pipeline_ref_pattern)
+      - cti_pipeline_gateway_key_ref.split(':', 1)[1] is match(cti_pipeline_namespace_pattern)
+    fail_msg: >-
+      cti-pipeline: cti_pipeline_env and cti_pipeline_lane_refs are keyed by lane (real, shadow); each
+      maps NAME_LIKE_THIS to a string (env) or to a secret in the module's own namespace
+      (cti-pipeline/); neither sets PATH, HOME, XDG_CACHE_HOME, LANG, HNX_*, the lake schema's
+      or the publish mode's variable (the role forces those)
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Refuse a lane name that is both an environment value and a credential
+  ansible.builtin.assert:
+    that:
+      - (cti_pipeline_env[item] | default({})).keys() | intersect((cti_pipeline_lane_refs[item] | default({})).keys()) | length == 0
+    fail_msg: "cti-pipeline: lane {{ item }} names {{ (cti_pipeline_env[item] | default({})).keys() | intersect((cti_pipeline_lane_refs[item] | default({})).keys()) }} both in cti_pipeline_env and in cti_pipeline_lane_refs"
+  loop: "{{ cti_pipeline_lane_names }}"
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Validate the job table
+  ansible.builtin.assert:
+    that:
+      - cti_pipeline_jobs is mapping and cti_pipeline_jobs | length >= 1 and cti_pipeline_jobs | length <= 64
+      - cti_pipeline_jobs.keys() | map('string') | reject('match', cti_pipeline_job_pattern) | list | length == 0
+      - cti_pipeline_instances | length >= 1
+    fail_msg: >-
+      cti-pipeline: cti_pipeline_jobs maps 1 to 64 jobs (slugs of up to 48 characters) to their spec,
+      and at least one job runs in a deployed lane (README, "Jobs")
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Validate each job
+  ansible.builtin.assert:
+    that:
+      - item.value is mapping
+      - item.value.keys() | difference(['steps', 'timeout_s', 'max_age_s', 'lanes', 'env', 'refs']) | length == 0
+      - item.value.steps | default([]) is sequence and item.value.steps | default([]) is not string
+      - item.value.steps | default([]) | length >= 1 and item.value.steps | length <= 32
+      - item.value.steps | reject('sequence') | list | length == 0
+      - item.value.steps | select('string') | list | length == 0
+      - item.value.steps | map('length') | select('lt', 1) | list | length == 0
+      - item.value.steps | flatten | reject('string') | list | length == 0
+      - item.value.steps | map('first') | reject('match', '^(\{python\}|\{app\}/[^\s]+|/[^\s]+)\Z') | list | length == 0
+      - item.value.timeout_s | default(0) | int >= 60 and item.value.timeout_s | int <= 86400
+      - item.value.max_age_s | default(-1) | int >= 0
+      - item.value.lanes | default(cti_pipeline_lanes) is sequence and item.value.lanes | default(cti_pipeline_lanes) is not string
+      - item.value.lanes | default(cti_pipeline_lanes) | difference(cti_pipeline_lane_names) | length == 0
+      - item.value.env | default({}) is mapping
+      - item.value.env | default({}) | dict2items | map(attribute='key') | reject('match', cti_pipeline_env_pattern) | list | length == 0
+      - item.value.env | default({}) | dict2items | map(attribute='value') | reject('string') | list | length == 0
+      - >-
+        item.value.env | default({}) | dict2items | map(attribute='key')
+        | select('in', cti_pipeline_reserved_env + [cti_pipeline_lake_schema_env, cti_pipeline_publish_mode_env])
+        | list | length == 0
+      - item.value.env | default({}) | dict2items | map(attribute='key') | select('match', '^HNX_') | list | length == 0
+      - item.value.refs | default([]) is sequence and item.value.refs | default([]) is not string
+      - item.value.refs | default([]) | reject('match', cti_pipeline_env_pattern) | list | length == 0
+    fail_msg: >-
+      cti-pipeline: job {{ item.key }}: steps (1 to 32 argv lists of strings, each starting with
+      {python}, {app}/<path> or an absolute path), timeout_s (60 to 86400), max_age_s (0 or more),
+      lanes (real, shadow), env (NAME: string; never a forced or reserved name) and refs (names), no other key
+  loop: "{{ cti_pipeline_jobs | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Refuse a job's ref its lane does not hold, or a job env name its lane holds as a credential
+  ansible.builtin.assert:
+    that:
+      - >-
+        cti_pipeline_jobs[item.job].refs | default([])
+        | difference((cti_pipeline_lane_refs[item.lane] | default({})).keys()) | length == 0
+      - >-
+        (cti_pipeline_jobs[item.job].env | default({})).keys()
+        | intersect((cti_pipeline_lane_refs[item.lane] | default({})).keys()) | length == 0
+    fail_msg: >-
+      cti-pipeline: job {{ item.job }} in lane {{ item.lane }}: its refs must be names of
+      cti_pipeline_lane_refs.{{ item.lane }}, and its env must not set a name that lane holds as a credential
+  loop: "{{ cti_pipeline_instances }}"
+  loop_control:
+    label: "{{ item.instance }}"
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+# The forced schema variable is what the app is told; a step argument or an env value can still
+# name the real schema outright (--schema cti, --schema=cti, a table cti.items). In the shadow lane
+# neither may: the real schema's name as a token (vars/main.yml cti_pipeline_real_schema_token) is
+# refused in every argument and env value, except the module a `-m` names (a package that shares
+# the schema's name is code, not a table). The lake grant is the real control: the
+# shadow lane's lake credential is one that can write only *_shadow schemas (README, "Lanes").
+- name: Refuse the real lake schema named in a shadow-lane job's arguments or environment
+  ansible.builtin.assert:
+    that:
+      - >-
+        cti_pipeline_shadow_texts | select('search', cti_pipeline_real_schema_token) | list | length == 0
+    fail_msg: >-
+      cti-pipeline: job {{ item.job }} runs in the shadow lane but names the real lake schema
+      ({{ cti_pipeline_lake_schema.real }}) in a step argument or an env value; the shadow lane
+      writes only {{ cti_pipeline_lake_schema.shadow }}
+  vars:
+    cti_pipeline_shadow_texts: >-
+      {%- set out = [] -%}
+      {%- for step in cti_pipeline_jobs[item.job].steps -%}
+      {%- for arg in step -%}
+      {%- if not (loop.index0 > 0 and step[loop.index0 - 1] == '-m') -%}
+      {%- set _ = out.append(arg) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {%- set _ = out.extend((cti_pipeline_env.shadow | default({})).values() | list) -%}
+      {%- set _ = out.extend((cti_pipeline_jobs[item.job].env | default({})).values() | list) -%}
+      {{ out }}
+  loop: "{{ cti_pipeline_instances | selectattr('lane', 'equalto', 'shadow') | list }}"
+  loop_control:
+    label: "{{ item.instance }}"
+  tags: [readiness, health, backup, restore, export, upgrade]

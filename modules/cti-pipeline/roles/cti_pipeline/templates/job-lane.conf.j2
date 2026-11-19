@@ -1,0 +1,14 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+{% set job = cti_pipeline_jobs[item.job] %}
+{% set lane_refs = (cti_pipeline_lane_refs[item.lane] | default({})).keys() | list | sort %}
+# {{ cti_pipeline_marker }}, service {{ cti_pipeline_logical_id }}, instance {{ item.instance }}); local changes are overwritten.
+# The {{ item.lane }} lane of job {{ item.job }}: its user, the one directory it may write (its lane's
+# root), its time budget and the {{ item.lane }} lane's credentials this job is given (systemd
+# credentials, read by PID 1 from root-only files; hnx-cti-run exports them to the job's processes only).
+[Service]
+User={{ cti_pipeline_lane_user[item.lane] }}
+ReadWritePaths={{ cti_pipeline_data_root }}/{{ item.lane }}
+TimeoutStartSec={{ job.timeout_s | int }}
+{% for name in ((job.refs | sort) if job.refs is defined else lane_refs) %}
+LoadCredential={{ name }}:{{ cti_pipeline_refs_dir }}/{{ item.lane }}/{{ name }}
+{% endfor %}

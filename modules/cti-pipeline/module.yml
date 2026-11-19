@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: Apache-2.0
+# The threat-intelligence pipeline as a feature module (docs/modules.md; README.md beside this file):
+# a site-built app artefact pinned by sha256 (the model of the orchestration module's binary),
+# installed on the guest as a release with its own offline venv, and run per job and per lane
+# (real, shadow) by one hardened systemd template, hnx-<instance>@<job>-<lane>.service, that the
+# orchestration controller's dispatcher starts (modules/orchestration README, "Module job units").
+# The module never publishes: every lane stages its items, the shadow lane writes only its own lake
+# schema and its own lane root. It names slots and a model role, never a product: which gateway,
+# lake, voice or feed serves it is the site's selection, and every real value (the artefact, the
+# job table, the environment, the secrets, the placement) is the overlay's.
+manifest_version: "1.0"
+id: cti-pipeline
+kind: feature
+title: Threat-intelligence pipeline jobs, real and shadow, run by orchestration
+description: Runs a site-built, sha256-pinned threat-intelligence app as module-owned job units the
+  orchestration controller starts (one per job and lane), each with its own user, writable root and
+  credentials; the shadow lane only stages and writes its own lake schema; health judges the release,
+  the gateway, the lake and every job's last-run freshness; each lane's store is exported consistently
+  and restored only after its row counts are checked.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+bundle: {id: soc, group: threat-intel}
+identifiers:
+  - {kind: secret-name, name: cti-pipeline, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: every lane secret, the gateway key and the lake CA are read by name at deploy time
+    - cap: cap:orchestration
+      version: "1.0"
+      purpose: the controller's dispatcher starts the job units (orchestration_job_units names this instance's set) and admits each job against live load
+    - cap: cap:inference
+      version: "1.0"
+      purpose: the jobs' model calls (extraction, analysis, scripts) go through the gateway, and the health hook probes it
+  hosts:
+    - role: worker
+      kind: vm
+      footprint: {cpu: 2, memory_mb: 4096, disk_gb: 40}
+      guest:
+        baselines: [base]
+      roles: [role:cti_pipeline]
+      purpose: holds the releases, the job units and each lane's root; a job runs in its own unit under the module's slice
+prefers:
+  capabilities:
+    - cap: cap:lake-query
+      version: "1.0"
+      purpose: the jobs read and write the lake (the real lane its schema, the shadow lane its own), and the health hook reaches it over the lab CA
+      fallback:
+        behaviour: the stages that read or write the lake fail their job; the store and the staged items are still written
+    - cap: cap:tts
+      provisional: true
+      purpose: the episode jobs voice their scripts
+      fallback:
+        behaviour: the episode jobs fail; every other job runs
+    - cap: cap:notify
+      version: "1.0"
+      purpose: the jobs' own alerts (a stalled rotation, a stale public page)
+      fallback:
+        behaviour: the jobs log the alert and send nothing
+egress:
+  - host: worker
+    to: [internet]
+    purpose: collection fetches the articles a feed links and the public vulnerability and social sources; the jobs never publish (the publishing module owns that egress)
+contributes:
+  roles:
+    - file: roles/cti_pipeline
+  preflight:
+    - {role: role:cti_pipeline, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: store
+    kind: state
+    description: Each lane's store (data/cti.db) and its state directories (data/, state/, podcast/ by default) under the lane's root, exported as a consistent store copy with every table's row count, the files and a sha256 listing (hnx-cti-state/1).
+    export: {formats: [object-tree], via: role:cti_pipeline}
+    import: {formats: [object-tree], via: role:cti_pipeline}
+    retention: {keep: forever}
+config:
+  artefact_sha256:
+    type: string
+    description: the sha256 of the app artefact the site built (cti_pipeline_artefact_sha256)
+    default: "0000000000000000000000000000000000000000000000000000000000000000"
+    overlay: required
+  gateway_key:
+    type: secret
+    description: the key the health hook's gateway probe presents (cti_pipeline_gateway_key_ref)
+    default: secret:cti-pipeline/gateway-key
+    overlay: optional
+  shadow_schema:
+    type: string
+    description: the shadow lane's lake schema (cti_pipeline_lake_schema.shadow); ends in _shadow
+    default: cti_shadow
+    overlay: optional
+lifecycle:
+  install: {playbook: playbooks/install.yml, note: "the orchestration module's job-unit set for this instance is declared in the same overlay change (orchestration_job_units)"}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a new artefact (a new sha256): the role's upgrade hook validates and records it, every lane is exported, then it converges; a running job keeps its release"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

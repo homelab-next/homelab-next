@@ -36,8 +36,7 @@ def _find() -> Path:
     hits = [
         p.parent
         for p in sorted((ROOT / "modules").glob("*/module.yml"))
-        if yaml.safe_load(p.read_text())
-        .get("provides", {})
+        if (yaml.safe_load(p.read_text()).get("provides") or {})
         .get("slots", {})
         .get("inference", {})
         .get("adapter")

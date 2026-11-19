@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export every lane first (lifecycle.remove.export_first), stop every running job unit of the
+# set, then remove the template unit, the role's drop-ins and the lanes' secret files, and reload
+# systemd. The data root (the lanes' stores, archives and the exports) and the install directory are
+# kept for the operator to delete. The orchestration side (the set's orchestration_job_units entry,
+# its polkit rule and dispatch entry) is removed by the overlay's orchestration change. The
+# decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the module.
+- name: Remove the threat-intelligence pipeline's job units
+  hosts: mod_cti_pipeline_worker
+  become: true
+  tasks:
+    - name: Export every lane first
+      ansible.builtin.include_role:
+        name: cti_pipeline
+        tasks_from: export
+    - name: Stop every job unit of the set
+      ansible.builtin.command:
+        argv: [systemctl, stop, "hnx-{{ cti_pipeline_logical_id }}@*.service"]
+      changed_when: true
+    - name: Find the set's drop-in directories
+      ansible.builtin.find:
+        paths: "{{ cti_pipeline_unit_dir | default('/etc/systemd/system') }}"
+        patterns: ["hnx-{{ cti_pipeline_logical_id }}@*.service.d"]
+        file_type: directory
+      register: cti_pipeline_remove_dropins
+    - name: Remove the role's drop-ins (its file only)
+      ansible.builtin.file:
+        path: "{{ item.path }}/50-hnx-lane.conf"
+        state: absent
+      loop: "{{ cti_pipeline_remove_dropins.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+    - name: Remove the template unit and the lanes' secret files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ cti_pipeline_unit_dir | default('/etc/systemd/system') }}/hnx-{{ cti_pipeline_logical_id }}@.service"
+        - "{{ cti_pipeline_config_dir | default('/etc/hnx/' ~ cti_pipeline_logical_id) }}/credentials"
+    - name: Reload systemd
+      ansible.builtin.command:
+        argv: [systemctl, daemon-reload]
+      changed_when: true
