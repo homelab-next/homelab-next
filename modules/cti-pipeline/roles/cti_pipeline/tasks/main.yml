@@ -18,9 +18,47 @@
 # export and restore mask a lane's units for their run and unmask them in always:, which never runs
 # when the play itself dies (the control node, the connection): every converge lifts any runtime
 # mask left behind (idempotent: nothing masked is nothing to do), and health refuses a masked unit
+# A lane an export or restore is working on right now (a fresh .quiesced-<lane> marker) keeps its
+# masks; a marker older than cti_pipeline_quiesce_marker_max_age_s was left by a play that died, and
+# its lane is unmasked like any other (with a warning) and the marker removed.
+- name: Look for each lane's quiesce marker
+  ansible.builtin.stat:
+    path: "{{ cti_pipeline_data_root }}/.quiesced-{{ item }}"
+  register: cti_pipeline_markers
+  loop: "{{ cti_pipeline_lanes }}"
+
+- name: Name the lanes an export or restore is quiescing right now
+  ansible.builtin.set_fact:
+    cti_pipeline_busy_lanes: >-
+      {{ cti_pipeline_markers.results | selectattr('stat.exists')
+         | selectattr('stat.mtime', 'ge', (now().timestamp() | int) - (cti_pipeline_quiesce_marker_max_age_s | int))
+         | map(attribute='item') | list }}
+    cti_pipeline_stale_markers: >-
+      {{ cti_pipeline_markers.results | selectattr('stat.exists')
+         | selectattr('stat.mtime', 'lt', (now().timestamp() | int) - (cti_pipeline_quiesce_marker_max_age_s | int))
+         | map(attribute='item') | list }}
+
+- name: Warn about a quiesce marker an aborted export or restore left
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: cti-pipeline: lane {{ item }} was left quiesced (a marker older than
+      {{ cti_pipeline_quiesce_marker_max_age_s }} s): its units are unmasked and the marker removed
+  loop: "{{ cti_pipeline_stale_markers }}"
+
 - name: Lift any runtime mask an aborted export or restore left on the job units
   ansible.builtin.command:
-    argv: "{{ [cti_pipeline_systemctl_cli, 'unmask', '--runtime'] + (cti_pipeline_instances | map(attribute='unit') | list) }}"
+    argv: >-
+      {{ [cti_pipeline_systemctl_cli, 'unmask', '--runtime']
+         + (cti_pipeline_instances | rejectattr('lane', 'in', cti_pipeline_busy_lanes) | map(attribute='unit') | list) }}
   register: cti_pipeline_unmasked
   changed_when: "'Removed' in (cti_pipeline_unmasked.stdout ~ cti_pipeline_unmasked.stderr)"
-  when: cti_pipeline_reload_systemd | bool and not ansible_check_mode
+  when: >-
+    cti_pipeline_reload_systemd | bool and not ansible_check_mode
+    and cti_pipeline_instances | rejectattr('lane', 'in', cti_pipeline_busy_lanes) | list | length > 0
+
+- name: Remove the markers an aborted export or restore left
+  ansible.builtin.file:
+    path: "{{ cti_pipeline_data_root }}/.quiesced-{{ item }}"
+    state: absent
+  loop: "{{ cti_pipeline_stale_markers }}"
+  when: not ansible_check_mode

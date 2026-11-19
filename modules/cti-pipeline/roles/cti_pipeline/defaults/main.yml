@@ -40,6 +40,9 @@ cti_pipeline_lake_schema:
 # the app's own variable names for the lake schema and the publish mode (the app contract, README
 # "The app contract"); the publish mode is always forced to stage: this module never publishes
 cti_pipeline_lake_schema_env: CTI_LAKE_SCHEMA
+# absolute paths a shadow-lane step may run besides {python} -m <module>, {python} {app}/<script>
+# and {app}/<path> (an allowlist: a shell, another interpreter or a command runner is never one)
+cti_pipeline_shadow_programs: []
 cti_pipeline_publish_mode_env: PUBLISH_MODE
 
 # --- the job table (role data: README, "Jobs") -------------------------------------------------
@@ -113,3 +116,6 @@ cti_pipeline_tasks_max: 512
 cti_pipeline_keep_exports: 3
 # export and restore block the lane's units and wait this long for a running one to finish
 cti_pipeline_quiesce_wait_s: 3600
+# a quiesce marker older than this was left by an export or restore that died: an install unmasks
+# its lane (a fresh one means one is running now, and its masks are left alone)
+cti_pipeline_quiesce_marker_max_age_s: 21600

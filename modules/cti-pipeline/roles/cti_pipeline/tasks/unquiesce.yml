@@ -6,3 +6,9 @@
   changed_when: true
   when: cti_pipeline_quiesce_units | default([]) | length > 0
   tags: [export, backup, restore]
+
+- name: Unmark the lane
+  ansible.builtin.file:
+    path: "{{ cti_pipeline_data_root }}/.quiesced-{{ cti_pipeline_quiesce_lane }}"
+    state: absent
+  tags: [export, backup, restore]

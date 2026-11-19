@@ -33,6 +33,7 @@
       - cti_pipeline_memory_max is match('^[1-9][0-9]{0,5}[KMG]\Z')
       - cti_pipeline_tasks_max | int >= 16
       - cti_pipeline_health_timeout | int >= 1
+      - cti_pipeline_quiesce_marker_max_age_s | int > cti_pipeline_quiesce_wait_s | int
       - cti_pipeline_gateway_probe_timeout_s | int >= 10
     fail_msg: >-
       cti-pipeline: an instance id (a slug of up to 24 characters: the unit set hnx-<id>@), the
@@ -60,6 +61,8 @@
       - cti_pipeline_lake_schema_env is match(cti_pipeline_env_pattern)
       - cti_pipeline_publish_mode_env is match(cti_pipeline_env_pattern)
       - cti_pipeline_lake_schema_env != cti_pipeline_publish_mode_env
+      - cti_pipeline_shadow_programs is sequence and cti_pipeline_shadow_programs is not string
+      - cti_pipeline_shadow_programs | reject('match', cti_pipeline_path_pattern) | list | length == 0
       - cti_pipeline_state_dirs is sequence and cti_pipeline_state_dirs is not string
       - cti_pipeline_state_dirs | length >= 1 and 'data' in cti_pipeline_state_dirs
       - cti_pipeline_state_dirs | reject('match', '^[a-z][a-z0-9_-]{0,31}\Z') | list | length == 0
@@ -192,33 +195,40 @@
 # catalog.cti.items, `cti`, (cti)). In the shadow lane neither may: the real schema's name as a token
 # (vars/main.yml cti_pipeline_real_schema_token: case-insensitive, after quotes and backslashes are
 # deleted) is refused in every argument and env value, except the module `{python} -m` names (a
-# package that shares the schema's name is code, not a table); and no shadow step runs a shell or
-# an interpreter given inline code, whose text could splice the name past any check. The lake
+# package that shares the schema's name is code, not a table). And a shadow step runs only what is
+# on an allowlist: `{python} -m <module>` or `{python} {app}/<script>` (no interpreter option
+# before them), an `{app}/<path>`, or an absolute path of cti_pipeline_shadow_programs; a shell,
+# another interpreter, inline code or a wrapper that runs a command (find -exec, xargs, timeout,
+# nice, flock, script) is never one, so their text cannot splice the name past the check. The lake
 # grant is the real control: the shadow lane's lake credential is one that can write only *_shadow
 # schemas (README, "Lanes"). The wrapper checks the same again at every start.
-- name: Refuse the real lake schema named in a shadow-lane job's arguments or environment
+- name: Refuse a shadow-lane job that runs a program off the allowlist or names the real lake schema
   ansible.builtin.assert:
     that:
-      - cti_pipeline_shadow_programs | select('in', cti_pipeline_shells) | list | length == 0
-      - cti_pipeline_shadow_inline | length == 0
+      - cti_pipeline_shadow_offlist | length == 0
       - >-
         cti_pipeline_shadow_texts | select('search', cti_pipeline_real_schema_token) | list | length == 0
       - >-
         cti_pipeline_shadow_texts | map('regex_replace', '[' ~ "'" ~ '"`\\\\]', '')
         | select('search', cti_pipeline_real_schema_token) | list | length == 0
     fail_msg: >-
-      cti-pipeline: job {{ item.job }} runs in the shadow lane but runs a shell or inline code, or
-      names the real lake schema ({{ cti_pipeline_lake_schema.real }}) in a step argument or an env
-      value; the shadow lane writes only {{ cti_pipeline_lake_schema.shadow }}
+      cti-pipeline: job {{ item.job }} runs in the shadow lane but runs a program off the allowlist
+      ({{ cti_pipeline_shadow_offlist }}: only {python} -m <module>, {python} {app}/<script>,
+      {app}/<path> or cti_pipeline_shadow_programs), or names the real lake schema
+      ({{ cti_pipeline_lake_schema.real }}) in a step argument or an env value; the shadow lane
+      writes only {{ cti_pipeline_lake_schema.shadow }}
   vars:
-    cti_pipeline_shadow_programs: >-
-      {{ cti_pipeline_jobs[item.job].steps | map('first') | map('basename') | map('lower') | list }}
-    cti_pipeline_shadow_inline: >-
+    cti_pipeline_shadow_offlist: >-
       {%- set out = [] -%}
       {%- for step in cti_pipeline_jobs[item.job].steps -%}
-      {%- if (step[0] == '{python}' or (step[0] | basename | lower).startswith('python'))
-             and (step[1:] | intersect(cti_pipeline_inline_flags) | length > 0) -%}
-      {%- set _ = out.append(step[0]) -%}
+      {%- if step[0] == '{python}' -%}
+      {%- set ok = (step | length >= 3 and step[1] == '-m' and step[2] is match(cti_pipeline_module_pattern))
+                   or (step | length >= 2 and step[1] is match(cti_pipeline_app_path_pattern)) -%}
+      {%- else -%}
+      {%- set ok = step[0] is match(cti_pipeline_app_path_pattern) or step[0] in cti_pipeline_shadow_programs -%}
+      {%- endif -%}
+      {%- if not ok -%}
+      {%- set _ = out.append(step[0] ~ ' ' ~ (step[1:2] | join(' '))) -%}
       {%- endif -%}
       {%- endfor -%}
       {{ out }}

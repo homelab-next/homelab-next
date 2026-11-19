@@ -22,13 +22,26 @@
 
 - name: Name the lane's units
   ansible.builtin.set_fact:
+    # an older systemd marks a failed unit with a leading bullet even with --plain: stripped first
     cti_pipeline_quiesce_units: >-
-      {{ (cti_pipeline_instances | selectattr('lane', 'equalto', cti_pipeline_quiesce_lane)
-          | map(attribute='unit') | list)
-         + (cti_pipeline_quiesce_loaded.stdout_lines | map('trim') | map('split') | map('first')
-            | select('match', '^hnx-' ~ (cti_pipeline_logical_id | regex_escape) ~ '@[a-z0-9-]+-'
-                     ~ cti_pipeline_quiesce_lane ~ '\.service\Z') | list)
+      {{ ((cti_pipeline_instances | selectattr('lane', 'equalto', cti_pipeline_quiesce_lane)
+           | map(attribute='unit') | list)
+          + (cti_pipeline_quiesce_loaded.stdout_lines | map('regex_replace', '^[\s●*]+', '')
+             | reject('equalto', '') | map('split') | map('first')
+             | select('match', '^hnx-' ~ (cti_pipeline_logical_id | regex_escape) ~ '@[a-z0-9-]+-'
+                      ~ cti_pipeline_quiesce_lane ~ '\.service\Z') | list))
          | unique | sort | list }}
+  tags: [export, backup, restore]
+
+# the marker tells an install that converges meanwhile (a scheduled deploy during a backup) to leave
+# this lane's masks alone; unquiesce.yml removes it, and an install treats an old one as left behind
+- name: Mark the lane quiesced (an install converging meanwhile leaves its masks alone)
+  ansible.builtin.copy:
+    content: "{{ {'lane': cti_pipeline_quiesce_lane, 'since': now().timestamp() | int} | to_json }}\n"
+    dest: "{{ cti_pipeline_data_root }}/.quiesced-{{ cti_pipeline_quiesce_lane }}"
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "0600"
   tags: [export, backup, restore]
 
 - name: Block the lane's units from starting (for this boot only)

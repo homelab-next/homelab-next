@@ -184,20 +184,24 @@ def lane_guard(spec: dict) -> None:
     if spec["lane"] == "shadow":
         if not isinstance(real, str) or not real or real.endswith(SHADOW_SUFFIX):
             raise Refused("the shadow spec does not name the real lake schema it must never write")
-        if shadow_names_real(spec["steps"], spec["env"].values(), real):
+        programs = spec.get("shadow_programs", [])
+        if not isinstance(programs, list) or not all(
+            isinstance(p, str) and p.startswith("/") for p in programs
+        ):
+            raise Refused("the spec's shadow programs are not a list of absolute paths")
+        if shadow_names_real(spec["steps"], spec["env"].values(), real, programs):
             raise Refused(
-                "a shadow-lane step runs inline code or a shell, or an argument or env value "
+                "a shadow-lane step runs a program off the allowlist, or an argument or env value "
                 "names the real lake schema"
             )
 
 
 # a word boundary for a lake identifier: a quote, a backtick, a bracket, punctuation or a dot (a
 # catalog-qualified name, catalog.schema.table, has the schema between two dots)
-BOUND = r"""[\s=,:;.'"`()\[\]{}]"""
+BOUND = r"""[\s=,:;.'"`()\[\]{}|<>+]"""
 # quotes and escapes are deleted before matching, so c""ti and c\ti read as cti
 SPLICE = re.compile(r"""['"`\\]""")
-SHELLS = {"sh", "bash", "dash", "zsh", "ksh", "ash", "busybox", "env"}
-INLINE = {"-c", "-e", "--eval", "--command"}
+MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
 
 
 def schema_token(real: str) -> re.Pattern:
@@ -205,17 +209,33 @@ def schema_token(real: str) -> re.Pattern:
     return re.compile(rf"(^|{BOUND}){re.escape(real)}({BOUND}|$)", re.IGNORECASE)
 
 
-def shadow_names_real(steps: list, env_values, real: str) -> bool:
-    """True when a shadow-lane job could name the real schema: a shell or an interpreter given
-    inline code (its text can splice the name past any check), or the name as a token in an
-    argument or env value. Exempt: the module ``{python} -m`` names (code, not a table)."""
+def app_path(arg: str) -> bool:
+    """``{app}/<path>`` with no empty, ``.`` or ``..`` segment."""
+    if not arg.startswith("{app}/"):
+        return False
+    return all(p not in ("", ".", "..") for p in arg[len("{app}/") :].split("/"))
+
+
+def shadow_program_ok(step: list, programs) -> bool:
+    """A shadow-lane step runs only what can be read for what it does (an allowlist): ``{python}
+    -m <module>`` or ``{python} {app}/<script>`` (no interpreter option before them), an
+    ``{app}/<path>``, or an absolute path the site lists (cti_pipeline_shadow_programs)."""
+    if step[0] == "{python}":
+        if len(step) >= 3 and step[1] == "-m":
+            return bool(MODULE_RE.match(step[2]))
+        return len(step) >= 2 and app_path(step[1])
+    return app_path(step[0]) or step[0] in programs
+
+
+def shadow_names_real(steps: list, env_values, real: str, programs=()) -> bool:
+    """True when a shadow-lane job could name the real schema: a step whose program is not on the
+    allowlist (shadow_program_ok: a shell, another interpreter or inline code can splice the name
+    past any check), or the name as a token in an argument or env value. Exempt: the module
+    ``{python} -m`` names (code, not a table)."""
     token = schema_token(real)
     texts = list(env_values)
     for step in steps:
-        prog = os.path.basename(step[0]).lower()
-        if prog in SHELLS or (
-            (step[0] == "{python}" or prog.startswith("python")) and INLINE & set(step[1:])
-        ):
+        if not shadow_program_ok(step, programs):
             return True
         for i, arg in enumerate(step):
             if i == 2 and step[0] == "{python}" and step[1] == "-m":
