@@ -30,7 +30,16 @@
   changed_when: false
   when: not docker_engine_live.stat.exists or docker_engine_live.stat.checksum != docker_engine_staged.checksum
 
+# Under --check the template above writes nothing, so a guest with no daemon.json yet has no staged
+# copy to install; a real run writes it first. Where the copy exists it is installed as ever.
+- name: Is there a staged copy to install (--check writes none)
+  ansible.builtin.stat:
+    path: "{{ docker_engine_staged_file }}"
+  register: docker_engine_staged_stat
+  check_mode: false  # read-only: it runs in --check too
+
 - name: Install the checked configuration
+  when: docker_engine_staged_stat.stat.exists or not ansible_check_mode
   ansible.builtin.copy:
     src: "{{ docker_engine_staged_file }}"
     dest: "{{ docker_engine_config_file }}"

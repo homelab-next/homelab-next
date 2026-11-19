@@ -28,6 +28,12 @@ def base(**kw):
     return {"docker_engine_log_max_size": "10m", **kw}
 
 
+def _main_and_install_tasks():
+    """main.yml's tasks, then install.yml's (the packages' tasks live there so --check can test them)."""
+    d = ANSIBLE / "roles" / ROLE / "tasks"
+    return [t for f in ("main.yml", "install.yml") for t in yaml.safe_load((d / f).read_text())]
+
+
 # ---------------------------------------------------------------- inputs
 def test_the_pins_are_the_defaults_and_every_package_follows_one():
     assert (DEFAULTS["docker_engine_version"], DEFAULTS["docker_engine_containerd_version"],
@@ -118,7 +124,7 @@ def test_every_pin_is_installed_in_one_transaction_and_held_after():
     """The engine depends on the matching CLI and containerd, so all five install together; they
     are dpkg-held, so the bump path (a new pin, re-run main) must be allowed to move them, and the
     holds are set again after."""
-    tasks = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / "main.yml").read_text())
+    tasks = _main_and_install_tasks()
     (i,) = [n for n, t in enumerate(tasks) if "ansible.builtin.apt" in t
             and "docker_engine_packages" in str(t["ansible.builtin.apt"].get("name"))]  # fmt: skip
     install = tasks[i]["ansible.builtin.apt"]
@@ -408,7 +414,7 @@ def test_recommends_are_not_installed_so_rootless_extras_stays_at_no_unpinned_ve
     """docker-ce recommends docker-ce-rootless-extras, which apt would install at the newest
     version beside the pinned engine (5:29.10.0 beside 29.9.2).  This role pins and holds exactly the
     packages it names and installs nothing else, so the transaction takes no recommends."""
-    tasks = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / "main.yml").read_text())
+    tasks = _main_and_install_tasks()
     (install,) = [t["ansible.builtin.apt"] for t in tasks if "ansible.builtin.apt" in t
                   and "docker_engine_packages" in str(t["ansible.builtin.apt"].get("name"))]  # fmt: skip
     assert install["install_recommends"] is False
@@ -439,10 +445,98 @@ def test_apparmor_and_ca_certificates_are_installed_by_name_not_through_recommen
     """install_recommends is off for the pinned transaction, which would drop what docker-ce
     recommends and a guest needs (the docker-default AppArmor profile, registry TLS roots)."""
     assert FIXED["docker_engine_prerequisites"] == ["apparmor", "ca-certificates"]
-    tasks = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / "main.yml").read_text())
+    tasks = _main_and_install_tasks()
     (i,) = [n for n, t in enumerate(tasks) if "ansible.builtin.apt" in t
             and t["ansible.builtin.apt"].get("name") == "{{ docker_engine_prerequisites }}"]  # fmt: skip
     assert tasks[i]["ansible.builtin.apt"]["state"] == "present"
     (pinned,) = [n for n, t in enumerate(tasks) if "ansible.builtin.apt" in t
                  and "docker_engine_packages" in str(t["ansible.builtin.apt"].get("name"))]  # fmt: skip
     assert i < pinned
+
+
+# ---------------------------------------------------------------- --check on a guest with no engine yet
+# Under --check the vendor repository is never written, so a guest that has none yet cannot name the
+# packages (apt: "No package matching 'docker-ce'") and has no unit to start: the dry run reports
+# what a real run would install instead of failing on what only a real run can make.
+NOT_IN_ANY_REPO = [{"name": "hnx-test-no-such-package", "version": "1.2.3-*"}]
+
+
+def _first_install_check(tmp_path):
+    return {
+        "role": ROLE,
+        "tasks_from": "install",
+        "check": True,
+        "extra_vars": base(
+            docker_engine_would_install=True, docker_engine_packages=NOT_IN_ANY_REPO
+        ),
+    }
+
+
+@first_run(_first_install_check)
+def test_check_mode_reports_the_would_be_install_when_the_repository_is_not_there_yet(first):
+    r, _ = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "would install" in r.stdout and "hnx-test-no-such-package" in r.stdout, r.stdout
+    assert "No package matching" not in r.stdout + r.stderr
+
+
+def _first_service_check(tmp_path):
+    return {
+        "role": ROLE,
+        "tasks_from": "service",
+        "check": True,
+        "extra_vars": base(
+            docker_engine_would_install=True, docker_engine_service="hnx-test-no-such-unit"
+        ),
+    }
+
+
+@first_run(_first_service_check)
+def test_check_mode_does_not_start_a_unit_the_install_would_create(first):
+    r, _ = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Could not find the requested service" not in r.stdout + r.stderr
+
+
+def _first_config_check(tmp_path):
+    etc = tmp_path / "etc"
+    return {
+        "role": ROLE,
+        "tasks_from": "config",
+        "check": True,
+        "extra_vars": base(
+            docker_engine_state_dir=str(tmp_path / "state"),
+            docker_engine_config_file=str(etc / "daemon.json"),
+            docker_engine_daemon_cli="/nonexistent/dockerd",
+        ),
+        "setup": {"live": etc / "daemon.json"},
+    }
+
+
+@first_run(_first_config_check)
+def test_check_mode_on_a_guest_with_no_daemon_json_reports_it_instead_of_failing(first):
+    """--check stages nothing, so the checked copy that installs the file has no source to copy."""
+    r, _ = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "not found" not in r.stdout + r.stderr
+    assert not first.setup["live"].exists()  # a dry run wrote nothing
+    assert "changed=0" not in r.stdout  # the new file is reported as a change
+
+
+def test_a_real_run_is_not_guarded_and_the_guard_follows_the_repository_in_check_mode_only():
+    """Outside --check nothing is skipped (the guard is false whatever the repository did), and
+    inside it the guard is the repository task reporting a change."""
+    main = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / "main.yml").read_text())
+    (guard,) = [
+        t
+        for t in main
+        if "docker_engine_would_install" in (t.get("ansible.builtin.set_fact") or {})
+    ]
+    expr = guard["ansible.builtin.set_fact"]["docker_engine_would_install"]
+    (repo,) = [t for t in main if "ansible.builtin.deb822_repository" in t]
+    assert repo["register"] == "docker_engine_repo"
+    # a conjunction led by --check: false in every real run, whatever the repository task reported
+    assert expr.strip() == "{{ ansible_check_mode and docker_engine_repo is changed }}"
+    for hook in ("install", "service"):
+        tasks = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / f"{hook}.yml").read_text())
+        assert [t for t in tasks if "docker_engine_would_install" in str(t.get("when", ""))], hook

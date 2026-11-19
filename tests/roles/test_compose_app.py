@@ -149,6 +149,28 @@ def test_a_slice_starts_only_under_systemd_and_with_its_unit_installed(first, dr
         assert "has no unit file: install the module limits first" in r.stdout
 
 
+def _driver_check(tmp, unit):
+    return {**_driver(tmp, "systemd", unit), "check": True}
+
+
+@pytest.mark.parametrize("unit", ["missing", "installed"])
+@first_run(_driver_check)
+def test_check_mode_on_a_fresh_guest_does_not_refuse_a_slice_the_limits_play_has_not_written(
+    first, unit
+):
+    """The limits play's slice file is only reported under --check, so on a fresh guest systemd has
+    no unit for it yet and the refusal would fail the whole dry run; it says so instead.  An
+    installed slice is still judged, and a real run (above) still refuses a missing one."""
+    r, tmp = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = (tmp / "docker.log").read_text().splitlines()
+    assert not any(
+        c.startswith("compose ") and " up " in c for c in calls
+    )  # --check starts nothing
+    assert "install the module limits first" not in r.stdout + r.stderr  # the refusal's own text
+    assert ("a real run refuses to start" in r.stdout) is (unit == "missing"), r.stdout
+
+
 # ------------------------------------------------- the boot unit (opt-in): a container that did not
 # come back after a power cycle is started at boot (LL-571)
 
