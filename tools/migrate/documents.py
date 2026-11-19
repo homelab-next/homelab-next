@@ -844,10 +844,75 @@ def _read_manifest(dump_dir: Path) -> dict:
     return manifest
 
 
+MODULE_DIR = Path(__file__).resolve().parents[2] / "modules" / "documents"
+
+
+# 3.4.2, v3.4.2, 3.5.1-rc1, 3.5.1rc1, 3.5.1+build: the leading numbers are the version; a
+# pre-release or build suffix is read as its base version (the safe side: 3.5.1-rc1 is 3.5.1, so
+# it is refused against a 3.4.2 pin).  Anything else does not parse.
+_VERSION = re.compile(r"[vV]?([0-9]+(?:\.[0-9]+){0,3})(?:[-+_]?[A-Za-z][-+.\w]*)?")
+
+
+def _version_key(text: str) -> tuple[int, ...] | None:
+    """``3.4.2`` or ``v3.5.1-rc1`` -> ``(3, 4, 2, 0)`` / ``(3, 5, 1, 0)``; None for no version."""
+    found = _VERSION.fullmatch(str(text).strip())
+    if not found:
+        return None
+    nums = [int(n) for n in found.group(1).split(".")]
+    return (*nums, *([0] * (4 - len(nums))))
+
+
+def pinned_version(module_dir: Path = MODULE_DIR) -> str:
+    """``product.version`` of the module's manifest (the version its image pin carries)."""
+    manifest = (module_dir / "module.yml").read_text(encoding="utf-8")
+    block = re.search(r"^product:\n((?:[ \t]+.*\n|\n)*)", manifest, re.MULTILINE)
+    found = (
+        re.search(r"^[ \t]+version:[ \t]*(\S+)", block.group(1), re.MULTILINE) if block else None
+    )
+    version = found.group(1).strip("\"'") if found else ""
+    if _version_key(version) is None:
+        raise MigrateError(f"{module_dir / 'module.yml'}: no product.version")
+    return version
+
+
+def check_version(recorded: str, given: str | None, target: str) -> str:
+    """The source version a restore may go ahead with; refuse a downgrade (MigrateError).
+
+    A newer application migrates its database and writes records an older one cannot open, so an
+    export of a newer version is not restored into an older one.  The version is the one the
+    export recorded (its ``metadata.json``) and/or ``given`` (``--source-version``); the newer of
+    the two decides, so the flag can confirm or supply a version but never lower a recorded one.
+    A recorded version that does not parse is refused, never skipped; none recorded is refused
+    unless ``given`` supplies it.  A pre-release suffix counts as its base version.
+    """
+    recorded = str(recorded or "").strip()
+    if given is not None and _version_key(given) is None:
+        raise MigrateError(f"--source-version {given!r}: not a version")
+    if recorded and _version_key(recorded) is None:
+        raise MigrateError(
+            f"the dump's recorded source version {recorded!r}: cannot read the version it "
+            "recorded; refusing (a recorded version is never overridden by --source-version)"
+        )
+    known = [v for v in (recorded, given) if v]
+    if not known:
+        raise MigrateError(
+            "the dump records no version of its source: pass --source-version (the source's "
+            "image tag), refusing to guess"
+        )
+    source = max(known, key=_version_key)
+    if _version_key(source) > _version_key(target):
+        raise MigrateError(
+            f"the source application is {source.strip()}, newer than the target {target}: "
+            "restoring it would be a downgrade; pin the module to the source's version or newer"
+        )
+    return source.strip().lstrip("vV")
+
+
 def restore(
     target: Endpoint,
     dump_dir: str | os.PathLike,
     *,
+    source_version: str | None = None,
     expect_counts: Mapping[str, int] | None = None,
     require_quiescent: bool = False,
     disable_egress: bool = False,
@@ -855,7 +920,9 @@ def restore(
 ) -> dict:
     """Import ``dump_dir`` into an empty ``target`` and verify it; return the report.
 
-    Refused before anything is written: a dump whose tar is not what its manifest says, or not
+    Refused before anything is written: a source application newer than the module's pinned
+    version (a downgrade), or one that records no version (``--source-version`` supplies it) or
+    one that cannot be read; a dump whose tar is not what its manifest says, or not
     whole; a dump not taken from a source that stood still (``require_quiescent``); one that is not
     the state ``expect_counts`` names; a target that holds any document or account.  After the
     import the counts and the checksum of every file on disk must equal the dump's.  A failure
@@ -870,9 +937,13 @@ def restore(
     ctx = _ctx or _Ctx()
     root = Path(dump_dir)
     manifest = _read_manifest(root)
+    target_version = pinned_version()
+    source_seen = check_version(str(manifest.get("version") or ""), source_version, target_version)
     if not target.staging_dir:
         raise MigrateError("restore needs a staging directory in the target's export volume")
     scan = scan_export(root / TAR_FILE)
+    if scan["version"] != str(manifest.get("version") or ""):
+        raise VerifyMismatch(f"{root / TAR_FILE}: its version is not what {MANIFEST} recorded")
     if scan["counts"] != manifest["counts"] or scan["digest"] != manifest.get("documents_digest"):
         raise VerifyMismatch(f"{root / TAR_FILE}: its contents are not what {MANIFEST} recorded")
     if require_quiescent and not manifest.get("quiescent"):
@@ -974,6 +1045,8 @@ def restore(
         "duplicate_checksums": scan["duplicates"],
         "sanity_known_from_source": sum(known.values()),
         "egress": egress,
+        "source_version": source_seen,
+        "target_version": target_version,
     }
 
 
@@ -1065,6 +1138,8 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--allow-empty", action="store_true", help="dump: accept a source with no documents"
     )
+    ap.add_argument("--source-version",
+                    help="restore: the source application's version (its image tag); refused when newer than the module's pin")  # fmt: skip
     ap.add_argument("--disable-egress", action="store_true",
                     help="restore: switch off imported mail rules and e-mail/webhook workflows")  # fmt: skip
     ap.add_argument("--require-quiescent", action="store_true",
@@ -1094,6 +1169,7 @@ def _command(a: argparse.Namespace) -> dict:
         a.dir,
         expect_counts=_expect(a.expect_counts),
         require_quiescent=a.require_quiescent,
+        source_version=a.source_version,
         disable_egress=a.disable_egress,
     )
 
