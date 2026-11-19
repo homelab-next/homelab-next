@@ -93,6 +93,7 @@ def test_quiesce_lists_each_unit_of_the_lane_once_from_systemds_real_output():
     ],
 )
 def test_the_roles_shadow_allowlist(step, ok):
+    modules = ["intel"]  # the app's package: -m intel.cve passes
     task = _task(
         "validate.yml",
         "Refuse a shadow-lane job that runs a program off the allowlist or names the real lake schema",
@@ -102,6 +103,7 @@ def test_the_roles_shadow_allowlist(step, ok):
         item={"job": "j", "lane": "shadow"},
         cti_pipeline_jobs={"j": {"steps": [step]}},
         cti_pipeline_shadow_programs=["/opt/site/tool"],
+        cti_pipeline_shadow_modules=modules,
         cti_pipeline_module_pattern=VARS["cti_pipeline_module_pattern"],
         cti_pipeline_app_path_pattern=VARS["cti_pipeline_app_path_pattern"],
     )
@@ -113,10 +115,11 @@ def test_a_fresh_quiesce_marker_keeps_its_lane_masked_and_an_old_one_is_lifted()
         "ansible.builtin.set_fact"
     ]
     variables = {
+        "cti_pipeline_owner": "root",
         "cti_pipeline_quiesce_marker_max_age_s": 21600,
         "cti_pipeline_markers": {"results": [
-            {"item": "real", "stat": {"exists": True, "mtime": 4_000_000_000}},  # just written
-            {"item": "shadow", "stat": {"exists": True, "mtime": 0}},  # left by a play that died
+            {"item": "real", "stat": {"exists": True, "mtime": 4_000_000_000, "pw_name": "root"}},  # just written
+            {"item": "shadow", "stat": {"exists": True, "mtime": 0, "pw_name": "root"}},  # left by a play that died
         ]},
     }  # fmt: skip
     assert render(facts["cti_pipeline_busy_lanes"], **variables) == ["real"]
@@ -140,3 +143,43 @@ def test_the_install_unmasks_every_instance_but_those_of_a_lane_being_quiesced()
     out = render(argv, cti_pipeline_systemctl_cli="systemctl", cti_pipeline_instances=instances,
                  cti_pipeline_busy_lanes=[])  # fmt: skip
     assert out[3:] == [unit("fresh-real"), unit("fresh-shadow")]
+
+
+@pytest.mark.parametrize(
+    ("module", "modules", "ok"),
+    [("intel.cve", ["intel"], True), ("intel", ["intel"], True), ("timeit", ["intel"], False),
+     ("http.server", ["intel"], False), ("cProfile", ["intel"], False), ("intelx.y", ["intel"], False),
+     ("timeit", [], True)],  # nothing listed: the wrapper decides from the artefact's packages
+)  # fmt: skip
+def test_the_roles_shadow_modules(module, modules, ok):
+    task = _task(
+        "validate.yml",
+        "Refuse a shadow-lane job that runs a program off the allowlist or names the real lake schema",
+    )
+    offlist = render(
+        task["vars"]["cti_pipeline_shadow_offlist"],
+        item={"job": "j", "lane": "shadow"},
+        cti_pipeline_jobs={"j": {"steps": [["{python}", "-m", module]]}},
+        cti_pipeline_shadow_programs=[],
+        cti_pipeline_shadow_modules=modules,
+        cti_pipeline_module_pattern=VARS["cti_pipeline_module_pattern"],
+        cti_pipeline_app_path_pattern=VARS["cti_pipeline_app_path_pattern"],
+    )
+    assert (offlist == []) is ok, offlist
+
+
+def test_a_quiesce_marker_the_role_did_not_write_is_ignored():
+    facts = _task("main.yml", "Name the lanes an export or restore is quiescing right now")[
+        "ansible.builtin.set_fact"
+    ]
+    variables = {
+        "cti_pipeline_owner": "root",
+        "cti_pipeline_quiesce_marker_max_age_s": 21600,
+        "cti_pipeline_markers": {"results": [
+            {"item": "real", "stat": {"exists": True, "mtime": 4_000_000_000, "pw_name": "hnx-cti"}},
+            {"item": "shadow", "stat": {"exists": True, "mtime": 4_000_000_000, "pw_name": "root"}},
+        ]},
+    }  # fmt: skip
+    assert render(facts["cti_pipeline_foreign_markers"], **variables) == ["real"]
+    assert render(facts["cti_pipeline_busy_lanes"], **variables) == ["shadow"]
+    assert render(facts["cti_pipeline_stale_markers"], **variables) == []

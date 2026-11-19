@@ -786,3 +786,89 @@ def test_the_wrapper_accepts_and_refuses_exactly_what_the_reference_reader_does(
         ours = 1
     assert ours == r.returncode, (case, r.stderr)
     assert (case == "ok") == (ours == 0)
+
+
+STDLIB_RUNNERS = [
+    "timeit",
+    "pdb",
+    "cProfile",
+    "trace",
+    "http.server",
+    "runpy",
+    "code",
+    "pip",
+    "unittest",
+]
+
+
+def _pinned_shadow(tmp_path, steps, modules=None, packages=None):
+    """A shadow spec with ``steps``, its release pinned; the artefact declares ``packages``."""
+    _, body = _spec(tmp_path, "shadow", steps=steps, shadow_modules=modules or [])
+    install = Path(body["release_link"]).parent
+    if packages is not None:
+        for rel in ("a" * 16, "b" * 16):
+            (install / "releases" / rel / "hnx-artefact.json").write_text(
+                json.dumps({"name": "intel-app", "version": "1", "packages": packages})
+            )
+    fd = run.pin_release(body)
+    return body, fd
+
+
+@pytest.mark.parametrize("module", STDLIB_RUNNERS)
+def test_a_shadow_step_never_runs_the_interpreters_own_modules(tmp_path, module):
+    body, fd = _pinned_shadow(
+        tmp_path, [["{python}", "-m", module, "x"]], modules=["intel"], packages=["intel"]
+    )
+    try:
+        with pytest.raises(run.Refused, match="not the app's own"):
+            run.check_release_paths(body)
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.parametrize(
+    ("modules", "packages", "module", "ok"),
+    [
+        (["intel"], None, "intel.cve", True),  # the site's list
+        (["intel"], None, "intel", True),
+        ([], ["intel", "intelx"], "intelx.run", True),  # the artefact's own packages
+        ([], ["intel"], "timeit", False),
+        ([], None, "intel.cve", False),  # nothing declared: no -m at all
+        (["intel"], ["timeit"], "timeit", False),  # the site's list wins over the artefact's
+        ([], ["intel"], "intelligence.x", False),  # a prefix is not the package
+    ],
+)
+def test_a_shadow_module_must_be_one_of_the_apps_packages(tmp_path, modules, packages, module, ok):
+    body, fd = _pinned_shadow(
+        tmp_path, [["{python}", "-m", module]], modules=modules, packages=packages
+    )
+    try:
+        if ok:
+            run.check_release_paths(body)
+        else:
+            with pytest.raises(run.Refused, match="not the app's own"):
+                run.check_release_paths(body)
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.parametrize("arg", ["{app}/..{lane_root}", "{app}/../../x", "{app}/x/../../y"])
+def test_an_app_argument_that_leaves_the_release_once_filled_is_refused(tmp_path, arg):
+    body, fd = _pinned_shadow(tmp_path, [["{python}", "{app}/run.py", arg]], modules=["intel"])
+    try:
+        with pytest.raises(run.Refused, match="leaves the release"):
+            run.check_release_paths(body)
+    finally:
+        os.close(fd)
+    body, fd = _pinned_shadow(tmp_path / "ok", [["{python}", "{app}/run.py", "{app}/a/b"]])
+    try:
+        run.check_release_paths(body)
+    finally:
+        os.close(fd)
+
+
+def test_the_artefact_declares_its_packages_as_names_only(tmp_path, releases):
+    meta = {"name": "intel-app", "version": "1.0", "packages": ["intel", "x.y"]}
+    sha = _tar(tmp_path / "p.tar.gz", {**GOOD, "hnx-artefact.json": json.dumps(meta).encode()})
+    with pytest.raises(art.Refused, match="packages"):
+        art.install(str(tmp_path / "p.tar.gz"), sha, str(releases), sys.executable)

@@ -50,7 +50,8 @@ The site builds the app once on the control host (never on the guest) and pins i
 `cti_pipeline_artefact` (its path) and `cti_pipeline_artefact_sha256`. It is a tar (gzip allowed):
 
 ```text
-hnx-artefact.json   {"name": ..., "version": ..., "commit": ...}   (name and version required)
+hnx-artefact.json   {"name": ..., "version": ..., "commit": ..., "packages": [...]}   (name and version required;
+                    packages: the top-level packages a shadow-lane `{python} -m` may run)
 app/                the application tree; the job's code, never written at run time
 requirements.txt    optional: every wheel, pinned with --hash (built from the app's lock file)
 wheels/             optional: those wheels, for the guest's Python and architecture
@@ -135,7 +136,12 @@ module.
   `{python} {app}/<script>` (no interpreter option before them), an `{app}/<path>`, or an absolute
   path the site lists in `cti_pipeline_shadow_programs` (default none). A shell, another
   interpreter, inline code or a command runner (`find -exec`, `xargs`, `timeout`, `nice`, `flock`,
-  `script`) is never on it unless the site lists it.
+  `script`) is never on it unless the site lists it. `{python} -m` runs only the app's own
+  packages, `<pkg>` or `<pkg>.<sub>`: those of `cti_pipeline_shadow_modules`, or, when the site lists
+  none, the artefact's `hnx-artefact.json` `packages` (none declared: no `-m` at all). The
+  interpreter's own entry points (`timeit`, `pdb`, `cProfile`, `trace`, `http.server`, `runpy`,
+  `code`) run code or commands taken from their arguments, so they are never allowed. Every
+  `{app}/...` argument, once filled and normalised, must stay inside the release's app tree.
 - The wrapper also refuses a shadow spec whose schema is not a shadow schema, any spec whose
   publish mode is not `stage`, and a run whose dispatcher lane differs from the instance's.
 - **The lake grant is the real control; the environment is a convenience.** The forced variable
@@ -191,7 +197,8 @@ install lifts them (`systemctl unmask --runtime`, idempotent), and health fails 
 unit is masked. While an export or restore runs, `<data root>/.quiesced-<lane>` marks its lane: an
 install converging meanwhile (a scheduled deploy during a backup) leaves that lane's masks alone,
 and treats a marker older than `cti_pipeline_quiesce_marker_max_age_s` as left by a play that died
-(it unmasks the lane, warns and removes the marker). **Health fails during a backup window**: the
+(it unmasks the lane, warns and removes the marker). A marker not owned by the role's owner is
+ignored, with a warning. **Health fails during a backup window**: the
 lane's units are masked on purpose while the export runs.
 
 An export (`hnx-cti-state/1`, `files/cti_state.py`) is a directory: `cti.db` (the store and its

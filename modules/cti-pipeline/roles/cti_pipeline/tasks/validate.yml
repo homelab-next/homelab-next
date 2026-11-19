@@ -63,6 +63,8 @@
       - cti_pipeline_lake_schema_env != cti_pipeline_publish_mode_env
       - cti_pipeline_shadow_programs is sequence and cti_pipeline_shadow_programs is not string
       - cti_pipeline_shadow_programs | reject('match', cti_pipeline_path_pattern) | list | length == 0
+      - cti_pipeline_shadow_modules is sequence and cti_pipeline_shadow_modules is not string
+      - cti_pipeline_shadow_modules | map('string') | reject('match', '^[A-Za-z_][A-Za-z0-9_]*\Z') | list | length == 0
       - cti_pipeline_state_dirs is sequence and cti_pipeline_state_dirs is not string
       - cti_pipeline_state_dirs | length >= 1 and 'data' in cti_pipeline_state_dirs
       - cti_pipeline_state_dirs | reject('match', '^[a-z][a-z0-9_-]{0,31}\Z') | list | length == 0
@@ -222,7 +224,9 @@
       {%- set out = [] -%}
       {%- for step in cti_pipeline_jobs[item.job].steps -%}
       {%- if step[0] == '{python}' -%}
-      {%- set ok = (step | length >= 3 and step[1] == '-m' and step[2] is match(cti_pipeline_module_pattern))
+      {%- set ok = (step | length >= 3 and step[1] == '-m' and step[2] is match(cti_pipeline_module_pattern)
+                    and (cti_pipeline_shadow_modules | length == 0
+                         or step[2].split('.')[0] in cti_pipeline_shadow_modules))
                    or (step | length >= 2 and step[1] is match(cti_pipeline_app_path_pattern)) -%}
       {%- else -%}
       {%- set ok = step[0] is match(cti_pipeline_app_path_pattern) or step[0] in cti_pipeline_shadow_programs -%}

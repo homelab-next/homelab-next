@@ -201,6 +201,7 @@ def lane_guard(spec: dict) -> None:
 BOUND = r"""[\s=,:;.'"`()\[\]{}|<>+]"""
 # quotes and escapes are deleted before matching, so c""ti and c\ti read as cti
 SPLICE = re.compile(r"""['"`\\]""")
+PACKAGE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
 
 
@@ -242,6 +243,43 @@ def shadow_names_real(steps: list, env_values, real: str, programs=()) -> bool:
                 continue
             texts.append(arg)
     return any(token.search(SPLICE.sub("", t)) or token.search(t) for t in texts)
+
+
+def release_packages(app_dir: str) -> list[str]:
+    """The top-level packages the release's artefact declares (``hnx-artefact.json``
+    ``packages``, beside ``app/``), or none."""
+    try:
+        with open(os.path.join(os.path.dirname(app_dir), "hnx-artefact.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        return []
+    pkgs = meta.get("packages") if isinstance(meta, dict) else None
+    if not isinstance(pkgs, list):
+        return []
+    return [p for p in pkgs if isinstance(p, str) and PACKAGE_RE.match(p)]
+
+
+def check_release_paths(spec: dict) -> None:
+    """After the release is pinned: every ``{app}/...`` argument, filled and normalised, stays
+    inside the release's app tree; and a shadow-lane ``{python} -m`` runs only the app's own
+    packages (spec ``shadow_modules``, or the artefact's ``packages`` when the site lists none),
+    never the interpreter's (timeit, pdb, cProfile, trace, http.server, runpy, code... run code or
+    commands taken from their arguments)."""
+    app = spec["placeholders"].get("app")
+    for step in spec["steps"]:
+        for arg in step:
+            if arg.startswith("{app}/"):
+                if not app or not os.path.normpath(fill(arg, spec["placeholders"])).startswith(app + "/"):
+                    raise Refused("an {app}/ argument leaves the release once filled")
+    if spec["lane"] != "shadow":
+        return
+    allowed = spec.get("shadow_modules") or (release_packages(app) if app else [])
+    if not isinstance(allowed, list) or not all(isinstance(p, str) and PACKAGE_RE.match(p) for p in allowed):
+        raise Refused("the spec's shadow modules are not a list of package names")
+    for step in spec["steps"]:
+        if step[0] == "{python}" and len(step) >= 3 and step[1] == "-m":
+            if step[2].split(".", 1)[0] not in allowed:
+                raise Refused("a shadow-lane step runs a module that is not the app's own")
 
 
 def pin_release(spec: dict) -> int:
@@ -483,6 +521,7 @@ def main(argv: list[str]) -> int:
             raise Refused("the credentials directory is not an absolute path")
         run = dispatch_run(spec)
         release_fd = pin_release(spec)  # held (shared lock) until the wrapper exits
+        check_release_paths(spec)
         env = environment(spec, run, cred_dir)
         os.chdir(spec["lane_root"])
     except Refused as e:
