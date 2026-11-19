@@ -55,6 +55,7 @@ def stage_item(item: Item, verdict: Verdict, plan: dict, staging: Path, source: 
     digest = tree_digest(item)[:12]
     final = root / item.kind / f"{item.id}-{digest}"
     if final.exists():
+        os.utime(final)  # still current: the pruner goes by age
         return final
     parent = final.parent
     parent.mkdir(parents=True, exist_ok=True)

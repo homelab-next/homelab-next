@@ -80,6 +80,8 @@ class Config:
     snapshots_keep: int = 5
     snapshots_min_age_s: float = 3600.0
     legacy_exceptions: dict[str, str] | None = None
+    staging_keep: int = 48
+    staging_min_age_s: float = 172800.0
 
 
 def _abs(doc: dict, key: str) -> Path:
@@ -166,4 +168,6 @@ def load(path: Path, mode_override: str | None = None) -> Config:
         snapshots_keep=int(doc.get("snapshots_keep", 5)),
         snapshots_min_age_s=float(doc.get("snapshots_min_age_s", 3600)),
         legacy_exceptions=_legacy(doc.get("legacy_exceptions", [])),
+        staging_keep=int(doc.get("staging_keep", 48)),
+        staging_min_age_s=float(doc.get("staging_min_age_s", 172800)),
     )

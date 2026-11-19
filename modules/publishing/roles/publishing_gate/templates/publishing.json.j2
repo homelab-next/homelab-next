@@ -12,6 +12,8 @@
   'snapshots_keep': publishing_gate_snapshots_keep | int,
   'snapshots_min_age_s': publishing_gate_snapshots_min_age_s | int,
   'legacy_exceptions': publishing_gate_legacy_exceptions,
+  'staging_keep': publishing_gate_staging_keep | int,
+  'staging_min_age_s': publishing_gate_staging_min_age_s | int,
 } %}
 {% if publishing_gate_pages_project != '' %}
 {% set _ = cfg.update({'pages': {

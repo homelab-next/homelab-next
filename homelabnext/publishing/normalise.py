@@ -18,6 +18,7 @@ import json
 import re
 import unicodedata
 import urllib.parse
+from html.parser import HTMLParser
 
 from homelabnext.publishing.media import printable_text
 
@@ -55,6 +56,8 @@ _CONFUSABLES = _table(
     ),
     ("\u1d0f\u1d18\u0280\ua731\u1d1b\u1d1c\u1d20\u1d21\u028f\u1d22", "OPRSTUVWYZ"),
     ("\u0261", "g"),
+    # Armenian letters drawn like Latin ones
+    ("\u0570\u0578\u057d\u0585\u0581\u0555\u054d", "hnuogOS"),
 )
 _DATA_URI = re.compile(r"data:[A-Za-z0-9/+.;=_-]*;base64,([A-Za-z0-9+/_=-]{16,})")
 _FORMAT = {"Cf", "Cc"}
@@ -72,9 +75,14 @@ class NotConverged(ValueError):
     """Decoding still changed the text after the layer cap: refused, not guessed at."""
 
 
+# characters that draw nothing: variation selectors, Mongolian free variation selectors, the Hangul
+# fillers, the Khmer inherent vowels and the combining grapheme joiner
+_INVISIBLE = {0x115F, 0x1160, 0x3164, 0xFFA0, 0x17B4, 0x17B5, 0x034F, 0x180B, 0x180C, 0x180D}
+
+
 def _is_variation(c: str) -> bool:
     n = ord(c)
-    return 0xFE00 <= n <= 0xFE0F or 0xE0100 <= n <= 0xE01EF or n in (0x180B, 0x180C, 0x180D)
+    return 0xFE00 <= n <= 0xFE0F or 0xE0100 <= n <= 0xE01EF or n in _INVISIBLE
 
 
 def _step(text: str) -> str:
@@ -100,10 +108,39 @@ def canon(text: str) -> str:
     return text
 
 
+class _Text(HTMLParser):
+    """The text of a document as a browser tokenises it: a ``>`` inside a quoted attribute does not
+    end the tag, comments are dropped, CDATA sections and script and style bodies are kept."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.out: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.out.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        self.out.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        self.out.append(f"&#{name};")
+
+    def unknown_decl(self, data: str) -> None:
+        if data.startswith("CDATA["):
+            self.out.append(data[6:])
+
+
 def strip_markup(text: str) -> str:
-    """The text a browser renders from ``text``: comments, CDATA markers and tags removed, nothing
-    put in their place (so a name split by ``<span>`` is whole again)."""
-    return _TAG.sub("", _CDATA.sub("", _COMMENT.sub("", text)))
+    """The text a browser renders from ``text``, nothing put in the place of a tag (so a name split
+    by ``<span>`` is whole again).  Read with an HTML tokeniser (a quoted ``>`` in an attribute is
+    not the end of the tag); if that fails, with a pattern."""
+    parser = _Text()
+    try:
+        parser.feed(text)
+        parser.close()
+    except (ValueError, AssertionError):
+        return _TAG.sub("", _CDATA.sub("", _COMMENT.sub("", text)))
+    return "".join(parser.out)
 
 
 def decode_escapes(text: str) -> str:
@@ -140,6 +177,7 @@ def variants(text: str, _depth: int = 0) -> list[str]:
     out = [text, c]
     stripped = canon(strip_markup(c))
     out.append(stripped)
+    out.append(canon(_TAG.sub("", _CDATA.sub("", _COMMENT.sub("", c)))))  # a second reading
     for base in (c, stripped):
         out.append(canon(decode_escapes(base)))
     out += [_without_marks(v) for v in list(out)]

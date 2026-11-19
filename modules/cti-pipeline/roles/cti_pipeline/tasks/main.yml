@@ -14,3 +14,13 @@
 
 - name: Write the secrets, the job specs, the template unit and its drop-ins
   ansible.builtin.include_tasks: config.yml
+
+# export and restore mask a lane's units for their run and unmask them in always:, which never runs
+# when the play itself dies (the control node, the connection): every converge lifts any runtime
+# mask left behind (idempotent: nothing masked is nothing to do), and health refuses a masked unit
+- name: Lift any runtime mask an aborted export or restore left on the job units
+  ansible.builtin.command:
+    argv: "{{ [cti_pipeline_systemctl_cli, 'unmask', '--runtime'] + (cti_pipeline_instances | map(attribute='unit') | list) }}"
+  register: cti_pipeline_unmasked
+  changed_when: "'Removed' in (cti_pipeline_unmasked.stdout ~ cti_pipeline_unmasked.stderr)"
+  when: cti_pipeline_reload_systemd | bool and not ansible_check_mode
