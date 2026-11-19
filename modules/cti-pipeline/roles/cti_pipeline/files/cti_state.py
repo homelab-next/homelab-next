@@ -109,16 +109,14 @@ def rel_ok(rel: str) -> bool:
 
 
 def sha256_fd(fd: int, out=None) -> tuple[str, int]:
+    """The sha256 and size of what ``fd`` holds from its offset on, copied to ``out`` when given."""
     h = hashlib.sha256()
-    n = 0
-    while True:
-        chunk = os.read(fd, 1 << 20)
-        if not chunk:
-            return h.hexdigest(), n
-        h.update(chunk)
-        n += len(chunk)
-        if out is not None:
-            out.write(chunk)
+    with os.fdopen(os.dup(fd), "rb", closefd=True) as src:
+        for chunk in iter(lambda: src.read(1 << 20), b""):
+            h.update(chunk)
+            if out is not None:
+                out.write(chunk)
+        return h.hexdigest(), src.tell()
 
 
 def walk_files(root: str, rel_dir: str):
