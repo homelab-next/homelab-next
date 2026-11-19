@@ -16,8 +16,11 @@ from pathlib import Path
 
 import pytest
 import yaml
-from jinja2 import ChainableUndefined
-from jinja2.nativetypes import NativeEnvironment
+
+jinja2 = pytest.importorskip("jinja2")  # present wherever ansible is
+native = pytest.importorskip("jinja2.nativetypes")
+
+pytestmark = pytest.mark.requires_tool("ansible-playbook")  # the job that has ansible has jinja2
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLES = sorted(
@@ -27,7 +30,7 @@ ROLES = sorted(
         *ROOT.glob("ansible/roles/*/tasks/main.yml"),
     ]
 )
-ENV = NativeEnvironment(undefined=ChainableUndefined)
+ENV = native.NativeEnvironment(undefined=jinja2.ChainableUndefined)
 ENV.filters["int"] = lambda v, default=0: (
     int(v) if str(v).strip().lstrip("-").isdigit() else default
 )
