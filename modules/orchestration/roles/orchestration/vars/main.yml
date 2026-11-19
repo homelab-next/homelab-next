@@ -283,7 +283,8 @@ orchestration_runner_exit_classes_effective: >-
      if orchestration_runner_dispatch | bool else orchestration_runner_exit_classes }}
 # the polkit action and the only verbs a rule grants; never manage-unit-files or reload-daemon
 orchestration_job_unit_action: org.freedesktop.systemd1.manage-units
-orchestration_job_unit_verbs: [start, stop, reset-failed]
+# ref: systemctl start --wait pins the unit (Unit.Ref) while it waits, so its result stays readable
+orchestration_job_unit_verbs: [start, stop, ref, reset-failed]
 orchestration_job_unit_lanes: [real, shadow]
 # the first line every rule the role writes carries: only such a file is ever removed by the role
 orchestration_polkit_marker: "// Managed by homelabnext (role orchestration"
@@ -299,6 +300,9 @@ orchestration_job_instances: >-
   {%- endfor -%}
   {%- endfor -%}
   {{ out }}
-orchestration_job_set_pattern: '^(?=.{1,32}\Z)[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+orchestration_job_set_pattern: '^(?=.{1,24}\Z)[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
 orchestration_job_name_pattern: '^(?=.{1,48}\Z)[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
 orchestration_agent_key_pattern: '^[a-z0-9][a-z0-9_-]{0,63}\Z'
+orchestration_dispatch_read_bin: "{{ orchestration_install_dir }}/bin/hnx-dispatch-read"
+orchestration_job_group_prefix: hnx-job-
+orchestration_polkit_rule_prefix: "49-hnx-{{ orchestration_logical_id }}-"

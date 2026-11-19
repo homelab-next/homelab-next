@@ -1,0 +1,153 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: orchestration-dispatch-read
+#   kind: job
+#   purpose: Read and check, as a job unit's own user, the run file the session dispatcher wrote for it, refusing anything planted or replayed.
+#   owner: platform
+#   trigger: [role:orchestration]
+#   inputs: the set's run directory, the unit's instance (%i), the controller's user, a directory of consumed run ids the job's user owns
+#   outputs: the run file's JSON on stdout; the refusal on stderr; one marker per consumed run id
+#   installs_to: /opt/hnx/orchestration/bin/hnx-dispatch-read
+#   exit:
+#     "0": the run file is the dispatcher's, for this instance, and not consumed before
+#     "1": "refused: missing, a link, not a regular file, more than one link, not the controller's, too large, malformed, for another instance, or a run id already consumed"
+#     "2": usage error
+"""The job side of the dispatcher's run file (modules/orchestration README, "Module job units").
+
+A module's job unit runs this as its first step, as the module's own user (never as root, never
+through ``LoadCredential=``): ``hnx-dispatch-read --dir /var/lib/hnx-dispatch/<set> --instance %i
+--owner hnx-orchestrator --consumed-dir <a directory of the job's>``. It opens
+``<dir>/<instance>.json`` with ``O_NOFOLLOW | O_NONBLOCK`` and checks, on the open descriptor:
+a regular file (never a directory, FIFO, socket or device), one link, owned by the controller's
+user, writable by no one but it, at most 256 KiB. Then the content: version 1, the instance's own
+job and lane, the unit's own name, a run id of the dispatcher's shape, the other fields of their
+types. Last, the run id is recorded as consumed (a marker created exclusively in
+``--consumed-dir``): a run id seen before is refused, so a stale or copied run file never runs the
+same task twice. The checked JSON goes to stdout; anything else is a refusal (exit 1) that reads
+nothing more.
+
+A link or a planted file can therefore reach only what the module's user could read anyway, and
+nothing is read with root's rights.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pwd
+import re
+import stat
+import sys
+
+MAX_RUN_FILE_BYTES = 256 << 10
+INSTANCE_RE = re.compile(r"^(?P<job>[a-z][a-z0-9]*(-[a-z0-9]+)*)-(?P<lane>real|shadow)\Z")
+SET_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z")
+AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+
+
+class Refused(Exception):
+    pass
+
+
+def read_run_file(directory: str, instance: str, owner_uid: int) -> dict:
+    m = INSTANCE_RE.match(instance)
+    if not m:
+        raise Refused(f"the instance {instance!r} is not <job>-<real|shadow>")
+    set_name = os.path.basename(os.path.normpath(directory))
+    if not SET_RE.match(set_name):
+        raise Refused(f"the run directory {directory} is not a set's (<run root>/<set>)")
+    path = os.path.join(directory, instance + ".json")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError as e:
+        raise Refused(f"{path} cannot be opened ({e.strerror}; a link is never followed)") from e
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise Refused(f"{path} is not a regular file")
+        if st.st_nlink != 1:
+            raise Refused(f"{path} has {st.st_nlink} links (one expected)")
+        if st.st_uid != owner_uid:
+            raise Refused(f"{path} belongs to uid {st.st_uid}, not the controller's ({owner_uid})")
+        if st.st_mode & 0o022:
+            raise Refused(f"{path} is writable by group or others")
+        if st.st_size > MAX_RUN_FILE_BYTES:
+            raise Refused(f"{path} is larger than {MAX_RUN_FILE_BYTES} bytes")
+        raw = b""
+        while len(raw) <= MAX_RUN_FILE_BYTES:
+            chunk = os.read(fd, 1 << 16)
+            if not chunk:
+                break
+            raw += chunk
+    finally:
+        os.close(fd)
+    if len(raw) > MAX_RUN_FILE_BYTES:
+        raise Refused(f"{path} grew past {MAX_RUN_FILE_BYTES} bytes while read")
+    try:
+        doc = json.loads(raw)
+    except ValueError as e:
+        raise Refused(f"{path} is not JSON") from e
+    unit = f"hnx-{set_name}@{instance}.service"
+    checks = [
+        (isinstance(doc, dict), "is not an object"),
+        (isinstance(doc, dict) and doc.get("version") == 1, "is not version 1"),
+        (isinstance(doc, dict) and doc.get("job") == m["job"], "names another job"),
+        (isinstance(doc, dict) and doc.get("lane") == m["lane"], "names another lane"),
+        (isinstance(doc, dict) and doc.get("unit") == unit, "names another unit"),
+        (isinstance(doc, dict) and isinstance(doc.get("run_id"), str) and bool(RUN_ID_RE.match(doc["run_id"])), "has no run id"),
+        (isinstance(doc, dict) and isinstance(doc.get("agent_key"), str) and bool(AGENT_RE.match(doc["agent_key"])), "has no agent key"),
+        (isinstance(doc, dict) and isinstance(doc.get("task"), str), "has no task"),
+        (isinstance(doc, dict) and isinstance(doc.get("dispatched_at"), str), "has no dispatch time"),
+    ]  # fmt: skip
+    for ok, why in checks:
+        if not ok:
+            raise Refused(f"{path} {why}")
+    return doc
+
+
+def consume(consumed_dir: str, run_id: str) -> None:
+    """Record the run id as consumed; a run id recorded before is a replay."""
+    try:
+        fd = os.open(
+            os.path.join(consumed_dir, run_id),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+        )
+    except FileExistsError as e:
+        raise Refused(f"run id {run_id} was consumed before (a replayed run file)") from e
+    except OSError as e:
+        raise Refused(
+            f"the consumed-run directory {consumed_dir} is not usable ({e.strerror})"
+        ) from e
+    os.close(fd)
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="hnx-dispatch-read")
+    ap.add_argument("--dir", required=True)
+    ap.add_argument("--instance", required=True)
+    who = ap.add_mutually_exclusive_group(required=True)
+    who.add_argument("--owner", help="the controller's user name")
+    who.add_argument("--owner-uid", type=int)
+    ap.add_argument("--consumed-dir", required=True)
+    args = ap.parse_args(argv)
+    try:
+        uid = args.owner_uid if args.owner is None else pwd.getpwnam(args.owner).pw_uid
+    except KeyError:
+        print(f"hnx-dispatch-read: no user {args.owner}", file=sys.stderr)
+        return 2
+    try:
+        doc = read_run_file(args.dir, args.instance, uid)
+        consume(args.consumed_dir, doc["run_id"])
+    except Refused as e:
+        print(f"hnx-dispatch-read: refused: {e}", file=sys.stderr)
+        return 1
+    sys.stdout.write(json.dumps(doc, sort_keys=True) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

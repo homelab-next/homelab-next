@@ -95,72 +95,118 @@ orchestration_job_units:
 | What | Where (defaults) | Owner, mode |
 |---|---|---|
 | the dispatcher | `/opt/hnx/orchestration/bin/hnx-session-dispatch` | root, 0755 |
+| the run-file reader the job runs | `/opt/hnx/orchestration/bin/hnx-dispatch-read` | root, 0755 |
 | the dispatch table (agent key -> set and job) | `/etc/hnx/orchestration/dispatch.json` | root:service group, 0640; the dispatcher refuses one owned by anyone else or writable by group or others |
-| one polkit rule per set | `/etc/polkit-1/rules.d/49-hnx-<set>.rules` | root, 0644 |
-| the run file of each instance, and its lock | `/var/lib/hnx-modules/orchestration/dispatch/<set>/<job>-<lane>.{json,lock}` | service user, 0700 / 0600 |
-| the log file of each instance | `/var/log/hnx-jobs/<set>/<job>-<lane>.log` | root:service group, 0640 (directory 0750) |
+| one polkit rule per set | `/etc/polkit-1/rules.d/49-hnx-<service>-<set>.rules` | root, 0644 |
+| each set's group | `hnx-job-<set>` (a system group; the set name is at most 24 characters) | created by the role |
+| the run directory of a set | `/var/lib/hnx-dispatch/<set>/` (parent root 0755) | service user : `hnx-job-<set>`, **2750** (setgid) |
+| the run file of each instance | `/var/lib/hnx-dispatch/<set>/<job>-<lane>.json` | service user : `hnx-job-<set>`, 0640; removed when the run ends |
+| the lock of each instance | `/var/lib/hnx-modules/orchestration/dispatch/<set>/<job>-<lane>.lock` | service user, 0700 / 0600 |
+| the log file of each instance | `/var/log/hnx-jobs/<set>/<job>-<lane>.log` | root:service group, 0640 (directory root, 0750) |
 
 **One session.** The runner gives the session `HNX_AGENT_KEY`, `HNX_LANE` and `HNX_RUN_ID`. The
 dispatcher looks the agent up in the table, takes the instance's lock (a second session of the same
 job and lane waits for it: same-name jobs run one after the other), refuses with exit 75 a unit it
 finds already running (started by hand; classed `concurrency-limited`, a wait the controller asks
-again after, unless `orchestration_runner_exit_classes` names 75), writes the run file
-(`{run_id, lane, agent_key, job, unit, task, dispatched_at}`, the task being the prompt, at most
-64 KiB), notes where the unit's log ends, and runs `systemctl start --wait hnx-<set>@<job>-<lane>.service`.
-When the unit ends it answers one JSON object: `outcome` (`done`, `failed`, `busy`, `refused` or
-`cancelled`), `unit`, `result` and `exec_main_status` (from `systemctl show`, which needs no
-polkit), and `log_tail`, the end (`orchestration_dispatch_tail_bytes`, 16 KiB) of what **this run**
-appended to the unit's log. Success is exit 0 and the answer on stdout; a failed unit is exit 1,
-the answer on stderr (the runner keeps stderr), and the unit's failed state is reset
-(`reset-failed`, so a failed run does not stand as a failed unit on the host). A cancel (the
-runner's SIGTERM to the session's group) stops the unit (`systemctl stop`) and exits 143; a
-cancel while the session still waits for the lock starts nothing. An unknown agent, a lane the
-set does not run, a run id that is not `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` and an untrusted table
-are exit 2 before anything is started.
+again after, unless `orchestration_runner_exit_classes` names 75), writes the run file, notes where
+the unit's log ends, and runs `systemctl start --wait hnx-<set>@<job>-<lane>.service`. When the
+unit ends it removes the run file and answers one JSON object: `outcome` (`done`, `failed`, `busy`,
+`refused` or `cancelled`), `unit`, `result` and `exec_main_status` (from `systemctl show`, which
+needs no polkit), and `log_tail`, the end (`orchestration_dispatch_tail_bytes`, 16 KiB) of what
+**this run** appended to the unit's log. Success is exit 0 and the answer on stdout; a failed unit
+is exit 1, the answer on stderr (the runner keeps stderr), and the unit's failed state is reset. A
+cancel (the runner's SIGTERM to the session's group; any later signal is ignored) queues the stop
+with `systemctl stop --no-block` (so the runner's kill grace cannot cut it off), waits up to 4 s for
+it, resets a failed state, removes the run file and exits 143; a cancel while the session still
+waits for the lock starts nothing. A systemctl call that hangs past 30 s is part of the answer, never
+a traceback. An unknown agent, a lane the set does not run, a run id that is not
+`[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`, a task over 64 KiB (refused, never cut short) and an untrusted
+table are exit 2 before anything is started.
 
-**What the module's unit must do** (the module ships the template `hnx-<set>@.service`; the
-dispatcher never writes a unit):
+**The module's log is the session's answer.** `log_tail` is stored by the controller with the job
+(and shown to whoever reads the job): a module job must **never write a secret to its log**.
+
+### The run file (the contract a module job implements)
+
+The run file is read by **the job's own process, as the module's user** — never by PID 1, never
+with `LoadCredential=` or `EnvironmentFile=`. (Root reading a path in a directory the controller's
+user owns would let that user point a link at any file, directory or socket and have root read it
+into the module's unit.) What a link or a planted file can reach is then only what the module's user
+could read anyway.
+
+* **Path**: `/var/lib/hnx-dispatch/<set>/<job>-<lane>.json` (`orchestration_dispatch_run_root`),
+  i.e. `/var/lib/hnx-dispatch/<set>/%i.json` in the unit.
+* **Access**: the directory is the controller's (`orchestration_user`), group `hnx-job-<set>`,
+  2750; the file 0640, group `hnx-job-<set>` by the setgid directory. The module's unit gets read
+  access with `SupplementaryGroups=hnx-job-<set>`; nothing else changes on the module's user.
+* **Format**: one JSON object, UTF-8, at most 256 KiB:
+  `{"version": 1, "run_id": str, "lane": "real"|"shadow", "agent_key": str, "job": str,
+  "unit": "hnx-<set>@<job>-<lane>.service", "task": str (at most 64 KiB), "dispatched_at":
+  "YYYY-MM-DDTHH:MM:SSZ"}`.
+* **Validation, before anything is used** (all of it is `hnx-dispatch-read`):
+  open with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` (a link is refused, a FIFO never blocks), then on
+  that descriptor `fstat`: a regular file, `st_nlink == 1`, `st_uid` the controller's uid, not
+  writable by group or others, `st_size` at most 256 KiB; then the content: `version` 1, `job` and
+  `lane` equal to the instance's (`%i` = `<job>-<lane>`), `unit` equal to the unit's own name,
+  `run_id` matching `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`, `agent_key` an agent key, `task` and
+  `dispatched_at` strings. Anything else is refused and nothing more is read.
+* **Replay**: the run id is recorded as consumed, a marker created with `O_CREAT | O_EXCL` in a
+  directory of the job's own (`--consumed-dir`); a run id seen before is refused. The dispatcher
+  also removes the run file when the run ends (and on a cancel), so a start without a dispatcher
+  finds none.
+
+The reader the role installs does all of it and prints the checked JSON:
 
 ```ini
 [Service]
 Type=oneshot
 User=<the module's own user>
-# the run file: read by PID 1 as root, placed under $CREDENTIALS_DIRECTORY/hnx-dispatch for the
-# unit's user; data the job parses (run id, lane, task), never an environment file, so a session
-# cannot hand the unit a variable. A start without a dispatcher's run file fails.
-LoadCredential=hnx-dispatch:/var/lib/hnx-modules/orchestration/dispatch/<set>/%i.json
-# opened by PID 1 before it drops to the unit's user: the file the role made keeps its owner and
-# mode, so the controller's group reads it and the controller is never in the journal's group
+SupplementaryGroups=hnx-job-<set>
+# the job's first step, as the module's user: exit 1 and nothing read on any refusal
+ExecStart=/bin/sh -c 'run=$(/opt/hnx/orchestration/bin/hnx-dispatch-read --dir /var/lib/hnx-dispatch/<set> --instance %i --owner hnx-orchestrator --consumed-dir <a directory of the job's>) && exec <the job> ...'
+# opened by PID 1 before it drops to the unit's user, in a root directory the controller cannot
+# write: the file the role made keeps its owner and mode, so the controller's group reads it and the
+# controller is never in the journal's group
 StandardOutput=append:/var/log/hnx-jobs/<set>/%i.log
 StandardError=inherit
 ```
 
-The lane is the instance's last part (`%i` = `<job>-<lane>`); a unit picks its lane's settings from
-it (an `env.real` / `env.shadow` of its own, say).
+A module may implement the same checks in its own code instead of running the reader; the checks
+above are the contract either way. The lane is the instance's last part; a unit picks its lane's
+settings from it (an `env.real` / `env.shadow` of its own, say).
 
 **The polkit rule** grants the service user (`orchestration_user`) the action
-`org.freedesktop.systemd1.manage-units` with the verbs `start`, `stop` and `reset-failed` on exactly
-the set's declared units, compared as whole names (never a prefix or a pattern), and answers
-`NOT_HANDLED` to everything else, so polkit's default (authentication required) applies: never
-`restart`, `reload` or `kill`, never another unit, never `manage-unit-files` or `reload-daemon`.
-A rule this role wrote for a set the site no longer declares is removed (only a file whose first line
-is the role's marker); run files and logs are kept. `remove.yml` deletes the rules and the table. A
-host without `/etc/polkit-1/rules.d` refuses the job units. Facts behind the design: a
-spike on a deployed controller (2026-11-19, a plain unit in a clone of the controller's sandbox)
-proved that `systemctl start --wait` and `stop` reach PID 1 over the system bus socket, which
-`ProtectSystem=strict`, `NoNewPrivileges` and the empty capability set do not touch, that polkit
-names the caller by its uid, and that a unit the rule does not name is refused. The rest is
-systemd's documented behaviour, held here by tests against a stand-in and not yet run on a host: the
-`unit` detail of a template instance is its full name (`hnx-<set>@<job>-<lane>.service`, never the template), which the
-rule compares whole; `reset-failed` is a verb of the same action; a unit left failed starts again
-with `start`; and a second `start` of a running oneshot merges into the first run's job (it would
-answer the first run's result), which is why the dispatcher locks and checks `is-active` first.
+`org.freedesktop.systemd1.manage-units` with the verbs `start`, `stop`, `ref` (systemctl's
+`start --wait` pins the unit with `Unit.Ref` while it waits, so its result stays readable) and
+`reset-failed` on exactly the set's declared units, compared as whole names (never a prefix or a
+pattern), and answers `NOT_HANDLED` to everything else, so polkit's default (authentication
+required) applies: never `restart`, `reload`, `kill`, `set-property` or `clean`, never another unit,
+never `manage-unit-files` or `reload-daemon`. The grant exists only with the dispatcher:
+`orchestration_job_units` is refused unless `orchestration_runner_dispatch` is true (otherwise the
+runner's sessions are arbitrary agent code holding it). The rule file is named by the service
+(`49-hnx-<service>-<set>.rules`), so two controllers on one host do not overwrite each other's.
+A rule this role wrote for a set the site no longer declares is removed (only a file whose **first
+line** is the role's marker for this service); run directories and logs are kept. `remove.yml`
+deletes the rules and the table. A host without `/etc/polkit-1/rules.d` refuses the job units.
 
-**Settings.** `orchestration_runner_dispatch` needs `orchestration_job_units`, and the runner's
-own `orchestration_runner_argv`, `_usage_args` and `_toolsets_args` left at their defaults (the
-dispatcher is the whole command); the health check's round trip does not run through it (its agent
-has no unit), so `orchestration_health_job: yes` is refused with it. `orchestration_job_logs_dir`,
-`orchestration_polkit_rules_dir`, `orchestration_dispatch_systemctl` and
+Facts behind the design: a spike on a deployed controller (2026-11-19, a plain unit in a clone of
+the controller's sandbox) proved that `systemctl start --wait` and `stop` reach PID 1 over the
+system bus socket, which `ProtectSystem=strict`, `NoNewPrivileges` and the empty capability set do
+not touch, that polkit names the caller by its uid, and that a unit the rule does not name is
+refused. The rest is systemd's behaviour (read in its v257 source by the review), held here by
+tests against a stand-in and not yet run on a host: the `unit` detail of a template instance is its
+full name (`hnx-<set>@<job>-<lane>.service`, never the template), which the rule compares whole;
+the verbs are `start`, `stop`, `ref` and `reset-failed`; a unit left failed starts again with
+`start`; and a second `start` of a running oneshot merges into the first run's job (it would answer
+the first run's result), which is why the dispatcher locks and checks `is-active` first.
+
+**Settings.** `orchestration_runner_dispatch` needs `orchestration_job_units` and the reverse, and
+the runner's own `orchestration_runner_argv`, `_usage_args` and `_toolsets_args` left at their
+defaults (the dispatcher is the whole command); the health check's round trip does not run through
+it (its agent has no unit), so `orchestration_health_job: yes` is refused with it. The controller's
+unit gains `ReadWritePaths=` on the run root when job units are declared (a restart).
+`orchestration_job_logs_dir`, `orchestration_polkit_rules_dir`, `orchestration_dispatch_run_root`,
+`orchestration_job_run_group`, `orchestration_dispatch_systemctl` and
 `orchestration_dispatch_table_owner_uid` (0) exist for tests.
 
 ## Sizing a job: min_context and exclusive

@@ -6,8 +6,9 @@
     'lanes': s.lanes | default(orchestration_job_unit_lanes),
     'log_dir': orchestration_job_logs_dir ~ '/' ~ s.name}}) %}
 {% endfor %}
-{{ {'version': 1,
+{{ {'version': 2,
     'managed_by': 'homelabnext role orchestration, service ' ~ orchestration_logical_id,
     'dispatch_dir': orchestration_dispatch_dir,
+    'run_root': orchestration_dispatch_run_root,
     'systemctl': orchestration_dispatch_systemctl,
     'units': units} | to_nice_json }}

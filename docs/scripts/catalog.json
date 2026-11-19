@@ -1408,10 +1408,30 @@
     },
     {
       "exit": {
+        "0": "the run file is the dispatcher's, for this instance, and not consumed before",
+        "1": "refused: missing, a link, not a regular file, more than one link, not the controller's, too large, malformed, for another instance, or a run id already consumed",
+        "2": "usage error"
+      },
+      "id": "orchestration-dispatch-read",
+      "inputs": "the set's run directory, the unit's instance (%i), the controller's user, a directory of consumed run ids the job's user owns",
+      "installs_to": "/opt/hnx/orchestration/bin/hnx-dispatch-read",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the run file's JSON on stdout; the refusal on stderr; one marker per consumed run id",
+      "owner": "platform",
+      "path": "modules/orchestration/roles/orchestration/files/hnx-dispatch-read",
+      "purpose": "Read and check, as a job unit's own user, the run file the session dispatcher wrote for it, refusing anything planted or replayed.",
+      "status": "active",
+      "trigger": [
+        "role:orchestration"
+      ]
+    },
+    {
+      "exit": {
         "0": "the unit ran and ended successfully",
-        "1": "the unit failed, or was never started (systemctl refused the start)",
+        "1": "the unit failed, or was never started (systemctl refused or timed out)",
         "143": "cancelled (SIGTERM, SIGINT or SIGHUP), the unit was stopped",
-        "2": "usage or configuration error (an untrusted or malformed table, an agent key with no job, a lane or run id refused)",
+        "2": "usage or configuration error (an untrusted or malformed table, an agent key with no job, a lane, run id or task refused)",
         "75": "the unit is already active (started outside this dispatcher), a wait the controller retries"
       },
       "id": "orchestration-session-dispatch",
@@ -1419,7 +1439,7 @@
       "installs_to": "/opt/hnx/orchestration/bin/hnx-session-dispatch",
       "kind": "job",
       "language": "python",
-      "outputs": "one JSON answer on stdout (success) or stderr (failure, refusal, cancel); the run file the unit loads as a credential",
+      "outputs": "one JSON answer on stdout (success) or stderr (failure, refusal, cancel); the run file the job reads itself, removed when the run ends",
       "owner": "platform",
       "path": "modules/orchestration/roles/orchestration/files/hnx-session-dispatch",
       "purpose": "Run one controller session as a module-declared job unit (start it, wait, return its result and log tail; stop it on cancel).",

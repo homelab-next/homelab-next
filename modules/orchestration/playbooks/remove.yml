@@ -29,13 +29,13 @@
         - "{{ orchestration_config_dir | default('/etc/hnx/orchestration') }}/api-tokens.yaml"
         - "{{ orchestration_config_dir | default('/etc/hnx/orchestration') }}/events.token"
     # the grants go with the controller: no rule may let a user that no longer runs anything start
-    # a module's units (only a rule this role wrote, by its first line); run files and logs are kept
+    # a module's units (only a rule this role wrote, by its first line); run directories and logs are kept
     - name: Find the polkit rules the role wrote for the module job units
       ansible.builtin.find:
         paths: "{{ orchestration_polkit_rules_dir | default('/etc/polkit-1/rules.d') }}"
         patterns: ["49-hnx-*.rules"]
-        contains: '^// Managed by homelabnext \(role orchestration, service {{ orchestration_logical_id | regex_escape }}, '
-        read_whole_file: false
+        contains: '\A// Managed by homelabnext \(role orchestration, service {{ orchestration_logical_id | regex_escape }}, '
+        read_whole_file: true
         file_type: file
         recurse: false
       register: orchestration_remove_rules
