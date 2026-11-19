@@ -22,21 +22,26 @@ import contextlib
 import hashlib
 import http.server
 import json
+import os
 import socket
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_role
+from rolerun import fake, run_cases, run_role
 
 from tests.conform.controller_rig import controller_binary
+from tests.suite_policy import require_tool
 
 __all__ = ["controller_binary"]  # the session fixture, imported for its tests
 
+#: a unit instance's name ("<template>@<instance>"), built so no literal reads as an address
+U = "{}@{}".format
 ROOT = Path(__file__).resolve().parents[2]
 ROLE = str(ROOT / "modules" / "orchestration" / "roles" / "orchestration")
 USER = subprocess.run(["id", "-un"], capture_output=True, text=True, check=True).stdout.strip()
@@ -593,6 +598,191 @@ def test_what_changed_decides_start_restart_reload_and_a_profile_reload(tmp_path
     assert r.returncode == 0, r.stdout + r.stderr
     assert [c for c in calls(tmp_path) if c.split()[0] in ("restart", "reload", "start")] == []
     assert stand.reloads == [f"Bearer {TOKENS['ADMIN']}"]
+
+
+# ----------------------------------------------------------------------------- module job units
+
+JOB_UNITS = [
+    {"name": "cti", "jobs": {"cti-hourly": "fresh", "cti-hourly-b": "fresh", "cti-publish": "publish"}},
+    {"name": "voice", "jobs": {"voice-check": "check"}, "lanes": ["shadow"]},
+]  # fmt: skip
+MANAGE = "org.freedesktop.systemd1.manage-units"
+
+# polkit's rule API, enough to run a rendered rule: each case is (action id, user, unit, verb)
+POLKIT_HARNESS = r"""
+const fs = require("fs");
+const rules = [];
+const polkit = {Result: {YES: "yes", NO: "no", NOT_HANDLED: "not-handled"}, addRule: f => rules.push(f)};
+new Function("polkit", fs.readFileSync(process.argv[2], "utf8"))(polkit);
+const out = JSON.parse(process.argv[3]).map(([id, user, unit, verb]) => {
+  const details = {unit: unit, verb: verb};
+  const action = {id: id, lookup: k => details[k]};
+  for (const r of rules) { const v = r(action, {user: user}); if (v !== polkit.Result.NOT_HANDLED) return v; }
+  return polkit.Result.NOT_HANDLED;
+});
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def polkit_verdicts(tmp: Path, rule: Path, cases: list) -> list[str]:
+    """Run the rendered rule in node with polkit's addRule/lookup shape; one verdict per case."""
+    node = require_tool("node")
+    harness = tmp / "polkit-harness.js"
+    harness.write_text(POLKIT_HARNESS)
+    r = subprocess.run([node, str(harness), str(rule), json.dumps(cases)],
+                       capture_output=True, text=True, timeout=60, check=False)  # fmt: skip
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
+def test_module_job_units_get_a_narrow_polkit_rule_a_table_logs_and_the_dispatcher(
+    tmp_path, binary
+):
+    rules = tmp_path / "polkit-rules"
+    rules.mkdir()
+    # a stale rule of a set the site dropped (this role's, by its first line) and another's rule
+    (rules / "49-hnx-gone.rules").write_text(
+        "// Managed by homelabnext (role orchestration, service orchestrator, job unit set gone); x\n"
+    )
+    (rules / "49-hnx-other.rules").write_text("// someone else's rule\n")
+    systemctl = Path(fake(tmp_path / "systemctl", "import sys\nsys.exit(0)\n"))
+    kw = {
+        "orchestration_job_units": JOB_UNITS,
+        "orchestration_runner_dispatch": True,
+        "orchestration_polkit_rules_dir": str(rules),
+        "orchestration_job_logs_dir": str(tmp_path / "log" / "hnx-jobs"),
+        "orchestration_dispatch_systemctl": str(systemctl),
+        "orchestration_dispatch_table_owner_uid": os.getuid(),
+    }
+    r, v = main(tmp_path, binary, **kw)
+    assert r.returncode == 0, r.stdout + r.stderr
+    etc, var = tmp_path / "etc" / "orchestration", tmp_path / "var" / "orchestration"
+    bin_ = tmp_path / "opt" / "hnx-orchestration" / "bin" / "hnx-session-dispatch"
+    cfg = yaml.safe_load((etc / "controller.yaml").read_text())
+    assert cfg["runner"]["exec"]["argv"] == [
+        str(bin_), "--table", str(etc / "dispatch.json"), "--table-owner", str(os.getuid()),
+        "--tail-bytes", "16384",
+    ]  # fmt: skip
+    # a unit found running is a wait (the controller asks again), keyed by the exit status
+    assert cfg["runner"]["exec"]["exit_classes"] == {75: "concurrency-limited"}
+    # the health check's agent has no job unit: no smoke round trip through the dispatcher
+    assert sorted(p.name for p in (etc / "profiles").iterdir()) == ["agent-a.yaml"]
+    assert oct(bin_.stat().st_mode & 0o777) == "0o755"
+    table = json.loads((etc / "dispatch.json").read_text())
+    assert oct((etc / "dispatch.json").stat().st_mode & 0o777) == "0o640"
+    assert table["version"] == 1 and table["dispatch_dir"] == str(var / "dispatch")
+    assert table["systemctl"] == str(systemctl)
+    assert table["units"]["cti"] == {
+        "jobs": JOB_UNITS[0]["jobs"], "lanes": ["real", "shadow"],
+        "log_dir": str(tmp_path / "log" / "hnx-jobs" / "cti"),
+    }  # fmt: skip
+    assert table["units"]["voice"]["lanes"] == ["shadow"]
+    for d in (var / "dispatch", var / "dispatch" / "cti", var / "dispatch" / "voice"):
+        assert oct(d.stat().st_mode & 0o777) == "0o700"
+    logs = tmp_path / "log" / "hnx-jobs"
+    assert oct((logs / "cti").stat().st_mode & 0o777) == "0o750"
+    assert sorted(p.name for p in (logs / "cti").iterdir()) == [
+        "fresh-real.log", "fresh-shadow.log", "publish-real.log", "publish-shadow.log",
+    ]  # fmt: skip
+    assert sorted(p.name for p in (logs / "voice").iterdir()) == ["check-shadow.log"]
+    assert oct((logs / "cti" / "fresh-real.log").stat().st_mode & 0o777) == "0o640"
+    # one rule per set; the dropped set's rule is gone, another's rule is untouched
+    assert sorted(p.name for p in rules.iterdir()) == [
+        "49-hnx-cti.rules", "49-hnx-other.rules", "49-hnx-voice.rules",
+    ]  # fmt: skip
+    rule = (rules / "49-hnx-cti.rules").read_text()
+    assert oct((rules / "49-hnx-cti.rules").stat().st_mode & 0o777) == "0o644"
+    assert rule.startswith(
+        "// Managed by homelabnext (role orchestration, service orchestrator, job unit set cti)"
+    )
+    code = rule.split("polkit.addRule", 1)[1]
+    for never in (
+        "manage-unit-files",
+        "reload-daemon",
+        "restart",
+        "Result.YES;\n  }\n  return polkit.Result.YES",
+    ):
+        assert never not in code
+    units = json.loads(code.split("var units = ", 1)[1].split(";", 1)[0])
+    assert units == [
+        f"hnx-cti@{j}-{lane}.service" for j in ("fresh", "publish") for lane in ("real", "shadow")
+    ]
+    assert json.loads(code.split("var verbs = ", 1)[1].split(";", 1)[0]) == [
+        "start",
+        "stop",
+        "reset-failed",
+    ]
+    again = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+    # the rendered table is one the installed dispatcher accepts (an unknown agent is its refusal)
+    d = subprocess.run(
+        [sys.executable, "-I", str(bin_), "--table", str(etc / "dispatch.json"), "--table-owner", str(os.getuid())],
+        input="", capture_output=True, text=True, timeout=60, check=False,
+        env={"HNX_AGENT_KEY": "nobody", "HNX_LANE": "real", "HNX_RUN_ID": "r1"},
+    )  # fmt: skip
+    assert d.returncode == 2 and "no module job unit is declared for agent nobody" in d.stderr
+    # what polkit decides on the rendered rule: only the controller's user, only manage-units,
+    # only a declared unit (exactly; not a prefix, another suffix or another set), only the 3 verbs
+    other = "someone"
+    rule_user = json.loads(code.split("subject.user !== ", 1)[1].split(")", 1)[0])
+    assert rule_user == v["orchestration_user"]
+    user = rule_user
+    cases = {
+        (MANAGE, user, U("hnx-cti", "fresh-real.service"), "start"): "yes",
+        (MANAGE, user, U("hnx-cti", "fresh-shadow.service"), "stop"): "yes",
+        (MANAGE, user, U("hnx-cti", "publish-real.service"), "reset-failed"): "yes",
+        (MANAGE, user, U("hnx-cti", "fresh-real.service"), "restart"): "not-handled",
+        (MANAGE, user, U("hnx-cti", "fresh-real.service"), "kill"): "not-handled",
+        (MANAGE, user, U("hnx-cti", "fresh-real.service"), None): "not-handled",
+        (MANAGE, user, U("hnx-cti", "fresh-prod.service"), "start"): "not-handled",
+        (MANAGE, user, U("hnx-cti", "other-real.service"), "start"): "not-handled",
+        (MANAGE, user, U("hnx-cti", "fresh-real.service.d"), "start"): "not-handled",
+        (MANAGE, user, U("xhnx-cti", "fresh-real.service"), "start"): "not-handled",
+        (MANAGE, user, U("hnx-cti", "fresh-real.socket"), "start"): "not-handled",
+        (MANAGE, user, U("hnx-cti", ".service"), "start"): "not-handled",
+        (MANAGE, user, U("hnx-voice", "check-shadow.service"), "start"): "yes",
+        (MANAGE, user, U("hnx-voice", "check-real.service"), "start"): "not-handled",
+        (MANAGE, user, "ssh.service", "start"): "not-handled",
+        (MANAGE, user, None, "start"): "not-handled",
+        (MANAGE, other, U("hnx-cti", "fresh-real.service"), "start"): "not-handled",
+        ("org.freedesktop.systemd1.manage-unit-files", user, U("hnx-cti", "fresh-real.service"), "start"): "not-handled",
+        ("org.freedesktop.systemd1.reload-daemon", user, None, None): "not-handled",
+    }  # fmt: skip
+    both = [rules / "49-hnx-cti.rules", rules / "49-hnx-voice.rules"]
+    joined = tmp_path / "all.rules"
+    joined.write_text("".join(p.read_text() for p in both))
+    assert polkit_verdicts(tmp_path, joined, [list(k) for k in cases]) == list(cases.values())
+
+
+def test_malformed_job_units_and_a_dispatcher_beside_another_command_are_refused(tmp_path, binary):
+    v = vars_for(tmp_path, binary)
+    good = [{"name": "cti", "jobs": {"cti-hourly": "fresh"}}]
+    cases = [
+        {"orchestration_job_units": good},  # the control: accepted
+        {"orchestration_job_units": good, "orchestration_runner_dispatch": True},  # accepted
+        {"orchestration_job_units": [{"name": "CTI", "jobs": {"a": "fresh"}}]},
+        {"orchestration_job_units": [{"name": "cti_x", "jobs": {"a": "fresh"}}]},
+        {"orchestration_job_units": [{"name": "c" * 33, "jobs": {"a": "fresh"}}]},
+        {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "fresh@x"}}]},
+        {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "Fresh"}}]},
+        {"orchestration_job_units": [{"name": "cti", "jobs": {"A b": "fresh"}}]},
+        {"orchestration_job_units": [{"name": "cti", "jobs": {}}]},
+        {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "fresh"}, "lanes": ["prod"]}]},
+        {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "fresh"}, "lanes": []}]},
+        {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "fresh"}, "unit": "ssh.service"}]},
+        {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "x"}}, {"name": "cti", "jobs": {"b": "y"}}]},
+        {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "x"}}, {"name": "tts", "jobs": {"a": "y"}}]},
+        {"orchestration_job_units": good, "orchestration_polkit_rules_dir": "/etc"},
+        {"orchestration_runner_dispatch": True},
+        {"orchestration_job_units": good, "orchestration_runner_dispatch": True,
+         "orchestration_runner_argv": ["/usr/bin/agent"]},
+        {"orchestration_job_units": good, "orchestration_runner_dispatch": True,
+         "orchestration_runner_usage_args": ["--usage", "{usage_path}"]},
+        {"orchestration_job_units": good, "orchestration_runner_dispatch": True, "orchestration_health_job": "yes"},
+    ]  # fmt: skip
+    got = run_cases(tmp_path, ROLE, "validate", v, cases)
+    assert [failed for failed, _ in got] == [False, False] + [True] * (len(cases) - 2), got
+    assert "orchestration_job_units" in got[2][1] and "orchestration_runner_dispatch" in got[-1][1]
 
 
 def test_start_false_writes_files_and_asks_systemd_nothing(tmp_path, binary):
