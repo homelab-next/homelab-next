@@ -10,9 +10,9 @@
 #   outputs: the steps' output on stdout (the unit's log file); <lane root>/hnx-runs/<job>.json, the last run's record
 #   exit:
 #     "0": every step succeeded
+#     "1": a step failed (its own non-zero exit status is passed on; the steps after it did not run)
 #     "2": refused before any step ran (an untrusted or malformed spec, a lane mismatch, a missing credential)
 #     "143": stopped (SIGTERM, the dispatcher's cancel)
-#     "other": the failing step's own exit status (the steps after it did not run)
 """The job wrapper of module cti-pipeline (modules/cti-pipeline/README.md, "Job units").
 
 The unit ``hnx-<set>@<job>-<lane>.service`` runs::

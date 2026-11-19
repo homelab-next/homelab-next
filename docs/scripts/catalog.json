@@ -370,6 +370,64 @@
     },
     {
       "exit": {
+        "0": "installed (or already installed), or pruned",
+        "1": "refused (a wrong sha256, an unsafe or malformed archive, a failed venv; the reason on stderr); nothing replaced",
+        "2": "usage error"
+      },
+      "id": "cti-pipeline-artefact",
+      "inputs": "install ARCHIVE SHA256 RELEASES_DIR PYTHON | prune RELEASES_DIR CURRENT KEEP",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON line on stdout (changed, release); install writes RELEASES_DIR/<sha16>/, prune removes old release directories",
+      "owner": "platform",
+      "path": "modules/cti-pipeline/roles/cti_pipeline/files/cti_artefact.py",
+      "purpose": "Install the pipeline's pinned app artefact as a release (sha256 first, a safe extract, an offline venv, then a rename), and prune old releases.",
+      "status": "active",
+      "trigger": [
+        "role:cti_pipeline"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every step succeeded",
+        "1": "a step failed (its own non-zero exit status is passed on; the steps after it did not run)",
+        "143": "stopped (SIGTERM, the dispatcher's cancel)",
+        "2": "refused before any step ran (an untrusted or malformed spec, a lane mismatch, a missing credential)"
+      },
+      "id": "cti-pipeline-run",
+      "inputs": "the instance's job spec (root's), the dispatcher's run file and the lane's credentials (systemd credentials)",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the steps' output on stdout (the unit's log file); <lane root>/hnx-runs/<job>.json, the last run's record",
+      "owner": "platform",
+      "path": "modules/cti-pipeline/roles/cti_pipeline/files/hnx-cti-run",
+      "purpose": "Run one cti-pipeline job unit's steps in its lane, with the lane's credentials exported only into the job's processes, and record the run for the freshness check.",
+      "status": "active",
+      "trigger": [
+        "role:cti_pipeline"
+      ]
+    },
+    {
+      "exit": {
+        "0": "exported, checked, restored, fresh, or the gateway answered with content",
+        "1": "refused, stale, or the probe failed (the reason in the JSON and on stderr)",
+        "2": "usage error"
+      },
+      "id": "cti-pipeline-state",
+      "inputs": "export SRC_ROOT DEST [--include DIR]... | prune-exports EXPORT_DIR LANE KEEP | check SOURCE [--expect-counts FILE] | restore SOURCE LANE_ROOT UID GID [--expect-counts FILE] | freshness RUNS_DIR JOB=MAX_AGE_S... [--now EPOCH] | probe-gateway URL MODEL MAX_TOKENS TIMEOUT_S [--ca FILE] (key on stdin)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON object on stdout; export writes DEST (created new), restore moves the replaced directories aside and renames the restored ones into the lane root",
+      "owner": "platform",
+      "path": "modules/cti-pipeline/roles/cti_pipeline/files/cti_state.py",
+      "purpose": "Export, check and restore a cti-pipeline lane's store and state files; judge each job's last-run freshness; probe the gateway with a real-sized request.",
+      "status": "active",
+      "trigger": [
+        "role:cti_pipeline"
+      ]
+    },
+    {
+      "exit": {
         "0": "no reference remains",
         "1": "references remain",
         "2": "usage error"
