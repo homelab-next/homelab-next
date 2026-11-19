@@ -645,6 +645,11 @@ def test_module_job_units_get_a_narrow_polkit_rule_a_table_logs_and_the_dispatch
         "// Managed by homelabnext (role orchestration, service orchestrator, job unit set gone); x\n"
     )
     (rules / "49-hnx-other.rules").write_text("// someone else's rule\n")
+    # the marker on a later line is not the role's: only a FIRST-line marker is ever removed
+    (rules / "49-hnx-late.rules").write_text(
+        "// a site's own rule\n"
+        "// Managed by homelabnext (role orchestration, service orchestrator, job unit set late); x\n"
+    )
     systemctl = Path(fake(tmp_path / "systemctl", "import sys\nsys.exit(0)\n"))
     kw = {
         "orchestration_job_units": JOB_UNITS,
@@ -653,6 +658,8 @@ def test_module_job_units_get_a_narrow_polkit_rule_a_table_logs_and_the_dispatch
         "orchestration_job_logs_dir": str(tmp_path / "log" / "hnx-jobs"),
         "orchestration_dispatch_systemctl": str(systemctl),
         "orchestration_dispatch_table_owner_uid": os.getuid(),
+        "orchestration_dispatch_run_root": str(tmp_path / "var" / "hnx-dispatch"),
+        "orchestration_job_run_group": GROUP,
     }
     r, v = main(tmp_path, binary, **kw)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -670,7 +677,18 @@ def test_module_job_units_get_a_narrow_polkit_rule_a_table_logs_and_the_dispatch
     assert oct(bin_.stat().st_mode & 0o777) == "0o755"
     table = json.loads((etc / "dispatch.json").read_text())
     assert oct((etc / "dispatch.json").stat().st_mode & 0o777) == "0o640"
-    assert table["version"] == 1 and table["dispatch_dir"] == str(var / "dispatch")
+    assert table["version"] == 2 and table["dispatch_dir"] == str(var / "dispatch")
+    assert table["run_root"] == str(tmp_path / "var" / "hnx-dispatch")
+    reader = bin_.parent / "hnx-dispatch-read"
+    assert oct(reader.stat().st_mode & 0o777) == "0o755"
+    # the run directories: the service user's, the set's group, setgid 2750 (the job reads its own
+    # run file as the module's user; no root ever reads it); the controller may write them
+    for s_ in ("cti", "voice"):
+        d = tmp_path / "var" / "hnx-dispatch" / s_
+        assert oct(d.stat().st_mode & 0o7777) == "0o2750"
+    unit_text = (tmp_path / "units" / "hnx-orchestrator.service").read_text()
+    assert f"ReadWritePaths={tmp_path}/var/hnx-dispatch" in unit_text
+    assert "LoadCredential=hnx-dispatch" not in unit_text
     assert table["systemctl"] == str(systemctl)
     assert table["units"]["cti"] == {
         "jobs": JOB_UNITS[0]["jobs"], "lanes": ["real", "shadow"],
@@ -686,12 +704,14 @@ def test_module_job_units_get_a_narrow_polkit_rule_a_table_logs_and_the_dispatch
     ]  # fmt: skip
     assert sorted(p.name for p in (logs / "voice").iterdir()) == ["check-shadow.log"]
     assert oct((logs / "cti" / "fresh-real.log").stat().st_mode & 0o777) == "0o640"
-    # one rule per set; the dropped set's rule is gone, another's rule is untouched
+    # one rule per set, named by the service; the dropped set's rule is gone, another's rule and
+    # one whose marker is not on its first line are untouched
     assert sorted(p.name for p in rules.iterdir()) == [
-        "49-hnx-cti.rules", "49-hnx-other.rules", "49-hnx-voice.rules",
+        "49-hnx-late.rules", "49-hnx-orchestrator-cti.rules", "49-hnx-orchestrator-voice.rules",
+        "49-hnx-other.rules",
     ]  # fmt: skip
-    rule = (rules / "49-hnx-cti.rules").read_text()
-    assert oct((rules / "49-hnx-cti.rules").stat().st_mode & 0o777) == "0o644"
+    rule = (rules / "49-hnx-orchestrator-cti.rules").read_text()
+    assert oct((rules / "49-hnx-orchestrator-cti.rules").stat().st_mode & 0o777) == "0o644"
     assert rule.startswith(
         "// Managed by homelabnext (role orchestration, service orchestrator, job unit set cti)"
     )
@@ -710,6 +730,7 @@ def test_module_job_units_get_a_narrow_polkit_rule_a_table_logs_and_the_dispatch
     assert json.loads(code.split("var verbs = ", 1)[1].split(";", 1)[0]) == [
         "start",
         "stop",
+        "ref",
         "reset-failed",
     ]
     again = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
@@ -731,6 +752,10 @@ def test_module_job_units_get_a_narrow_polkit_rule_a_table_logs_and_the_dispatch
         (MANAGE, user, U("hnx-cti", "fresh-real.service"), "start"): "yes",
         (MANAGE, user, U("hnx-cti", "fresh-shadow.service"), "stop"): "yes",
         (MANAGE, user, U("hnx-cti", "publish-real.service"), "reset-failed"): "yes",
+        (MANAGE, user, U("hnx-cti", "publish-shadow.service"), "ref"): "yes",
+        (MANAGE, user, U("hnx-cti", "other-real.service"), "ref"): "not-handled",
+        (MANAGE, user, U("hnx-cti", "fresh-real.service"), "set-property"): "not-handled",
+        (MANAGE, user, U("hnx-cti", "fresh-real.service"), "clean"): "not-handled",
         (MANAGE, user, U("hnx-cti", "fresh-real.service"), "restart"): "not-handled",
         (MANAGE, user, U("hnx-cti", "fresh-real.service"), "kill"): "not-handled",
         (MANAGE, user, U("hnx-cti", "fresh-real.service"), None): "not-handled",
@@ -748,7 +773,7 @@ def test_module_job_units_get_a_narrow_polkit_rule_a_table_logs_and_the_dispatch
         ("org.freedesktop.systemd1.manage-unit-files", user, U("hnx-cti", "fresh-real.service"), "start"): "not-handled",
         ("org.freedesktop.systemd1.reload-daemon", user, None, None): "not-handled",
     }  # fmt: skip
-    both = [rules / "49-hnx-cti.rules", rules / "49-hnx-voice.rules"]
+    both = [rules / "49-hnx-orchestrator-cti.rules", rules / "49-hnx-orchestrator-voice.rules"]
     joined = tmp_path / "all.rules"
     joined.write_text("".join(p.read_text() for p in both))
     assert polkit_verdicts(tmp_path, joined, [list(k) for k in cases]) == list(cases.values())
@@ -758,11 +783,16 @@ def test_malformed_job_units_and_a_dispatcher_beside_another_command_are_refused
     v = vars_for(tmp_path, binary)
     good = [{"name": "cti", "jobs": {"cti-hourly": "fresh"}}]
     cases = [
-        {"orchestration_job_units": good},  # the control: accepted
-        {"orchestration_job_units": good, "orchestration_runner_dispatch": True},  # accepted
+        {"orchestration_job_units": good, "orchestration_runner_dispatch": True},  # the control
+        {"orchestration_job_units": [{"name": "c" * 24, "jobs": {"a": "fresh"}}],
+         "orchestration_runner_dispatch": True},  # the longest set name: accepted
+        # no grant without the dispatcher: a runner of arbitrary agent code never holds it
+        {"orchestration_job_units": good},
         {"orchestration_job_units": [{"name": "CTI", "jobs": {"a": "fresh"}}]},
         {"orchestration_job_units": [{"name": "cti_x", "jobs": {"a": "fresh"}}]},
-        {"orchestration_job_units": [{"name": "c" * 33, "jobs": {"a": "fresh"}}]},
+        {"orchestration_job_units": [{"name": "c" * 25, "jobs": {"a": "fresh"}}]},
+        {"orchestration_job_units": good, "orchestration_runner_dispatch": True,
+         "orchestration_dispatch_run_root": "/var"},
         {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "fresh@x"}}]},
         {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "Fresh"}}]},
         {"orchestration_job_units": [{"name": "cti", "jobs": {"A b": "fresh"}}]},
@@ -780,9 +810,18 @@ def test_malformed_job_units_and_a_dispatcher_beside_another_command_are_refused
          "orchestration_runner_usage_args": ["--usage", "{usage_path}"]},
         {"orchestration_job_units": good, "orchestration_runner_dispatch": True, "orchestration_health_job": "yes"},
     ]  # fmt: skip
+    # every other malformed declaration is refused for its own reason, the dispatcher on
+    cases = [
+        c if i == 2 or "orchestration_runner_dispatch" in c
+        else {**c, "orchestration_runner_dispatch": True}
+        for i, c in enumerate(cases)
+    ]  # fmt: skip
     got = run_cases(tmp_path, ROLE, "validate", v, cases)
     assert [failed for failed, _ in got] == [False, False] + [True] * (len(cases) - 2), got
-    assert "orchestration_job_units" in got[2][1] and "orchestration_runner_dispatch" in got[-1][1]
+    assert (
+        "orchestration_runner_dispatch" in got[2][1]
+        and "orchestration_runner_dispatch" in got[-1][1]
+    )
 
 
 def test_start_false_writes_files_and_asks_systemd_nothing(tmp_path, binary):
