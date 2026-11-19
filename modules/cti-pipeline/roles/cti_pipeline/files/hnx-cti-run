@@ -31,13 +31,15 @@ The log carries constants, the instance (the unit's own ``%i``, an argument) and
 nothing read from the spec, the environment, the run file or a credential reaches it, so a value
 can never be logged by a message that names it.
 
-The dispatcher's run file (the orchestration module's contract v2, modules/orchestration README,
+The dispatcher's run file (the orchestration module's contract v3, modules/orchestration README,
 "Module job units") is read by this process, as the lane's user, never by PID 1: it is opened with
 ``O_NOFOLLOW|O_NONBLOCK`` and must be a regular file with one link, owned by the controller's user,
-writable by no one else and at most 256 KiB; its ``version``, ``job``, ``lane`` and ``unit`` must
-be this instance's, its ``run_id`` and ``agent_key`` well formed. Each run id is consumed once: a
-file ``<consumed dir>/<run_id>`` is created exclusively (the lane's own directory), and a run id
-seen before is refused (a replay).  A shadow spec whose publish mode is not the
+writable by no one else and at most 256 KiB (contract v3); its ``version`` (2), ``job``, ``lane``
+and ``unit`` must be this instance's, its ``run_id``, ``agent_key`` and ``dispatch_id`` well formed
+and its ``dispatched_at`` within the 30-day keep window (and at most an hour ahead). Each dispatch
+is consumed once: ``<consumed dir>/<dispatch_id>`` is created exclusively (the lane's own
+directory) and a dispatch seen before is refused (a replay); the key is never the run id, which
+the controller reuses across a run's retries. Markers older than the keep window are pruned.  A shadow spec whose publish mode is not the
 staging one, or whose lake schema is the real lane's form, is refused: the shadow lane never
 publishes and never writes a table the real lane relies on.
 
@@ -58,6 +60,7 @@ reads.
 from __future__ import annotations
 
 import argparse
+import calendar
 import contextlib
 import errno
 import fcntl
@@ -85,6 +88,10 @@ PLACEHOLDERS = ("app", "python", "lane_root", "config", "lake_ca")
 STAGE_MODE = "stage"
 SHADOW_SUFFIX = "_shadow"
 MAX_RUN_FILE = 256 << 10
+RUN_FILE_VERSION = 2
+DISPATCH_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
+KEEP_S = 30 * 86400  # the dispatcher's keep window: older run files are refused, older markers pruned
+FUTURE_S = 3600
 AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 BASE_PATH = "/usr/local/bin:/usr/bin:/bin"
 
@@ -250,8 +257,8 @@ def read_loaded(directory: str, name: str) -> str:
 
 
 def dispatch_run(spec: dict) -> dict:
-    """The dispatcher's run file for this instance, checked (contract v2) before anything in it is
-    used, then consumed: a run id that was consumed before is refused."""
+    """The dispatcher's run file for this instance, checked (contract v3) before anything in it is
+    used, then consumed: a dispatch that was consumed before is refused."""
     path, owner = spec.get("run_file"), spec.get("run_owner")
     if not isinstance(path, str) or not path.startswith("/") or not isinstance(owner, str):
         raise Refused("the spec does not name the run file and its owner")
@@ -283,12 +290,14 @@ def dispatch_run(spec: dict) -> dict:
         raise Refused("the run file is too large")
     try:
         run = json.loads(raw.decode("utf-8"))
-    except ValueError as e:
+    except (ValueError, RecursionError) as e:
         raise Refused("the run file is not UTF-8 JSON") from e
     unit = f"hnx-{spec['set']}@{spec['instance']}.service"
     if (
         not isinstance(run, dict)
-        or run.get("version") != 1
+        or run.get("version") != RUN_FILE_VERSION
+        or not isinstance(run.get("dispatch_id"), str)
+        or not DISPATCH_ID_RE.match(run["dispatch_id"])
         or run.get("job") != spec["job"]
         or run.get("lane") != spec["lane"]
         or run.get("unit") != unit
@@ -300,6 +309,13 @@ def dispatch_run(spec: dict) -> dict:
         or not isinstance(run.get("dispatched_at"), str)
     ):
         raise Refused("the run file is not this instance's run (version, job, lane, unit, ids)")
+    try:
+        at = calendar.timegm(time.strptime(run["dispatched_at"], "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError as e:
+        raise Refused("the run file's dispatched_at is not YYYY-MM-DDTHH:MM:SSZ") from e
+    now_s = now_epoch()
+    if at < now_s - KEEP_S or at > now_s + FUTURE_S:
+        raise Refused("the run file is older than the keep window or from the future")
     consumed = spec.get("consumed_dir")
     if not isinstance(consumed, str) or not consumed.startswith("/"):
         raise Refused("the spec does not name the consumed-runs directory")
@@ -308,20 +324,42 @@ def dispatch_run(spec: dict) -> dict:
     except OSError as e:
         raise Refused("the consumed-runs directory is missing or is a link") from e
     try:
+        prune_consumed(dir_fd, now_s)
+        # the replay key is the dispatch, never the run: the controller reuses a run id across its
+        # retries and failovers, and each of those must run
         mark = os.open(
-            run["run_id"],
+            run["dispatch_id"],
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
             0o600,
             dir_fd=dir_fd,
         )
         os.close(mark)
     except FileExistsError as e:
-        raise Refused("the run was consumed before (a replay)") from e
+        raise Refused("the dispatch was consumed before (a replay)") from e
     except OSError as e:
         raise Refused("the run cannot be marked consumed") from e
     finally:
         os.close(dir_fd)
     return run
+
+
+def now_epoch() -> float:
+    """The clock the keep window is judged by (a seam for the tests)."""
+    return time.time()
+
+
+def prune_consumed(dir_fd: int, now_s: float) -> None:
+    """Delete consumed markers older than the keep window: regular files named as a dispatch id,
+    judged by lstat, never a link. A run file that old is refused, so pruning reopens no replay."""
+    for name in os.listdir(dir_fd):
+        if not DISPATCH_ID_RE.match(name):
+            continue
+        try:
+            st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+            if stat.S_ISREG(st.st_mode) and st.st_mtime < now_s - KEEP_S:
+                os.unlink(name, dir_fd=dir_fd)
+        except FileNotFoundError:
+            continue
 
 
 def fill(value: str, placeholders: dict) -> str:

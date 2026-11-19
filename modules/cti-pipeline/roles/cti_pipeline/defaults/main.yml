@@ -65,12 +65,14 @@ cti_pipeline_lane_refs:
 cti_pipeline_state_dirs: [data, state, podcast]
 
 # --- the orchestration dispatcher's interface (modules/orchestration, "Module job units") --------
-# the orchestration dispatcher's run files (contract v2): <dir>/<set>/<job>-<lane>.json, owned by
-# the controller's user (cti_pipeline_dispatch_owner), group hnx-job-<set>, which the job units join
-# (SupplementaryGroups=) to read them; the orchestration role creates the group and the directories
+# the orchestration dispatcher's run files (contract v3): <dir>/<service>/<set>/<job>-<lane>.json,
+# owned by the controller's user (cti_pipeline_dispatch_owner), group hnx-<service>_<set> (at most
+# 32 characters), which the job units join (SupplementaryGroups=) to read them; <service> is the
+# controller's orchestration_logical_id; the orchestration role creates the group and directories
 cti_pipeline_dispatch_dir: /var/lib/hnx-dispatch
+cti_pipeline_dispatch_service: orchestrator
 cti_pipeline_dispatch_owner: hnx-orchestrator
-cti_pipeline_dispatch_group: "hnx-job-{{ cti_pipeline_logical_id }}"
+cti_pipeline_dispatch_group: "hnx-{{ cti_pipeline_dispatch_service }}_{{ cti_pipeline_logical_id }}"
 # where each unit appends its log (<dir>/<set>/<job>-<lane>.log, pre-created by the orchestration role)
 cti_pipeline_job_logs_dir: /var/log/hnx-jobs
 

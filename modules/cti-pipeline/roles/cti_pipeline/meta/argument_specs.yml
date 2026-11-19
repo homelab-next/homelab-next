@@ -100,16 +100,20 @@ argument_specs:
         default: ["data", "state", "podcast"]
       cti_pipeline_dispatch_dir:
         type: path
-        description: "The orchestration dispatcher's run-file directory (contract v2): the job reads <dir>/<id>/%i.json itself, as its lane's user."
+        description: "The orchestration dispatcher's run-file root (contract v3): the job reads <dir>/<service>/<id>/%i.json itself, as its lane's user."
         default: "/var/lib/hnx-dispatch"
+      cti_pipeline_dispatch_service:
+        type: str
+        description: "The controller's orchestration_logical_id, which namespaces the run directory and group."
+        default: "orchestrator"
       cti_pipeline_dispatch_owner:
         type: str
         description: "The controller's user, which must own every run file (the job refuses one of another owner)."
         default: "hnx-orchestrator"
       cti_pipeline_dispatch_group:
         type: str
-        description: "The run files' group, created by the orchestration role; the job units join it (SupplementaryGroups=)."
-        default: "hnx-job-{{ cti_pipeline_logical_id }}"
+        description: "The run files' group (at most 32 characters), created by the orchestration role; the job units join it (SupplementaryGroups=)."
+        default: "hnx-{{ cti_pipeline_dispatch_service }}_{{ cti_pipeline_logical_id }}"
       cti_pipeline_job_logs_dir:
         type: path
         description: "The job units' log directory (<dir>/<id>/%i.log), pre-created by the orchestration role."

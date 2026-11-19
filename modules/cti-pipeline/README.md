@@ -16,15 +16,20 @@ publishing module owns all egress to a public host. The shadow lane writes only 
 and its own lane root, so it can run beside the real lane (or before it exists) without touching
 anything the real lane relies on.
 
-**The run file (the dispatcher's contract v2).** PID 1 never reads it. The unit joins the
-run-file group `hnx-job-<id>` (`SupplementaryGroups=`, created by the orchestration role), and
-`hnx-cti-run` opens `/var/lib/hnx-dispatch/<id>/%i.json` itself as the lane's user with
+**The run file (the dispatcher's contract v3).** PID 1 never reads it. The unit joins the
+run-file group `hnx-<service>_<id>` (`SupplementaryGroups=`, created by the orchestration role; at
+most 32 characters, so with the default service `orchestrator` the instance id is at most 15), and
+`hnx-cti-run` opens `/var/lib/hnx-dispatch/<service>/<id>/%i.json` itself as the lane's user with
 `O_NOFOLLOW|O_NONBLOCK`. It refuses anything but a regular file with one link that is owned by the
 controller's user (`cti_pipeline_dispatch_owner`), writable by no one else and at most 256 KiB, so
-a link, a directory, a FIFO or a hard link at that path is refused before anything is read. The
-file's `version`, `job`, `lane` and `unit` must be this instance's, and its `run_id` and
-`agent_key` must be well formed. The run id is then consumed: `<lane root>/hnx-consumed/<run_id>`
-is created exclusively, and a replay is refused.
+a link, a directory, a FIFO or a hard link at that path is refused before anything is read. A
+parse error (deep nesting included) is a refusal. The file's `version` (2), `job`, `lane` and
+`unit` must be this instance's; its `run_id`, `agent_key` and `dispatch_id` (32 hex) must be well
+formed; its `dispatched_at` must be within the 30-day keep window and at most an hour ahead. The
+dispatch is then consumed: `<lane root>/hnx-consumed/<dispatch_id>` is created exclusively, and a
+copied run file (the same dispatch) is refused. The key is never the run id: the controller
+reuses it across a run's retries and failovers, and each of those runs. Markers older than the
+keep window are pruned (regular files named as a dispatch id, by lstat, never a link).
 
 ## Why job units, not sessions inside the controller
 

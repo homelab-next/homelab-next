@@ -6,7 +6,9 @@
     that:
       - cti_pipeline_logical_id is defined and cti_pipeline_logical_id is match(cti_pipeline_set_pattern)
       - cti_pipeline_dispatch_owner is match(cti_pipeline_user_pattern)
-      - cti_pipeline_dispatch_group is match(cti_pipeline_user_pattern)
+      - cti_pipeline_dispatch_service is match(cti_pipeline_slug_pattern)
+      - cti_pipeline_dispatch_group is match('^[a-z][a-z0-9_-]{0,31}\Z')
+      - cti_pipeline_dispatch_group | length <= 32
       - cti_pipeline_artefact is defined and cti_pipeline_artefact is match(cti_pipeline_path_pattern)
       - cti_pipeline_artefact_sha256 is defined and cti_pipeline_artefact_sha256 is match('^[0-9a-f]{64}\Z')
       - >-
@@ -34,7 +36,8 @@
       - cti_pipeline_gateway_probe_timeout_s | int >= 10
     fail_msg: >-
       cti-pipeline: an instance id (a slug of up to 24 characters: the unit set hnx-<id>@), the
-      dispatcher's user and run-file group, the
+      dispatcher's service (a slug), user and run-file group (hnx-<service>_<id>, at most 32
+      characters: with the default service orchestrator the id is at most 15), the
       artefact's path on the control host and its sha256 (64 lowercase hex), canonical absolute paths
       three components deep with the data root, the install and the configuration directories apart,
       distinct lane users (never root), 1 to 20 kept releases, a memory limit like 6G

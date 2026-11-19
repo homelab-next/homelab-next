@@ -201,12 +201,22 @@ def _spec(tmp_path: Path, lane: str = "real", **over) -> tuple[Path, dict]:
     return path, spec
 
 
-def _run_file(spec: dict, run_id: str = "run-1", **over) -> Path:
-    body = {"version": 1, "run_id": run_id, "lane": spec["lane"], "agent_key": "intel-fresh",
-            "job": spec["job"], "unit": f"hnx-intel@{spec['instance']}.service", "task": "",
+NOW = 1_795_086_000  # 2026-11-19T11:00:00Z: the wrapper's clock in these tests
+
+
+@pytest.fixture(autouse=True)
+def _clock(monkeypatch):
+    monkeypatch.setattr(run, "now_epoch", lambda: NOW)
+
+
+def _run_file(spec: dict, run_id: str = "run-1", dispatch: str = "d" * 32, **over) -> Path:
+    raw = over.pop("_raw", None)
+    body = {"version": 2, "dispatch_id": dispatch, "run_id": run_id, "lane": spec["lane"],
+            "agent_key": "intel-fresh", "job": spec["job"],
+            "unit": f"hnx-intel@{spec['instance']}.service", "task": "",
             "dispatched_at": "2026-11-19T10:00:00Z", **over}  # fmt: skip
     path = Path(spec["run_file"])
-    path.write_text(json.dumps(body))
+    path.write_text(raw or json.dumps(body))
     path.chmod(0o640)
     return path
 
@@ -246,16 +256,64 @@ def test_the_steps_run_in_the_lane_root_with_the_credentials_in_their_environmen
     assert "alice" not in capsys.readouterr().out  # never in the log
     rec = json.loads(Path(body["runs_dir"], "fresh.json").read_text())
     assert rec["ok"] is True and rec["exit"] == 0 and rec["run_id"] == "run-1"
-    assert (Path(body["consumed_dir"]) / "run-1").exists()
+    assert sorted(p.name for p in Path(body["consumed_dir"]).iterdir()) == ["d" * 32]
 
 
-def test_a_run_file_is_consumed_once(tmp_path, monkeypatch):
+def test_a_retry_with_the_same_run_id_runs_and_a_copied_run_file_is_refused(tmp_path, monkeypatch):
     spec, body = _spec(tmp_path)
-    _run_file(body)
+    _run_file(body, run_id="run-1", dispatch="a" * 32)
     assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 0
-    _run_file(body)  # the same run id again: a replay
+    # the controller retries the run: the same run id, a fresh dispatch: it runs
+    _run_file(body, run_id="run-1", dispatch="b" * 32)
+    assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 0
+    assert sorted(p.name for p in Path(body["consumed_dir"]).iterdir()) == ["a" * 32, "b" * 32]
+    # the first dispatch's file presented again (copied back): refused as consumed
+    _run_file(body, run_id="run-1", dispatch="a" * 32)
     assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 2
-    assert len(_rows(tmp_path)) == 2  # the first run's two steps only
+    assert len(_rows(tmp_path)) == 4  # two runs of two steps; the replay ran nothing
+
+
+def test_consumed_markers_past_the_keep_window_are_pruned_and_nothing_else(tmp_path):
+    _, body = _spec(tmp_path)
+    consumed = Path(body["consumed_dir"])
+    old, fresh, linked = "1" * 32, "2" * 32, "3" * 32
+    for name in (old, fresh, "not-a-dispatch"):
+        (consumed / name).write_text("")
+    outside = tmp_path / "outside"
+    outside.write_text("keep")
+    (consumed / linked).symlink_to(outside)
+    stale = NOW - run.KEEP_S - 60
+    for name in (old, "not-a-dispatch"):
+        os.utime(consumed / name, (stale, stale))
+    os.utime(consumed / linked, (stale, stale), follow_symlinks=False)
+    _run_file(body, dispatch="4" * 32)
+    run.dispatch_run(body)
+    left = sorted(p.name for p in consumed.iterdir())
+    assert left == sorted([fresh, linked, "4" * 32, "not-a-dispatch"])
+    assert outside.read_text() == "keep"
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"dispatched_at": "2026-10-01T10:00:00Z"},  # older than the keep window
+        {"dispatched_at": "2026-11-19T12:30:00Z"},  # more than an hour ahead
+        {"dispatched_at": "yesterday"},
+    ],
+)
+def test_a_run_file_outside_the_keep_window_is_refused(tmp_path, over):
+    _, body = _spec(tmp_path)
+    _run_file(body, **over)
+    with pytest.raises(run.Refused, match=r"dispatched_at|keep window"):
+        run.dispatch_run(body)
+    assert list(Path(body["consumed_dir"]).iterdir()) == []
+
+
+def test_a_deeply_nested_run_file_is_a_refusal_not_a_crash(tmp_path):
+    _, body = _spec(tmp_path)
+    _run_file(body, _raw="[" * 100_000 + "]" * 100_000)
+    with pytest.raises(run.Refused, match="not UTF-8 JSON"):
+        run.dispatch_run(body)
 
 
 def _hard_link(path: Path) -> None:
@@ -299,9 +357,11 @@ def test_a_run_file_that_is_not_the_dispatchers_is_refused_before_it_is_read(
         {"lane": "shadow"},
         {"job": "other"},
         {"unit": "@".join(["hnx-other", "fresh-real.service"])},
-        {"version": 2},
+        {"version": 1},
         {"run_id": "../x"},
         {"agent_key": "Bad Key"},
+        {"dispatch_id": "D" * 32},
+        {"dispatch_id": "a" * 31},
     ],
 )
 def test_a_run_file_for_another_run_or_malformed_is_refused(tmp_path, over):
@@ -323,7 +383,9 @@ def test_a_failing_step_ends_the_job_with_1_and_its_own_status_in_the_record(tmp
     ):
         body["steps"] = steps
         spec.write_text(json.dumps(body))
-        _run_file(body, run_id=f"run-{i}")
+        _run_file(
+            body, run_id="run-1", dispatch=f"{i}" * 32
+        )  # the controller's retries: one run id
         assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 1  # never 2 or 143
         rec = json.loads(Path(body["runs_dir"], "fresh.json").read_text())
         assert rec["ok"] is False and rec["exit"] == 1 and rec["step_status"] == status

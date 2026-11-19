@@ -24,7 +24,7 @@
     'lake_schema_env': cti_pipeline_lake_schema_env,
     'real_lake_schema': cti_pipeline_lake_schema.real,
     'release_link': cti_pipeline_current,
-    'run_file': cti_pipeline_dispatch_dir ~ '/' ~ cti_pipeline_logical_id ~ '/' ~ item.instance ~ '.json',
+    'run_file': cti_pipeline_dispatch_dir ~ '/' ~ cti_pipeline_dispatch_service ~ '/' ~ cti_pipeline_logical_id ~ '/' ~ item.instance ~ '.json',
     'run_owner': cti_pipeline_dispatch_owner,
     'consumed_dir': lane_root ~ '/' ~ cti_pipeline_consumed_subdir,
     'publish_mode_env': cti_pipeline_publish_mode_env,

@@ -4,7 +4,7 @@ ansible run: jinja2 with the few filters they use).
 
 * Each job runs in each of its lanes as one instance, ``hnx-<id>@<job>-<lane>.service``.
 * The template unit is the orchestration dispatcher's interface (modules/orchestration README,
-  "Module job units", contract v2: no run file loaded by PID 1, the run-file group joined, the spec
+  "Module job units", contract v3: no run file loaded by PID 1, the run-file group hnx-<service>_<set> joined, the spec
   naming ``<dispatch dir>/<set>/%i.json`` and its owner for the job to read itself, the log
   appended to ``<log dir>/<set>/%i.log``), hardened, in the module's slice, never enabled and
   writing nothing by itself.
@@ -115,7 +115,7 @@ def test_the_template_unit_is_the_dispatchers_interface_and_hardened(site):
     lines = set(unit.splitlines())
     # modules/orchestration (Module job units, contract v2): the job reads its own run file
     assert not any(x.startswith("LoadCredential=") for x in lines)
-    assert "SupplementaryGroups=hnx-job-intel" in lines
+    assert "SupplementaryGroups=hnx-orchestrator_intel" in lines
     assert "StandardOutput=append:/var/log/hnx-jobs/intel/%i.log" in lines
     assert (
         "ExecStart=/opt/hnx/intel/bin/hnx-cti-run --spec /etc/hnx/intel/jobs/%i.json --instance %i"
@@ -188,7 +188,7 @@ def test_the_data_root_has_one_owner_and_each_lane_root_its_own_user(site):
 def test_the_spec_names_the_run_file_its_owner_and_the_lanes_consumed_runs(site):
     ctx, inst = site
     spec = json.loads(render("job-spec.json.j2", ctx, inst["fresh-shadow"]))
-    assert spec["run_file"] == "/var/lib/hnx-dispatch/intel/fresh-shadow.json"
+    assert spec["run_file"] == "/var/lib/hnx-dispatch/orchestrator/intel/fresh-shadow.json"
     assert spec["run_owner"] == "hnx-orchestrator"
     assert spec["consumed_dir"] == "/var/lib/hnx-modules/intel/shadow/hnx-consumed"
     assert spec["release_link"] == "/opt/hnx/intel/current" and spec["real_lake_schema"] == "cti"
@@ -203,3 +203,13 @@ def test_the_spec_names_the_run_file_its_owner_and_the_lanes_consumed_runs(site)
 def test_the_real_schema_token_the_role_refuses_in_a_shadow_job(site, text, hit):
     ctx, _ = site
     assert bool(re.search(ctx["cti_pipeline_real_schema_token"].strip(), text)) is hit
+
+
+def test_the_run_file_group_fits_its_32_characters_only_with_a_short_enough_id():
+    ok = role_vars({**LANES_SITE, "cti_pipeline_logical_id": "a" * 15})
+    assert ok["cti_pipeline_dispatch_group"] == "hnx-orchestrator_" + "a" * 15
+    assert len(ok["cti_pipeline_dispatch_group"]) == 32
+    long = role_vars({**LANES_SITE, "cti_pipeline_logical_id": "a" * 16})
+    assert len(long["cti_pipeline_dispatch_group"]) == 33  # validate.yml refuses it (at most 32)
+    validate = (ROLE / "tasks" / "validate.yml").read_text()
+    assert "cti_pipeline_dispatch_group | length <= 32" in validate

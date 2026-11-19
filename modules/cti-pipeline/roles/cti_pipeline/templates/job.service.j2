@@ -16,7 +16,7 @@ Type=oneshot
 # the least-privileged account until a declared instance's drop-in names its lane's
 User={{ cti_pipeline_shadow_user }}
 Group={{ cti_pipeline_group }}
-# the dispatcher's run-file group (contract v2): the job reads its own run file, as its own user
+# the dispatcher's run-file group (contract v3): the job reads its own run file, as its own user
 SupplementaryGroups={{ cti_pipeline_dispatch_group }}
 ExecStart={{ cti_pipeline_bin }} --spec {{ cti_pipeline_jobs_dir }}/%i.json --instance %i
 # the dispatcher returns this file's tail verbatim as the job's answer (stored by the controller):
