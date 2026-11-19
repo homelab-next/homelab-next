@@ -226,7 +226,7 @@ def write_record(runs_dir: str, job: str, body: dict) -> None:
     tmp = os.path.join(runs_dir, "." + job + ".json.tmp")
     with contextlib.suppress(FileNotFoundError):
         os.unlink(tmp)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o640)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(body, f, sort_keys=True)
         f.write("\n")
@@ -265,7 +265,7 @@ def main(argv: list[str]) -> int:
     record = {"job": spec["job"], "lane": spec["lane"], "run_id": run["run_id"],
               "started_at": now(), "finished_at": None, "ok": False, "exit": None, "step": 0}  # fmt: skip
     write_record(spec["runs_dir"], spec["job"], {**record, "state": "running"})
-    say(f"run {run['run_id']} job {spec['job']} lane {spec['lane']}: {len(spec['steps'])} step(s)")
+    say(f"job {spec['job']} lane {spec['lane']}: {len(spec['steps'])} step(s)")
     code = EXIT_OK
     child = None
     try:

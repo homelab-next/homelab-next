@@ -29,7 +29,8 @@ climbs (``..``), holds a backslash or a control character, or repeats an entry i
 an archive over 20 000 entries or 2 GiB.  It is extracted into ``RELEASES_DIR/.<sha16>.incoming``,
 a virtual environment is built there offline (``pip --no-index --require-hashes --only-binary``
 from ``wheels/``; with no requirement, a venv without pip), the pin is recorded in
-``.hnx-installed`` and only then is the directory renamed to ``RELEASES_DIR/<sha16>``: a refused or
+``.hnx-installed`` and only then is the directory renamed (owner-only: the role then gives the
+module's group read access, never anyone else) to ``RELEASES_DIR/<sha16>``: a refused or
 failed install never touches a release in use.  The venv is always run as ``venv/bin/python``
 (never a generated script), so the rename does not break it.
 
@@ -120,7 +121,7 @@ def extract(archive: str, dest: str) -> None:
         raise Refused(f"{archive} is not a readable tar archive: {e}") from e
     for root, dirs, _files in os.walk(dest):
         for d in dirs:
-            os.chmod(os.path.join(root, d), 0o755)
+            os.chmod(os.path.join(root, d), 0o700)
 
 
 def _extract_members(tf: tarfile.TarFile, dest: str) -> None:
@@ -136,21 +137,21 @@ def _extract_members(tf: tarfile.TarFile, dest: str) -> None:
         seen.add(key)
         target = os.path.join(dest, name)
         if m.isdir():
-            os.makedirs(target, mode=0o755, exist_ok=True)
+            os.makedirs(target, mode=0o700, exist_ok=True)
             continue
         if not m.isreg():
             raise Refused(f"archive entry {name!r} is not a regular file or a directory")
         total += m.size
         if total > MAX_BYTES:
             raise Refused("the archive unpacks to more than 2 GiB")
-        os.makedirs(os.path.dirname(target), mode=0o755, exist_ok=True)
+        os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
         src = tf.extractfile(m)
         if src is None:
             raise Refused(f"archive entry {name!r} cannot be read")
         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NF, 0o600)
         with os.fdopen(fd, "wb") as out, src:
             shutil.copyfileobj(src, out, 1 << 20)
-        os.chmod(target, 0o755 if m.mode & 0o111 else 0o644)
+        os.chmod(target, 0o700 if m.mode & 0o111 else 0o600)
 
 
 def check_layout(stage: str) -> dict:
@@ -224,14 +225,13 @@ def install(archive: str, pin: str, releases: str, python: str) -> dict:
     stage = os.path.join(releases, f".{name}.incoming")
     if os.path.lexists(stage):
         remove_inside(stage, releases)
-    os.mkdir(stage, 0o755)
+    os.mkdir(stage, 0o700)
     try:
         extract(archive, stage)
         meta = check_layout(stage)
         build_venv(stage, python)
         with open(os.path.join(stage, MARKER), "w", encoding="utf-8") as f:
             f.write(pin + "\n")
-        os.chmod(stage, 0o755)
         os.rename(stage, final)
     except BaseException:
         if os.path.isdir(stage) and not os.path.islink(stage):

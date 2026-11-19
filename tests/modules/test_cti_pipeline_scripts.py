@@ -86,7 +86,10 @@ def test_an_artefact_is_installed_once_and_renamed_into_place(tmp_path, releases
     assert out["changed"] and out["release"] == str(rel) and out["version"] == "1.0"
     assert (rel / ".hnx-installed").read_text().strip() == sha
     assert (rel / "venv" / "bin" / "python").exists()  # built on the host, offline
-    assert os.stat(rel / "app" / "scripts" / "episode.sh").st_mode & 0o777 == 0o755
+    assert (
+        os.stat(rel / "app" / "scripts" / "episode.sh").st_mode & 0o777 == 0o700
+    )  # owner-only until the role grants the group
+    assert os.stat(rel / "app" / "run.py").st_mode & 0o777 == 0o600
     assert sorted(p.name for p in releases.iterdir()) == [sha[:16]]  # no incoming left
     again = art.install(str(tmp_path / "a.tar.gz"), sha, str(releases), sys.executable)
     assert again == {"changed": False, "release": str(rel)}

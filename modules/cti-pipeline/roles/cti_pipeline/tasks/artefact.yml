@@ -45,6 +45,19 @@
         path: "{{ cti_pipeline_incoming }}"
         state: absent
 
+# unpacked owner-only; the lane users read it through the module's group, nobody else does
+# (follow: false: the venv's interpreter link points at the host's python, never re-moded)
+- name: Give the module's group read access to the release (root's, nobody else's)
+  ansible.builtin.file:
+    path: "{{ cti_pipeline_releases_dir }}/{{ cti_pipeline_release_name }}"
+    state: directory
+    recurse: true
+    follow: false
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_group }}"
+    mode: "u=rwX,g=rX,o="
+  when: not ansible_check_mode or cti_pipeline_release_stat.stat.exists
+
 - name: Switch the current link to the pinned release
   ansible.builtin.file:
     src: "{{ cti_pipeline_releases_dir }}/{{ cti_pipeline_release_name }}"

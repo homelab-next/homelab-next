@@ -45,7 +45,8 @@ link, a device, an absolute or climbing path, a backslash, a control character, 
 over 20 000 entries or 2 GiB: refused) into `releases/.<sha16>.incoming`; the venv is built there
 offline (`pip --no-index --no-deps --require-hashes --only-binary=:all:` from `wheels/`; with no
 requirement, a venv without pip); the pin is recorded in `.hnx-installed` and the directory is
-then renamed to `releases/<sha16>` and `current` switched to it. A wrong or broken artefact never
+then renamed to `releases/<sha16>`, given to root and the module's group (read only; nobody else
+reads it) and `current` switched to it. A wrong or broken artefact never
 touches the release in use. A second run with the same pin changes nothing. The venv is always run
 as `venv/bin/python` (never a generated script), which is why the rename does not break it.
 Releases past `cti_pipeline_keep_releases` are pruned (never the current one).
