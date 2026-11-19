@@ -42,20 +42,6 @@ def _write_plan(directory: Path, item: Item, verdict: Verdict, plan: dict) -> No
         "plan": plan,
         "sha256s": item.sidecar["sha256s"],
     }
-    atomic_write_text(
-        directory / "plan.json", json.dumps(doc, indent=2, sort_keys=True) + "\n", mode=0o640
-    )
-
-
-def _write_plan(directory: Path, item: Item, verdict: Verdict, plan: dict) -> None:
-    doc = {
-        "item": item.id,
-        "kind": item.kind,
-        "tlp": verdict.label,
-        "mode": "stage",
-        "plan": plan,
-        "sha256s": item.sidecar["sha256s"],
-    }
     text = json.dumps(doc, indent=2, sort_keys=True) + "\n"
     atomic_write_text(directory / "plan.json", text, mode=0o640)
 

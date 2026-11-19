@@ -36,7 +36,11 @@ def _find() -> Path:
     hits = [
         p.parent
         for p in sorted((ROOT / "modules").glob("*/module.yml"))
-        if yaml.safe_load(p.read_text())["provides"]["slots"].get("inference", {}).get("adapter")
+        if yaml.safe_load(p.read_text())
+        .get("provides", {})
+        .get("slots", {})
+        .get("inference", {})
+        .get("adapter")
         == "homelabnext.conform.adapters.inference_server:make"
     ]
     assert len(hits) == 1, hits
