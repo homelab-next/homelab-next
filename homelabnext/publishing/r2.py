@@ -292,6 +292,7 @@ def plan_episode(
             if legacy.get(key) == hashlib.sha256(raw or b"").hexdigest():
                 excused.add(s)
     metas[stem] = json.loads(local[json_key][0])
+    excused.discard(stem)  # the item being published is never excused: it passed the gate itself
     sizes[mp3_key] = len(local[mp3_key][0])
     episodes = []
     for s, doc in metas.items():

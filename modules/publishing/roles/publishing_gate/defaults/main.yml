@@ -35,3 +35,5 @@ publishing_gate_target_wrangler_version: ""
 publishing_gate_snapshots_keep: 5
 publishing_gate_snapshots_min_age_s: 3600
 publishing_gate_legacy_exceptions: []
+publishing_gate_staging_keep: 48
+publishing_gate_staging_min_age_s: 172800
