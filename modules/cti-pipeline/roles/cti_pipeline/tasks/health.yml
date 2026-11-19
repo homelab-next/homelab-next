@@ -43,8 +43,10 @@
       ansible.builtin.assert:
         that: "'LoadState=masked' not in cti_pipeline_load_states.stdout_lines"
         fail_msg: >-
-          cti-pipeline: a job unit is masked, so the dispatcher's starts fail: run the install (it
-          lifts the runtime masks) or systemctl unmask --runtime them
+          cti-pipeline: a job unit is masked, so the dispatcher's starts fail. During an export or
+          restore (a backup window) that is on purpose: {{ cti_pipeline_data_root }}/.quiesced-<lane>
+          exists while it runs. Otherwise run the install (it lifts masks a dead play left) or
+          systemctl unmask --runtime them
           ({{ cti_pipeline_load_states.stdout | truncate(400) }})
     - name: The release imports the app
       ansible.builtin.command:
