@@ -181,6 +181,9 @@ def _creds(tmp_path: Path, lane: str = "real") -> Path:
 
 
 def _main(spec: Path, instance: str, creds: Path, monkeypatch) -> int:
+    # the wrapper changes into the lane root: monkeypatch puts this process's directory back after
+    # the test (other suites resolve paths against it)
+    monkeypatch.chdir(os.getcwd())
     monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
     return run.main(["--spec", str(spec), "--instance", instance, "--spec-owner", str(os.getuid())])
 

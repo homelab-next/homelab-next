@@ -39,7 +39,7 @@ never a pass.
 Nothing is deleted.
 
 ``freshness`` reads each job's last-run record (``<runs dir>/<job>.json``, written by
-hnx-cti-run) and is fresh when the last run ended ok within its max age.
+the job wrapper) and is fresh when the last run ended ok within its max age.
 
 ``probe-gateway`` posts one chat completion of MAX_TOKENS (the size a real job asks for: a
 reasoning model spends a small budget on thought and returns nothing) and passes only when the
