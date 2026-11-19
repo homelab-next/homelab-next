@@ -33,6 +33,10 @@
         "description": "a resubmit: the controller replays that run's payload, so it carries no task_description",
         "pattern": "^[A-Za-z0-9._:-]{1,128}$"
       },
+      "shadow": {
+        "type": "boolean",
+        "description": "submit on the controller's shadow lane (one unfinished shadow job per agent); omitted: the real lane"
+      },
       "task_description": {
         "type": "string",
         "minLength": 1,
