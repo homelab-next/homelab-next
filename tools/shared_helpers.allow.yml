@@ -42,3 +42,6 @@ allow:
   - path: modules/gitea/roles/gitea/files/hnx_gitea.py
     rule: lake
     reason: the forge role's helper reads the forge's own SQLite database (a dump's SQL loaded into memory, or the instance's database file opened read-only) to count rows and fingerprint accounts for the export and restore checks, with the stdlib module because it runs on a guest with no homelabnext package; it is an application's database, not the shared lake, and nothing here queries the lake
+  - path: modules/cti-pipeline/roles/cti_pipeline/files/cti_state.py
+    rule: lake
+    reason: the pipeline role's state tool copies the app's own local SQLite store (data/cti.db) through the database's backup API, counts its tables' rows and runs its integrity check for the export and restore checks, with the stdlib module because it runs on a guest with no homelabnext package; it is an application's database, not the shared lake, and nothing here queries the lake
