@@ -327,6 +327,17 @@ constraints`' `--exclude-newer`), so a bad release has time to be pulled first.
   checksum from the release's own checksums file, a Go tool's from `go mod download -json`
   (its `Sum`, as hex), a wheel's from PyPI's file listing. Never type one in.
 
+## Changelog rotation
+
+`CHANGELOG.md` must stay under the 512 KB large-file limit (CI "large files" check and the
+`check-added-large-files` pre-commit hook). When it passes about 400 KB, move the oldest
+`[Unreleased]` entries, verbatim and in their original groups, into a new
+`docs/changelog/unreleased-archive-<first>-to-<last>.md` (each archive file also under 512 KB), keep
+the newest entries under `## [Unreleased]` with a pointer line to the archive, and leave the
+released sections where they are. Or cut a release, which folds `[Unreleased]` into a version
+section. Never delete entries. New entries go at the top of `[Unreleased]`. The release workflow
+reads only the `## [<version>]` section, so whoever cuts a release folds the archive files in first.
+
 ## Bug fixes carry a regression test
 
 A bug fix is a commit whose subject is a conventional-commit fix (`fix: ...`, `fix(scope): ...`) or
