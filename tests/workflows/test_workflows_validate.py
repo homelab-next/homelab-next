@@ -235,7 +235,10 @@ def test_deploy_unknown_and_twice_pinned(tmp_path):
     assert {"nope: no such pack", "case-opened-notify: pinned twice"} <= details
 
 
-RUNNABLE = ("proposal-validate", "agent-job-retry")  # the rest are reference packs (site handlers)
+from homelabnext.workflows import cti_schedules as _cti
+
+# the rest are reference packs (site handlers); the cti-schedule packs only submit controller jobs
+RUNNABLE = ("proposal-validate", "agent-job-retry", *(_cti.pack_name(t[0]) for t in _cti.TIMERS))
 
 
 def test_repository_deploy_manifest_pins_every_runnable_pack():
@@ -382,7 +385,7 @@ def test_r07_stale_approval_fails():
 def test_cli_validate_run_digest(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(ROOT)
     assert main(["validate"]) == 0
-    assert "5 pack(s), 0 problem(s)" in capsys.readouterr().out
+    assert f"{len(list(PACKS.glob('*.yml')))} pack(s), 0 problem(s)" in capsys.readouterr().out
     assert (
         main(
             [
