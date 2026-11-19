@@ -274,12 +274,12 @@ def dump_sql(
 
 
 def make_dump(
-    path: Path, *, repos=(("labs", "alpha"), ("labs", "beta")), extra=(), **sql_kw
+    path: Path, *, repos=(("labs", "alpha"), ("labs", "beta")), extra=(), sql_extra="", **sql_kw
 ) -> Path:
     """A dump archive: the SQL, the repositories' files, data directories the restore takes and
     members it must not (host keys, configuration)."""
     with zipfile.ZipFile(path, "w") as z:
-        z.writestr(f"{MID}-db.sql", dump_sql(repos=repos, **sql_kw))
+        z.writestr(f"{MID}-db.sql", dump_sql(repos=repos, **sql_kw) + sql_extra)
         z.writestr("app.ini", "[server]\nSSH_PORT = 22\n")
         for o, n in repos:
             base = f"repos/{o}/{n}.git"

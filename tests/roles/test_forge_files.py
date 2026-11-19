@@ -506,3 +506,30 @@ def test_a_source_with_its_own_key_is_copied_as_before():
     }
     with pytest.raises(helper.HelperError, match="secret_key is not the source's"):
         helper.check_app_key({"values": FRESH, "origin": "source", "manifest": manifest})
+
+
+# The product's dumper (xorm, sqlite to sqlite) writes a string holding a control character as a
+# unistr() literal, which only SQLite 3.50 and later know; Debian 13's Python links 3.46.
+UNISTR = r"unistr('line\000aend \u00e9\+01F600 \U0001F600 back\\slash')"
+UNISTR_VALUE = "line\nend \u00e9\U0001f600 \U0001f600 back\\slash"
+
+
+def test_an_exports_unistr_literal_reads_as_the_string_it_spells():
+    conn = helper.sql_connection(":memory:")
+    assert conn.execute(f"SELECT {UNISTR}").fetchone()[0] == UNISTR_VALUE
+    assert conn.execute("SELECT unistr(NULL)").fetchone()[0] is None
+
+
+@pytest.mark.parametrize("bad", [r"\q", r"\00", r"\+11FFFF", "\\"])
+def test_a_malformed_unistr_escape_is_refused(bad):
+    conn = helper.sql_connection(":memory:")
+    with pytest.raises(sqlite3.Error):
+        conn.execute("SELECT unistr(?)", (bad,)).fetchone()
+
+
+def test_a_dump_whose_sql_uses_unistr_is_read(tmp_path):
+    extra = f"CREATE TABLE notice (id INTEGER PRIMARY KEY, description TEXT);\nINSERT INTO notice VALUES (1, {UNISTR});\n"
+    z = make_dump(tmp_path / "a.zip", sql_extra=extra)
+    assert helper.dbcounts({"zip": str(z)}) == helper.dbcounts(
+        {"zip": str(make_dump(tmp_path / "b.zip"))}
+    )
