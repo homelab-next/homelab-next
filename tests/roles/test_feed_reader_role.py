@@ -747,3 +747,22 @@ def _tasks(doc):
         yield task
         for key in ("block", "rescue", "always"):
             yield from _tasks(task.get(key))
+
+
+@pytest.mark.parametrize("bad", ["../../etc/x", "a1/../a2", "/abs", "a1000", "b1", "a1 ", "a9"])
+def test_restore_refuses_a_manifest_file_name_that_is_not_a_listed_plain_name(tmp_path, bad):
+    source = _exported(tmp_path)
+    manifest = json.loads((source / "manifest.json").read_text())
+    manifest["accounts"][0]["file"] = bad
+    text = json.dumps(manifest)
+    (source / "manifest.json").write_text(text)
+    rows = [json.loads(x) for x in (source / "listing.jsonl").read_text().splitlines()]
+    for x in rows:
+        if x["key"] == "manifest.json":
+            x["size"], x["sha256"] = len(text), hashlib.sha256(text.encode()).hexdigest()
+    (source / "listing.jsonl").write_text("\n".join(json.dumps(x) for x in rows) + "\n")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    _empty(dst)
+    r = _restore(dst, source)
+    assert r.returncode != 0 and not (dst / "import.log").exists()

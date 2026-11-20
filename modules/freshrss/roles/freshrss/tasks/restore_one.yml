@@ -13,6 +13,16 @@
          | selectattr('name', 'equalto', freshrss_acct_name) | list | first | default({}) }}
   no_log: true
 
+- name: Refuse a file name in the manifest that is not a plain a<n> name or is not a listed file (before any path is built)
+  ansible.builtin.assert:
+    that:
+      - freshrss_acct_export.file is string
+      - freshrss_acct_export.file is match('^a[0-9]{1,3}\Z')
+      - (freshrss_acct_export.file ~ '.sqlite') in (freshrss_restore_stats.results | map(attribute='item') | list)
+    fail_msg: "freshrss: the manifest names a file for account {{ freshrss_i }} that is not a<n> or is not in the listing; nothing was staged"
+  when: freshrss_acct_export | length > 0
+  no_log: true
+
 - name: Restore the account
   when: freshrss_acct_export | length > 0
   block:

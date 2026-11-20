@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # One account (freshrss_acct). The name, the web password and the API password reach the container
-# through the environment of this one command, never an argument of it; an account with no web
+# through the environment of this one command (briefly visible in the guest's process list); an account with no web
 # password has no web sign-in (the API alone).
 - name: Create or update the account
   ansible.builtin.command:

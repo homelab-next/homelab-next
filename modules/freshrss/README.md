@@ -46,9 +46,11 @@ Nothing here names a real host, address, VM id, account or domain; those live in
 
   Names, passwords and the md5 key are read at deploy time by `lookup('hnx_secret', ...)` and handed
   to the container in the environment of one `docker compose exec` command (`no_log`); they are
-  never an argument of a command on the guest, never in a file the role writes, never logged. (The
-  product's own tool takes a password as an option, so for the instant it runs it is in that
-  container's own process list and nowhere else.) A second run is `changed=0`: an account that
+  never in a file the role writes and never logged. They are **not** hidden from local users on the
+  guest, though: Ansible prefixes the task's `environment:` onto the remote `sh -c` line, and the
+  product's own tool takes a password as an option, so for the instant each command runs a password
+  is visible in the process list to any local user of the guest (as with the forge module's
+  bootstrap). Keep the guest's local users to the operator. A second run is `changed=0`: an account that
   exists is checked against its stored hashes and updated only when a password differs.
   The role refuses a reference with no value in the secret store, naming it, before anything is
   rendered; refuses a name or password of the wrong form; and refuses two accounts with one name or
