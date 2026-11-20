@@ -12,8 +12,8 @@
   ansible.builtin.file:
     path: "{{ orchestration_config_dir | dirname }}"
     state: directory
-    owner: root
-    group: root
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_owner_group }}"
     mode: "0755"
 
 - name: Create the configuration directories

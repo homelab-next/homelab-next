@@ -25,7 +25,13 @@ def test_orchestration_creates_the_shared_etc_parent_traversable():
     parent = [t for t in dirs if "dirname" in str(t["ansible.builtin.file"]["path"])]
     assert parent, "the parent of the config dir must be created explicitly"
     args = parent[0]["ansible.builtin.file"]
-    assert (args["owner"], args["group"], str(args["mode"])) == ("root", "root", "0755")
+    # root's (the owner variables, root:root by default), never the service group
+    assert "orchestration_group" not in str(args["group"])
+    assert (args["owner"], args["group"]) == (
+        "{{ orchestration_owner }}",
+        "{{ orchestration_owner_group }}",
+    )
+    assert str(args["mode"]) == "0755"
     # and it comes before the restrictive directory task
     assert tasks.index(parent[0]) < tasks.index(
         next(t for t in dirs if str(t["ansible.builtin.file"]["mode"]) == "0750")
