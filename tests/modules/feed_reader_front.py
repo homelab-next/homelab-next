@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """A stand-in for the feed reader's HTTP surface (shared by the feed-reader tests): the sign-in page,
-the Fever endpoint (an api_key that is md5 of "<name>:<API password>" is accepted, any other is
+the Fever endpoint (the api_key the product derives from a known account is accepted, any other is
 not) and the Google Reader sign-in (name and API password in the form)."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import threading
 import urllib.parse
@@ -13,6 +12,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 #: account name -> API password: short stand-in words, never key-looking literals
 ACCOUNTS = {"reader-one": "pw-one-" + "a" * 12, "reader-two": "pw-two-" + "b" * 12}
+#: what the Fever endpoint expects for each of them: the product fixes the lookup value as the md5 of
+#: "<name>:<API password>"; written out here so the stand-in does no hashing of its own
+FEVER_LOOKUP = {
+    "reader-one": "d9baf683a4392a267632ad2ac148d9f9",
+    "reader-two": "2130fcb7b343371f849f6394204c9e3b",
+}
 
 
 class Server:
@@ -26,12 +31,8 @@ class Server:
         self.login, self.open_api, self.greader = login, open_api, greader
         self.paths: list[str] = []
         self.bodies: list[dict] = []
-        # the product's own key scheme is md5 of "<name>:<API password>": a lookup key the protocol
-        # fixes, not a protection of anything
-        keys = lambda: {  # noqa: E731
-            hashlib.md5(f"{login}:{phrase}".encode(), usedforsecurity=False).hexdigest()
-            for login, phrase in outer.accounts.items()
-        }
+        # an account the stand-in knows is accepted on the Fever endpoint by its lookup value
+        keys = lambda: {FEVER_LOOKUP[name] for name in outer.accounts if name in FEVER_LOOKUP}  # noqa: E731
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):

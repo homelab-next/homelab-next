@@ -489,10 +489,11 @@ def test_health_fails_on_an_account_the_api_does_not_know(tmp_path):
     assert r.returncode != 0 and "refuses account 2's key" in r.stdout
 
 
-def test_health_fails_on_a_wrong_api_password(tmp_path):
+def test_health_fails_on_an_api_password_the_reader_does_not_hold(tmp_path):
+    # the Fever lookup is the account's; the Google Reader sign-in compares the password itself
     with Server(accounts={NAME1: ACCOUNTS[NAME1], NAME2: "other-" + "c" * 14}) as front:
         r = _health(tmp_path, front)
-    assert r.returncode != 0 and "refuses account 2's key" in r.stdout
+    assert r.returncode != 0 and "The Google Reader API signs the account in" in r.stdout
 
 
 def test_health_fails_when_the_google_reader_sign_in_is_not_served(tmp_path):
