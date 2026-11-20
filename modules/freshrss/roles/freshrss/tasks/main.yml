@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Refuse a feed list that is not the one pinned (nothing is written)
+  ansible.builtin.include_tasks: opml_check.yml
+  when: freshrss_opml_src | length > 0
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Put the pinned feed list in place
+  ansible.builtin.include_tasks: opml_place.yml
+  when: freshrss_opml_src | length > 0
+
+- name: Render and start the feed reader
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ freshrss_app.compose_app_name }}"
+    compose_app_dir: "{{ freshrss_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ freshrss_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ freshrss_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ freshrss_app.compose_app_owner }}"
+    compose_app_group: "{{ freshrss_app.compose_app_group }}"
+    compose_app_start: "{{ freshrss_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ freshrss_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ freshrss_app.compose_app_spec }}"
+    compose_app_bind_roots: ["{{ freshrss_dir }}", "{{ freshrss_data_root }}"]
+  no_log: true
+
+- name: Wait for the application to answer (its first start installs the product)
+  ansible.builtin.uri:
+    url: "http://{{ freshrss_bind }}:{{ freshrss_port | int }}/i/"
+    status_code: 200
+    timeout: "{{ freshrss_health_timeout | int }}"
+  register: freshrss_up
+  until: freshrss_up.status | default(0) == 200
+  retries: "{{ ((freshrss_ready_timeout | int) / 5) | int }}"
+  delay: 5
+  changed_when: false
+  when: freshrss_start | bool
+
+- name: Create the accounts and set their passwords
+  ansible.builtin.include_tasks: users.yml
+  when: freshrss_start | bool
+
+- name: Subscribe the feed list for the accounts that asked for it
+  ansible.builtin.include_tasks: opml.yml
+  when: freshrss_start | bool and freshrss_opml_src | length > 0

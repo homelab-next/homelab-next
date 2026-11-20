@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# One pass per account, administrator first (the product's default user exists from its install, the
+# others are created beside it). Created on an empty database, updated when a password differs,
+# otherwise no change: the passwords are checked against the stored hashes inside the container, so
+# a second run reports changed=0.
+- name: Create or update each account
+  ansible.builtin.include_tasks: user_one.yml
+  loop: "{{ freshrss_accounts }}"
+  loop_control:
+    loop_var: freshrss_acct
+    index_var: freshrss_i
+    label: "account {{ freshrss_i }}"
+  tags: [restore]

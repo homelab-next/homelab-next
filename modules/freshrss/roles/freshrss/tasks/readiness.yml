@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# The provider's dependencies are the container engine (docker_engine, applied to the guest before
+# this module) and its credentials in the secret store; it calls no other service.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: The feed list is the pinned one
+      ansible.builtin.include_tasks: opml_check.yml
+      when: freshrss_opml_src | length > 0
+  tags: [readiness]

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# One account (freshrss_acct). The product reads each new feed's page and icon while it subscribes,
+# so a long list takes minutes (freshrss_import_timeout); a feed already subscribed is skipped.
+- name: Subscribe the feed list and count the account's feeds
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ freshrss_dir }}/docker-compose.yml", exec, -T, -u, www-data,
+           -e, HNX_USER, -e, HNX_SHA, -e, HNX_FLOOR, app, sh, -c, "{{ freshrss_opml_script }}"]
+    expand_argument_vars: false  # the script holds $NAME for the container's shell: never the controller's
+  environment:
+    HNX_USER: "{{ freshrss_acct.name if freshrss_acct.name | length > 0 else lookup('hnx_secret', freshrss_acct.name_ref) }}"
+    HNX_SHA: "{{ freshrss_opml_sha256 }}"
+    HNX_FLOOR: "{{ [(freshrss_opml_feeds | int) - (freshrss_opml_tolerance | int), freshrss_expected_min_feeds | int] | max }}"
+  register: freshrss_opml
+  async: "{{ freshrss_import_timeout | int }}"
+  poll: 10
+  changed_when: "'HNX-OPML imported' in freshrss_opml.stdout"
+  failed_when: freshrss_opml.rc | default(1) != 0 or 'HNX-OPML ' not in freshrss_opml.stdout
+  no_log: true
+  tags: [restore]

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (freshrss_target_image, tag and digest; the same
+# or a newer version, never an older one: the database cannot be migrated back), export every
+# account first (a newer application migrates its own database on first start), then converge with
+# the new pin (set freshrss_image to the target in the overlay).
+#   ansible-playbook -i <inventory> modules/freshrss/playbooks/upgrade.yml -e freshrss_target_image=<ref>
+- name: Upgrade the feed reader
+  hosts: mod_freshrss_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: freshrss
+        tasks_from: upgrade
+    - name: Export every account before the new image opens the database
+      ansible.builtin.include_role:
+        name: freshrss
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: freshrss
+      vars:
+        freshrss_image: "{{ freshrss_target_image }}"
