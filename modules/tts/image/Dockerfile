@@ -2,7 +2,7 @@
 # The cloned-voice speech service (homelabnext/tts_service) as an image, built from a checkout of this
 # repository: there is no published image to pin, so what runs is the code at the commit the image was
 # built from together with the hashed dependency set of requirements-<backend>.txt.
-#   docker build -f modules/tts/image/Dockerfile --build-arg BACKEND=cpu -t hnx-tts:<version>-<commit12> .
+#   docker build -f modules/tts/image/Dockerfile --build-arg BACKEND=cpu -t localhost/hnx-tts:<version>-<commit12> .
 # BACKEND is cpu or cuda (torch's CUDA 12.8 build). Build context: the repository root (the
 # Dockerfile.dockerignore beside this file sends only what is copied below).
 # The base is pinned by digest (python 3.11.17, Debian 13 slim). Every wheel is hash-checked

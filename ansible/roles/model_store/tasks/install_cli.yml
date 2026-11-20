@@ -2,9 +2,10 @@
 # The hf CLI, installed from the hashed requirements file shipped in this role: pip refuses any
 # archive whose sha256 is not listed (--require-hashes), so the CLI that downloads the weights is
 # itself pinned bytes. Without it a fresh guest fails the first fetch with rc 2 and no stderr.
-- name: The venv module is present
+- name: The venv module and the packaging library are present
+  # ansible.builtin.pip imports `packaging` on the target; a fresh Debian 13 guest lacks it
   ansible.builtin.package:
-    name: python3-venv
+    name: [python3-venv, python3-packaging]
     state: present
 
 - name: Create the directory of the CLI's virtualenv

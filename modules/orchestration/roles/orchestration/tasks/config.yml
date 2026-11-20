@@ -5,6 +5,17 @@
 # each backend's runner home. Every file is root's and read by the service group; the check below
 # is the controller's own judgement of the whole set, run as the service user, before anything
 # restarts onto it.
+# The parent (/etc/hnx) is shared with every other module's configuration: file's state=directory would
+# create a missing parent with the restrictive owner and mode below, locking the other modules' service
+# users out of it. It is root's and traversable; only this module's own directory is restricted.
+- name: Create the shared parent of the configuration directory (root's, traversable)
+  ansible.builtin.file:
+    path: "{{ orchestration_config_dir | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Create the configuration directories
   ansible.builtin.file:
     path: "{{ item }}"

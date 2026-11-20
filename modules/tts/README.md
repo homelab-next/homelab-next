@@ -95,9 +95,9 @@ Built by the orchestrator from the commit the overlay pins, one image per backen
 
 ```bash
 cd <a checkout of this repository at the commit the overlay pins>
-docker build -f modules/tts/image/Dockerfile --build-arg BACKEND=cpu -t hnx-tts:<version>-<commit12>-cpu .
-docker image inspect --format '{{.Id}}' hnx-tts:<version>-<commit12>-cpu          # sha256:<digest>
-docker save hnx-tts:<version>-<commit12>-cpu | zstd -o hnx-tts-<version>-<commit12>-cpu.tar.zst
+docker build -f modules/tts/image/Dockerfile --build-arg BACKEND=cpu -t localhost/hnx-tts:<version>-<commit12>-cpu .
+docker image inspect --format '{{.Id}}' localhost/hnx-tts:<version>-<commit12>-cpu          # sha256:<digest>
+docker save localhost/hnx-tts:<version>-<commit12>-cpu | zstd -o hnx-tts-<version>-<commit12>-cpu.tar.zst
 sha256sum hnx-tts-<version>-<commit12>-cpu.tar.zst > hnx-tts-<version>-<commit12>-cpu.tar.zst.sha256
 ```
 

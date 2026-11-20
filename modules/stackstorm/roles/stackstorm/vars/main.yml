@@ -78,6 +78,9 @@ stackstorm_hash_input_prefix: saltnpepper
 # the stack's own services, by name and port inside the compose network (data, not endpoints of the
 # site): the front proxies to them, their health checks ask themselves
 stackstorm_c_self: localhost
-stackstorm_c_services: {api: {host: st2api, port: 9101}, auth: {host: st2auth, port: 9100}, stream: {host: st2stream, port: 9102}, cache: {host: redis, port: 6379}}
+# the three hosts end in a dot: an absolute name, so the resolver never tries the host's search domain
+# first (a wildcard under it answered st2api with the wrong address after a reboot until st2web restarted);
+# docker's embedded DNS answers the service name with the dot
+stackstorm_c_services: {api: {host: "st2api.", port: 9101}, auth: {host: "st2auth.", port: 9100}, stream: {host: "st2stream.", port: 9102}, cache: {host: redis, port: 6379}}
 # the service that proxies /api/ and /auth/ (it is the only one with a port)
 stackstorm_front: st2web
