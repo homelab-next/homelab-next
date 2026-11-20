@@ -26,8 +26,11 @@ class Server:
         self.login, self.open_api, self.greader = login, open_api, greader
         self.paths: list[str] = []
         self.bodies: list[dict] = []
+        # the product's own key scheme is md5 of "<name>:<API password>": a lookup key the protocol
+        # fixes, not a protection of anything
         keys = lambda: {  # noqa: E731
-            hashlib.md5(f"{n}:{p}".encode()).hexdigest() for n, p in outer.accounts.items()
+            hashlib.md5(f"{n}:{p}".encode(), usedforsecurity=False).hexdigest()
+            for n, p in outer.accounts.items()
         }
 
         class H(BaseHTTPRequestHandler):
