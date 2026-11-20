@@ -28,9 +28,14 @@ def _tracked_docs() -> list[Path]:
     )
     if out.returncode == 0 and out.stdout:
         names = [n for n in out.stdout.decode().split("\0") if n.endswith(".md")]
-        return [ROOT / n for n in names]
+        # docs/changelog/ is archived CHANGELOG history, verbatim: its paths are as they were then
+        return [ROOT / n for n in names if not n.startswith("docs/changelog/")]
     # an export without .git: the same files from the directory walk
-    return [ROOT / "README.md", ROOT / "CONTRIBUTING.md", *sorted((ROOT / "docs").rglob("*.md"))]
+    return [
+        ROOT / "README.md",
+        ROOT / "CONTRIBUTING.md",
+        *(p for p in sorted((ROOT / "docs").rglob("*.md")) if "changelog" not in p.parts),
+    ]
 
 
 def test_the_readme_counts_the_adrs():
@@ -132,7 +137,10 @@ def _citing_files() -> list[Path]:
             for p in (ROOT / d).rglob("*")
             if p.is_file()
         ]
-    return [ROOT / n for n in names if n != "CHANGELOG.md" and (ROOT / n).is_file()]
+    # CHANGELOG.md and its archives (docs/changelog/) are verbatim history: they cite sections as
+    # they were named when the entry was written
+    history = lambda n: n == "CHANGELOG.md" or n.startswith("docs/changelog/")  # noqa: E731
+    return [ROOT / n for n in names if not history(n) and (ROOT / n).is_file()]
 
 
 def test_module_section_citations_name_a_section_that_exists():
