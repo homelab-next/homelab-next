@@ -1676,7 +1676,11 @@ def test_model_store_installs_the_cli_by_hash_into_a_venv_and_defaults_to_it():
     pip = next(t for t in tasks if "ansible.builtin.pip" in t)["ansible.builtin.pip"]
     assert "--require-hashes" in pip["extra_args"]
     assert pip["virtualenv"] == "{{ model_store_hf_venv }}"
-    assert any(t.get("ansible.builtin.package", {}).get("name") == "python3-venv" for t in tasks)
+    assert any(
+        "python3-venv" in ([n] if isinstance(n, str) else n)
+        for t in tasks
+        if (n := t.get("ansible.builtin.package", {}).get("name"))
+    )
     main = yaml.safe_load((root / "tasks/main.yml").read_text())
     inst = next(t for t in main if t.get("ansible.builtin.include_tasks") == "install_cli.yml")
     assert "model_store_hf_install" in inst["when"]
