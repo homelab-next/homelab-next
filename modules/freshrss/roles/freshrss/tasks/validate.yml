@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - freshrss_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - freshrss_image is match(freshrss_pinned_ref_pattern)
+      - freshrss_tag is match(freshrss_version_tag_pattern)
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - freshrss_bind is match(freshrss_ipv4_pattern)
+      - freshrss_bind != '0.0.0.0'
+      - freshrss_port | int >= 1 and freshrss_port | int <= 65535
+      - freshrss_app_uid | int >= 1 and freshrss_app_gid | int >= 1
+      - >-
+        [freshrss_dir, freshrss_data_root] | reject('match', freshrss_path_pattern) | list | length == 0
+      # a recursive removal of a path under the data root needs the root to be a real directory, never a shallow one
+      - freshrss_data_root.split('/') | length >= 4
+      - freshrss_timezone is match('^[A-Za-z][A-Za-z0-9_+/-]{0,63}\Z')
+      - freshrss_language is match(freshrss_language_pattern)
+      - freshrss_base_url == '' or freshrss_base_url is match(freshrss_url_pattern)
+      - freshrss_cron_minutes is match(freshrss_cron_pattern)
+      - freshrss_admin_user is match(freshrss_user_pattern)
+      - freshrss_users is sequence and freshrss_users is not string and freshrss_users is not mapping
+      - >-
+        freshrss_users | select('mapping') | list | length == freshrss_users | length
+      - >-
+        freshrss_users | reject('mapping') | list | length > 0 or
+        freshrss_users | map('dict2items') | map('map', attribute='key') | map('difference', ['name_ref', 'api_password_ref', 'password_ref', 'opml']) | select | list | length == 0
+      - >-
+        freshrss_users | reject('mapping') | list | length > 0 or
+        freshrss_users | selectattr('name_ref', 'defined') | list | length == freshrss_users | length
+      - >-
+        freshrss_users | reject('mapping') | list | length > 0 or
+        freshrss_users | selectattr('api_password_ref', 'defined') | list | length == freshrss_users | length
+      - freshrss_admin_import_opml is boolean
+      - freshrss_opml_src == '' and freshrss_opml_sha256 == '' or (freshrss_opml_src is match(freshrss_path_pattern) and freshrss_opml_sha256 is match(freshrss_sha256_pattern))
+      - freshrss_opml_tolerance | int >= 0
+      - freshrss_expected_min_feeds | int >= 0
+      - freshrss_refs | reject('match', freshrss_ref_pattern) | list | length == 0
+      - freshrss_refs | unique | length == freshrss_refs | length
+      - freshrss_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      freshrss: a registry id, an image pinned by tag and digest (the tag a version like 1.30.4), the
+      guest's IPv4 address to publish on (not all interfaces), a port, a uid and gid of 1 or more,
+      absolute canonical directories, a timezone, a language code, an http(s) base URL or empty, cron
+      minutes (0 to 59, comma separated), account names, additional accounts that are mappings with
+      name_ref and api_password_ref (and password_ref, opml) only, a feed list that names both its
+      path and its sha256 or neither, a tolerance and a minimum of 0 or more, distinct secret:
+      references and a memory limit like 512m
+  tags: [health, backup, restore, export, upgrade]

@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# The feed-reader provider (modules/freshrss): one compose_app container (Apache and PHP, SQLite in
+# the data root, the image's own cron for the scheduled refresh). The application listens in plain
+# http on the guest's own address and nowhere else. SQLite, not a server database: a few accounts
+# and a few hundred feeds are one writer, and the product's per-account export and import are
+# database-neutral, so a later move is an export and an import.
+# Required, with no default (the site's): freshrss_logical_id (the instance's registry id).
+freshrss_image: "docker.io/freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# hypervisor's per-VM firewall admits only the named consumers on this port
+freshrss_bind: "{{ ansible_host }}"
+freshrss_port: 8084
+freshrss_dir: /opt/compose/freshrss
+freshrss_owner: root
+freshrss_group: root
+# the module's data root (docs/modules/data.md): data/ (the database of every account and the
+# product's configuration), import/ (the feed list) and export/ (the exit copy)
+freshrss_data_root: /var/lib/hnx-modules/freshrss
+# the web server's account inside the image (www-data): it owns data/ and export/, because the
+# product's command line tools run as it. A site on another image changes both.
+freshrss_app_uid: 33
+freshrss_app_gid: 33
+freshrss_timezone: Etc/UTC
+freshrss_language: en
+# the name the people and agents use for the reader, when a route exists (empty: the guest's own
+# address and port); it becomes the product's base URL, e.g. https://feeds.<domain>
+freshrss_base_url: ""
+# the scheduled refresh inside the container: the minutes of each hour it runs (the image's own
+# cron, as the web server's user). Two runs an hour; a single account's feeds cap the useful rate.
+freshrss_cron_minutes: "7,37"
+# the administrator (the product's default user: the only one who can change the product's
+# settings). Its web password is a secret by reference. An API password is optional (empty: none)
+freshrss_admin_user: admin
+freshrss_admin_login_ref: secret:freshrss/admin-password
+freshrss_admin_api_login_ref: ""
+# the additional accounts: a list of {name_ref, api_password_ref, password_ref (optional), opml
+# (optional, default true)}. The NAME and the passwords are secrets by reference, never values: an
+# account is created on an empty database, a changed password is updated, an unchanged account is no
+# change. Without password_ref an account has no web sign-in (the API alone), which is what a feed
+# consumer wants. opml: whether the feed list below is subscribed for it.
+freshrss_users: []
+# the feed list: an OPML file on the control host and its sha256. Both or neither (empty: no list).
+# It is subscribed for the administrator when freshrss_admin_import_opml is true and for every
+# account in freshrss_users with opml true, once per list (a marker holds the list's sha256), so the
+# accounts carry the same subscriptions and one that unsubscribed from a feed is not made to
+# resubscribe on the next run.
+freshrss_opml_src: ""
+freshrss_opml_sha256: ""
+freshrss_admin_import_opml: false
+# a feed the product merges with another (the same address, spelled twice) leaves fewer feeds than the
+# list has addresses: how many fewer the import and health accept
+freshrss_opml_tolerance: 0
+# health fails when an account that subscribed the list has fewer feeds than the list has addresses
+# less the tolerance, or fewer than this (0 = only the list is checked)
+freshrss_expected_min_feeds: 0
+freshrss_mem_limit: 512m
+freshrss_start: true
+freshrss_validate_with_docker: true
+freshrss_health_timeout: 15
+# seconds main waits for the application to answer after a start (the first one installs)
+freshrss_ready_timeout: 300
+# seconds a subscription of the feed list may take (the product reads each new feed's page and icon)
+freshrss_import_timeout: 1800

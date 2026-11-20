@@ -1,0 +1,935 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the feed reader as one compose_app container with SQLite, the Fever and Google
+      Reader APIs, a refresh schedule, accounts from secrets and a pinned feed list per account.
+    options:
+      freshrss_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. feeds).
+        required: true
+      freshrss_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 1.30.4).
+        default: docker.io/freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df
+      freshrss_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      freshrss_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8084
+      freshrss_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/freshrss
+      freshrss_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      freshrss_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      freshrss_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, import/ and export/.'
+        default: /var/lib/hnx-modules/freshrss
+      freshrss_app_uid:
+        type: int
+        description: The web server's user id inside the image (www-data); owns data/ and export/ and
+          runs the product's command line tools.
+        default: 33
+      freshrss_app_gid:
+        type: int
+        description: The web server's group id inside the image.
+        default: 33
+      freshrss_timezone:
+        type: str
+        description: The container's timezone (the schedule and the feeds' dates).
+        default: Etc/UTC
+      freshrss_language:
+        type: str
+        description: The language of a new account (a code such as en).
+        default: en
+      freshrss_base_url:
+        type: str
+        description: The name the people and agents use for the reader when a route exists (an http(s)
+          URL); empty means the guest's own address and port.
+        default: ''
+      freshrss_cron_minutes:
+        type: str
+        description: The minutes of each hour the image's own cron refreshes the feeds (comma separated,
+          0 to 59).
+        default: 7,37
+      freshrss_admin_user:
+        type: str
+        description: The administrator's account name (the product's default user).
+        default: admin
+      freshrss_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:freshrss/admin-password
+      freshrss_admin_api_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API password; empty means the administrator
+          has no API.'
+        default: ''
+      freshrss_users:
+        type: list
+        description: 'The additional accounts: mappings of name_ref and api_password_ref (secret: references;
+          the name is a secret too), password_ref (optional: without it the account has no web sign-in)
+          and opml (optional, default true: whether the feed list is subscribed for it).'
+        default: []
+        elements: dict
+      freshrss_opml_src:
+        type: path
+        description: An OPML feed list on the control host; with freshrss_opml_sha256, or neither.
+        default: ''
+      freshrss_opml_sha256:
+        type: str
+        description: The sha256 of that file; the role refuses any other content before it copies anything.
+        default: ''
+      freshrss_admin_import_opml:
+        type: bool
+        description: Whether the feed list is subscribed for the administrator too.
+        default: false
+      freshrss_opml_tolerance:
+        type: int
+        description: How many fewer feeds than the list has distinct addresses the import and health accept
+          (a feed the product merges with another).
+        default: 0
+      freshrss_expected_min_feeds:
+        type: int
+        description: Health and export fail when an account that subscribed the list holds fewer feeds
+          than this (0 means only the list is checked).
+        default: 0
+      freshrss_mem_limit:
+        type: str
+        description: The container's memory limit.
+        default: 512m
+      freshrss_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      freshrss_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      freshrss_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      freshrss_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one installs
+          the product).
+        default: 300
+      freshrss_import_timeout:
+        type: int
+        description: Seconds a subscription of the feed list may take for one account (the product reads
+          each new feed's page and icon).
+        default: 1800
+  health:
+    short_description: Fail unless the container is healthy, the sign-in page answers, a Fever call with
+      an unknown key is refused, every account with an API password signs in to the Fever and Google Reader
+      APIs and holds the feeds it is expected to.
+    options:
+      freshrss_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. feeds).
+        required: true
+      freshrss_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 1.30.4).
+        default: docker.io/freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df
+      freshrss_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      freshrss_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8084
+      freshrss_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/freshrss
+      freshrss_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      freshrss_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      freshrss_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, import/ and export/.'
+        default: /var/lib/hnx-modules/freshrss
+      freshrss_app_uid:
+        type: int
+        description: The web server's user id inside the image (www-data); owns data/ and export/ and
+          runs the product's command line tools.
+        default: 33
+      freshrss_app_gid:
+        type: int
+        description: The web server's group id inside the image.
+        default: 33
+      freshrss_timezone:
+        type: str
+        description: The container's timezone (the schedule and the feeds' dates).
+        default: Etc/UTC
+      freshrss_language:
+        type: str
+        description: The language of a new account (a code such as en).
+        default: en
+      freshrss_base_url:
+        type: str
+        description: The name the people and agents use for the reader when a route exists (an http(s)
+          URL); empty means the guest's own address and port.
+        default: ''
+      freshrss_cron_minutes:
+        type: str
+        description: The minutes of each hour the image's own cron refreshes the feeds (comma separated,
+          0 to 59).
+        default: 7,37
+      freshrss_admin_user:
+        type: str
+        description: The administrator's account name (the product's default user).
+        default: admin
+      freshrss_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:freshrss/admin-password
+      freshrss_admin_api_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API password; empty means the administrator
+          has no API.'
+        default: ''
+      freshrss_users:
+        type: list
+        description: 'The additional accounts: mappings of name_ref and api_password_ref (secret: references;
+          the name is a secret too), password_ref (optional: without it the account has no web sign-in)
+          and opml (optional, default true: whether the feed list is subscribed for it).'
+        default: []
+        elements: dict
+      freshrss_opml_src:
+        type: path
+        description: An OPML feed list on the control host; with freshrss_opml_sha256, or neither.
+        default: ''
+      freshrss_opml_sha256:
+        type: str
+        description: The sha256 of that file; the role refuses any other content before it copies anything.
+        default: ''
+      freshrss_admin_import_opml:
+        type: bool
+        description: Whether the feed list is subscribed for the administrator too.
+        default: false
+      freshrss_opml_tolerance:
+        type: int
+        description: How many fewer feeds than the list has distinct addresses the import and health accept
+          (a feed the product merges with another).
+        default: 0
+      freshrss_expected_min_feeds:
+        type: int
+        description: Health and export fail when an account that subscribed the list holds fewer feeds
+          than this (0 means only the list is checked).
+        default: 0
+      freshrss_mem_limit:
+        type: str
+        description: The container's memory limit.
+        default: 512m
+      freshrss_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      freshrss_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      freshrss_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      freshrss_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one installs
+          the product).
+        default: 300
+      freshrss_import_timeout:
+        type: int
+        description: Seconds a subscription of the feed list may take for one account (the product reads
+          each new feed's page and icon).
+        default: 1800
+  readiness:
+    short_description: Fail unless the container engine is ready, the inputs are valid, every secret resolves
+      in its form and the feed list is the pinned one.
+    options:
+      freshrss_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. feeds).
+        required: true
+      freshrss_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 1.30.4).
+        default: docker.io/freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df
+      freshrss_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      freshrss_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8084
+      freshrss_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/freshrss
+      freshrss_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      freshrss_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      freshrss_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, import/ and export/.'
+        default: /var/lib/hnx-modules/freshrss
+      freshrss_app_uid:
+        type: int
+        description: The web server's user id inside the image (www-data); owns data/ and export/ and
+          runs the product's command line tools.
+        default: 33
+      freshrss_app_gid:
+        type: int
+        description: The web server's group id inside the image.
+        default: 33
+      freshrss_timezone:
+        type: str
+        description: The container's timezone (the schedule and the feeds' dates).
+        default: Etc/UTC
+      freshrss_language:
+        type: str
+        description: The language of a new account (a code such as en).
+        default: en
+      freshrss_base_url:
+        type: str
+        description: The name the people and agents use for the reader when a route exists (an http(s)
+          URL); empty means the guest's own address and port.
+        default: ''
+      freshrss_cron_minutes:
+        type: str
+        description: The minutes of each hour the image's own cron refreshes the feeds (comma separated,
+          0 to 59).
+        default: 7,37
+      freshrss_admin_user:
+        type: str
+        description: The administrator's account name (the product's default user).
+        default: admin
+      freshrss_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:freshrss/admin-password
+      freshrss_admin_api_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API password; empty means the administrator
+          has no API.'
+        default: ''
+      freshrss_users:
+        type: list
+        description: 'The additional accounts: mappings of name_ref and api_password_ref (secret: references;
+          the name is a secret too), password_ref (optional: without it the account has no web sign-in)
+          and opml (optional, default true: whether the feed list is subscribed for it).'
+        default: []
+        elements: dict
+      freshrss_opml_src:
+        type: path
+        description: An OPML feed list on the control host; with freshrss_opml_sha256, or neither.
+        default: ''
+      freshrss_opml_sha256:
+        type: str
+        description: The sha256 of that file; the role refuses any other content before it copies anything.
+        default: ''
+      freshrss_admin_import_opml:
+        type: bool
+        description: Whether the feed list is subscribed for the administrator too.
+        default: false
+      freshrss_opml_tolerance:
+        type: int
+        description: How many fewer feeds than the list has distinct addresses the import and health accept
+          (a feed the product merges with another).
+        default: 0
+      freshrss_expected_min_feeds:
+        type: int
+        description: Health and export fail when an account that subscribed the list holds fewer feeds
+          than this (0 means only the list is checked).
+        default: 0
+      freshrss_mem_limit:
+        type: str
+        description: The container's memory limit.
+        default: 512m
+      freshrss_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      freshrss_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      freshrss_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      freshrss_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one installs
+          the product).
+        default: 300
+      freshrss_import_timeout:
+        type: int
+        description: Seconds a subscription of the feed list may take for one account (the product reads
+          each new feed's page and icon).
+        default: 1800
+  backup:
+    short_description: Name the data root for the backup.
+    options:
+      freshrss_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. feeds).
+        required: true
+      freshrss_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 1.30.4).
+        default: docker.io/freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df
+      freshrss_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      freshrss_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8084
+      freshrss_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/freshrss
+      freshrss_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      freshrss_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      freshrss_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, import/ and export/.'
+        default: /var/lib/hnx-modules/freshrss
+      freshrss_app_uid:
+        type: int
+        description: The web server's user id inside the image (www-data); owns data/ and export/ and
+          runs the product's command line tools.
+        default: 33
+      freshrss_app_gid:
+        type: int
+        description: The web server's group id inside the image.
+        default: 33
+      freshrss_timezone:
+        type: str
+        description: The container's timezone (the schedule and the feeds' dates).
+        default: Etc/UTC
+      freshrss_language:
+        type: str
+        description: The language of a new account (a code such as en).
+        default: en
+      freshrss_base_url:
+        type: str
+        description: The name the people and agents use for the reader when a route exists (an http(s)
+          URL); empty means the guest's own address and port.
+        default: ''
+      freshrss_cron_minutes:
+        type: str
+        description: The minutes of each hour the image's own cron refreshes the feeds (comma separated,
+          0 to 59).
+        default: 7,37
+      freshrss_admin_user:
+        type: str
+        description: The administrator's account name (the product's default user).
+        default: admin
+      freshrss_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:freshrss/admin-password
+      freshrss_admin_api_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API password; empty means the administrator
+          has no API.'
+        default: ''
+      freshrss_users:
+        type: list
+        description: 'The additional accounts: mappings of name_ref and api_password_ref (secret: references;
+          the name is a secret too), password_ref (optional: without it the account has no web sign-in)
+          and opml (optional, default true: whether the feed list is subscribed for it).'
+        default: []
+        elements: dict
+      freshrss_opml_src:
+        type: path
+        description: An OPML feed list on the control host; with freshrss_opml_sha256, or neither.
+        default: ''
+      freshrss_opml_sha256:
+        type: str
+        description: The sha256 of that file; the role refuses any other content before it copies anything.
+        default: ''
+      freshrss_admin_import_opml:
+        type: bool
+        description: Whether the feed list is subscribed for the administrator too.
+        default: false
+      freshrss_opml_tolerance:
+        type: int
+        description: How many fewer feeds than the list has distinct addresses the import and health accept
+          (a feed the product merges with another).
+        default: 0
+      freshrss_expected_min_feeds:
+        type: int
+        description: Health and export fail when an account that subscribed the list holds fewer feeds
+          than this (0 means only the list is checked).
+        default: 0
+      freshrss_mem_limit:
+        type: str
+        description: The container's memory limit.
+        default: 512m
+      freshrss_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      freshrss_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      freshrss_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      freshrss_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one installs
+          the product).
+        default: 300
+      freshrss_import_timeout:
+        type: int
+        description: Seconds a subscription of the feed list may take for one account (the product reads
+          each new feed's page and icon).
+        default: 1800
+  restore:
+    short_description: Check an export (listing, sha256, names) and import each account into an EMPTY
+      account, then compare the counts with the export.
+    options:
+      freshrss_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. feeds).
+        required: true
+      freshrss_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 1.30.4).
+        default: docker.io/freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df
+      freshrss_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      freshrss_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8084
+      freshrss_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/freshrss
+      freshrss_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      freshrss_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      freshrss_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, import/ and export/.'
+        default: /var/lib/hnx-modules/freshrss
+      freshrss_app_uid:
+        type: int
+        description: The web server's user id inside the image (www-data); owns data/ and export/ and
+          runs the product's command line tools.
+        default: 33
+      freshrss_app_gid:
+        type: int
+        description: The web server's group id inside the image.
+        default: 33
+      freshrss_timezone:
+        type: str
+        description: The container's timezone (the schedule and the feeds' dates).
+        default: Etc/UTC
+      freshrss_language:
+        type: str
+        description: The language of a new account (a code such as en).
+        default: en
+      freshrss_base_url:
+        type: str
+        description: The name the people and agents use for the reader when a route exists (an http(s)
+          URL); empty means the guest's own address and port.
+        default: ''
+      freshrss_cron_minutes:
+        type: str
+        description: The minutes of each hour the image's own cron refreshes the feeds (comma separated,
+          0 to 59).
+        default: 7,37
+      freshrss_admin_user:
+        type: str
+        description: The administrator's account name (the product's default user).
+        default: admin
+      freshrss_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:freshrss/admin-password
+      freshrss_admin_api_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API password; empty means the administrator
+          has no API.'
+        default: ''
+      freshrss_users:
+        type: list
+        description: 'The additional accounts: mappings of name_ref and api_password_ref (secret: references;
+          the name is a secret too), password_ref (optional: without it the account has no web sign-in)
+          and opml (optional, default true: whether the feed list is subscribed for it).'
+        default: []
+        elements: dict
+      freshrss_opml_src:
+        type: path
+        description: An OPML feed list on the control host; with freshrss_opml_sha256, or neither.
+        default: ''
+      freshrss_opml_sha256:
+        type: str
+        description: The sha256 of that file; the role refuses any other content before it copies anything.
+        default: ''
+      freshrss_admin_import_opml:
+        type: bool
+        description: Whether the feed list is subscribed for the administrator too.
+        default: false
+      freshrss_opml_tolerance:
+        type: int
+        description: How many fewer feeds than the list has distinct addresses the import and health accept
+          (a feed the product merges with another).
+        default: 0
+      freshrss_expected_min_feeds:
+        type: int
+        description: Health and export fail when an account that subscribed the list holds fewer feeds
+          than this (0 means only the list is checked).
+        default: 0
+      freshrss_mem_limit:
+        type: str
+        description: The container's memory limit.
+        default: 512m
+      freshrss_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      freshrss_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      freshrss_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      freshrss_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one installs
+          the product).
+        default: 300
+      freshrss_import_timeout:
+        type: int
+        description: Seconds a subscription of the feed list may take for one account (the product reads
+          each new feed's page and icon).
+        default: 1800
+      freshrss_restore_source:
+        type: path
+        description: Directory holding an export (listing.jsonl, manifest.json and a<n>.sqlite for each
+          account).
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest; the same or a newer version) and record
+      it as pending.
+    options:
+      freshrss_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. feeds).
+        required: true
+      freshrss_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 1.30.4).
+        default: docker.io/freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df
+      freshrss_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      freshrss_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8084
+      freshrss_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/freshrss
+      freshrss_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      freshrss_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      freshrss_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, import/ and export/.'
+        default: /var/lib/hnx-modules/freshrss
+      freshrss_app_uid:
+        type: int
+        description: The web server's user id inside the image (www-data); owns data/ and export/ and
+          runs the product's command line tools.
+        default: 33
+      freshrss_app_gid:
+        type: int
+        description: The web server's group id inside the image.
+        default: 33
+      freshrss_timezone:
+        type: str
+        description: The container's timezone (the schedule and the feeds' dates).
+        default: Etc/UTC
+      freshrss_language:
+        type: str
+        description: The language of a new account (a code such as en).
+        default: en
+      freshrss_base_url:
+        type: str
+        description: The name the people and agents use for the reader when a route exists (an http(s)
+          URL); empty means the guest's own address and port.
+        default: ''
+      freshrss_cron_minutes:
+        type: str
+        description: The minutes of each hour the image's own cron refreshes the feeds (comma separated,
+          0 to 59).
+        default: 7,37
+      freshrss_admin_user:
+        type: str
+        description: The administrator's account name (the product's default user).
+        default: admin
+      freshrss_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:freshrss/admin-password
+      freshrss_admin_api_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API password; empty means the administrator
+          has no API.'
+        default: ''
+      freshrss_users:
+        type: list
+        description: 'The additional accounts: mappings of name_ref and api_password_ref (secret: references;
+          the name is a secret too), password_ref (optional: without it the account has no web sign-in)
+          and opml (optional, default true: whether the feed list is subscribed for it).'
+        default: []
+        elements: dict
+      freshrss_opml_src:
+        type: path
+        description: An OPML feed list on the control host; with freshrss_opml_sha256, or neither.
+        default: ''
+      freshrss_opml_sha256:
+        type: str
+        description: The sha256 of that file; the role refuses any other content before it copies anything.
+        default: ''
+      freshrss_admin_import_opml:
+        type: bool
+        description: Whether the feed list is subscribed for the administrator too.
+        default: false
+      freshrss_opml_tolerance:
+        type: int
+        description: How many fewer feeds than the list has distinct addresses the import and health accept
+          (a feed the product merges with another).
+        default: 0
+      freshrss_expected_min_feeds:
+        type: int
+        description: Health and export fail when an account that subscribed the list holds fewer feeds
+          than this (0 means only the list is checked).
+        default: 0
+      freshrss_mem_limit:
+        type: str
+        description: The container's memory limit.
+        default: 512m
+      freshrss_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      freshrss_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      freshrss_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      freshrss_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one installs
+          the product).
+        default: 300
+      freshrss_import_timeout:
+        type: int
+        description: Seconds a subscription of the feed list may take for one account (the product reads
+          each new feed's page and icon).
+        default: 1800
+      freshrss_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> to move to.
+        required: true
+  export:
+    short_description: Write the exit copy (object-tree) of every account to <data root>/export/latest
+      with a manifest and a sha256 listing.
+    options:
+      freshrss_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. feeds).
+        required: true
+      freshrss_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. 1.30.4).
+        default: docker.io/freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df
+      freshrss_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      freshrss_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8084
+      freshrss_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/freshrss
+      freshrss_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      freshrss_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      freshrss_data_root:
+        type: path
+        description: 'The module''s data root on the host: data/, import/ and export/.'
+        default: /var/lib/hnx-modules/freshrss
+      freshrss_app_uid:
+        type: int
+        description: The web server's user id inside the image (www-data); owns data/ and export/ and
+          runs the product's command line tools.
+        default: 33
+      freshrss_app_gid:
+        type: int
+        description: The web server's group id inside the image.
+        default: 33
+      freshrss_timezone:
+        type: str
+        description: The container's timezone (the schedule and the feeds' dates).
+        default: Etc/UTC
+      freshrss_language:
+        type: str
+        description: The language of a new account (a code such as en).
+        default: en
+      freshrss_base_url:
+        type: str
+        description: The name the people and agents use for the reader when a route exists (an http(s)
+          URL); empty means the guest's own address and port.
+        default: ''
+      freshrss_cron_minutes:
+        type: str
+        description: The minutes of each hour the image's own cron refreshes the feeds (comma separated,
+          0 to 59).
+        default: 7,37
+      freshrss_admin_user:
+        type: str
+        description: The administrator's account name (the product's default user).
+        default: admin
+      freshrss_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:freshrss/admin-password
+      freshrss_admin_api_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API password; empty means the administrator
+          has no API.'
+        default: ''
+      freshrss_users:
+        type: list
+        description: 'The additional accounts: mappings of name_ref and api_password_ref (secret: references;
+          the name is a secret too), password_ref (optional: without it the account has no web sign-in)
+          and opml (optional, default true: whether the feed list is subscribed for it).'
+        default: []
+        elements: dict
+      freshrss_opml_src:
+        type: path
+        description: An OPML feed list on the control host; with freshrss_opml_sha256, or neither.
+        default: ''
+      freshrss_opml_sha256:
+        type: str
+        description: The sha256 of that file; the role refuses any other content before it copies anything.
+        default: ''
+      freshrss_admin_import_opml:
+        type: bool
+        description: Whether the feed list is subscribed for the administrator too.
+        default: false
+      freshrss_opml_tolerance:
+        type: int
+        description: How many fewer feeds than the list has distinct addresses the import and health accept
+          (a feed the product merges with another).
+        default: 0
+      freshrss_expected_min_feeds:
+        type: int
+        description: Health and export fail when an account that subscribed the list holds fewer feeds
+          than this (0 means only the list is checked).
+        default: 0
+      freshrss_mem_limit:
+        type: str
+        description: The container's memory limit.
+        default: 512m
+      freshrss_start:
+        type: bool
+        description: Start the container (false renders only).
+        default: true
+      freshrss_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      freshrss_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      freshrss_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one installs
+          the product).
+        default: 300
+      freshrss_import_timeout:
+        type: int
+        description: Seconds a subscription of the feed list may take for one account (the product reads
+          each new feed's page and icon).
+        default: 1800

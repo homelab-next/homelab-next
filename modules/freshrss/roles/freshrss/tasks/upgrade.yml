@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate and record an image bump (compose_app upgrade). Only the same or a NEWER version of the
+# same repository: the application migrates its database forward on first start and cannot be taken
+# back, so an older tag is refused. The playbook exports first, then converges.
+- block:
+    - name: Refuse a target that is not pinned by tag and digest, is another repository or is older
+      ansible.builtin.assert:
+        that:
+          - freshrss_target_image is match(freshrss_pinned_ref_pattern)
+          - freshrss_target_image.split('@')[0].rsplit(':', 1)[0] == freshrss_repository
+          - freshrss_target_image.split('@')[0].rsplit(':', 1)[1] is match(freshrss_version_tag_pattern)
+          - >-
+            freshrss_target_image.split('@')[0].rsplit(':', 1)[1].split('.') | map('int') | list
+            >= freshrss_tag.split('.') | map('int') | list
+        fail_msg: >-
+          freshrss: the target must be {{ freshrss_repository }}:<version>@sha256:<64 hex>, a version
+          equal to or newer than {{ freshrss_tag }} (the database is migrated forward on first start
+          and cannot go back)
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: freshrss
+        compose_app_dir: "{{ freshrss_app.compose_app_dir }}"
+        compose_app_owner: "{{ freshrss_app.compose_app_owner }}"
+        compose_app_group: "{{ freshrss_app.compose_app_group }}"
+        compose_app_spec: "{{ freshrss_app.compose_app_spec }}"
+        compose_app_upgrade_service: app
+        compose_app_upgrade_tag: "{{ freshrss_target_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ freshrss_target_image.split('@')[1] }}"
+  tags: [upgrade]

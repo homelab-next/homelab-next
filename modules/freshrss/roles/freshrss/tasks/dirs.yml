@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's (root); data/ and export/ belong to the web server's account
+# inside the image (the product's command line tools run as it, and the export is written by it);
+# import/ holds the feed list, root's to write and the application's to read.
+- name: Create the data root and the directories under it
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ freshrss_data_root }}", owner: "{{ freshrss_owner }}", group: "{{ freshrss_group }}", mode: "0750"}
+    - {path: "{{ freshrss_data_root }}/data", owner: "{{ freshrss_app_uid | int }}", group: "{{ freshrss_app_gid | int }}", mode: "0750"}
+    - {path: "{{ freshrss_data_root }}/export", owner: "{{ freshrss_app_uid | int }}", group: "{{ freshrss_app_gid | int }}", mode: "0700"}
+    - {path: "{{ freshrss_data_root }}/import", owner: "{{ freshrss_owner }}", group: "{{ freshrss_app_gid | int }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). No environment
+# holds a secret: the accounts are made by the role through the product's command line, with the
+# passwords in the environment of that one command. The image's entrypoint installs the product on an
+# empty data directory from FRESHRSS_INSTALL (the API on, SQLite, the form sign-in, the
+# administrator as the default user) and, with CRON_MIN set, runs the image's cron for the scheduled
+# refresh. The image starts as root (Apache and cron drop to the web server's user themselves), so
+# the container runs with every capability dropped but the six the entrypoint, Apache and cron
+# need, and no-new-privileges.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    freshrss_app:
+      compose_app_name: freshrss
+      compose_app_dir: "{{ freshrss_dir }}"
+      compose_app_data_dir: "{{ freshrss_data_root }}"
+      compose_app_export_dir: "{{ freshrss_data_root }}/export"
+      compose_app_owner: "{{ freshrss_owner }}"
+      compose_app_group: "{{ freshrss_group }}"
+      compose_app_start: "{{ freshrss_start }}"
+      compose_app_validate_with_docker: "{{ freshrss_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          app:
+            image: "{{ freshrss_repository }}"
+            tag: "{{ freshrss_tag }}"
+            digest: "{{ freshrss_digest }}"
+            environment:
+              TZ: "{{ freshrss_timezone }}"
+              CRON_MIN: "{{ freshrss_cron_minutes }}"
+              FRESHRSS_INSTALL: "{{ freshrss_install_args }}"
+            cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, NET_BIND_SERVICE]
+            ports: ["{{ freshrss_bind }}:{{ freshrss_port | int }}:{{ freshrss_container_port }}"]
+            volumes:
+              - "{{ freshrss_data_root }}/data:{{ freshrss_container_data }}"
+              - "{{ freshrss_data_root }}/export:{{ freshrss_container_export }}"
+              - "{{ freshrss_data_root }}/import:{{ freshrss_container_import }}:ro"
+            mem_limit: "{{ freshrss_mem_limit }}"
+            healthcheck:
+              test: [CMD, php, -f, ./cli/health.php]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 60s
+  vars:
+    freshrss_effective_url: "{{ freshrss_base_url if freshrss_base_url | length > 0 else 'http://' ~ freshrss_bind ~ ':' ~ (freshrss_port | int) }}"
+    freshrss_install_args: >-
+      --api-enabled --base-url {{ freshrss_effective_url }} --db-type sqlite --default-user {{ freshrss_admin_user }}
+      --auth-type form --language {{ freshrss_language }}
+  tags: [health, backup, restore, export, upgrade]

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the feed reader on the guests the site placed the module's `server` role
+# on. The apply path (docs/modules/apply.md) renders its own modules.yml from the selection and does
+# not import this file; it is the module's own entry point, for a lab that runs one module by hand:
+#   ansible-playbook -i <inventory with --selection> modules/freshrss/playbooks/install.yml
+# docker_engine is applied to the guest first (a compose_app module's host); the role's readiness
+# hook refuses to go on without it and without the secrets.
+- name: Install the feed reader (FreshRSS)
+  hosts: mod_freshrss_server
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: freshrss
+        tasks_from: readiness
+      tags: [mod_freshrss]
+  roles:
+    - role: freshrss
+      tags: [mod_freshrss]

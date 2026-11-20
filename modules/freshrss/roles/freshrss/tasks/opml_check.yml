@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# The feed list is read on the control host and must be exactly the one the site pinned: a regular
+# file (never a link), not larger than freshrss_opml_max_bytes, with the sha256 the site named. Nothing
+# is copied to the guest before this passes. The number of distinct feed addresses in it is the count
+# the import and health are held to; a list with none is refused (zero rows where rows are expected
+# is an error).
+- name: Read the feed list on the control host
+  ansible.builtin.stat:
+    path: "{{ freshrss_opml_src }}"
+    checksum_algorithm: sha256
+    follow: false
+  delegate_to: localhost
+  become: false
+  register: freshrss_opml_stat
+  tags: [health, restore]
+
+- name: Refuse a feed list that is not the pinned one
+  ansible.builtin.assert:
+    that:
+      - freshrss_opml_stat.stat.exists
+      - freshrss_opml_stat.stat.isreg
+      - not freshrss_opml_stat.stat.islnk
+      - freshrss_opml_stat.stat.size | int <= freshrss_opml_max_bytes | int
+      - freshrss_opml_stat.stat.checksum == freshrss_opml_sha256
+    fail_msg: >-
+      freshrss: {{ freshrss_opml_src }} is not the pinned feed list (a regular file of at most
+      {{ freshrss_opml_max_bytes }} bytes whose sha256 is freshrss_opml_sha256); nothing was copied
+  tags: [health, restore]
+
+- name: Count the distinct feed addresses in it
+  ansible.builtin.set_fact:
+    freshrss_opml_feeds: >-
+      {{ lookup('ansible.builtin.file', freshrss_opml_src)
+         | regex_findall('(?i)xmlurl\s*=\s*"([^"]+)"') | unique | length }}
+  tags: [health, restore]
+
+- name: Refuse a feed list with no feed in it
+  ansible.builtin.assert:
+    that: freshrss_opml_feeds | int > 0
+    fail_msg: "freshrss: {{ freshrss_opml_src }} names no feed (no xmlUrl attribute); an empty list is not a subscription"
+  tags: [health, restore]
