@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Subscribe the pinned feed list for every account that asked for it, once per list: a marker beside
+# the account's data holds the list's sha256, so an account that unsubscribed from a feed is not made
+# to resubscribe on the next run, and a second run does no network work (changed=0). Each pass checks
+# the account then holds at least as many feeds as the list has distinct addresses (less the
+# tolerance); the marker is written only after that check.
+- name: Subscribe the list for each account that asked for it
+  ansible.builtin.include_tasks: opml_one.yml
+  loop: "{{ freshrss_accounts | selectattr('opml') | list }}"
+  loop_control:
+    loop_var: freshrss_acct
+    index_var: freshrss_i
+    label: "account {{ freshrss_i }}"
+  tags: [restore]

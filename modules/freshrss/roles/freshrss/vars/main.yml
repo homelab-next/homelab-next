@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+freshrss_container_port: 80
+freshrss_container_data: /var/www/FreshRSS/data
+freshrss_container_export: /hnx-export
+freshrss_container_import: /hnx-import
+freshrss_repository: "{{ freshrss_image.split('@')[0].rsplit(':', 1)[0] }}"
+freshrss_tag: "{{ freshrss_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+freshrss_digest: "{{ freshrss_image.split('@')[1] | default('') }}"
+freshrss_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+# the application's own version tag: the pin carries the version, and an upgrade never goes back
+freshrss_version_tag_pattern: '^[0-9]+\.[0-9]+\.[0-9]+\Z'
+freshrss_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+freshrss_ref_pattern: '^secret:[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)+\Z'
+freshrss_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+freshrss_url_pattern: '^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?\Z'
+# the product's account names (and the one the role refuses to put in a path or a command)
+freshrss_user_pattern: '^[0-9A-Za-z_][0-9A-Za-z_.@-]{0,37}\Z'
+freshrss_passphrase_pattern: '^[A-Za-z0-9._~-]{16,128}\Z'
+freshrss_cron_pattern: '^([0-9]|[1-5][0-9])(,([0-9]|[1-5][0-9])){0,11}\Z'
+freshrss_sha256_pattern: '^[0-9a-f]{64}\Z'
+freshrss_language_pattern: '^[a-z]{2}(-[a-z]{2})?\Z'
+freshrss_opml_max_bytes: 8388608
+# the accounts, administrator first. name is literal for the administrator and read from name_ref
+# for the others (a name is a secret too); password_ref and api_password_ref are empty for none
+freshrss_accounts: >-
+  {%- set out = [{'name': freshrss_admin_user, 'name_ref': '', 'password_ref': freshrss_admin_login_ref,
+                  'api_password_ref': freshrss_admin_api_login_ref, 'opml': freshrss_admin_import_opml | bool}] -%}
+  {%- for u in freshrss_users -%}
+  {%- set _ = out.append({'name': '', 'name_ref': u.name_ref, 'password_ref': u.password_ref | default(''),
+                          'api_password_ref': u.api_password_ref, 'opml': u.opml | default(true) | bool}) -%}
+  {%- endfor -%}
+  {{ out }}
+# every reference the role reads (empty ones are none)
+freshrss_refs: >-
+  {{ (freshrss_accounts | map(attribute='name_ref') | select | list)
+     + (freshrss_accounts | map(attribute='password_ref') | select | list)
+     + (freshrss_accounts | map(attribute='api_password_ref') | select | list) }}
+# the script the role runs in the container (as the web server's user) for each account: create it on
+# an empty database, update it when a password differs, else change nothing. The values arrive in the
+# environment of the one command, never an argument of it; inside the container the product's own
+# tools take a password as an option, so it is visible to that container's own processes for the
+# moment the tool runs, and to nobody else.
+freshrss_user_script: |
+  set -eu
+  cd /var/www/FreshRSS
+  if ! php cli/list-users.php 2>/dev/null | grep -qxF -- "$HNX_USER"; then
+    php cli/create-user.php --user "$HNX_USER" ${HNX_PW:+--password "$HNX_PW"} ${HNX_APIPW:+--api-password "$HNX_APIPW"} --language "$HNX_LANG" --no-default-feeds >/dev/null
+    echo "HNX-USER created"
+  elif php -r '$u = getenv("HNX_USER"); $c = @include "/var/www/FreshRSS/data/users/" . $u . "/config.php"; if (!is_array($c)) exit(1); $p = getenv("HNX_PW"); $a = getenv("HNX_APIPW"); if ($p !== false && $p !== "" && !password_verify($p, (string)($c["passwordHash"] ?? ""))) exit(1); if ($a !== false && $a !== "" && !password_verify($a, (string)($c["apiPasswordHash"] ?? ""))) exit(1); exit(0);'; then
+    echo "HNX-USER unchanged"
+  else
+    php cli/update-user.php --user "$HNX_USER" ${HNX_PW:+--password "$HNX_PW"} ${HNX_APIPW:+--api-password "$HNX_APIPW"} >/dev/null
+    echo "HNX-USER updated"
+  fi
+freshrss_counts_php: >-
+  $j = json_decode(stream_get_contents(STDIN), true); $r = $j[0] ?? null; if (!is_array($r)) { echo "HNX-COUNTS none\n"; exit(1); } echo "HNX-COUNTS " . json_encode(["categories" => (int)$r["categories"], "feeds" => (int)$r["feeds"], "reads" => (int)$r["reads"], "unreads" => (int)$r["unreads"], "favourites" => (int)$r["favourites"]], JSON_UNESCAPED_SLASHES) . "\n";
+# the script that subscribes the list for one account (HNX_USER) and holds it to its floor. The marker
+# is written only after the account's feed count reaches HNX_FLOOR; a list already subscribed (its
+# marker names this sha256) is not read again.
+freshrss_opml_script: |
+  set -eu
+  cd /var/www/FreshRSS
+  marker="data/users/$HNX_USER/hnx-opml.sha256"
+  feeds() { php cli/user-info.php --user "$HNX_USER" --json --no-db-size | php -r '$j = json_decode(stream_get_contents(STDIN), true); echo (int)($j[0]["feeds"] ?? -1);'; }
+  if [ -f "$marker" ] && [ "$(cat "$marker")" = "$HNX_SHA" ] && [ "$(feeds)" -ge "$HNX_FLOOR" ]; then
+    echo "HNX-OPML unchanged"
+    exit 0
+  fi
+  php cli/import-for-user.php --user "$HNX_USER" --filename /hnx-import/feeds.opml >/dev/null
+  n="$(feeds)"
+  if [ "$n" -lt "$HNX_FLOOR" ]; then
+    echo "HNX-OPML short $n of $HNX_FLOOR"
+    exit 1
+  fi
+  printf '%s' "$HNX_SHA" >"$marker"
+  echo "HNX-OPML imported $n"
+# the account's subscription and entry counts (HNX_USER in the environment), one line of JSON
+freshrss_counts_script: |
+  set -eu
+  cd /var/www/FreshRSS
+  php cli/user-info.php --user "$HNX_USER" --json --no-db-size | php -r '{{ freshrss_counts_php }}'
+# export one account (HNX_USER) to HNX_FILE.sqlite and HNX_FILE.opml, then print the application's counts
+# and the counts of the SQLite copy, one line of JSON each
+freshrss_export_script: |
+  set -eu
+  cd /var/www/FreshRSS
+  php cli/export-sqlite-for-user.php --user "$HNX_USER" --filename "$HNX_FILE.sqlite" >/dev/null
+  php cli/export-opml-for-user.php --user "$HNX_USER" >"$HNX_FILE.opml"
+  php cli/user-info.php --user "$HNX_USER" --json --no-db-size | php -r '{{ freshrss_counts_php }}'
+  php -r '$p = new PDO("sqlite:" . getenv("HNX_FILE") . ".sqlite"); $n = function ($t) use ($p) { return (int)$p->query("select count(*) from " . $t)->fetchColumn(); }; echo "HNX-EXPORT " . json_encode(["feeds" => $n("feed"), "categories" => $n("category"), "entries" => $n("entry")]) . "\n";'
+# import one account's SQLite export (HNX_FILE) into the account (HNX_USER) and print its counts
+freshrss_import_script: |
+  set -eu
+  cd /var/www/FreshRSS
+  php cli/import-sqlite-for-user.php --user "$HNX_USER" --filename "$HNX_FILE" >/dev/null
+  php cli/user-info.php --user "$HNX_USER" --json --no-db-size | php -r '{{ freshrss_counts_php }}'

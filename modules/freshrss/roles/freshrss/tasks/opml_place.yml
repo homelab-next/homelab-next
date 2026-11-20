@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# The pinned list is copied beside the data (import/feeds.opml) for the container to read, and the copy
+# is read back and must hash to the pin.
+- name: Put the feed list in the import directory
+  ansible.builtin.copy:
+    src: "{{ freshrss_opml_src }}"
+    dest: "{{ freshrss_data_root }}/import/feeds.opml"
+    owner: "{{ freshrss_owner }}"
+    group: "{{ freshrss_app_gid | int }}"
+    mode: "0640"
+  tags: [restore]
+
+- name: Read the copy
+  ansible.builtin.stat:
+    path: "{{ freshrss_data_root }}/import/feeds.opml"
+    checksum_algorithm: sha256
+  register: freshrss_opml_placed
+  tags: [restore]
+
+- name: The copy is the pinned list
+  ansible.builtin.assert:
+    that: freshrss_opml_placed.stat.checksum == freshrss_opml_sha256
+    fail_msg: "freshrss: the feed list on the guest does not hash to freshrss_opml_sha256"
+  tags: [restore]

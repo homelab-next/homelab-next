@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore from an export (README, "Backup and restore"): freshrss_restore_source holds listing.jsonl,
+# manifest.json and a<n>.sqlite for each account. The source is checked first and nothing is written
+# until it passes: the listing names exactly the files that are there, each a regular file of the size
+# and sha256 listed (and no other kind of name), and the manifest is the product's format. The
+# product's importer is not a merge, so every account being restored must be EMPTY (no feed, no
+# entry); the role refuses before it writes otherwise. Deploy with freshrss_opml_src empty for a
+# restore (the feed list would subscribe the accounts first), then restore. Accounts are created from
+# the secrets (their passwords are not in the export); each account's SQLite file is staged in
+# export/.restoring, imported, and the account's counts are compared with the manifest's.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Read the source's listing
+      ansible.builtin.slurp:
+        src: "{{ freshrss_restore_source }}/listing.jsonl"
+      register: freshrss_restore_listing
+    - name: Read the source's manifest
+      ansible.builtin.slurp:
+        src: "{{ freshrss_restore_source }}/manifest.json"
+      register: freshrss_restore_manifest
+      no_log: true
+    - name: Read the listed files (size, sha256)
+      ansible.builtin.stat:
+        path: "{{ freshrss_restore_source }}/{{ item }}"
+        checksum_algorithm: sha256
+        follow: false
+      loop: "{{ (freshrss_restore_listing.content | b64decode).splitlines() | reject('equalto', '') | map('from_json') | map(attribute='key') | list }}"
+      register: freshrss_restore_stats
+    - name: Refuse a source that is not exactly what its listing says (nothing is written)
+      ansible.builtin.assert:
+        that:
+          - freshrss_restore_stats.results | length > 0
+          - freshrss_restore_stats.results | map(attribute='item') | reject('match', '^(manifest\.json|a[0-9]{1,3}\.(sqlite|opml))\Z') | list | length == 0
+          - freshrss_restore_stats.results | map(attribute='item') | unique | list | length == freshrss_restore_stats.results | length
+          - "'manifest.json' in (freshrss_restore_stats.results | map(attribute='item') | list)"
+          - freshrss_restore_stats.results | map(attribute='stat') | selectattr('exists') | list | length == freshrss_restore_stats.results | length
+          - freshrss_restore_stats.results | map(attribute='stat') | selectattr('isreg') | list | length == freshrss_restore_stats.results | length
+          - freshrss_restore_stats.results | map(attribute='stat') | selectattr('islnk') | list | length == 0
+          - >-
+            freshrss_restore_stats.results | map(attribute='stat.checksum') | list
+            == (freshrss_restore_listing.content | b64decode).splitlines() | reject('equalto', '') | map('from_json') | map(attribute='sha256') | list
+          - >-
+            freshrss_restore_stats.results | map(attribute='stat.size') | map('int') | list
+            == (freshrss_restore_listing.content | b64decode).splitlines() | reject('equalto', '') | map('from_json') | map(attribute='size') | map('int') | list
+          - (freshrss_restore_manifest.content | b64decode | from_json).format == 'freshrss-export-1'
+          - (freshrss_restore_manifest.content | b64decode | from_json).accounts | length > 0
+        fail_msg: "freshrss: {{ freshrss_restore_source }} is not an intact export (listing, names, kinds, sizes or sha256 differ)"
+    - name: Look for a staging directory an earlier restore left
+      ansible.builtin.stat:
+        path: "{{ freshrss_data_root }}/export/.restoring"
+        follow: false
+      register: freshrss_stale_staging
+    - name: Refuse to stage over it
+      ansible.builtin.assert:
+        that: not freshrss_stale_staging.stat.exists
+        fail_msg: "freshrss: {{ freshrss_data_root }}/export/.restoring is left from an earlier restore; inspect it and move it away"
+    - name: The application is up (the importer runs in it)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ freshrss_dir }}/docker-compose.yml", up, -d, --wait, app]
+      changed_when: false
+    - name: Create the accounts and set their passwords (they are not in the export)
+      ansible.builtin.include_tasks: users.yml
+    - name: Create the staging directory
+      ansible.builtin.file:
+        path: "{{ freshrss_data_root }}/export/.restoring"
+        state: directory
+        owner: "{{ freshrss_app_uid | int }}"
+        group: "{{ freshrss_app_gid | int }}"
+        mode: "0700"
+    - name: Restore each account
+      ansible.builtin.include_tasks: restore_one.yml
+      loop: "{{ freshrss_accounts }}"
+      loop_control:
+        loop_var: freshrss_acct
+        index_var: freshrss_i
+        label: "account {{ freshrss_i }}"
+      register: freshrss_restored
+    - name: Every account the export holds was restored (a name the site no longer configures is an error)
+      ansible.builtin.assert:
+        that: freshrss_restored_n | default(0) | int == (freshrss_restore_manifest.content | b64decode | from_json).accounts | length
+        fail_msg: "freshrss: the export holds an account the site's freshrss_users no longer names (or one that did not restore); the staged files are LEFT in {{ freshrss_data_root }}/export/.restoring"
+      no_log: true
+    - name: Remove the staging directory (a fixed path inside the data root's export directory, empty by now)
+      ansible.builtin.file:
+        path: "{{ freshrss_data_root }}/export/.restoring"
+        state: absent
+  tags: [restore]

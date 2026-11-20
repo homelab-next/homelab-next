@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: Apache-2.0
+# One account (freshrss_acct) of the configured ones. An account the export does not hold is left as
+# it is (a new account); one it holds must be empty here.
+- name: Resolve the account's name
+  ansible.builtin.set_fact:
+    freshrss_acct_name: "{{ freshrss_acct.name if freshrss_acct.name | length > 0 else lookup('hnx_secret', freshrss_acct.name_ref) }}"
+  no_log: true
+
+- name: Find the account in the export
+  ansible.builtin.set_fact:
+    freshrss_acct_export: >-
+      {{ (freshrss_restore_manifest.content | b64decode | from_json).accounts
+         | selectattr('name', 'equalto', freshrss_acct_name) | list | first | default({}) }}
+  no_log: true
+
+- name: Refuse a file name in the manifest that is not a plain a<n> name or is not a listed file (before any path is built)
+  ansible.builtin.assert:
+    that:
+      - freshrss_acct_export.file is string
+      - freshrss_acct_export.file is match('^a[0-9]{1,3}\Z')
+      - (freshrss_acct_export.file ~ '.sqlite') in (freshrss_restore_stats.results | map(attribute='item') | list)
+    fail_msg: "freshrss: the manifest names a file for account {{ freshrss_i }} that is not a<n> or is not in the listing; nothing was staged"
+  when: freshrss_acct_export | length > 0
+  no_log: true
+
+- name: Restore the account
+  when: freshrss_acct_export | length > 0
+  block:
+    - name: Read what the account holds now
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ freshrss_dir }}/docker-compose.yml", exec, -T, -u, www-data,
+               -e, HNX_USER, app, sh, -c, "{{ freshrss_counts_script }}"]
+        expand_argument_vars: false  # the script holds $NAME for the container's shell: never the controller's
+      environment:
+        HNX_USER: "{{ freshrss_acct_name }}"
+      register: freshrss_before
+      changed_when: false
+      failed_when: freshrss_before.rc != 0 or (freshrss_before.stdout_lines | select('match', '^HNX-COUNTS \{') | list | length) != 1
+      no_log: true
+    - name: The account holds nothing yet
+      ansible.builtin.assert:
+        that:
+          - (freshrss_before.stdout_lines | select('match', '^HNX-COUNTS ') | first | regex_replace('^HNX-COUNTS ', '') | from_json).feeds | int == 0
+          - (freshrss_before.stdout_lines | select('match', '^HNX-COUNTS ') | first | regex_replace('^HNX-COUNTS ', '') | from_json).reads | int == 0
+          - (freshrss_before.stdout_lines | select('match', '^HNX-COUNTS ') | first | regex_replace('^HNX-COUNTS ', '') | from_json).unreads | int == 0
+        fail_msg: >-
+          freshrss: account {{ freshrss_i }} already holds feeds or entries; the importer is not a merge.
+          Move {{ freshrss_data_root }} aside and deploy again with freshrss_opml_src empty, then restore into that.
+      no_log: true
+    - name: Stage the account's database
+      ansible.builtin.copy:
+        src: "{{ freshrss_restore_source }}/{{ freshrss_acct_export.file }}.sqlite"
+        remote_src: true
+        dest: "{{ freshrss_data_root }}/export/.restoring/{{ freshrss_acct_export.file }}.sqlite"
+        owner: "{{ freshrss_app_uid | int }}"
+        group: "{{ freshrss_app_gid | int }}"
+        mode: "0600"
+      no_log: true
+    - name: Import it with the product's importer
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ freshrss_dir }}/docker-compose.yml", exec, -T, -u, www-data,
+               -e, HNX_USER, -e, HNX_FILE, app, sh, -c, "{{ freshrss_import_script }}"]
+        expand_argument_vars: false  # the script holds $NAME for the container's shell: never the controller's
+      environment:
+        HNX_USER: "{{ freshrss_acct_name }}"
+        HNX_FILE: "{{ freshrss_container_export }}/.restoring/{{ freshrss_acct_export.file }}.sqlite"
+      register: freshrss_imported
+      changed_when: true
+      failed_when: freshrss_imported.rc != 0 or (freshrss_imported.stdout_lines | select('match', '^HNX-COUNTS \{') | list | length) != 1
+      no_log: true
+    - name: The account's counts equal the export's
+      ansible.builtin.assert:
+        that:
+          - >-
+            (freshrss_imported.stdout_lines | select('match', '^HNX-COUNTS ') | first | regex_replace('^HNX-COUNTS ', '') | from_json)
+            == freshrss_acct_export.counts
+          - freshrss_acct_export.counts.feeds | int > 0
+        fail_msg: >-
+          freshrss: account {{ freshrss_i }} was imported but its counts differ from the export's, or
+          the export held no feed; the staged file is LEFT in {{ freshrss_data_root }}/export/.restoring for inspection
+      no_log: true
+    - name: Remove the staged file
+      ansible.builtin.file:
+        path: "{{ freshrss_data_root }}/export/.restoring/{{ freshrss_acct_export.file }}.sqlite"
+        state: absent
+      no_log: true
+    - name: Count it
+      ansible.builtin.set_fact:
+        freshrss_restored_n: "{{ (freshrss_restored_n | default(0) | int) + 1 }}"

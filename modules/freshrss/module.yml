@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# The feed-reader provider on FreshRSS (docs/modules.md; README.md beside this file): a self-hosted
+# RSS/Atom aggregator with the Fever and Google Reader APIs, run as one compose_app container from a
+# pinned image (Apache, PHP, SQLite in the data root, the image's own cron for feed refresh). Local
+# accounts of its own, created idempotently from secrets (usernames and API passwords by reference);
+# one OPML feed list, pinned by sha256, subscribed for each account that asks for it. Egress is the
+# point of a feed reader: it fetches the feeds' sites. No public route. Every real value (the guest,
+# its address, the names, the secret values, the feed list's path) is the site's: the overlay's
+# lab/modules.yml, lab/services.yml, group variables and secret store.
+manifest_version: "1.0"
+id: freshrss
+kind: provider
+title: Feed reader on FreshRSS
+description: Fills the feed-reader slot with FreshRSS, one compose_app container with SQLite, the
+  Fever and Google Reader APIs on, a feed refresh schedule inside the container, accounts created
+  from secrets, a pinned OPML list subscribed per account, and a per-account export and restore that
+  verifies feed and entry counts.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: freshrss
+  version: 1.30.4
+licence:
+  kind: open-source
+  spdx: AGPL-3.0-only
+credentials:
+  - secret: secret:freshrss/admin-password
+    identity: password
+    holder: provider
+    purpose: the administrator account's web password (the default user, who may also have an API password)
+  - secret: secret:freshrss/admin-api-password
+    identity: password
+    holder: provider
+    purpose: the administrator account's API password; read only when freshrss_admin_api_login_ref is set (other accounts' names and API passwords are the site's references, see README)
+identifiers:
+  - {kind: secret-name, name: freshrss, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the account names and passwords are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 1, memory_mb: 1024, disk_gb: 10}
+      guest:
+        baselines: [base]
+      roles: [role:freshrss]
+      purpose: runs the FreshRSS container (docker_engine applied first, compose_app renders it); the database and every account's state live on this guest's disk
+provides:
+  slots:
+    feed-reader:
+      adapter: homelabnext.conform.adapters.feed_reader:make
+      provisional: true
+      reason: feed-reader has no contract yet; the obvious standard is the service answering its sign-in page and refusing a feed-API call that carries no valid key, which is what the role's health hook and a consumer's first call read
+      migration: {formats: [object-tree], export: role:freshrss, import: role:freshrss}
+egress:
+  - host: server
+    to: [internet]
+    purpose: the feeds' own sites, fetched by the scheduled refresh and when a feed list is subscribed (the product also reads a feed's page and icon)
+contributes:
+  roles:
+    - file: roles/freshrss
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:freshrss, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: accounts
+    kind: database
+    description: Every account's subscriptions, categories, entries and read state as the product's own per-account SQLite export, beside an OPML list and a manifest of counts with a sha256 listing, taken without stopping the service.
+    export: {formats: [object-tree], via: role:freshrss}
+    import: {formats: [object-tree], via: role:freshrss}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest) of the same or a newer version: validated and recorded, every account exported, then converged; the application migrates its own database on first start"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

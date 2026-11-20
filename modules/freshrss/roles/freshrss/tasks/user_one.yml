@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# One account (freshrss_acct). The name, the web password and the API password reach the container
+# through the environment of this one command (briefly visible in the guest's process list); an account with no web
+# password has no web sign-in (the API alone).
+- name: Create or update the account
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ freshrss_dir }}/docker-compose.yml", exec, -T, -u, www-data,
+           -e, HNX_USER, -e, HNX_PW, -e, HNX_APIPW, -e, HNX_LANG, app, sh, -c, "{{ freshrss_user_script }}"]
+    expand_argument_vars: false  # the script holds $NAME for the container's shell: never the controller's
+  environment:
+    HNX_USER: "{{ freshrss_acct.name if freshrss_acct.name | length > 0 else lookup('hnx_secret', freshrss_acct.name_ref) }}"
+    HNX_PW: "{{ lookup('hnx_secret', freshrss_acct.password_ref) if freshrss_acct.password_ref | length > 0 else '' }}"
+    HNX_APIPW: "{{ lookup('hnx_secret', freshrss_acct.api_password_ref) if freshrss_acct.api_password_ref | length > 0 else '' }}"
+    HNX_LANG: "{{ freshrss_language }}"
+  register: freshrss_user
+  changed_when: "'HNX-USER created' in freshrss_user.stdout or 'HNX-USER updated' in freshrss_user.stdout"
+  failed_when: freshrss_user.rc != 0 or 'HNX-USER ' not in freshrss_user.stdout
+  no_log: true
+  tags: [restore]

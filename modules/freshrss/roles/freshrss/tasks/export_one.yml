@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# One account (freshrss_acct), written as a<index>.sqlite and a<index>.opml (the manifest holds the
+# name, the file names carry none). The script prints the application's counts for the account and
+# the counts of the SQLite copy it just made; they must agree on feeds and categories.
+- name: Resolve the account's name
+  ansible.builtin.set_fact:
+    freshrss_acct_name: "{{ freshrss_acct.name if freshrss_acct.name | length > 0 else lookup('hnx_secret', freshrss_acct.name_ref) }}"
+  no_log: true
+
+- name: Export the account with the product's exporter
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ freshrss_dir }}/docker-compose.yml", exec, -T, -u, www-data,
+           -e, HNX_USER, -e, HNX_FILE, app, sh, -c, "{{ freshrss_export_script }}"]
+    expand_argument_vars: false  # the script holds $NAME for the container's shell: never the controller's
+  environment:
+    HNX_USER: "{{ freshrss_acct_name }}"
+    HNX_FILE: "{{ freshrss_container_export }}/.new/a{{ freshrss_i }}"
+  register: freshrss_exported
+  changed_when: true
+  failed_when: >-
+    freshrss_exported.rc != 0 or
+    (freshrss_exported.stdout_lines | select('match', '^HNX-COUNTS \{') | list | length) != 1 or
+    (freshrss_exported.stdout_lines | select('match', '^HNX-EXPORT \{') | list | length) != 1
+  no_log: true
+
+- name: Read what the application and the copy report
+  ansible.builtin.set_fact:
+    freshrss_acct_counts: "{{ freshrss_exported.stdout_lines | select('match', '^HNX-COUNTS ') | first | regex_replace('^HNX-COUNTS ', '') | from_json }}"
+    freshrss_acct_copy: "{{ freshrss_exported.stdout_lines | select('match', '^HNX-EXPORT ') | first | regex_replace('^HNX-EXPORT ', '') | from_json }}"
+  no_log: true
+
+- name: The copy is whole and the account holds the subscriptions it is expected to
+  ansible.builtin.assert:
+    that:
+      - freshrss_acct_copy.feeds | int == freshrss_acct_counts.feeds | int
+      - freshrss_acct_copy.categories | int == freshrss_acct_counts.categories | int
+      - >-
+        freshrss_acct_counts.feeds | int
+        >= (([(freshrss_opml_feeds | int) - (freshrss_opml_tolerance | int)] if freshrss_acct.opml and freshrss_opml_src | length > 0 else [0])
+            + [freshrss_expected_min_feeds | int if freshrss_acct.opml else 0]) | max
+    fail_msg: >-
+      freshrss: the export of account {{ freshrss_i }} is not whole (its SQLite copy holds
+      {{ freshrss_acct_copy.feeds | default('?') }} feeds and {{ freshrss_acct_copy.categories | default('?') }}
+      categories where the application reports {{ freshrss_acct_counts.feeds | default('?') }} and
+      {{ freshrss_acct_counts.categories | default('?') }}, or the account holds fewer feeds than expected); the previous export was left in place
+
+- name: Read the two files (size, sha256)
+  ansible.builtin.stat:
+    path: "{{ freshrss_data_root }}/export/.new/a{{ freshrss_i }}.{{ item }}"
+    checksum_algorithm: sha256
+  loop: [sqlite, opml]
+  register: freshrss_acct_files
+
+- name: Refuse a file that is not there or is empty
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.size | int > 0
+    fail_msg: "freshrss: an export file of account {{ freshrss_i }} is missing or empty"
+  loop: "{{ freshrss_acct_files.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Record the account
+  ansible.builtin.set_fact:
+    freshrss_export_accounts: >-
+      {{ freshrss_export_accounts + [{'name': freshrss_acct_name, 'file': 'a' ~ freshrss_i,
+                                      'counts': freshrss_acct_counts}] }}
+    freshrss_export_files: >-
+      {{ freshrss_export_files + [
+           {'key': 'a' ~ freshrss_i ~ '.sqlite', 'size': freshrss_acct_files.results[0].stat.size, 'sha256': freshrss_acct_files.results[0].stat.checksum},
+           {'key': 'a' ~ freshrss_i ~ '.opml', 'size': freshrss_acct_files.results[1].stat.size, 'sha256': freshrss_acct_files.results[1].stat.checksum}] }}
+  no_log: true
