@@ -40,17 +40,18 @@ freshrss_refs: >-
 # an empty database, update it when a password differs, else change nothing. The values arrive in the
 # environment of the one command, never an argument of it; inside the container the product's own
 # tools take a password as an option, so it is visible to that container's own processes for the
-# moment the tool runs, and to nobody else.
+# moment the tool runs, and to nobody else. Every user-supplied value is ONE argv word in the
+# `--option=VALUE` form: as a separate word, a value beginning with "-" is parsed as an option.
 freshrss_user_script: |
   set -eu
   cd /var/www/FreshRSS
   if ! php cli/list-users.php 2>/dev/null | grep -qxF -- "$HNX_USER"; then
-    php cli/create-user.php --user "$HNX_USER" ${HNX_PW:+--password "$HNX_PW"} ${HNX_APIPW:+--api-password "$HNX_APIPW"} --language "$HNX_LANG" --no-default-feeds >/dev/null
+    php cli/create-user.php "--user=$HNX_USER" ${HNX_PW:+"--password=$HNX_PW"} ${HNX_APIPW:+"--api-password=$HNX_APIPW"} "--language=$HNX_LANG" --no-default-feeds >/dev/null
     echo "HNX-USER created"
   elif php -r '$u = getenv("HNX_USER"); $c = @include "/var/www/FreshRSS/data/users/" . $u . "/config.php"; if (!is_array($c)) exit(1); $p = getenv("HNX_PW"); $a = getenv("HNX_APIPW"); if ($p !== false && $p !== "" && !password_verify($p, (string)($c["passwordHash"] ?? ""))) exit(1); if ($a !== false && $a !== "" && !password_verify($a, (string)($c["apiPasswordHash"] ?? ""))) exit(1); exit(0);'; then
     echo "HNX-USER unchanged"
   else
-    php cli/update-user.php --user "$HNX_USER" ${HNX_PW:+--password "$HNX_PW"} ${HNX_APIPW:+--api-password "$HNX_APIPW"} >/dev/null
+    php cli/update-user.php "--user=$HNX_USER" ${HNX_PW:+"--password=$HNX_PW"} ${HNX_APIPW:+"--api-password=$HNX_APIPW"} >/dev/null
     echo "HNX-USER updated"
   fi
 freshrss_counts_php: >-
@@ -62,12 +63,12 @@ freshrss_opml_script: |
   set -eu
   cd /var/www/FreshRSS
   marker="data/users/$HNX_USER/hnx-opml.sha256"
-  feeds() { php cli/user-info.php --user "$HNX_USER" --json --no-db-size | php -r '$j = json_decode(stream_get_contents(STDIN), true); echo (int)($j[0]["feeds"] ?? -1);'; }
+  feeds() { php cli/user-info.php "--user=$HNX_USER" --json --no-db-size | php -r '$j = json_decode(stream_get_contents(STDIN), true); echo (int)($j[0]["feeds"] ?? -1);'; }
   if [ -f "$marker" ] && [ "$(cat "$marker")" = "$HNX_SHA" ] && [ "$(feeds)" -ge "$HNX_FLOOR" ]; then
     echo "HNX-OPML unchanged"
     exit 0
   fi
-  php cli/import-for-user.php --user "$HNX_USER" --filename /hnx-import/feeds.opml >/dev/null
+  php cli/import-for-user.php "--user=$HNX_USER" --filename=/hnx-import/feeds.opml >/dev/null
   n="$(feeds)"
   if [ "$n" -lt "$HNX_FLOOR" ]; then
     echo "HNX-OPML short $n of $HNX_FLOOR"
@@ -79,19 +80,19 @@ freshrss_opml_script: |
 freshrss_counts_script: |
   set -eu
   cd /var/www/FreshRSS
-  php cli/user-info.php --user "$HNX_USER" --json --no-db-size | php -r '{{ freshrss_counts_php }}'
+  php cli/user-info.php "--user=$HNX_USER" --json --no-db-size | php -r '{{ freshrss_counts_php }}'
 # export one account (HNX_USER) to HNX_FILE.sqlite and HNX_FILE.opml, then print the application's counts
 # and the counts of the SQLite copy, one line of JSON each
 freshrss_export_script: |
   set -eu
   cd /var/www/FreshRSS
-  php cli/export-sqlite-for-user.php --user "$HNX_USER" --filename "$HNX_FILE.sqlite" >/dev/null
-  php cli/export-opml-for-user.php --user "$HNX_USER" >"$HNX_FILE.opml"
-  php cli/user-info.php --user "$HNX_USER" --json --no-db-size | php -r '{{ freshrss_counts_php }}'
+  php cli/export-sqlite-for-user.php "--user=$HNX_USER" "--filename=$HNX_FILE.sqlite" >/dev/null
+  php cli/export-opml-for-user.php "--user=$HNX_USER" >"$HNX_FILE.opml"
+  php cli/user-info.php "--user=$HNX_USER" --json --no-db-size | php -r '{{ freshrss_counts_php }}'
   php -r '$p = new PDO("sqlite:" . getenv("HNX_FILE") . ".sqlite"); $n = function ($t) use ($p) { return (int)$p->query("select count(*) from " . $t)->fetchColumn(); }; echo "HNX-EXPORT " . json_encode(["feeds" => $n("feed"), "categories" => $n("category"), "entries" => $n("entry")]) . "\n";'
 # import one account's SQLite export (HNX_FILE) into the account (HNX_USER) and print its counts
 freshrss_import_script: |
   set -eu
   cd /var/www/FreshRSS
-  php cli/import-sqlite-for-user.php --user "$HNX_USER" --filename "$HNX_FILE" >/dev/null
-  php cli/user-info.php --user "$HNX_USER" --json --no-db-size | php -r '{{ freshrss_counts_php }}'
+  php cli/import-sqlite-for-user.php "--user=$HNX_USER" "--filename=$HNX_FILE" >/dev/null
+  php cli/user-info.php "--user=$HNX_USER" --json --no-db-size | php -r '{{ freshrss_counts_php }}'

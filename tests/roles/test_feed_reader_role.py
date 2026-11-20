@@ -766,3 +766,74 @@ def test_restore_refuses_a_manifest_file_name_that_is_not_a_listed_plain_name(tm
     _empty(dst)
     r = _restore(dst, source)
     assert r.returncode != 0 and not (dst / "import.log").exists()
+
+
+# ------------------------------------------------- a value that begins with "-" is never an option
+
+
+def _run_cli_script(tmp_path: Path, script: str, env: dict) -> list[list[str]]:
+    """Run one of the role's in-container scripts under a fake ``php`` that records its argv words.
+    ``list-users`` reports nothing (so the account is created), and the ``-r`` verifier reports a
+    difference (so an existing account is updated)."""
+    import subprocess
+
+    bindir = tmp_path / "pbin"
+    bindir.mkdir()
+    log = tmp_path / "php.log"
+    fake(
+        bindir / "php",
+        f"""
+import json, sys
+a = sys.argv[1:]
+if a[:1] == ["-r"]:
+    sys.exit(1)
+open({str(log)!r}, "a").write(json.dumps(a) + "\\n")
+sys.exit(0)
+""",
+    )
+    body = "".join(ln for ln in script.splitlines(True) if not ln.startswith("cd /"))
+    r = subprocess.run(
+        ["sh", "-c", body],
+        env={"PATH": f"{bindir}:{os.environ['PATH']}", **env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    return [json.loads(x) for x in log.read_text().splitlines()]
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_a_password_or_name_that_begins_with_a_dash_is_one_option_word(tmp_path, existing):
+    pw, api, name = "-" + "p" * 20, "-" + "a" * 20, "-reader"
+    env = {"HNX_USER": name, "HNX_PW": pw, "HNX_APIPW": api, "HNX_LANG": "en"}
+    script = VARS[P + "user_script"]
+    if existing:  # make list-users name the account, so the update tool runs
+        script = script.replace(
+            "php cli/list-users.php 2>/dev/null | grep -qxF --", f"echo {name} | grep -qxF --"
+        )
+    calls = [c for c in _run_cli_script(tmp_path, script, env) if c[0] != "cli/list-users.php"]
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[0] == ("cli/update-user.php" if existing else "cli/create-user.php")
+    assert f"--user={name}" in argv
+    assert f"--password={pw}" in argv and f"--api-password={api}" in argv
+    # no value ever stands as its own word, where the tool would take it for an option
+    assert not [w for w in argv[1:] if w.startswith("-") and not w.startswith("--")]
+    assert not {"--user", "--password", "--api-password", "--language"} & set(argv)
+    assert not [w for w in argv if w in {name, pw, api}]
+
+
+def test_every_cli_invocation_in_the_role_uses_the_single_word_option_form():
+    import re
+
+    for key, script in VARS.items():
+        if not (key.startswith(P) and key.endswith("_script")):
+            continue
+        for line in script.splitlines():
+            if "cli/" not in line:
+                continue
+            assert not re.search(r"\s--(user|password|api-password|language|filename)\s", line), (
+                key,
+                line,
+            )
