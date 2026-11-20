@@ -27,6 +27,7 @@
         | reject('match', cti_pipeline_user_pattern) | list | length == 0
       - cti_pipeline_user != cti_pipeline_shadow_user
       - cti_pipeline_user != 'root' and cti_pipeline_shadow_user != 'root'
+      - cti_pipeline_owner not in [cti_pipeline_user, cti_pipeline_shadow_user]
       - cti_pipeline_manage_accounts is boolean and cti_pipeline_reload_systemd is boolean
       - cti_pipeline_allow_plain_http is boolean
       - cti_pipeline_keep_releases | int >= 1 and cti_pipeline_keep_releases | int <= 20
@@ -41,7 +42,33 @@
       characters: with the default service orchestrator the id is at most 15), the
       artefact's path on the control host and its sha256 (64 lowercase hex), canonical absolute paths
       three components deep with the data root, the install and the configuration directories apart,
-      distinct lane users (never root), 1 to 20 kept releases, a memory limit like 6G
+      distinct lane users (never root, never the owner of the data root and the configuration), 1 to 20 kept releases, a memory limit like 6G
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+# The interpreter's own module names, which an app package (cti_pipeline_shadow_modules) never is:
+# a shadow-lane -m runs only the app's code, never timeit, pdb, runpy... (read from the host's
+# python, which the release's venv is built from)
+- name: Read the interpreter's own module names
+  ansible.builtin.command:
+    argv: ["{{ cti_pipeline_python }}", -I, -c, "import json, sys; print(json.dumps(sorted(sys.stdlib_module_names)))"]
+  register: cti_pipeline_stdlib_names
+  changed_when: false
+  check_mode: false
+  when: cti_pipeline_shadow_modules | length > 0
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Refuse an interpreter module or installer named as one of the app's packages
+  ansible.builtin.assert:
+    that:
+      - >-
+        cti_pipeline_shadow_modules
+        | intersect((cti_pipeline_stdlib_names.stdout | from_json) + cti_pipeline_not_app_packages)
+        | length == 0
+    fail_msg: >-
+      cti-pipeline: cti_pipeline_shadow_modules names
+      {{ cti_pipeline_shadow_modules | intersect((cti_pipeline_stdlib_names.stdout | from_json) + cti_pipeline_not_app_packages) }}:
+      the interpreter's own modules and its installers are never the app's packages
+  when: cti_pipeline_shadow_modules | length > 0
   tags: [readiness, health, backup, restore, export, upgrade]
 
 - name: Validate the handoff and the host tools
@@ -91,6 +118,8 @@
       - cti_pipeline_lake_schema_env != cti_pipeline_publish_mode_env
       - cti_pipeline_shadow_programs is sequence and cti_pipeline_shadow_programs is not string
       - cti_pipeline_shadow_programs | reject('match', cti_pipeline_path_pattern) | list | length == 0
+      - cti_pipeline_shadow_modules is sequence and cti_pipeline_shadow_modules is not string
+      - cti_pipeline_shadow_modules | map('string') | reject('match', '^[A-Za-z_][A-Za-z0-9_]*\Z') | list | length == 0
       - cti_pipeline_state_dirs is sequence and cti_pipeline_state_dirs is not string
       - cti_pipeline_state_dirs | length >= 1 and 'data' in cti_pipeline_state_dirs
       - cti_pipeline_state_dirs | reject('match', '^[a-z][a-z0-9_-]{0,31}\Z') | list | length == 0
@@ -250,7 +279,9 @@
       {%- set out = [] -%}
       {%- for step in cti_pipeline_jobs[item.job].steps -%}
       {%- if step[0] == '{python}' -%}
-      {%- set ok = (step | length >= 3 and step[1] == '-m' and step[2] is match(cti_pipeline_module_pattern))
+      {%- set ok = (step | length >= 3 and step[1] == '-m' and step[2] is match(cti_pipeline_module_pattern)
+                    and (cti_pipeline_shadow_modules | length == 0
+                         or step[2].split('.')[0] in cti_pipeline_shadow_modules))
                    or (step | length >= 2 and step[1] is match(cti_pipeline_app_path_pattern)) -%}
       {%- else -%}
       {%- set ok = step[0] is match(cti_pipeline_app_path_pattern) or step[0] in cti_pipeline_shadow_programs -%}

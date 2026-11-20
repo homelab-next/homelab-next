@@ -43,6 +43,9 @@ cti_pipeline_lake_schema_env: CTI_LAKE_SCHEMA
 # absolute paths a shadow-lane step may run besides {python} -m <module>, {python} {app}/<script>
 # and {app}/<path> (an allowlist: a shell, another interpreter or a command runner is never one)
 cti_pipeline_shadow_programs: []
+# the top-level packages a shadow-lane `{python} -m` may run (<pkg> or <pkg>.<sub>); empty: the
+# artefact's own (hnx-artefact.json "packages"), and none at all when it declares none
+cti_pipeline_shadow_modules: []
 cti_pipeline_publish_mode_env: PUBLISH_MODE
 
 # --- the job table (role data: README, "Jobs") -------------------------------------------------

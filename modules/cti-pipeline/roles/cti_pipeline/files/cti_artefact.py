@@ -19,7 +19,8 @@
 ``install`` hashes ARCHIVE (opened without following a link) and refuses it unless it is the pin,
 before anything is written.  The archive is a tar (optionally gzip) holding::
 
-    hnx-artefact.json   {"name": ..., "version": ...} (and anything else the builder records)
+    hnx-artefact.json   {"name": ..., "version": ..., "packages": [<top-level package>, ...]}
+                        (packages optional: the modules a shadow-lane ``-m`` may run)
     app/                the application tree (the job's working code; never written at run time)
     requirements.txt    optional: every wheel the app needs, pinned with --hash
     wheels/             optional: those wheels
@@ -54,6 +55,8 @@ import unicodedata
 
 NF = os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
+PACKAGE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
+NOT_APP_PACKAGES = set(sys.stdlib_module_names) | {"pip", "setuptools", "ensurepip", "wheel"}
 RELEASE_RE = re.compile(r"^[0-9a-f]{16}\Z")
 MAX_ENTRIES = 20_000
 MAX_BYTES = 2 << 30
@@ -185,6 +188,14 @@ def check_layout(stage: str) -> dict:
         isinstance(meta.get(k), str) and meta[k] for k in ("name", "version")
     ):
         raise Refused(f"{META} must name the app and its version")
+    pkgs = meta.get("packages", [])
+    if not isinstance(pkgs, list) or not all(
+        isinstance(p, str) and PACKAGE_RE.match(p) and p not in NOT_APP_PACKAGES for p in pkgs
+    ):
+        raise Refused(
+            f"{META} packages must be a list of the app's own top-level package names "
+            "(never the interpreter's modules or its installers)"
+        )
     if os.path.lexists(os.path.join(stage, "venv")):
         raise Refused("the archive carries a venv/: it is built on the host, never shipped")
     return meta

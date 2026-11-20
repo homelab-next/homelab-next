@@ -29,14 +29,28 @@
 
 - name: Name the lanes an export or restore is quiescing right now
   ansible.builtin.set_fact:
+    # only a marker the role's owner wrote counts (root's, in a data root no lane can write); any
+    # other is treated as absent, with a warning
+    cti_pipeline_foreign_markers: >-
+      {{ cti_pipeline_markers.results | selectattr('stat.exists')
+         | rejectattr('stat.pw_name', 'equalto', cti_pipeline_owner) | map(attribute='item') | list }}
     cti_pipeline_busy_lanes: >-
       {{ cti_pipeline_markers.results | selectattr('stat.exists')
+         | selectattr('stat.pw_name', 'equalto', cti_pipeline_owner)
          | selectattr('stat.mtime', 'ge', (now().timestamp() | int) - (cti_pipeline_quiesce_marker_max_age_s | int))
          | map(attribute='item') | list }}
     cti_pipeline_stale_markers: >-
       {{ cti_pipeline_markers.results | selectattr('stat.exists')
+         | selectattr('stat.pw_name', 'equalto', cti_pipeline_owner)
          | selectattr('stat.mtime', 'lt', (now().timestamp() | int) - (cti_pipeline_quiesce_marker_max_age_s | int))
          | map(attribute='item') | list }}
+
+- name: Warn about a quiesce marker the role did not write (treated as absent)
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: cti-pipeline: {{ cti_pipeline_data_root }}/.quiesced-{{ item }} is not
+      {{ cti_pipeline_owner }}'s: it is ignored and the lane's units are unmasked
+  loop: "{{ cti_pipeline_foreign_markers }}"
 
 - name: Warn about a quiesce marker an aborted export or restore left
   ansible.builtin.debug:

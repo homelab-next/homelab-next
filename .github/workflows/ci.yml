@@ -1383,7 +1383,8 @@ jobs:
                   continue
               data = open(name, "rb").read()
               if len(data) > 512 * 1024:
-                  problems.append(f"{name}: larger than 512 KB")
+                  hint = " (CONTRIBUTING.md, 'Changelog rotation')" if name == "CHANGELOG.md" else ""
+                  problems.append(f"{name}: larger than 512 KB{hint}")
               if marker.search(data):
                   problems.append(f"{name}: merge-conflict marker")
               if key.search(data):
