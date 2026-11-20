@@ -82,6 +82,11 @@ argument_specs:
         elements: str
         description: "Absolute paths a shadow-lane step may run besides {python} -m <module>, {python} {app}/<script> and {app}/<path> (an allowlist)."
         default: []
+      cti_pipeline_shadow_modules:
+        type: list
+        elements: str
+        description: "Top-level packages a shadow-lane {python} -m may run; empty takes the artefact's own (hnx-artefact.json packages)."
+        default: []
       cti_pipeline_publish_mode_env:
         type: str
         description: "The app's variable naming its publish mode (always forced to stage: this module never publishes)."

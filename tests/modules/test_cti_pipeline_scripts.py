@@ -786,3 +786,157 @@ def test_the_wrapper_accepts_and_refuses_exactly_what_the_reference_reader_does(
         ours = 1
     assert ours == r.returncode, (case, r.stderr)
     assert (case == "ok") == (ours == 0)
+
+
+STDLIB_RUNNERS = [
+    "timeit",
+    "pdb",
+    "cProfile",
+    "trace",
+    "http.server",
+    "runpy",
+    "code",
+    "pip",
+    "unittest",
+]
+
+
+def _pinned_shadow(tmp_path, steps, modules=None, packages=None):
+    """A shadow spec with ``steps``, its release pinned; the artefact declares ``packages``."""
+    _, body = _spec(tmp_path, "shadow", steps=steps, shadow_modules=modules or [])
+    install = Path(body["release_link"]).parent
+    if packages is not None:
+        for rel in ("a" * 16, "b" * 16):
+            (install / "releases" / rel / "hnx-artefact.json").write_text(
+                json.dumps({"name": "intel-app", "version": "1", "packages": packages})
+            )
+    fd = run.pin_release(body)
+    return body, fd
+
+
+@pytest.mark.parametrize("module", STDLIB_RUNNERS)
+def test_a_shadow_step_never_runs_the_interpreters_own_modules(tmp_path, module):
+    body, fd = _pinned_shadow(
+        tmp_path, [["{python}", "-m", module, "x"]], modules=["intel"], packages=["intel"]
+    )
+    try:
+        with pytest.raises(run.Refused, match="not the app's own"):
+            run.check_release_paths(body)
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.parametrize(
+    ("modules", "packages", "module", "ok"),
+    [
+        (["intel"], None, "intel.cve", True),  # the site's list
+        (["intel"], None, "intel", True),
+        ([], ["intel", "intelx"], "intelx.run", True),  # the artefact's own packages
+        ([], ["intel"], "timeit", False),
+        ([], None, "intel.cve", False),  # nothing declared: no -m at all
+        (["intel"], ["timeit"], "timeit", False),  # the site's list wins over the artefact's
+        ([], ["intel"], "intelligence.x", False),  # a prefix is not the package
+    ],
+)
+def test_a_shadow_module_must_be_one_of_the_apps_packages(tmp_path, modules, packages, module, ok):
+    body, fd = _pinned_shadow(
+        tmp_path, [["{python}", "-m", module]], modules=modules, packages=packages
+    )
+    try:
+        if ok:
+            run.check_release_paths(body)
+        else:
+            with pytest.raises(run.Refused, match="not the app's own"):
+                run.check_release_paths(body)
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.parametrize("arg", ["{app}/..{lane_root}", "{app}/../../x", "{app}/x/../../y"])
+def test_an_app_argument_that_leaves_the_release_once_filled_is_refused(tmp_path, arg):
+    body, fd = _pinned_shadow(tmp_path, [["{python}", "{app}/run.py", arg]], modules=["intel"])
+    try:
+        with pytest.raises(run.Refused, match="leaves the release"):
+            run.check_release_paths(body)
+    finally:
+        os.close(fd)
+    body, fd = _pinned_shadow(tmp_path / "ok", [["{python}", "{app}/run.py", "{app}/a/b"]])
+    try:
+        run.check_release_paths(body)
+    finally:
+        os.close(fd)
+
+
+def test_the_artefact_declares_its_packages_as_names_only(tmp_path, releases):
+    meta = {"name": "intel-app", "version": "1.0", "packages": ["intel", "x.y"]}
+    sha = _tar(tmp_path / "p.tar.gz", {**GOOD, "hnx-artefact.json": json.dumps(meta).encode()})
+    with pytest.raises(art.Refused, match="packages"):
+        art.install(str(tmp_path / "p.tar.gz"), sha, str(releases), sys.executable)
+
+
+@pytest.mark.parametrize("lane", ["real", "shadow"])
+def test_a_package_planted_in_the_lane_root_never_runs_with_m(tmp_path, monkeypatch, lane):
+    """The steps run in the lane root, which the lane writes: PYTHONSAFEPATH keeps python from
+    importing from it, so a planted ``<pkg>/__main__.py`` never runs (either lane)."""
+    spec, body = _spec(
+        tmp_path, lane, steps=[["{python}", "-m", "planted"]], shadow_modules=["planted"]
+    )
+    pkg = Path(body["lane_root"]) / "planted"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "__main__.py").write_text(f"open({str(tmp_path / 'pwned')!r}, 'w').write('ran')\n")
+    _run_file(body)
+    assert _main(spec, f"fresh-{lane}", _creds(tmp_path), monkeypatch) == 1  # no such module
+    assert not (tmp_path / "pwned").exists()
+
+
+def test_the_steps_get_pythonsafepath_and_no_spec_or_credential_can_unset_it(tmp_path, monkeypatch):
+    probe = tmp_path / "env.py"
+    probe.write_text(
+        f"import os; open({str(tmp_path / 'env.out')!r}, 'w').write(os.environ.get('PYTHONSAFEPATH', ''))\n"
+    )
+    spec, body = _spec(tmp_path, steps=[["{python}", str(probe)]])
+    _run_file(body)
+    assert _main(spec, "fresh-real", _creds(tmp_path), monkeypatch) == 0
+    assert (tmp_path / "env.out").read_text() == "1"
+    for name in ("PYTHONSAFEPATH", "PYTHONPATH", "PYTHONHOME"):
+        bad, _ = _spec(tmp_path / name, env={name: "x"})
+        with pytest.raises(run.Refused, match="reserved"):
+            run.load_spec(str(bad), os.getuid(), "fresh-real")
+    creds = _creds(tmp_path)
+    (creds / "PYTHONPATH").write_text("/tmp\n")
+    _run_file(body, dispatch="e" * 32)
+    assert _main(spec, "fresh-real", creds, monkeypatch) == 2
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [[["{python}", "-m", "timeit", "1"]], [["{python}", "{app}/run.py", "{app}/..{lane_root}"]]],
+)
+def test_main_refuses_a_shadow_stdlib_module_and_an_escaping_app_path_before_any_step(
+    tmp_path, monkeypatch, steps
+):
+    spec, body = _spec(tmp_path, "shadow", steps=steps)
+    install = Path(body["release_link"]).parent
+    for rel in ("a" * 16, "b" * 16):
+        (install / "releases" / rel / "hnx-artefact.json").write_text(
+            json.dumps({"name": "intel-app", "version": "1", "packages": ["intel"]})
+        )
+    _run_file(body)
+    assert _main(spec, "fresh-shadow", _creds(tmp_path), monkeypatch) == 2
+    assert not (tmp_path / "probe.jsonl").exists()
+
+
+@pytest.mark.parametrize("name", ["timeit", "pip", "setuptools", "ensurepip", "wheel", "os"])
+def test_an_interpreter_module_is_never_one_of_the_apps_packages(tmp_path, releases, name):
+    meta = {"name": "intel-app", "version": "1.0", "packages": ["intel", name]}
+    sha = _tar(tmp_path / "p.tar.gz", {**GOOD, "hnx-artefact.json": json.dumps(meta).encode()})
+    with pytest.raises(art.Refused, match="never the interpreter"):
+        art.install(str(tmp_path / "p.tar.gz"), sha, str(releases), sys.executable)
+    _, body = _spec(tmp_path, "shadow", steps=[["{python}", "-m", name]], shadow_modules=[name])
+    fd = run.pin_release(body)
+    try:
+        with pytest.raises(run.Refused, match="package names"):
+            run.check_release_paths(body)
+    finally:
+        os.close(fd)

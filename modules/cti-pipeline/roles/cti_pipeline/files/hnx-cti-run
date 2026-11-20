@@ -96,6 +96,17 @@ KEEP_S = 30 * 86400  # the dispatcher's keep window: older run files are refused
 FUTURE_S = 3600
 AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")
 BASE_PATH = "/usr/local/bin:/usr/bin:/bin"
+# set for every step, never the spec's to set: the working directory is the lane root, which the
+# lane writes, so python must never import from it (``-m <pkg>`` would run a planted package)
+PINNED_ENV = {"PYTHONSAFEPATH": "1"}
+# names neither the spec's env nor a credential may set (what decides where python imports from)
+RESERVED_ENV = {
+    "PATH", "HOME", "XDG_CACHE_HOME", "LANG", "CREDENTIALS_DIRECTORY", "HNX_RUN_ID", "HNX_LANE",
+    "HNX_JOB", "PYTHONSAFEPATH", "PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE", "PYTHONSTARTUP",
+    "PYTHONINSPECT", "PYTHONPLATLIBDIR",
+}  # fmt: skip
+# what a package the app declares must never be: the interpreter's own modules and its installers
+NOT_APP_PACKAGES = set(sys.stdlib_module_names) | {"pip", "setuptools", "ensurepip", "wheel"}
 
 
 class Refused(Exception):
@@ -161,6 +172,8 @@ def load_spec(path: str, owner: int, instance: str) -> dict:
             raise Refused(f"the spec's {key} is not a mapping of strings")
     if not all(ENV_RE.match(k) for k in [*spec["env"], *spec["forced_env"]]):
         raise Refused("the spec names an environment variable that is not NAME_LIKE_THIS")
+    if RESERVED_ENV & (set(spec["env"]) | set(spec["forced_env"])):
+        raise Refused("the spec sets a reserved environment variable (PATH, HOME, PYTHON*...)")
     if set(spec["placeholders"]) - set(PLACEHOLDERS):
         raise Refused("the spec names an unknown placeholder")
     lane_guard(spec)
@@ -201,6 +214,7 @@ def lane_guard(spec: dict) -> None:
 BOUND = r"""[\s=,:;.'"`()\[\]{}|<>+]"""
 # quotes and escapes are deleted before matching, so c""ti and c\ti read as cti
 SPLICE = re.compile(r"""['"`\\]""")
+PACKAGE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
 
 
@@ -242,6 +256,45 @@ def shadow_names_real(steps: list, env_values, real: str, programs=()) -> bool:
                 continue
             texts.append(arg)
     return any(token.search(SPLICE.sub("", t)) or token.search(t) for t in texts)
+
+
+def release_packages(app_dir: str) -> list[str]:
+    """The top-level packages the release's artefact declares (``hnx-artefact.json``
+    ``packages``, beside ``app/``), or none."""
+    try:
+        with open(os.path.join(os.path.dirname(app_dir), "hnx-artefact.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        return []
+    pkgs = meta.get("packages") if isinstance(meta, dict) else None
+    if not isinstance(pkgs, list):
+        return []
+    return [p for p in pkgs if isinstance(p, str) and PACKAGE_RE.match(p) and p not in NOT_APP_PACKAGES]
+
+
+def check_release_paths(spec: dict) -> None:
+    """After the release is pinned: every ``{app}/...`` argument, filled and normalised, stays
+    inside the release's app tree; and a shadow-lane ``{python} -m`` runs only the app's own
+    packages (spec ``shadow_modules``, or the artefact's ``packages`` when the site lists none),
+    never the interpreter's (timeit, pdb, cProfile, trace, http.server, runpy, code... run code or
+    commands taken from their arguments)."""
+    app = spec["placeholders"].get("app")
+    for step in spec["steps"]:
+        for arg in step:
+            if arg.startswith("{app}/"):
+                if not app or not os.path.normpath(fill(arg, spec["placeholders"])).startswith(app + "/"):
+                    raise Refused("an {app}/ argument leaves the release once filled")
+    if spec["lane"] != "shadow":
+        return
+    allowed = spec.get("shadow_modules") or (release_packages(app) if app else [])
+    if not isinstance(allowed, list) or not all(
+        isinstance(p, str) and PACKAGE_RE.match(p) and p not in NOT_APP_PACKAGES for p in allowed
+    ):
+        raise Refused("the spec's shadow modules are not a list of the app's package names")
+    for step in spec["steps"]:
+        if step[0] == "{python}" and len(step) >= 3 and step[1] == "-m":
+            if step[2].split(".", 1)[0] not in allowed:
+                raise Refused("a shadow-lane step runs a module that is not the app's own")
 
 
 def pin_release(spec: dict) -> int:
@@ -440,8 +493,9 @@ def environment(spec: dict, run: dict, directory: str) -> dict:
         env["PATH"] = os.path.dirname(ph["python"]) + ":" + BASE_PATH
     env.update({k: fill(v, ph) for k, v in spec["env"].items()})
     env.update(spec["forced_env"])
+    env.update(PINNED_ENV)
     names = loaded_names(directory)
-    if set(names) & set(env):
+    if set(names) & (set(env) | RESERVED_ENV):
         raise Refused("a loaded credential and an environment variable share a name")
     for name in names:
         env[name] = read_loaded(directory, name)
@@ -483,6 +537,7 @@ def main(argv: list[str]) -> int:
             raise Refused("the credentials directory is not an absolute path")
         run = dispatch_run(spec)
         release_fd = pin_release(spec)  # held (shared lock) until the wrapper exits
+        check_release_paths(spec)
         env = environment(spec, run, cred_dir)
         os.chdir(spec["lane_root"])
     except Refused as e:
