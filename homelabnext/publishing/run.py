@@ -13,7 +13,9 @@ matched text); every push to ``published-manifest.jsonl``.  Exit code 0: nothing
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -80,6 +82,140 @@ def discover(publishable: Path) -> list[tuple[str, Path]]:
     return out
 
 
+def _no_runner(*_a, **_k):  # a lane source never deploys: a runner call there is a defect
+    raise pg.PagesError("a producer lane's items are staged only; nothing is deployed from it")
+
+
+def _prune(
+    cfg: cf.Config,
+    entries: list[tuple[str, Path]],
+    manifest: Path,
+    snapshots_dir: Path,
+    staging_dir: Path,
+    clock: Callable[[], float],
+    gate_log: Path,
+) -> None:
+    try:  # snapshots go by age: the newest few per kind, what is current, what was last published
+        snapshots.prune(
+            snapshots_dir,
+            keep=cfg.snapshots_keep,
+            min_age_s=cfg.snapshots_min_age_s,
+            protect_ids={p.name for _k, p in entries} | snapshots.referenced_ids(manifest),
+            now=clock(),
+        )
+        if staging_dir.is_dir():  # shadow output: by age, but what is current is never pruned
+            snapshots.prune(
+                staging_dir,
+                keep=cfg.staging_keep,
+                min_age_s=cfg.staging_min_age_s,
+                protect_ids={p.name for _k, p in entries},
+                now=clock(),
+                digest_len=12,
+            )
+    except OSError as exc:
+        _append(gate_log, {"ts": clock(), "prune_failed": type(exc).__name__})
+
+
+def _gate_source(
+    cfg: cf.Config,
+    entries: list[tuple[str, Path]],
+    *,
+    net: Transport,
+    runner: pg.Runner,
+    policy: gt.Policy,
+    report: Report,
+    clock: Callable[[], float],
+    snapshots_dir: Path,
+    lane: str | None,
+    anchor: Path | None = None,
+) -> None:
+    """Gate and handle one source's items: the publishable area (``lane`` None) or one producer
+    lane's output.  A lane's items are tagged with it everywhere: the report (``<lane>:<id>``),
+    the gate log and ``plan.json``; the lanes never share a snapshot or staging directory."""
+    gate_log = cfg.state_dir / "gate.jsonl"
+    # a lane publishes nothing (stage only), so it has no manifest: it never sees the real one
+    manifest = cfg.state_dir / (
+        "published-manifest.jsonl" if lane is None else f"no-manifest-{lane}.jsonl"
+    )
+
+    def tag(name: str) -> str:
+        return name if lane is None else f"{lane}:{name}"
+
+    def log(doc: dict) -> None:
+        _append(gate_log, doc if lane is None else {**doc, "lane": lane})
+
+    sites = [e for e in entries if e[0] == "site"]
+    superseded = {p.name for _, p in sites[:-1]}  # only the newest site build is the site
+    for kind, root in entries:
+        if root.name in superseded:
+            done = {"item": tag(root.name), "kind": kind, "result": "superseded"}
+            report.done.append(done if lane is None else {**done, "lane": lane})
+            continue
+        try:
+            # what is gated and published is a private copy: every byte read once, hashed as read
+            item = gt.snapshot_item(root, kind, snapshots_dir, anchor)
+            verdict = gt.evaluate(item, policy)
+        except (gt.GateError, OSError) as exc:
+            report.blocked.append(tag(root.name))
+            log(
+                {
+                    "ts": clock(),
+                    "item": root.name,
+                    "kind": kind,
+                    "ok": False,
+                    "reasons": [{"rule": "item-unreadable", "path": "", "detail": str(exc)}],
+                }
+            )
+            continue
+        log(
+            {
+                "ts": clock(),
+                "item": item.id,
+                "kind": kind,
+                "ok": verdict.ok,
+                "label": verdict.label,
+                "reasons": [r.as_dict() for r in verdict.reasons],
+            }
+        )
+        if not verdict.ok:
+            report.blocked.append(tag(item.id))
+            continue
+        try:
+            out = _handle(cfg, item, verdict, net, runner, manifest, clock, policy, lane)
+            report.done.append(out if lane is None else {**out, "lane": lane, "item": tag(item.id)})
+        except r2.FeedBlocked as exc:
+            report.blocked.append(tag(item.id))
+            log(
+                {
+                    "ts": clock(),
+                    "item": item.id,
+                    "kind": kind,
+                    "ok": False,
+                    "reasons": [{"rule": "feed-blocked", "path": "feed.xml", "detail": str(exc)}],
+                }
+            )
+        except (r2.R2Error, pg.PagesError, cf.ConfigError, stage.StageError, OSError) as exc:
+            report.failed.append(tag(item.id))
+            log(
+                {
+                    "ts": clock(),
+                    "item": item.id,
+                    "kind": kind,
+                    "ok": True,
+                    "failed": f"{type(exc).__name__}: {exc}",
+                }
+            )
+    _prune(
+        cfg,
+        entries,
+        manifest,
+        snapshots_dir,
+        cfg.staging_dir,
+        clock,
+        gate_log,
+    )
+
+
 def run(
     cfg: cf.Config,
     *,
@@ -96,96 +232,64 @@ def run(
         cfg.access_control,
         cfg.posture_rules,
     )
+    gate_log = cfg.state_dir / "gate.jsonl"
     net: Transport = NoNetwork()  # stage: whatever a caller passes, no call is possible
     if cfg.mode == "dry-run":
         net = ReadOnly(transport or Urllib())
     elif cfg.mode == "live":
         net = transport or Urllib()
-    gate_log, manifest = cfg.state_dir / "gate.jsonl", cfg.state_dir / "published-manifest.jsonl"
-
-    entries = discover(cfg.publishable_dir)
-    sites = [e for e in entries if e[0] == "site"]
-    superseded = {p.name for _, p in sites[:-1]}  # only the newest site build is the site
-    for kind, root in entries:
-        if root.name in superseded:
-            report.done.append({"item": root.name, "kind": kind, "result": "superseded"})
-            continue
+    _gate_source(
+        cfg,
+        discover(cfg.publishable_dir),
+        net=net,
+        runner=runner,
+        policy=policy,
+        report=report,
+        clock=clock,
+        snapshots_dir=cfg.state_dir / "snapshots",
+        lane=None,
+    )
+    for src in cfg.lane_sources:
+        # a producer lane's items: gated like any other, then STAGED ONLY, whatever the run's mode
+        # (no transport, no runner, no hosting credential): its own snapshots and staging area
         try:
-            # what is gated and published is a private copy: every byte read once, hashed as read
-            item = gt.snapshot_item(root, kind, cfg.state_dir / "snapshots")
-            verdict = gt.evaluate(item, policy)
-        except (gt.GateError, OSError) as exc:
-            report.blocked.append(root.name)
-            _append(
-                gate_log,
-                {
-                    "ts": clock(),
-                    "item": root.name,
-                    "kind": kind,
-                    "ok": False,
-                    "reasons": [{"rule": "item-unreadable", "path": "", "detail": str(exc)}],
-                },
-            )
+            os.listdir(
+                src.dir
+            )  # absent: nothing handed off yet.  Anything else is reported, never silent
+            lane_entries = discover(src.dir)
+        except FileNotFoundError:
             continue
-        _append(
-            gate_log,
-            {
-                "ts": clock(),
-                "item": item.id,
-                "kind": kind,
-                "ok": verdict.ok,
-                "label": verdict.label,
-                "reasons": [r.as_dict() for r in verdict.reasons],
-            },
-        )
-        if not verdict.ok:
-            report.blocked.append(item.id)
-            continue
-        try:
-            report.done.append(_handle(cfg, item, verdict, net, runner, manifest, clock, policy))
-        except r2.FeedBlocked as exc:
-            report.blocked.append(item.id)
+        except OSError as exc:  # no read access yet (the read group), a file in its place, ...
+            report.failed.append(f"{src.lane}:unreadable")
             _append(
-                gate_log,
+                cfg.state_dir / "gate.jsonl",
                 {
                     "ts": clock(),
-                    "item": item.id,
-                    "kind": kind,
-                    "ok": False,
-                    "reasons": [{"rule": "feed-blocked", "path": "feed.xml", "detail": str(exc)}],
-                },
-            )
-        except (r2.R2Error, pg.PagesError, cf.ConfigError, stage.StageError, OSError) as exc:
-            report.failed.append(item.id)
-            _append(
-                gate_log,
-                {
-                    "ts": clock(),
-                    "item": item.id,
-                    "kind": kind,
+                    "lane": src.lane,
+                    "item": f"lane-{src.lane}",
+                    "kind": "lane",
                     "ok": True,
-                    "failed": f"{type(exc).__name__}: {exc}",
+                    "failed": f"lane-unreadable: {type(exc).__name__}",
                 },
             )
-    try:  # snapshots go by age: the newest few per kind, what is current, what was last published
-        snapshots.prune(
-            cfg.state_dir / "snapshots",
-            keep=cfg.snapshots_keep,
-            min_age_s=cfg.snapshots_min_age_s,
-            protect_ids={p.name for _k, p in entries} | snapshots.referenced_ids(manifest),
-            now=clock(),
+            continue
+        _gate_source(
+            dataclasses.replace(
+                cfg,
+                mode="stage",
+                publishable_dir=src.dir,
+                staging_dir=cfg.staging_dir / f"lane-{src.lane}",
+            ),
+            lane_entries,
+            net=NoNetwork(),
+            runner=_no_runner,
+            policy=policy,
+            report=report,
+            clock=clock,
+            snapshots_dir=cfg.state_dir / f"snapshots-{src.lane}",
+            lane=src.lane,
+            anchor=src.dir,
         )
-        if cfg.staging_dir.is_dir():  # shadow output: by age, but what is current is never pruned
-            snapshots.prune(
-                cfg.staging_dir,
-                keep=cfg.staging_keep,
-                min_age_s=cfg.staging_min_age_s,
-                protect_ids={p.name for _k, p in entries},
-                now=clock(),
-                digest_len=12,
-            )
-    except OSError as exc:
-        _append(gate_log, {"ts": clock(), "prune_failed": type(exc).__name__})
     # stage mode makes no network call at all, a notification included; and a notification that
     # cannot be sent never takes the run down (the verdicts are already logged and returned)
     if notifier is not None and cfg.mode != "stage":
@@ -208,7 +312,7 @@ def run(
     return report
 
 
-def _handle(cfg, item, verdict, net, runner, manifest, clock, policy) -> dict:
+def _handle(cfg, item, verdict, net, runner, manifest, clock, policy, lane=None) -> dict:
     out: dict = {"item": item.id, "kind": item.kind, "mode": cfg.mode}
     digest = gt.tree_digest(item)
     plan: dict
@@ -309,7 +413,7 @@ def _handle(cfg, item, verdict, net, runner, manifest, clock, policy) -> dict:
     if cfg.mode == "stage":
         out["result"] = "staged"
         out["staged"] = str(
-            stage.stage_item(item, verdict, plan, cfg.staging_dir, cfg.publishable_dir)
+            stage.stage_item(item, verdict, plan, cfg.staging_dir, cfg.publishable_dir, lane)
         )
     return out
 

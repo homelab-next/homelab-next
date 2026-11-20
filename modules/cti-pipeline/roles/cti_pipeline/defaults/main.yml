@@ -82,6 +82,31 @@ cti_pipeline_dispatch_group: "hnx-{{ cti_pipeline_dispatch_service }}_{{ cti_pip
 # where each unit appends its log (<dir>/<set>/<job>-<lane>.log, pre-created by the orchestration role)
 cti_pipeline_job_logs_dir: /var/log/hnx-jobs
 
+# --- the handoff to the publishing module (README, "Handoff") -----------------------------------
+# A lane root is its user's alone (0700), so what a lane stages in <lane root>/publishable/ never
+# reaches the publishing module by itself. After a job's steps all succeed, hnx-cti-run (as the lane's
+# user) carries each staged item to <handoff dir>/<lane>/<kind>/<id>/ (built beside, renamed in), where
+# ONE group per lane reads it: <handoff dir> is traversable but not listable (0711), each lane's
+# directory is the lane user's, group-readable by that lane's group only (2750). The shadow lane's
+# group is what the publishing module's user joins (publishing_gate_extra_groups) and its directory what
+# it reads as a stage-only lane source (publishing_gate_lane_sources); the real lane's stays unread
+# until the cutover. false: no handoff (nothing is carried, no directory or group is made).
+cti_pipeline_handoff_enabled: true
+cti_pipeline_handoff_dir: "/var/lib/hnx-handoff/{{ cti_pipeline_logical_id }}"
+# the per-lane read groups (system groups, created by this role; at most 32 characters)
+cti_pipeline_handoff_group:
+  real: "hnx-{{ cti_pipeline_logical_id }}-out-real"
+  shadow: "hnx-{{ cti_pipeline_logical_id }}-out-shadow"
+# handed-off items the lane no longer stages: the newest this many are kept per kind (older than an hour
+# go); what the lane still stages is never pruned
+cti_pipeline_handoff_keep: 20
+
+# --- host tools the app calls (README, "Host preconditions") ----------------------------------------
+# the claude CLI the app's in-job fallback runs (the old pipeline's D1: local model first, this only
+# when it fails). No module installs it: when set, readiness checks it is there and runs; empty: the
+# site declares no use of it
+cti_pipeline_claude_cli: ""
+
 # --- checks -------------------------------------------------------------------------------------
 # a module the release's python must import in the health hook (the app's package); empty: skipped
 cti_pipeline_import_check: ""

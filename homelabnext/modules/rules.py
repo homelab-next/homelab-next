@@ -1207,6 +1207,7 @@ def site_problems(
     out += _grant_problems(grants, sel, rows, units, privileged_units, roles, ch, slots, served)
     out += role_ceiling_problems(roles)
     out += _config_problems(site, sel, grants)
+    out += _live_publish_problems(site, sel, served)
     out += scope_problems(site)
     out += tlp_reader_problems(site, sel)
     for m in sel.values():
@@ -1569,6 +1570,30 @@ def _green_problems(where: str, spec: Doc, cfg: Doc) -> list[str]:
         f"{where}.config.{TLP_ALLOWED}: {label} is not public (ADR-0033 decision 9): it needs "
         + " and ".join(missing)
     ]
+
+
+def _live_publish_problems(site: Doc, sel: dict[str, Doc], served: set[str]) -> list[str]:
+    """``live`` pushes content through the static-hosting slot; ``stage`` and ``dry-run`` never do
+    (no network at all, and reads only), which is why a module may *prefer* the slot rather than
+    require it.  A selection whose ``mode`` (its value, else the manifest's default) is ``live``
+    must therefore have a provider selected: the loader refuses the combination, so dropping the
+    requirement cannot let a lab run live with nowhere to push."""
+    out = []
+    for sec in SECTION.values():
+        for mid, block in site.get(sec, {}).items():
+            m = sel.get(mid)
+            if m is None or STATIC_HOSTING not in {c["cap"] for c in _caps(m)}:
+                continue
+            spec = m.get("config", {}).get("mode")
+            if spec is None:
+                continue
+            mode = block.get("config", {}).get("mode", spec.get("default"))
+            if mode == "live" and STATIC_HOSTING not in served:
+                out.append(
+                    f"{sec}.{mid}.config.mode: live pushes through {STATIC_HOSTING}, which the "
+                    "site does not select (stage and dry-run need no provider)"
+                )
+    return out
 
 
 def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:

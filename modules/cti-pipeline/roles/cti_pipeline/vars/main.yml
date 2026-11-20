@@ -18,6 +18,9 @@ cti_pipeline_consumed_subdir: hnx-consumed
 cti_pipeline_lane_dirs: "{{ (cti_pipeline_state_dirs + ['publishable', 'dist', 'home', 'cache', cti_pipeline_runs_subdir, cti_pipeline_consumed_subdir]) | unique | list }}"
 # the publish mode the module forces in every lane: items are staged, never pushed
 cti_pipeline_stage_mode: stage
+# the handoff directory's parent: shared by every module that hands output off, root's, traversable
+cti_pipeline_handoff_root: "{{ cti_pipeline_handoff_dir | dirname }}"
+cti_pipeline_group_name_pattern: '^[a-z_][a-z0-9_-]{0,31}\Z'
 # the drop-in each declared instance gets; only a file of this name is ever removed by the role
 cti_pipeline_dropin_name: 50-hnx-lane.conf
 cti_pipeline_marker: "Managed by homelabnext (role cti_pipeline"

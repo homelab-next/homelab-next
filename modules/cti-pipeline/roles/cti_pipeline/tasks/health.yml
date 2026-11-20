@@ -106,4 +106,24 @@
       loop: "{{ cti_pipeline_freshness.results | default([]) }}"
       loop_control:
         label: "{{ item.item }}"
+    - name: Judge each active lane's handoff (a conflict or refusal the last run reported is outstanding until a run no longer reports it)
+      ansible.builtin.command:
+        argv: >-
+          {{ ['python3', '-I', '-c', lookup('ansible.builtin.file', 'cti_state.py'), 'handoff-health',
+              cti_pipeline_data_root ~ '/' ~ item ~ '/' ~ cti_pipeline_runs_subdir] }}
+      register: cti_pipeline_handoff_health
+      changed_when: false
+      failed_when: false
+      loop: "{{ cti_pipeline_active_lanes if cti_pipeline_handoff_enabled | bool else [] }}"
+    - name: No handoff conflict or refusal is outstanding
+      ansible.builtin.assert:
+        that: item.rc == 0
+        fail_msg: >-
+          cti-pipeline: lane {{ item.item }} has handoff items that were not carried (a changed item under a name
+          already handed off, or one the handoff refused): {{ item.stdout | default('') | truncate(800) }}. Remove the
+          stale <handoff dir>/{{ item.item }}/<kind>/<id> (or let the app drop the item from its publishable/); the next
+          run of that job clears it (README, "Handoff")
+      loop: "{{ cti_pipeline_handoff_health.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}"
   tags: [health]

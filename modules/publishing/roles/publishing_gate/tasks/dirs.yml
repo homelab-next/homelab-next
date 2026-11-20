@@ -4,10 +4,18 @@
     name: "{{ publishing_gate_group }}"
     system: true
 
-- name: The service user
+- name: The groups that grant read access to producers' lane output (shared with the producer's module)
+  ansible.builtin.group:
+    name: "{{ item }}"
+    system: true
+  loop: "{{ publishing_gate_extra_groups }}"
+
+- name: The service user (a member of those groups, which grant read access and nothing else)
   ansible.builtin.user:
     name: "{{ publishing_gate_user }}"
     group: "{{ publishing_gate_group }}"
+    groups: "{{ publishing_gate_extra_groups }}"
+    append: true
     system: true
     shell: /usr/sbin/nologin
     create_home: false

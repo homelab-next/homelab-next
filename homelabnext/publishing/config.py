@@ -60,6 +60,22 @@ class R2Config:
     endpoint: str  # https://<account>.<object-store host>, derived unless given
 
 
+LANE_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+_LANE_KEYS = {"lane", "dir"}
+
+
+@dataclass(frozen=True)
+class LaneSource:
+    """A producer lane's output directory (``<dir>/<kind>/<id>/`` items, the same contract as the
+    publishable area).  Always **stage-only**: whatever the run's mode, its items are gated and
+    staged under ``<staging>/lane-<lane>/`` and nothing is ever deployed or uploaded from it, so a
+    shadow lane cannot reach the network through this module.  Its snapshots and staged items are
+    kept apart from every other lane's and from the publishable area's."""
+
+    lane: str
+    dir: Path
+
+
 @dataclass(frozen=True)
 class Config:
     mode: str
@@ -82,6 +98,7 @@ class Config:
     legacy_exceptions: dict[str, str] | None = None
     staging_keep: int = 48
     staging_min_age_s: float = 172800.0
+    lane_sources: tuple[LaneSource, ...] = ()
 
 
 def _abs(doc: dict, key: str) -> Path:
@@ -107,6 +124,37 @@ def _legacy(items: object) -> dict[str, str]:
             raise ConfigError("a legacy exception needs an episode metadata key and its sha256")
         out[it["key"]] = it["sha256"]
     return out
+
+
+def _nested(a: str, b: str) -> bool:
+    return a == b or a.startswith(b.rstrip("/") + "/") or b.startswith(a.rstrip("/") + "/")
+
+
+def _lanes(items: object, others: list[Path]) -> tuple[LaneSource, ...]:
+    """``[{lane, dir}]``: stage-only producer lanes (see :class:`LaneSource`)."""
+    if not isinstance(items, list):
+        raise ConfigError("lane_sources is a list of {lane, dir}")
+    out: list[LaneSource] = []
+    for it in items:
+        if not isinstance(it, dict) or set(it) != _LANE_KEYS:
+            raise ConfigError(
+                "a lane source is {lane, dir} and nothing else (it is always stage-only)"
+            )
+        lane = it["lane"]
+        if not isinstance(lane, str) or not LANE_RE.match(lane) or len(lane) > 32:
+            raise ConfigError("a lane source's lane is a short slug")
+        d = _abs(it, "dir")
+        if any(x.lane == lane for x in out):
+            raise ConfigError(f"lane source {lane!r} is listed twice")
+        real = os.path.realpath(d)  # a link or a doubled slash is the same directory
+        taken = [os.path.realpath(x.dir) for x in out] + [os.path.realpath(o) for o in others]
+        if any(_nested(real, t) for t in taken):
+            raise ConfigError(
+                "a lane source's dir is its own: not nested with another lane's, publishable_dir, "
+                "staging_dir, state_dir or credentials_dir"
+            )
+        out.append(LaneSource(lane, d))
+    return tuple(out)
 
 
 def load(path: Path, mode_override: str | None = None) -> Config:
@@ -170,4 +218,11 @@ def load(path: Path, mode_override: str | None = None) -> Config:
         legacy_exceptions=_legacy(doc.get("legacy_exceptions", [])),
         staging_keep=int(doc.get("staging_keep", 48)),
         staging_min_age_s=float(doc.get("staging_min_age_s", 172800)),
+        lane_sources=_lanes(
+            doc.get("lane_sources", []),
+            [
+                _abs(doc, k)
+                for k in ("publishable_dir", "staging_dir", "state_dir", "credentials_dir")
+            ],
+        ),
     )

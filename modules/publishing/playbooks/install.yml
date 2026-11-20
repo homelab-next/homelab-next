@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Install (and converge) the publishing gate on the guest the site placed the module's `publisher`
 # role on. The apply path (docs/modules/apply.md) renders its own modules.yml from the selection;
-# this is the module's own entry point. Needs the runtime release (role hnx_runtime), node 22+ and
-# npm on the guest.
+# this is the module's own entry point. Needs the runtime release (role hnx_runtime) on the guest; node 22+
+# and npm only for mode live with a Pages project (README, "Host preconditions").
 #   ansible-playbook -i <inventory with --selection> modules/publishing/playbooks/install.yml
 - name: Install the publishing gate
   hosts: mod_publishing_publisher

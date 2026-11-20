@@ -12,6 +12,10 @@ argument_specs:
         description: stage (gate and write the would-be set, no network), dry-run (reads only) or live.
         default: stage
         choices: [stage, dry-run, live]
+      publishing_gate_hosting_provider:
+        type: str
+        description: The logical id of the static-hosting provider the site selected; required for mode live (the role fails closed without it, because the loader's site rule cannot see a group_var mode), unused otherwise.
+        default: ""
       publishing_gate_tlp_allowed:
         type: str
         description: The most permissive TLP the gate lets out (clear or green).
@@ -146,6 +150,16 @@ argument_specs:
         type: int
         description: A staged item younger than this many seconds is never pruned.
         default: 172800
+      publishing_gate_lane_sources:
+        type: list
+        elements: dict
+        description: Producer lanes, each {lane, dir} (a slug and an absolute output directory in the publishable-item layout). Always stage-only (gated and staged under staging/lane-<lane>/, never deployed or uploaded, in any mode), tagged with the lane everywhere.
+        default: []
+      publishing_gate_extra_groups:
+        type: list
+        elements: str
+        description: Supplementary groups the service user joins to read the lane directories (the producer's handoff group); created when absent.
+        default: []
       publishing_gate_legacy_exceptions:
         type: list
         elements: dict

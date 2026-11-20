@@ -1639,6 +1639,45 @@ def test_green_publishing_with_a_community_and_its_access_control_is_accepted():
     assert site_problems(site, mods) == []
 
 
+def _without_static_hosting():
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    del site["slots"]["static-hosting"]
+    del mods["example-static-host"]  # the lab selects no hosting provider at all
+    site["grants"].pop("secrets", None)  # the provider's credential grant goes with it
+    return site, mods
+
+
+def test_publishing_in_stage_needs_no_static_hosting_provider():
+    """static-hosting is preferred, not required: stage and dry-run push nothing, so a lab with no
+    hosting provider selected (a hosted Pages project is not a lab host) still places publishing."""
+    assert "cap:static-hosting" not in {
+        c["cap"] for c in MODULES["publishing"]["requires"].get("capabilities", [])
+    }
+    site, mods = _without_static_hosting()
+    for mode in ("stage", "dry-run"):
+        site["features"]["publishing"]["config"] = {"mode": mode}
+        assert site_problems(site, mods) == [], mode
+    site["features"]["publishing"].pop("config")  # the manifest's default (stage)
+    assert site_problems(site, mods) == []
+
+
+def test_publishing_live_without_a_static_hosting_provider_is_refused():
+    site, mods = _without_static_hosting()
+    site["features"]["publishing"]["config"] = {"mode": "live"}
+    probs = "\n".join(site_problems(site, mods))
+    assert "features.publishing.config.mode: live pushes through cap:static-hosting" in probs
+    # with a provider selected, live is accepted
+    site = copy.deepcopy(SITES["full"])
+    site["features"]["publishing"]["config"] = {"mode": "live"}
+    assert site_problems(site, copy.deepcopy(MODULES)) == []
+
+
+def test_a_manifest_default_of_live_without_a_provider_is_refused():
+    site, mods = _without_static_hosting()
+    mods["publishing"]["config"]["mode"]["default"] = "live"
+    assert "config.mode: live pushes through" in "\n".join(site_problems(site, mods))
+
+
 def test_a_site_rule_refuses_the_defect(case):
     """Parametrised by pytest_generate_tests from the final SITE_DEFECTS, so an entry added
     anywhere in this module is collected."""

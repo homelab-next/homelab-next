@@ -25,6 +25,22 @@
   when: cti_pipeline_manage_accounts | bool
   tags: [backup, export, restore, upgrade]
 
+- name: Create each lane's handoff read group (the publishing module's user joins the one it reads)
+  ansible.builtin.group:
+    name: "{{ cti_pipeline_handoff_group[item] }}"
+    system: true
+  loop: "{{ cti_pipeline_lanes }}"
+  when: cti_pipeline_manage_accounts | bool and cti_pipeline_handoff_enabled | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Without account management, each lane's handoff group must already exist (the directories chown to it)
+  ansible.builtin.getent:
+    database: group
+    key: "{{ cti_pipeline_handoff_group[item] }}"
+  loop: "{{ cti_pipeline_lanes }}"
+  when: not (cti_pipeline_manage_accounts | bool) and cti_pipeline_handoff_enabled | bool
+  tags: [backup, export, restore, upgrade]
+
 - name: Create the data root (root's, read by the module's group) and the export directory (root's)
   ansible.builtin.file:
     path: "{{ item.path }}"
@@ -37,6 +53,32 @@
     - {path: "{{ cti_pipeline_export_dir }}", group: "{{ cti_pipeline_owner_group }}", mode: "0700"}
   loop_control:
     label: "{{ item.path }}"
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the handoff directories (traversable by all, listable by none)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ cti_pipeline_handoff_root }}", mode: "0755"}
+    - {path: "{{ cti_pipeline_handoff_dir }}", mode: "0711"}
+  loop_control:
+    label: "{{ item.path }}"
+  when: cti_pipeline_handoff_enabled | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create each lane's handoff directory (the lane user's, read by that lane's group only; new entries inherit the group)
+  ansible.builtin.file:
+    path: "{{ cti_pipeline_handoff_dir }}/{{ item }}"
+    state: directory
+    owner: "{{ cti_pipeline_lane_user[item] }}"
+    group: "{{ cti_pipeline_handoff_group[item] }}"
+    mode: "2750"
+  loop: "{{ cti_pipeline_lanes }}"
+  when: cti_pipeline_handoff_enabled | bool
   tags: [backup, export, restore, upgrade]
 
 - name: Create each lane's root and its working directories (the lane's user's alone)

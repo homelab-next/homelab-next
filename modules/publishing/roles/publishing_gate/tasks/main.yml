@@ -5,9 +5,9 @@
 - name: Create the users and directories
   ansible.builtin.include_tasks: dirs.yml
 
-- name: Install the pinned wrangler (a Pages project needs it)
+- name: Install the pinned wrangler (only the live Pages deploy runs it)
   ansible.builtin.include_tasks: wrangler.yml
-  when: publishing_gate_pages_project != ''
+  when: publishing_gate_needs_wrangler | bool
 
 - name: Write the credentials
   ansible.builtin.include_tasks: credentials.yml

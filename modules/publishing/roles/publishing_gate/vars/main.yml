@@ -8,6 +8,11 @@ publishing_gate_state_dir: "{{ publishing_gate_root }}/state"
 publishing_gate_tools_dir: "{{ publishing_gate_root }}/tools"
 publishing_gate_config_dir: /etc/hnx-modules/publishing
 publishing_gate_cred_src_dir: "{{ publishing_gate_config_dir }}/credentials"
+# wrangler (and so node and npm) is the Pages deploy's, and only `live` deploys: stage makes no network
+# call and dry-run only reads, so neither installs nor needs them
+publishing_gate_needs_wrangler: "{{ publishing_gate_pages_project != '' and publishing_gate_mode == 'live' }}"
+publishing_gate_lane_pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+publishing_gate_group_pattern: '^[a-z_][a-z0-9_-]{0,31}\Z'
 publishing_gate_wrangler_bin: "{{ publishing_gate_tools_dir }}/node_modules/.bin/wrangler"
 publishing_gate_semver_pattern: '^[0-9]+\.[0-9]+\.[0-9]+\Z'
 publishing_gate_path_pattern: '^(/(?!\.{1,2}(/|\Z))[A-Za-z0-9._-]+)+\Z'

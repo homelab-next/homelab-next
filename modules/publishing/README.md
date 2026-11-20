@@ -14,6 +14,7 @@ identity allowed to send anything off the lab. Nothing here names a real host, a
 | Adapters | `pages` (a static-site deploy with a **pinned** wrangler) and `r2-feed` (episode upload and `feed.xml`) |
 | Schedule | the fleet unit `publishing-run` (`units/fleet_units.yml`): hourly at :20, as the module's own service user, under the generator's full hardening block |
 | Egress | the hosting API and the object store, granted in the overlay (`grants.egress`); none is made in `stage` |
+| Static hosting | **preferred**, not required: only `live` pushes anything (see "Modes and the static-hosting slot") |
 | Credentials | by name, at run time (below); never in the repository, the config or an environment file |
 
 ## An item
@@ -121,6 +122,56 @@ operator's feed settings) is judged by `dry-run`.
   refuses any method but GET and HEAD, and the computed plan. Writes nothing, deploys nothing.
 * **live**: the gate, then the pushes. A blocked item is never pushed and does not stop the others.
 
+## Modes and the static-hosting slot
+
+`cap:static-hosting` is a **preference**, not a requirement. `stage` makes no network call at all and
+`dry-run` only reads, so a lab with no hosting provider selected (a hosted Pages project is not a host in the
+lab, and the slot may have no provider module) still places this module and runs the gate and the staged
+would-be publish set. What must not happen is `live` with nowhere to push: the loader's site rules refuse a
+selection whose `mode` (its config value, else the manifest default) is `live` while the site selects no
+`static-hosting` provider (`features.publishing.config.mode: live pushes through cap:static-hosting ...`).
+That rule cannot see the role's own mode, which a site sets as the group_var `publishing_gate_mode`, so the role
+**fails closed** as well: `live` needs `publishing_gate_hosting_provider` (the selected provider's logical id)
+and validate refuses it without one.
+A preference still counts as reaching the slot, so `grants.publish` and the egress rules apply unchanged.
+The role itself refuses `live` without the hosting credentials (readiness) and does not install wrangler
+(or ask for node and npm) in any other mode.
+
+## Producer lanes: the shadow window's input
+
+A producer may write each lane's items to its own directory (the cti-pipeline module's handoff does:
+`<handoff dir>/<lane>/<kind>/<id>/`, same item layout). The overlay names them in
+`publishing_gate_lane_sources: [{lane: shadow, dir: <the lane's directory>}]` and puts the service user in the
+read group (`publishing_gate_extra_groups`). Each lane source is:
+
+* **always stage-only**, whatever the run's mode: its items are gated by the same policy, then staged under
+  `staging/lane-<lane>/<kind>/<id>-<digest12>/` with a `plan.json` that names the lane; nothing is deployed
+  or uploaded from it (no transport, no runner, no hosting credential is reachable from it), and it never
+  reads or writes the published manifest. There is no `live` key to set: a lane source is refused if it
+  has anything but `lane` and `dir`;
+* **kept apart**: its own private snapshots (`state/snapshots-<lane>/`) and staging directory, pruned on their
+  own, so the same item id in two lanes stays two items, and neither mixes with the publishable area;
+* **named everywhere**: the report and the blocked list carry `<lane>:<id>`, the gate log and `plan.json` carry
+  `lane`. A lane item the gate blocks pages like any other and runs the same notify pair.
+
+An absent lane directory is an empty lane (nothing handed off yet); one that cannot be read (the service user
+is not yet in its read group, a file in its place) is **reported**: `<lane>:unreadable` in the run's `failed`
+list and the gate log, and the other sources still run. A lane directory may not be, link to, or nest with
+another lane's, `publishable_dir`, `staging_dir`, `state_dir` or `credentials_dir` (compared by real path), and
+its items are opened by descriptor chain from the lane directory with `O_NOFOLLOW` (and leaf files with
+`O_NONBLOCK`, so a file swapped for a FIFO is refused, never waited on).
+
+The lane's directory is read, never written or pruned, by this module (the producer owns it). Cutover of the
+real lane is a deliberate later change (repoint `publishable_dir`), not something a lane source can do.
+
+## Host preconditions
+
+| Needs | Provided by | Check (readiness) |
+|---|---|---|
+| the `hnx` runtime release (`/opt/hnx/bin/hnx`, which the scheduled run calls) | **no module**: the site applies role `hnx_runtime` (ansible/roles/hnx_runtime, docs/broker.md "Deploying with Ansible") to the guest | the file exists and `hnx publishing --help` exits 0; each failure says how to fix it |
+| node 22 or newer, npm, the pinned wrangler | the distribution's nodejs/npm; the role installs wrangler | **only `live` with a Pages project** (the only mode that deploys): node and npm exist, node is 22+; the role installs wrangler from the sha256-pinned lockfile. `stage` and `dry-run` need none of them |
+| the pinned lockfile on the control host | the site | when a Pages project is set (the pin is configuration in every mode): it hashes to the pin |
+
 ## The `pages` adapter and the pinned wrangler
 
 The old pipeline ran `npx --yes wrangler@latest pages deploy` every hour: an unpinned supply-chain pull on each
@@ -186,7 +237,7 @@ sha256 and never overwrites a non-empty live manifest.
 
 A selection of `publishing` placed on the publisher host; `grants.egress: {publishing: {publisher: [internet]}}`
 (for `dry-run`/`live`); group variables for the mode, `pages_project`, `r2_bucket`, the account id, the feed
-identity; the five secrets above. Producers write items into `/var/lib/hnx-modules/publishing/publishable/`.
+identity; the five secrets above. Producers write items into `/var/lib/hnx-modules/publishing/publishable/`, or hand each lane's items to a directory of their own that this module reads as a stage-only lane source (above).
 Start the lab in `stage`; move to `dry-run` to compare the computed feed with the live one, then `live`.
 
 ### Shadow pass criteria (the `stage` window)
