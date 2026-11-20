@@ -64,6 +64,9 @@
     dest: "{{ cti_pipeline_current }}"
     state: link
     force: true
+    # without follow: false the owner and group are applied THROUGH the link to the release directory,
+    # leaving it root:root 0750 on every run (changed each run; the lane users cannot enter it)
+    follow: false
     owner: "{{ cti_pipeline_owner }}"
     group: "{{ cti_pipeline_owner_group }}"
   when: not ansible_check_mode or cti_pipeline_release_stat.stat.exists
