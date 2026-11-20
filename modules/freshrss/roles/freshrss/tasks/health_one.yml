@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# One account (freshrss_acct). Only an account with an API password has an API to answer; every
+# account's feeds are counted. The key is the product's: md5 of "<name>:<API password>".
+- name: Resolve the account's name
+  ansible.builtin.set_fact:
+    freshrss_acct_name: "{{ freshrss_acct.name if freshrss_acct.name | length > 0 else lookup('hnx_secret', freshrss_acct.name_ref) }}"
+  no_log: true
+
+- name: The Fever API accepts the account's key
+  ansible.builtin.uri:
+    url: "http://{{ freshrss_bind }}:{{ freshrss_port | int }}/api/fever.php?api"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      api_key: "{{ (freshrss_acct_name ~ ':' ~ lookup('hnx_secret', freshrss_acct.api_password_ref)) | hash('md5') }}"
+    status_code: 200
+    return_content: true
+    timeout: "{{ freshrss_health_timeout | int }}"
+  register: freshrss_fever
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: freshrss_acct.api_password_ref | length > 0
+
+- name: The account is authenticated on the Fever API
+  ansible.builtin.assert:
+    that: freshrss_fever.json.auth | default(0) | int == 1
+    fail_msg: "freshrss: the Fever API refuses account {{ freshrss_i }}'s key (its API password is not the one in the secret store)"
+  when: freshrss_acct.api_password_ref | length > 0
+
+- name: The Google Reader API signs the account in
+  ansible.builtin.uri:
+    url: "http://{{ freshrss_bind }}:{{ freshrss_port | int }}/api/greader.php/accounts/ClientLogin"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      Email: "{{ freshrss_acct_name }}"
+      Passwd: "{{ lookup('hnx_secret', freshrss_acct.api_password_ref) }}"
+    status_code: 200
+    return_content: true
+    timeout: "{{ freshrss_health_timeout | int }}"
+  register: freshrss_greader
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: freshrss_acct.api_password_ref | length > 0
+
+- name: The sign-in returned an Auth token
+  ansible.builtin.assert:
+    that: "'Auth=' in freshrss_greader.content | default('')"
+    fail_msg: "freshrss: the Google Reader API did not sign account {{ freshrss_i }} in"
+  when: freshrss_acct.api_password_ref | length > 0
+
+- name: Count the account's subscriptions
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ freshrss_dir }}/docker-compose.yml", exec, -T, -u, www-data,
+           -e, HNX_USER, app, sh, -c, "{{ freshrss_counts_script }}"]
+    expand_argument_vars: false  # the script holds $NAME for the container's shell: never the controller's
+  environment:
+    HNX_USER: "{{ freshrss_acct_name }}"
+  register: freshrss_counts
+  changed_when: false
+  failed_when: freshrss_counts.rc != 0 or (freshrss_counts.stdout_lines | select('match', '^HNX-COUNTS \{') | list | length) != 1
+  no_log: true
+
+- name: The account holds the subscriptions it is expected to
+  ansible.builtin.assert:
+    that:
+      - >-
+        (freshrss_counts.stdout_lines | select('match', '^HNX-COUNTS ') | first | regex_replace('^HNX-COUNTS ', '') | from_json).feeds | int
+        >= (([(freshrss_opml_feeds | int) - (freshrss_opml_tolerance | int)] if freshrss_acct.opml and freshrss_opml_src | length > 0 else [0])
+            + [freshrss_expected_min_feeds | int if freshrss_acct.opml else 0]) | max
+    fail_msg: "freshrss: account {{ freshrss_i }} holds fewer feeds than it is expected to (the feed list is not subscribed, or subscriptions were lost)"

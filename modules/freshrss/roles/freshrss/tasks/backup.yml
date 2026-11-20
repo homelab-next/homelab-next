@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup manifest names the data root: every account's database, the product's configuration, the
+# feed list and the last export. The databases are SQLite files written while the service runs, so
+# the backup of the guest is crash-consistent (SQLite recovers from that); the consistent copy is
+# export/latest, which the upgrade and remove playbooks refresh and which an operator refreshes
+# before a copy that must not depend on recovery (README, "Backup and restore").
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Create the compose project directory
+      ansible.builtin.file:
+        path: "{{ freshrss_dir }}"
+        state: directory
+        owner: "{{ freshrss_owner }}"
+        group: "{{ freshrss_group }}"
+        mode: "0750"
+    - name: Write the backup manifest (the data root)
+      ansible.builtin.copy:
+        dest: "{{ freshrss_dir }}/backup-manifest.json"
+        content: "{{ {'app': 'freshrss', 'paths': [freshrss_data_root]} | to_nice_json }}\n"
+        owner: "{{ freshrss_owner }}"
+        group: "{{ freshrss_group }}"
+        mode: "0640"
+  tags: [backup]

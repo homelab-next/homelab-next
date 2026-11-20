@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy; the sign-in page answers 200; a Fever API call
+# with a key that is no account's is REFUSED (auth 0: the reader is private); and for every account
+# with an API password the Fever call with its own key is accepted (auth 1) and the Google Reader
+# sign-in returns an Auth token, and an account that subscribed the feed list holds at least as many
+# feeds as the list has distinct addresses (a reader that lost its subscriptions is never "healthy"
+# empty). Read-only: nothing is created, changed or fetched.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Refuse a feed list that is not the one pinned
+      ansible.builtin.include_tasks: opml_check.yml
+      when: freshrss_opml_src | length > 0
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: freshrss
+        compose_app_dir: "{{ freshrss_app.compose_app_dir }}"
+        compose_app_spec: "{{ freshrss_app.compose_app_spec }}"
+    - name: The sign-in page answers
+      ansible.builtin.uri:
+        url: "http://{{ freshrss_bind }}:{{ freshrss_port | int }}/i/"
+        status_code: 200
+        timeout: "{{ freshrss_health_timeout | int }}"
+      changed_when: false
+      check_mode: false
+    - name: A Fever call with a key that is no account's is refused
+      ansible.builtin.uri:
+        url: "http://{{ freshrss_bind }}:{{ freshrss_port | int }}/api/fever.php?api"
+        method: POST
+        body_format: form-urlencoded
+        body: {api_key: "00000000000000000000000000000000"}
+        status_code: 200
+        return_content: true
+        timeout: "{{ freshrss_health_timeout | int }}"
+      register: freshrss_anonymous
+      changed_when: false
+      check_mode: false
+    - name: The refused call says so
+      ansible.builtin.assert:
+        that:
+          - freshrss_anonymous.json.auth | default(1) | int == 0
+        fail_msg: "freshrss: the Fever API accepted a key that belongs to no account (the reader is open)"
+    - name: Check each account
+      ansible.builtin.include_tasks: health_one.yml
+      loop: "{{ freshrss_accounts }}"
+      loop_control:
+        loop_var: freshrss_acct
+        index_var: freshrss_i
+        label: "account {{ freshrss_i }}"
+  tags: [health]
