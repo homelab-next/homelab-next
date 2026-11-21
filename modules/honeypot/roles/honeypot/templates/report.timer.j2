@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ honeypot_marker }}, instance {{ honeypot_logical_id }}); local changes are overwritten.
+[Unit]
+Description=honeypot {{ honeypot_logical_id }}: render the daily intel report
+
+[Timer]
+OnCalendar={{ honeypot_report_oncalendar }}
+Persistent=true
+Unit={{ honeypot_report_unit }}
+
+[Install]
+WantedBy=timers.target

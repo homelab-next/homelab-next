@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the lake writer's offset from an export (honeypot_restore_source: <export>/ holding
+# lake-offset, one fixed-width record). The source is checked first; the receiver keeps running (its spool is not
+# touched), and the writer is stopped only for the copy. A restored offset beyond the spool's size
+# is reset to 0 by the writer itself on its next run.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: A restore source is named, and is an absolute directory of its own
+      ansible.builtin.assert:
+        that:
+          - honeypot_restore_source is match('^/[^/.][^/]*(/[^/.][^/]*)+\Z')
+          - honeypot_restore_source is not match('^' ~ (honeypot_state_dir | regex_escape) ~ '(/|\Z)')
+        fail_msg: "honeypot: honeypot_restore_source must be an absolute path of at least two components, outside the live state directory"
+    - name: Read the exported offset
+      ansible.builtin.slurp:
+        src: "{{ honeypot_restore_source }}/lake-offset"
+      register: honeypot_restore_state
+    - name: The exported state is exactly one 20-digit offset
+      ansible.builtin.assert:
+        that: (honeypot_restore_state.content | b64decode) is match('^[0-9]{20}\n?\Z')
+        fail_msg: "honeypot: {{ honeypot_restore_source }}/lake-offset is not a lake writer offset"
+    - name: Stop the lake writer while its state is replaced
+      ansible.builtin.systemd_service:
+        name: "{{ honeypot_lake_timer }}"
+        state: stopped
+      when: not ansible_check_mode
+    - name: Install the offset
+      ansible.builtin.copy:
+        content: "{{ (honeypot_restore_state.content | b64decode | trim) ~ '\n' }}"
+        dest: "{{ honeypot_state_dir }}/lake-offset"
+        owner: "{{ honeypot_user }}"
+        group: "{{ honeypot_group }}"
+        mode: "0600"
+    - name: Arm the lake writer's timer again
+      ansible.builtin.systemd_service:
+        name: "{{ honeypot_lake_timer }}"
+        state: started
+      when: not ansible_check_mode
+  tags: [restore]

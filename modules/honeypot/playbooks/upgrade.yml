@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: the module pins no artefact or image (its scripts ship with the role), so an upgrade is a
+# validated re-converge: the upgrade hook refuses when the live table is not the contract the
+# installed writer holds, the state is exported first, then the role converges with the new scripts.
+# Run the health hook after.
+#   ansible-playbook -i <inventory> modules/honeypot/playbooks/upgrade.yml
+- name: Upgrade the honeypot receiver, lake writer and intel report
+  hosts: mod_honeypot_receiver
+  become: true
+  tasks:
+    - name: Validate the upgrade
+      ansible.builtin.include_role:
+        name: honeypot
+        tasks_from: upgrade
+    - name: Export the state and the reports first
+      ansible.builtin.include_role:
+        name: honeypot
+        tasks_from: export
+    - name: Converge on the new scripts
+      ansible.builtin.include_role:
+        name: honeypot

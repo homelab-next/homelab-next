@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Names the lake query service's and the gateway's URLs from the registry (or the overrides) and
+# refuses a clear-text one. Included by the install and by every hook that talks to them.
+- name: Resolve the lake query service's URL
+  ansible.builtin.set_fact:
+    honeypot_effective_lake_url: "{{ honeypot_lake_url if honeypot_lake_url != '' else lookup('hnx_registry', honeypot_lake_query_id, field='url') }}"
+  tags: [readiness, health, backup, export, restore, upgrade]
+
+- name: The lake is reached over https
+  ansible.builtin.assert:
+    that: honeypot_effective_lake_url is match('^https://')
+    fail_msg: "honeypot: the lake query service's URL is not https (the password would travel in clear)"
+  tags: [readiness, health, backup, export, restore, upgrade]
+
+- name: Name the gateway's URL
+  ansible.builtin.set_fact:
+    honeypot_effective_gateway_url: "{{ lookup('hnx_registry', honeypot_gateway_id, field='url') ~ honeypot_gateway_path if honeypot_gateway_id != '' else '' }}"
+  tags: [readiness, health, backup, export, restore, upgrade]
+
+- name: The gateway is reached over https (http only when allowed)
+  ansible.builtin.assert:
+    that: honeypot_effective_gateway_url == '' or honeypot_effective_gateway_url is match('^https://') or (honeypot_allow_plain_http | bool and honeypot_effective_gateway_url is match('^http://'))
+    fail_msg: "honeypot: the gateway's URL is not https (the key would travel in clear); set honeypot_allow_plain_http to accept that"
+  tags: [readiness, health, backup, export, restore, upgrade]

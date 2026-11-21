@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy, in open formats: the writer's state (JSON) and the rendered reports (HTML) under
+# <data root>/export/<stamp>/. Built beside and renamed into place, so a half-written export is
+# never mistaken for a finished one. The events themselves are the lake's, exported there.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Name this export
+      ansible.builtin.set_fact:
+        honeypot_export_stamp: "{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}"
+    - name: Build the export beside its final name
+      ansible.builtin.file:
+        path: "{{ honeypot_export_dir }}/.{{ honeypot_export_stamp }}.incoming"
+        state: directory
+        owner: "{{ honeypot_owner }}"
+        group: "{{ honeypot_owner_group }}"
+        mode: "0700"
+    - name: Copy the state and the reports into it
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ honeypot_export_dir }}/.{{ honeypot_export_stamp }}.incoming/{{ item.dest }}"
+        remote_src: true
+        owner: "{{ honeypot_owner }}"
+        group: "{{ honeypot_owner_group }}"
+        mode: "0600"
+      loop:
+        - {src: "{{ honeypot_state_dir }}/lake-offset", dest: "lake-offset"}
+        - {src: "{{ honeypot_state_dir }}/last-run.json", dest: "last-run.json"}
+        - {src: "{{ honeypot_reports_dir }}/honeypot-report.html", dest: "honeypot-report.html"}
+      loop_control:
+        label: "{{ item.dest }}"
+      failed_when: false
+    - name: Rename it into place
+      ansible.builtin.command:
+        argv: [mv, -T, "{{ honeypot_export_dir }}/.{{ honeypot_export_stamp }}.incoming", "{{ honeypot_export_dir }}/{{ honeypot_export_stamp }}"]
+      changed_when: true
+  tags: [export]
