@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes, keyed by the slot and renamed to the
+# instance the site selects; version is product.version (never repeated here), host is the module's
+# host role. The lab registry (lab/services.yml) must carry it exactly as bound (hnx modules check,
+# docs/modules/registry-rows.md). auth: own - the product's local accounts and API tokens. The health
+# path is the front's own liveness, which answers without a credential; the role's health hook asks
+# the application itself (analyzers, token). No public_hostname: the enrichment service is private by
+# default; the consumers reach its API over the lab's network. A site that wants a web route adds one
+# with the public_hostname and the grant, and sets intelowl_web_domain.
+services:
+  enrichment:
+    capability: enrichment
+    impl: intelowl
+    host: server
+    protocol: http
+    port: 8080
+    health: {kind: http, path: /hc, expect_status: 200}
+    owner: operator
+    tls: none
+    auth: own
+    tags: [enrichment]
+    description: Observable enrichment aggregator with its own accounts and API tokens; keyless analyzers by default. No public route.

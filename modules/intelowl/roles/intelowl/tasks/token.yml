@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# The consumers' API token is a secret the deploy owns: its value is written into the web
+# framework's token table for the account intelowl_api_user (one token per account: a different one is
+# replaced; it does not expire). The value goes to the container through the environment of this one
+# command, never an argument. An account that does not exist yet (a database about to be restored) is
+# reported, not an error: run again after the restore; health fails until the token is seeded.
+- name: Seed the API token
+  ansible.builtin.include_tasks: exec.yml
+  vars:
+    intelowl_exec_label: TOKEN
+    intelowl_exec_code: "{{ intelowl_api_seed_code }}"
+    intelowl_exec_env:
+      HNX_API_USER: "{{ intelowl_api_user }}"
+      HNX_API_TOKEN: "{{ lookup('hnx_secret', intelowl_api_login_ref) }}"
+
+- name: Say that the API account does not exist yet
+  ansible.builtin.debug:
+    msg: >-
+      intelowl: no account named {{ intelowl_api_user }} yet, so the API token was not seeded.
+      Restore the database (or bootstrap the administrator) and run the role again.
+  when: "'HNX-TOKEN no-user' in intelowl_exec_out.stdout"
+
+- name: Report that the token was written
+  ansible.builtin.debug:
+    msg: "intelowl: the API token was {{ 'created' if 'HNX-TOKEN created' in intelowl_exec_out.stdout else 'replaced' }}"
+  changed_when: true
+  when: "'HNX-TOKEN created' in intelowl_exec_out.stdout or 'HNX-TOKEN replaced' in intelowl_exec_out.stdout"

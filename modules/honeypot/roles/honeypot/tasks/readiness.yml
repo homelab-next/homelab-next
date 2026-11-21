@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless every dependency is there before anything is written: systemd and python3 on the host,
+# every secret in its form, and the lake's (and, when named, the gateway's) registry row.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Resolve the lake's and the gateway's URLs
+      ansible.builtin.include_tasks: resolve.yml
+    - name: Look for systemd on the host
+      ansible.builtin.stat:
+        path: /run/systemd/system
+      register: honeypot_systemd_stat
+    - name: The host runs systemd
+      ansible.builtin.assert:
+        that: honeypot_systemd_stat.stat.isdir | default(false)
+        fail_msg: "honeypot: the host does not run systemd (the receiver and the jobs are units)"
+    - name: The receiver's interpreter is there
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "import json, socketserver"]
+      changed_when: false
+    # Host precondition no module provides: the site applies role hnx_runtime to the guest. The lake
+    # writer and the report import the platform's own lake client from that release.
+    - name: The runtime release's interpreter can import the platform's lake client
+      ansible.builtin.command:
+        argv: ["{{ honeypot_runtime_python }}", -I, -c, "from homelabnext.conform.adapters.lake import make_clients"]
+      register: honeypot_runtime_probe
+      changed_when: false
+      failed_when: false
+    - name: It can
+      ansible.builtin.assert:
+        that: honeypot_runtime_probe.rc == 0
+        fail_msg: >-
+          honeypot: {{ honeypot_runtime_python }} cannot import homelabnext's lake client (exit
+          {{ honeypot_runtime_probe.rc }}). The lake writer and the report run from the homelab-next runtime
+          release: apply the hnx_runtime role (ansible/roles/hnx_runtime, docs/broker.md "Deploying with
+          Ansible") to this guest first; no module installs it
+  tags: [readiness]

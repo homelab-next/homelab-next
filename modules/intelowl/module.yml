@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: Apache-2.0
+# The enrichment provider on IntelOwl (docs/modules.md; README.md beside this file): the application
+# (a web worker, a websocket server, a scheduler and a task worker, all of one image), its web front,
+# its PostgreSQL database and its broker as compose_app containers in the module's slice, and the
+# data root (database, analyzer downloads, logs). Local accounts and API tokens are the product's own
+# (auth: own); there is NO public route: the pipelines and agents that enrich an observable reach the
+# API over the lab's network. Every real value (the guest, its address, the secret values, the public
+# name if the site ever adds a route) is the site's: the overlay's lab/modules.yml, lab/services.yml,
+# group variables and secret store.
+manifest_version: "1.0"
+id: intelowl
+kind: provider
+title: Observable enrichment on IntelOwl
+description: Fills the enrichment slot with IntelOwl as compose_app containers; keyless analyzers by
+  default; the analyzer names the consumers request are checked against the running instance (an
+  unknown name makes the product answer 400 to the whole submit, a disabled one is dropped silently);
+  the API token is a secret the deploy owns; the database is exportable and restorable, proved by counts.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: intelowl
+  version: 6.7.0
+licence:
+  kind: open-source
+  spdx: AGPL-3.0-only
+credentials:
+  - secret: secret:intelowl/django-secret
+    identity: key
+    holder: provider
+    purpose: the application's signing secret (sessions, CSRF); after a migration it is the source instance's value, so its sessions still open
+  - secret: secret:intelowl/db-password
+    identity: password
+    holder: provider
+    purpose: the database role's password (it reaches only the containers' env_files)
+  - secret: secret:intelowl/admin-password
+    identity: password
+    holder: provider
+    purpose: the first administrator's password, read only when intelowl_admin_bootstrap is true (a fresh database); a restored database brings its own accounts
+  - secret: secret:intelowl/api-token
+    identity: token
+    holder: granted
+    purpose: the pipeline account's API token (40 characters, written into the framework's token table, no expiry); granted to the enrichment stage of the CTI pipeline and the agents' enrichment tool
+  - secret: secret:intelowl/otx-key
+    identity: api-key
+    holder: provider
+    purpose: an optional free-tier AlienVault OTX key for its two analyzers; read only when intelowl_otx_key_ref is set (empty by default, so the module is keyless)
+identifiers:
+  - {kind: secret-name, name: intelowl, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the database password, the application secret, the admin password and the API token are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 2, memory_mb: 6144, disk_gb: 30}
+      guest:
+        baselines: [base]
+      roles: [role:intelowl]
+      purpose: runs the application, its front, its database and its broker (docker_engine applied first, compose_app renders them); the database, the analyzer downloads and the logs live on this guest's disk
+provides:
+  slots:
+    enrichment:
+      adapter: homelabnext.conform.adapters.enrichment:make
+      provisional: true
+      reason: enrichment has no contract yet; the obvious standard is the front answering its liveness and refusing an anonymous call to the API
+      migration: {formats: [object-tree], export: role:intelowl, import: role:intelowl}
+egress:
+  - host: server
+    to: [internet]
+    purpose: the keyless analyzers query public services (DNS, threat-intelligence feeds, reputation lists) for the observables they are given; each analyzer's own destination is its configuration
+contributes:
+  roles:
+    - file: roles/intelowl
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:intelowl, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: database
+    kind: database
+    description: The PostgreSQL database - every job and report, analyzer and playbook configuration, account and API token - as pg_dump's custom format with a sha256 listing.
+    export: {formats: [object-tree], via: role:intelowl}
+    import: {formats: [object-tree], via: role:intelowl}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (the application and its front together, tag and digest): validated and recorded, the database exported, then converged; the application migrates its own database on first start"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

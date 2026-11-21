@@ -1,0 +1,47 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ honeypot_marker }}, instance {{ honeypot_logical_id }}); local changes are overwritten.
+# The one-way receiver: it accepts the honeypot's pushed events and appends them to the spool. It
+# answers nothing and opens no connection of its own, so the unit may not either.
+[Unit]
+Description=honeypot {{ honeypot_logical_id }} one-way event receiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ honeypot_user }}
+Group={{ honeypot_group }}
+EnvironmentFile={{ honeypot_env_file }}
+ExecStart=/usr/local/libexec/homelabnext/hnx-honeypot-receiver
+Environment=PYTHONSAFEPATH=1 PYTHONNOUSERSITE=1
+Restart=always
+RestartSec=5
+{% if hnx_module_slice | default('') %}
+Slice={{ hnx_module_slice }}
+{% endif %}
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths={{ honeypot_spool_dir }}
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

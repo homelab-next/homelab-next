@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - intelowl_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - intelowl_image is match(intelowl_pinned_ref_pattern)
+      - intelowl_nginx_image is match(intelowl_pinned_ref_pattern)
+      - intelowl_postgres_image is match(intelowl_pinned_ref_pattern)
+      - intelowl_redis_image is match(intelowl_pinned_ref_pattern)
+      # the application and its front are one release: the same version tag
+      - intelowl_tag is match(intelowl_version_tag_pattern)
+      - intelowl_front_tag == intelowl_tag
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - intelowl_bind is match(intelowl_ipv4_pattern)
+      - intelowl_bind != '0.0.0.0'
+      - intelowl_port | int >= 1 and intelowl_port | int <= 65535
+      - intelowl_db_uid | int >= 1000 and intelowl_db_gid | int >= 1000
+      - intelowl_broker_uid | int >= 1000 and intelowl_broker_gid | int >= 1000
+      - intelowl_db_uid | int != intelowl_broker_uid | int
+      - intelowl_db_name is match('^[a-z][a-z0-9_]{0,62}\Z')
+      - intelowl_db_user is match('^[a-z][a-z0-9_]{0,62}\Z')
+      - intelowl_web_domain | length == 0 or intelowl_web_domain is match(intelowl_domain_pattern)
+      - intelowl_old_jobs_retention_days | int >= 1
+      - intelowl_uwsgi_processes | int >= 1 and intelowl_uwsgi_processes | int <= 32
+      - >-
+        [intelowl_signing_ref, intelowl_db_login_ref, intelowl_admin_login_ref, intelowl_api_login_ref]
+        | reject('match', intelowl_ref_pattern) | list | length == 0
+      - intelowl_otx_key_ref | length == 0 or intelowl_otx_key_ref is match(intelowl_ref_pattern)
+      - intelowl_refs | unique | length == intelowl_refs | length
+      - intelowl_admin_bootstrap is boolean
+      - intelowl_admin_user is match(intelowl_user_pattern)
+      - intelowl_api_user is match(intelowl_user_pattern)
+      - intelowl_admin_email is match(intelowl_email_pattern)
+      - intelowl_restore_keep_keys is boolean
+      - intelowl_expected_min_analyzers | int >= 0
+      - intelowl_expected_min_jobs | int >= 0
+      - >-
+        [intelowl_dir, intelowl_data_root] | reject('match', intelowl_path_pattern) | list | length == 0
+      - >-
+        [intelowl_mem_limit, intelowl_worker_mem_limit, intelowl_db_mem_limit, intelowl_broker_mem_limit, intelowl_front_mem_limit]
+        | reject('match', '^[1-9][0-9]{0,5}[kmg]\Z') | list | length == 0
+    fail_msg: >-
+      intelowl: a registry id, four images pinned by tag and digest (the application's and its front's
+      one vX.Y.Z release), the guest's IPv4 address to publish on (not all interfaces), a port, container
+      uids of 1000 or more (the database's differing from the broker's), a database and role name, distinct
+      secret: references, a normal admin account, absolute canonical directories and memory limits like 512m
+  tags: [health, backup, restore, export, upgrade]
+
+# The analyzer names the consumers request: every class is one the product knows, every list is
+# non-empty and holds registered-name-shaped strings (the instance itself is asked in health).
+- name: Validate the analyzer lists the consumers request
+  ansible.builtin.assert:
+    that:
+      - intelowl_required_analyzers is mapping
+      - intelowl_required_analyzers | length > 0
+      - intelowl_required_analyzers.keys() | difference(intelowl_observable_classes) | length == 0
+      - intelowl_required_analyzers.values() | map('type_debug') | reject('equalto', 'list') | list | length == 0
+      - >-
+        intelowl_required_analyzers.values() | map('length') | select('lt', 1) | list | length == 0
+      - >-
+        intelowl_required_analyzers.values() | flatten | reject('string') | list | length == 0
+      - >-
+        intelowl_required_analyzers.values() | flatten | reject('match', intelowl_analyzer_name_pattern) | list | length == 0
+    fail_msg: >-
+      intelowl: intelowl_required_analyzers maps observable classes ({{ intelowl_observable_classes | join(', ') }})
+      to non-empty lists of analyzer names exactly as the instance registers them (letters, digits, underscore)
+  tags: [health, backup, restore, export, upgrade]

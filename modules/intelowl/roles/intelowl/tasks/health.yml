@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the seven containers run and are healthy; the database answers; the front answers
+# its liveness (no credential); an anonymous call to the API is REFUSED (401 or 403); the instance's
+# own model holds every analyzer the consumers request, none of them disabled, with every observable
+# class covered by at least one of them (an unknown analyzer name makes the application answer 400 to
+# the WHOLE submit, a disabled one is silently dropped: both are what health is for); the API token
+# reads each of those analyzers through the API; and the instance holds at least the analyzer
+# configurations and jobs it is expected to (a restored instance is never "healthy" empty).
+# Read-only: nothing is created, changed or submitted.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: intelowl
+        compose_app_dir: "{{ intelowl_app.compose_app_dir }}"
+        compose_app_spec: "{{ intelowl_app.compose_app_spec }}"
+    - name: The database answers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", exec, -T, postgres,
+               pg_isready, -U, "{{ intelowl_db_user }}", -d, "{{ intelowl_db_name }}"]
+      changed_when: false
+      check_mode: false
+    - name: The front answers its liveness
+      ansible.builtin.uri:
+        url: "http://{{ intelowl_bind }}:{{ intelowl_port | int }}/hc"
+        status_code: 200
+        timeout: "{{ intelowl_health_timeout | int }}"
+      changed_when: false
+      check_mode: false
+    - name: An anonymous call to the API is refused
+      ansible.builtin.uri:
+        url: "http://{{ intelowl_bind }}:{{ intelowl_port | int }}/api/analyzer"
+        status_code: [401, 403]
+        timeout: "{{ intelowl_health_timeout | int }}"
+      changed_when: false
+      check_mode: false
+    - name: Ask the instance what it holds and whether the requested analyzers exist
+      ansible.builtin.include_tasks: exec.yml
+      vars:
+        intelowl_exec_label: STATE
+        intelowl_exec_hide: false
+        intelowl_exec_code: "{{ intelowl_state_code }}"
+        intelowl_exec_env:
+          HNX_WANT: "{{ intelowl_required_analyzers | to_json(sort_keys=true) }}"
+    - name: Read the answer
+      ansible.builtin.set_fact:
+        intelowl_state: >-
+          {{ (intelowl_exec_out.stdout_lines | select('match', '^HNX-STATE ') | first | regex_replace('^HNX-STATE ', '')) | from_json }}
+    - name: Every requested analyzer exists, is enabled and every class is covered
+      ansible.builtin.assert:
+        that:
+          - intelowl_state.missing | length == 0
+          - intelowl_state.disabled | length == 0
+          - intelowl_state.uncovered | length == 0
+        fail_msg: >-
+          intelowl: the consumers request analyzers the instance cannot run. Unknown names (the whole submit
+          is refused with a 400): {{ intelowl_state.missing | join(', ') or 'none' }}. Disabled (silently
+          dropped): {{ intelowl_state.disabled | join(', ') or 'none' }}. Observable classes no listed
+          analyzer can run: {{ intelowl_state.uncovered | join(', ') or 'none' }}. Fix intelowl_required_analyzers
+          (names exactly as the instance registers them) or enable the analyzer.
+    - name: The instance holds as much as it is expected to
+      ansible.builtin.assert:
+        that:
+          - intelowl_state.counts.analyzer_configs | int >= intelowl_expected_min_analyzers | int
+          - intelowl_state.counts.jobs | int >= intelowl_expected_min_jobs | int
+        fail_msg: >-
+          intelowl: {{ intelowl_state.counts.analyzer_configs }} analyzer configurations (at least
+          {{ intelowl_expected_min_analyzers }} expected) and {{ intelowl_state.counts.jobs }} jobs (at least
+          {{ intelowl_expected_min_jobs }} expected): a restore that lost rows, or one that has not run
+    - name: The API token reads each requested analyzer through the API
+      ansible.builtin.uri:
+        url: "http://{{ intelowl_bind }}:{{ intelowl_port | int }}/api/analyzer/{{ item }}"
+        headers:
+          Authorization: "Token {{ lookup('hnx_secret', intelowl_api_login_ref) }}"
+        status_code: 200
+        timeout: "{{ intelowl_health_timeout | int }}"
+      loop: "{{ intelowl_required_analyzers.values() | flatten | unique | sort }}"
+      changed_when: false
+      check_mode: false
+      no_log: true
+  tags: [health]

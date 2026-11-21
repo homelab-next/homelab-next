@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# A pg_dump of the live database, kept as export/db/pre-restore-<UTC timestamp>.dump (with its sha256
+# beside it): a restore that replaces data that was there can be undone with this file.
+- name: Name the safety export
+  ansible.builtin.set_fact:
+    intelowl_safety: "pre-restore-{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}.dump"
+
+- name: Dump the live database before it is replaced
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", exec, -T, postgres,
+           pg_dump, -U, "{{ intelowl_db_user }}", -d, "{{ intelowl_db_name }}", -Fc, --no-owner, --no-acl,
+           -f, "{{ intelowl_container_export }}/.{{ intelowl_safety }}.tmp"]
+  changed_when: true
+
+- name: Put the safety export in place
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", exec, -T, postgres,
+           mv, -f, "{{ intelowl_container_export }}/.{{ intelowl_safety }}.tmp",
+           "{{ intelowl_container_export }}/{{ intelowl_safety }}"]
+  changed_when: true
+
+- name: Read the safety export
+  ansible.builtin.stat:
+    path: "{{ intelowl_data_root }}/export/db/{{ intelowl_safety }}"
+    checksum_algorithm: sha256
+  register: intelowl_safety_stat
+
+- name: Refuse to go on without a safety export that holds something
+  ansible.builtin.assert:
+    that:
+      - intelowl_safety_stat.stat.exists
+      - intelowl_safety_stat.stat.size | int > 0
+    fail_msg: "intelowl: the safety export of the live database is missing or empty; nothing was replaced"
+
+- name: Write its sha256 beside it
+  ansible.builtin.copy:
+    content: "{{ intelowl_safety_stat.stat.checksum }}  {{ intelowl_safety }}\n"
+    dest: "{{ intelowl_data_root }}/export/db/{{ intelowl_safety }}.sha256"
+    owner: "{{ intelowl_db_uid | int }}"
+    group: "{{ intelowl_db_gid | int }}"
+    mode: "0600"
+
+- name: Say where the safety export is
+  ansible.builtin.debug:
+    msg: "intelowl: the live database was exported to {{ intelowl_data_root }}/export/db/{{ intelowl_safety }} before it is replaced"

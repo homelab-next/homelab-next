@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# The application's web-server settings and the front's configuration, rendered under the compose
+# project (config/) and mounted read-only. A change reaches the running containers by a restart of the
+# two that read them (main does it), never silently.
+- name: Create the front's configuration directory
+  ansible.builtin.file:
+    path: "{{ intelowl_dir }}/config/nginx"
+    state: directory
+    owner: "{{ intelowl_owner }}"
+    group: "{{ intelowl_group }}"
+    mode: "0755"
+
+- name: Render the application server's settings and the front's configuration
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ intelowl_dir }}/config/{{ item.dest }}"
+    owner: "{{ intelowl_owner }}"
+    group: "{{ intelowl_group }}"
+    mode: "0644"
+  loop:
+    - {src: intel_owl.ini.j2, dest: intel_owl.ini}
+    - {src: nginx/http.conf.j2, dest: nginx/http.conf}
+    - {src: nginx/locations.conf.j2, dest: nginx/locations.conf}
+    - {src: nginx/errors.conf.j2, dest: nginx/errors.conf}
+    - {src: nginx/websocket.conf.j2, dest: nginx/websocket.conf}
+  loop_control:
+    label: "{{ item.dest }}"
+  register: intelowl_config

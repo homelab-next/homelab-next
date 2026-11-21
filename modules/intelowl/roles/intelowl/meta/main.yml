@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The enrichment provider on IntelOwl: the application, its front, its database and its broker as compose_app containers, keyless analyzers by default, a checked analyzer list, the database's own dump and restore."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

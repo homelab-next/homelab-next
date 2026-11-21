@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# Refuse a bad input before anything is read or written: the names that end up in unit names, SQL
+# identifiers and paths are checked here, so no later task has to trust them.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - honeypot_logical_id is match('^[a-z][a-z0-9-]{0,30}\Z')
+      - honeypot_port | int >= 1 and honeypot_port | int <= 65535
+      - honeypot_bind is match('^[0-9a-fA-F.:]{2,45}\Z')
+      - honeypot_allow_any_bind | bool or honeypot_bind not in ['0.0.0.0', '::']
+      - honeypot_idle_timeout_s | int >= 5
+      - honeypot_max_connections | int >= 1
+      - honeypot_max_line_bytes | int >= 1024
+      - honeypot_spool_max_bytes | int >= 1048576
+      - honeypot_batch_rows | int >= 1
+      - honeypot_lake_user is match('^[A-Za-z][A-Za-z0-9_.-]{0,62}\Z')
+      - honeypot_lake_catalog is match('^[a-z][a-z0-9_]{0,62}\Z')
+      - honeypot_lake_schema is match('^[a-z][a-z0-9_]{0,62}\Z')
+      - honeypot_lake_table is match('^[a-z][a-z0-9_]{0,62}\Z')
+      - honeypot_cti_table == '' or honeypot_cti_table is match('^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\Z')
+      - honeypot_lake_oncalendar is match('^[A-Za-z0-9 *:/,.-]{3,80}\Z')
+      - honeypot_report_oncalendar is match('^[A-Za-z0-9 *:/,._-]{3,80}\Z')
+      - honeypot_friendly_ips | map('regex_search', '^([0-9]{1,3}\.){3}[0-9]{1,3}\Z') | select('none') | list | length == 0
+      - honeypot_site_label is match('^[^\n\r]{1,120}\Z')
+      - honeypot_llm_max_tokens | int >= 256
+      - honeypot_llm_attempts | int >= 1 and honeypot_llm_attempts | int <= 10
+      - honeypot_spool_max_age_h | int >= 0
+      - honeypot_freshness_max_age_h | int >= 0
+      - honeypot_landing_max_age_h | int >= 0
+      - honeypot_report_keep_days | int >= 1
+      - honeypot_lake_url == '' or honeypot_lake_url is match('^https://[^ ]+\Z')
+      - honeypot_lake_url != '' or honeypot_lake_query_id != ''
+      - honeypot_gateway_id == '' or honeypot_gateway_model != ''
+      - honeypot_gateway_path is match('^/[A-Za-z0-9._/-]*\Z')
+      - honeypot_lake_login_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - honeypot_gateway_key_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - honeypot_lake_ca_ref == '' or honeypot_lake_ca_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - >-
+        [honeypot_config_dir, honeypot_data_root]
+        | reject('match', '^/[^/.][^/]*(/[^/.][^/]*)+\Z') | list | length == 0
+    fail_msg: >-
+      honeypot: an input is invalid (the instance id, ports, the lake and gateway names, secret
+      references, schedules, friendly addresses, labels and absolute paths of at least two
+      components are all checked; the lake URL must be https and either it or the registry id set)
+  tags: [readiness, health, backup, export, restore, upgrade]

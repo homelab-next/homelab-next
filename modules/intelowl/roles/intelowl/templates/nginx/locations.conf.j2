@@ -1,0 +1,35 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role intelowl). Do not edit.
+location = /favicon.ico {
+    access_log off;
+    log_not_found off;
+}
+
+# the front's own liveness (the registry row's health check): no application, no credential
+location /hc {
+    return 200;
+}
+
+location / {
+    root /;
+    uwsgi_pass                  django;
+    uwsgi_pass_header           Authorization;
+    uwsgi_pass_request_headers  on;
+    uwsgi_read_timeout          600;
+    include                     uwsgi_params;
+    client_max_body_size        100m;
+}
+
+# rate limiting for the application's admin panel
+location ^~/admin {
+    limit_req zone=adminlimit;
+
+    uwsgi_pass                  django;
+    uwsgi_pass_header           Authorization;
+    uwsgi_pass_request_headers  on;
+    uwsgi_read_timeout          600;
+    include                     uwsgi_params;
+    client_max_body_size        100m;
+}
+
+include websocket.conf;

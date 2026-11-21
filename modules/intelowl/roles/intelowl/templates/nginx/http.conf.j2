@@ -1,0 +1,17 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role intelowl). Do not edit.
+upstream django {
+    server uwsgi:8001 fail_timeout=30s;
+}
+
+limit_req_zone $binary_remote_addr zone=adminlimit:10m rate=1r/s;
+
+server {
+    listen 80;
+    server_name {{ intelowl_web_domain if intelowl_web_domain | length > 0 else '_' }};
+
+    server_tokens off;
+
+    include locations.conf;
+    include errors.conf;
+}
