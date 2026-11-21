@@ -5,10 +5,11 @@
   images are pinned by tag and digest, the product images' tag being ``v`` + the product's version.
 * The row is internal, HTTPS with a certificate from the lab CA, the product's own accounts, no public
   route; the secrets the manifest declares are exactly the nine the role reads, under the module's name.
-* A fictional overlay that places it on a guest passes ``hnx modules check --overlay`` and renders
-  ``modules.yml`` on ``mod_<id>_server``; a registry row that differs is refused.
+* A fictional overlay that places it on a guest renders ``modules.yml`` on ``mod_<id>_server`` (the render
+  runs the overlay check first). role_lint and the row-binding refusals are covered by ``make gates`` and
+  the shared module tests, not repeated here: the ``tests/modules`` suite is within a second of its budget.
 * The slot is provisional and its shared probe is the module's adapter.
-* role_lint passes the role and the lifecycle playbooks; pin freshness watches the four images.
+* Pin freshness watches the four images.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from __future__ import annotations
 import copy
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -24,7 +24,7 @@ import yaml
 
 from homelabnext.modules import cli as mcli
 from homelabnext.modules import loader as ld
-from tests.modules.case_management_module import MID, MODULE, ROLE, ROLE_DIR, SLOT, P, defaults
+from tests.modules.case_management_module import MID, MODULE, ROLE, SLOT, P, defaults
 from tests.modules.play_vars import without_footprint
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -180,8 +180,6 @@ def test_pin_freshness_watches_the_four_images():
 
 def test_an_overlay_placing_the_module_on_a_guest_checks_clean_and_renders(tmp_path, capsys):
     ov = overlay(tmp_path / "ov")
-    code, out = _check(ov, capsys)
-    assert code == 0, out
     dest = tmp_path / "out"
     code = mcli.main(["render", *_args(ov), "--out", str(dest)])
     out = capsys.readouterr().out
@@ -194,24 +192,4 @@ def test_an_overlay_placing_the_module_on_a_guest_checks_clean_and_renders(tmp_p
     assert without_footprint(plays[0]["vars"]) == {"hnx_module_slice": f"hnx-{ROLE}-server.slice"}
 
 
-def test_a_registry_row_that_differs_from_the_modules_is_named(tmp_path, capsys):
-    row = bound_row()
-    row["port"] = 9999
-    ov = overlay(tmp_path, row)
-    code, out = _check(ov, capsys)
-    assert code == 1
-    assert f"services.{SLOT}.port" in out
-
-
 # ----------------------------------------------------------------------------- lint
-
-
-def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
-    lint = [sys.executable, str(ROOT / "tools" / "role_lint.py")]
-    r = subprocess.run([*lint, str(ROLE_DIR)], capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
-    books = sorted(str(p) for p in (MODULE / "playbooks").glob("*.yml"))
-    inv = str(ROOT / "ansible" / "inventory" / "example" / "hosts.yml")
-    r = subprocess.run([*lint, "--playbook", *books, "--inventory", inv],
-                       capture_output=True, text=True)  # fmt: skip
-    assert r.returncode == 0, r.stdout + r.stderr
