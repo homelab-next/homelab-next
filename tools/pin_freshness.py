@@ -122,6 +122,7 @@ SOURCES: dict[str, tuple[str, str]] = {
     ),
     "role:freshrss/freshrss_image": ("github", "FreshRSS/FreshRSS"),
     "role:gitea/gitea_image": ("github", "go-gitea/gitea"),
+    "role:synapse_cortex/synapse_cortex_image": ("github", "vertexproject/synapse"),
     "role:keycloak/keycloak_image": ("github", "keycloak/keycloak"),
     "role:keycloak/keycloak_postgres_image": (
         "none",
@@ -305,6 +306,12 @@ NOTES: dict[str, str] = {
         "modules/freshrss/module.yml and the lab registry's version; the same or a newer version only "
         "(the application migrates its database forward on first start and cannot go back; the role "
         "refuses an older target), so export every account first (the upgrade playbook does)"
+    ),
+    "role:synapse_cortex/synapse_cortex_image": (
+        "an image (modules/synapse-cortex): bump the tag and its digest together, with product.version in "
+        "modules/synapse-cortex/module.yml and the lab's registry version; the same or a newer version only "
+        "(the service migrates its storage forward on first start and cannot go back; the role refuses an "
+        "older target), so export the graph first (the upgrade playbook does)"
     ),
     "role:media/media_image": (
         "an image (modules/media): bump the tag and its digest together, with product.version in "

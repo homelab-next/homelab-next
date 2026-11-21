@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (object-tree, docs/modules/data.md): <data root>/export/backups/hnx-<UTC stamp>/, a
+# runnable copy of the service directory made by the service's OWN backup machinery (never a file
+# copy of the live slabs): in `live` mode the running service writes it under one consistent hold
+# across all its slabs (its livebackup, the backup tool's code under the service's lock); in `offline`
+# mode the service is stopped, the offline backup tool (synapse.tools.service.backup) runs on the
+# stopped directory, and the service is started again whatever happened. The node count of every
+# form is read before and after, and the copy is SEALED (hnx-manifest.json: those counts, the version
+# and the image; hnx-listing.jsonl: every file's size and sha256) only when the two are equal and not
+# empty: a backup taken while the graph was changing, or an empty one, is refused. A sealed backup is
+# what restore accepts. The oldest sealed backups beyond synapse_cortex_export_keep are then removed.
+# A failure leaves the previous sealed backups in place. A snapshot: every run makes a new one.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Name the backup
+      ansible.builtin.set_fact:
+        synapse_cortex_backup_name: "hnx-{{ now(utc=True, fmt='%Y%m%dT%H%M%SZ') }}"
+    - name: The name is one this role makes
+      ansible.builtin.assert:
+        that: synapse_cortex_backup_name is match(synapse_cortex_backup_name_pattern)
+    - name: The service is up (its counts are read before anything is written)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ synapse_cortex_dir }}/docker-compose.yml", up, -d, --wait, app]
+      changed_when: false
+    - name: Count the nodes by form before
+      ansible.builtin.include_tasks: count.yml
+    - name: Remember them
+      ansible.builtin.set_fact:
+        synapse_cortex_counts_before: "{{ synapse_cortex_counts }}"
+    - name: Take the backup
+      ansible.builtin.include_tasks: "backup_{{ synapse_cortex_export_mode }}.yml"
+    - name: Count the nodes by form after
+      ansible.builtin.include_tasks: count.yml
+    - name: Seal the backup (refused unless the counts are equal and not empty)
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', synapse_cortex_scripts ~ '/synapse_cortex_backup.py') }}",
+               seal, "{{ synapse_cortex_data_root }}/export/backups/{{ synapse_cortex_backup_name }}"]
+        stdin: "{{ manifest | to_json }}"
+      vars:
+        manifest:
+          mode: "{{ synapse_cortex_export_mode }}"
+          name: "{{ synapse_cortex_backup_name }}"
+          version: "{{ synapse_cortex_tag }}"
+          image: "{{ synapse_cortex_image }}"
+          counts_before: "{{ synapse_cortex_counts_before }}"
+          counts_after: "{{ synapse_cortex_counts }}"
+      changed_when: true
+    - name: Remove the oldest sealed backups beyond the keep (the tool refuses anything but its own names)
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', synapse_cortex_scripts ~ '/synapse_cortex_backup.py') }}",
+               prune, "{{ synapse_cortex_data_root }}/export/backups", "{{ synapse_cortex_export_keep | int }}"]
+      changed_when: false
+  tags: [export]

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The graph-store provider on Synapse Cortex: one compose_app container, the LMDB storage on the data root, accounts and roles from secrets, the service's own backup machinery for the export and a checked restore."
+  license: Apache-2.0
+  min_ansible_version: "2.16"
+dependencies: []

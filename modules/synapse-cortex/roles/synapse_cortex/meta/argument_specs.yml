@@ -1,0 +1,284 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the graph store as one compose_app container (the service's storage on the
+      data root), then set root's password and the site's roles and accounts from secrets.
+    options:
+      synapse_cortex_logical_id: &id001
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. graph-store).
+        required: true
+      synapse_cortex_image: &id002
+        type: str
+        description: repository:vX.Y.Z@sha256:<digest> of the Synapse Cortex image.
+        default: docker.io/vertexproject/synapse-cortex:v2.247.0@sha256:8fffe67bfb88dcaece63f175e4d254ca685eb3749e301aabaf725349f4d22bd8
+      synapse_cortex_bind: &id003
+        type: str
+        description: The guest's own IPv4 address the ports are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      synapse_cortex_https_port: &id004
+        type: int
+        description: The HTTPS API's port (the registry row's port).
+        default: 4443
+      synapse_cortex_telepath_port: &id005
+        type: int
+        description: The telepath (TLS) listener's port, 0 for none.
+        default: 0
+      synapse_cortex_telepath_hostname: &id006
+        type: str
+        description: The name telepath clients dial; required with a telepath port.
+        default: ''
+      synapse_cortex_dir: &id007
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/synapse-cortex
+      synapse_cortex_owner: &id008
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      synapse_cortex_group: &id009
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      synapse_cortex_data_root: &id010
+        type: path
+        description: 'The module''s data root: storage/ (the service directory) and export/ (the backups).'
+        default: /var/lib/hnx-modules/synapse-cortex
+      synapse_cortex_uid: &id011
+        type: int
+        description: The container's user id (the image's unprivileged account); owns storage/ and export/.
+        default: 999
+      synapse_cortex_gid: &id012
+        type: int
+        description: The container's group id.
+        default: 999
+      synapse_cortex_root_login_ref: &id013
+        type: str
+        description: secret:<name> of root's password (set by the role through the service's API).
+        default: secret:synapse-cortex/root-password
+      synapse_cortex_roles: &id014
+        type: list
+        description: 'Roles: [{name, rules}], rules being permission strings (a leading ! denies).'
+        elements: dict
+        default: []
+      synapse_cortex_users: &id015
+        type: list
+        description: 'Accounts: [{name_ref, password_ref, admin, roles}], names and passwords by secret
+          reference.'
+        elements: dict
+        default: []
+      synapse_cortex_expected_min_nodes: &id016
+        type: int
+        description: Health fails below this many nodes (0 = not asserted).
+        default: 0
+      synapse_cortex_mem_limit: &id017
+        type: str
+        description: The container's memory limit, e.g. 6g.
+        default: 6g
+      synapse_cortex_start: &id018
+        type: bool
+        description: Start the service (false renders and stops, for a restore).
+        default: true
+      synapse_cortex_validate_with_docker: &id019
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      synapse_cortex_health_timeout: &id020
+        type: int
+        description: Seconds a health call may take.
+        default: 15
+      synapse_cortex_ready_timeout: &id021
+        type: int
+        description: Seconds main (and restore) waits for the service after a start.
+        default: 900
+      synapse_cortex_export_mode: &id022
+        type: str
+        description: live (the running service's own consistent backup) or offline (stopped, the offline
+          backup tool).
+        choices:
+        - live
+        - offline
+        default: live
+      synapse_cortex_export_keep: &id023
+        type: int
+        description: Sealed backups kept; the oldest beyond it are removed after a new one is sealed.
+        default: 2
+      synapse_cortex_backup_timeout: &id024
+        type: int
+        description: Seconds the backup may take.
+        default: 7200
+  health:
+    short_description: Fail unless the container is healthy, the service is active, an anonymous storm
+      call is refused, every account signs in and the graph holds the expected nodes.
+    options:
+      synapse_cortex_logical_id: *id001
+      synapse_cortex_image: *id002
+      synapse_cortex_bind: *id003
+      synapse_cortex_https_port: *id004
+      synapse_cortex_telepath_port: *id005
+      synapse_cortex_telepath_hostname: *id006
+      synapse_cortex_dir: *id007
+      synapse_cortex_owner: *id008
+      synapse_cortex_group: *id009
+      synapse_cortex_data_root: *id010
+      synapse_cortex_uid: *id011
+      synapse_cortex_gid: *id012
+      synapse_cortex_root_login_ref: *id013
+      synapse_cortex_roles: *id014
+      synapse_cortex_users: *id015
+      synapse_cortex_expected_min_nodes: *id016
+      synapse_cortex_mem_limit: *id017
+      synapse_cortex_start: *id018
+      synapse_cortex_validate_with_docker: *id019
+      synapse_cortex_health_timeout: *id020
+      synapse_cortex_ready_timeout: *id021
+      synapse_cortex_export_mode: *id022
+      synapse_cortex_export_keep: *id023
+      synapse_cortex_backup_timeout: *id024
+  readiness:
+    short_description: Fail unless the container engine is ready, the inputs are valid and every secret
+      resolves in its form.
+    options:
+      synapse_cortex_logical_id: *id001
+      synapse_cortex_image: *id002
+      synapse_cortex_bind: *id003
+      synapse_cortex_https_port: *id004
+      synapse_cortex_telepath_port: *id005
+      synapse_cortex_telepath_hostname: *id006
+      synapse_cortex_dir: *id007
+      synapse_cortex_owner: *id008
+      synapse_cortex_group: *id009
+      synapse_cortex_data_root: *id010
+      synapse_cortex_uid: *id011
+      synapse_cortex_gid: *id012
+      synapse_cortex_root_login_ref: *id013
+      synapse_cortex_roles: *id014
+      synapse_cortex_users: *id015
+      synapse_cortex_expected_min_nodes: *id016
+      synapse_cortex_mem_limit: *id017
+      synapse_cortex_start: *id018
+      synapse_cortex_validate_with_docker: *id019
+      synapse_cortex_health_timeout: *id020
+      synapse_cortex_ready_timeout: *id021
+      synapse_cortex_export_mode: *id022
+      synapse_cortex_export_keep: *id023
+      synapse_cortex_backup_timeout: *id024
+  backup:
+    short_description: Name the export directory (the sealed backups) for the guest backup.
+    options:
+      synapse_cortex_logical_id: *id001
+      synapse_cortex_image: *id002
+      synapse_cortex_bind: *id003
+      synapse_cortex_https_port: *id004
+      synapse_cortex_telepath_port: *id005
+      synapse_cortex_telepath_hostname: *id006
+      synapse_cortex_dir: *id007
+      synapse_cortex_owner: *id008
+      synapse_cortex_group: *id009
+      synapse_cortex_data_root: *id010
+      synapse_cortex_uid: *id011
+      synapse_cortex_gid: *id012
+      synapse_cortex_root_login_ref: *id013
+      synapse_cortex_roles: *id014
+      synapse_cortex_users: *id015
+      synapse_cortex_expected_min_nodes: *id016
+      synapse_cortex_mem_limit: *id017
+      synapse_cortex_start: *id018
+      synapse_cortex_validate_with_docker: *id019
+      synapse_cortex_health_timeout: *id020
+      synapse_cortex_ready_timeout: *id021
+      synapse_cortex_export_mode: *id022
+      synapse_cortex_export_keep: *id023
+      synapse_cortex_backup_timeout: *id024
+  restore:
+    short_description: Check a sealed backup and restore it into an EMPTY storage/, the service stopped,
+      then compare every form's node count with the backup's.
+    options:
+      synapse_cortex_logical_id: *id001
+      synapse_cortex_image: *id002
+      synapse_cortex_bind: *id003
+      synapse_cortex_https_port: *id004
+      synapse_cortex_telepath_port: *id005
+      synapse_cortex_telepath_hostname: *id006
+      synapse_cortex_dir: *id007
+      synapse_cortex_owner: *id008
+      synapse_cortex_group: *id009
+      synapse_cortex_data_root: *id010
+      synapse_cortex_uid: *id011
+      synapse_cortex_gid: *id012
+      synapse_cortex_root_login_ref: *id013
+      synapse_cortex_roles: *id014
+      synapse_cortex_users: *id015
+      synapse_cortex_expected_min_nodes: *id016
+      synapse_cortex_mem_limit: *id017
+      synapse_cortex_start: *id018
+      synapse_cortex_validate_with_docker: *id019
+      synapse_cortex_health_timeout: *id020
+      synapse_cortex_ready_timeout: *id021
+      synapse_cortex_export_mode: *id022
+      synapse_cortex_export_keep: *id023
+      synapse_cortex_backup_timeout: *id024
+      synapse_cortex_restore_source:
+        type: path
+        description: The sealed backup directory (backups/hnx-<stamp>) to restore from.
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest; the same or a newer version) and record
+      it as pending.
+    options:
+      synapse_cortex_logical_id: *id001
+      synapse_cortex_image: *id002
+      synapse_cortex_bind: *id003
+      synapse_cortex_https_port: *id004
+      synapse_cortex_telepath_port: *id005
+      synapse_cortex_telepath_hostname: *id006
+      synapse_cortex_dir: *id007
+      synapse_cortex_owner: *id008
+      synapse_cortex_group: *id009
+      synapse_cortex_data_root: *id010
+      synapse_cortex_uid: *id011
+      synapse_cortex_gid: *id012
+      synapse_cortex_root_login_ref: *id013
+      synapse_cortex_roles: *id014
+      synapse_cortex_users: *id015
+      synapse_cortex_expected_min_nodes: *id016
+      synapse_cortex_mem_limit: *id017
+      synapse_cortex_start: *id018
+      synapse_cortex_validate_with_docker: *id019
+      synapse_cortex_health_timeout: *id020
+      synapse_cortex_ready_timeout: *id021
+      synapse_cortex_export_mode: *id022
+      synapse_cortex_export_keep: *id023
+      synapse_cortex_backup_timeout: *id024
+      synapse_cortex_target_image:
+        type: str
+        description: repository:vX.Y.Z@sha256:<digest> of the target image (the same or a newer version).
+        required: true
+  export:
+    short_description: Take a backup with the service's own machinery, check the before and after node
+      counts, seal it and prune the oldest.
+    options:
+      synapse_cortex_logical_id: *id001
+      synapse_cortex_image: *id002
+      synapse_cortex_bind: *id003
+      synapse_cortex_https_port: *id004
+      synapse_cortex_telepath_port: *id005
+      synapse_cortex_telepath_hostname: *id006
+      synapse_cortex_dir: *id007
+      synapse_cortex_owner: *id008
+      synapse_cortex_group: *id009
+      synapse_cortex_data_root: *id010
+      synapse_cortex_uid: *id011
+      synapse_cortex_gid: *id012
+      synapse_cortex_root_login_ref: *id013
+      synapse_cortex_roles: *id014
+      synapse_cortex_users: *id015
+      synapse_cortex_expected_min_nodes: *id016
+      synapse_cortex_mem_limit: *id017
+      synapse_cortex_start: *id018
+      synapse_cortex_validate_with_docker: *id019
+      synapse_cortex_health_timeout: *id020
+      synapse_cortex_ready_timeout: *id021
+      synapse_cortex_export_mode: *id022
+      synapse_cortex_export_keep: *id023
+      synapse_cortex_backup_timeout: *id024

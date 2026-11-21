@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# The node count of every form, read from the running service: sets synapse_cortex_counts.
+- name: Count the nodes by form
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ synapse_cortex_dir }}/docker-compose.yml", exec, -T, app,
+           python, -c, "{{ synapse_cortex_counts_script }}"]
+    expand_argument_vars: false  # the script holds $NAME-like text for the container's shell: never the controller's
+  register: synapse_cortex_counted
+  changed_when: false
+  check_mode: false
+  failed_when: synapse_cortex_counted.rc != 0 or (synapse_cortex_counted.stdout_lines | select('match', '^HNX-COUNTS \{') | list | length) != 1
+
+- name: Read the counts
+  ansible.builtin.set_fact:
+    synapse_cortex_counts: "{{ synapse_cortex_counted.stdout_lines | select('match', '^HNX-COUNTS ') | first | regex_replace('^HNX-COUNTS ', '') | from_json }}"

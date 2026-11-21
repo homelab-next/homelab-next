@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's (root); storage/ and export/ belong to the container's account
+# (the service writes its slabs there and its backups under export/backups). Nothing is recursive:
+# a restored storage/ is chowned once, by the restore, before it is renamed into place.
+- name: Create the data root and the directories under it
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ synapse_cortex_data_root }}", owner: "{{ synapse_cortex_owner }}", group: "{{ synapse_cortex_group }}", mode: "0750"}
+    - {path: "{{ synapse_cortex_data_root }}/storage", owner: "{{ synapse_cortex_uid | int }}", group: "{{ synapse_cortex_gid | int }}", mode: "0700"}
+    - {path: "{{ synapse_cortex_data_root }}/export", owner: "{{ synapse_cortex_uid | int }}", group: "{{ synapse_cortex_gid | int }}", mode: "0700"}
+    - {path: "{{ synapse_cortex_data_root }}/export/backups", owner: "{{ synapse_cortex_uid | int }}", group: "{{ synapse_cortex_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

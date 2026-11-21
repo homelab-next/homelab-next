@@ -1,0 +1,150 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+synapse_cortex_container_storage: /vertex/storage
+synapse_cortex_container_export: /hnx-export
+synapse_cortex_container_telepath_port: 27492
+synapse_cortex_repository: "{{ synapse_cortex_image.split('@')[0].rsplit(':', 1)[0] }}"
+synapse_cortex_tag: "{{ synapse_cortex_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+synapse_cortex_digest: "{{ synapse_cortex_image.split('@')[1] | default('') }}"
+synapse_cortex_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}\Z'
+# the application's own version tag (vMAJOR.MINOR.PATCH): an upgrade never goes back
+synapse_cortex_version_tag_pattern: '^v[0-9]+\.[0-9]+\.[0-9]+\Z'
+synapse_cortex_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+synapse_cortex_ref_pattern: '^secret:[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)+\Z'
+synapse_cortex_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+synapse_cortex_hostname_pattern: '^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\Z'
+# the service's account and role names
+synapse_cortex_user_pattern: '^[0-9A-Za-z_][0-9A-Za-z_.@-]{0,37}\Z'
+synapse_cortex_role_pattern: '^[0-9A-Za-z_][0-9A-Za-z_.-]{0,37}\Z'
+# a permission string: dot-separated segments, an optional leading "!" for a deny
+synapse_cortex_rule_pattern: '^!?[a-z0-9_]+(\.[A-Za-z0-9_:*-]+){0,12}\Z'
+synapse_cortex_passphrase_pattern: '^[A-Za-z0-9._~-]{16,128}\Z'
+synapse_cortex_backup_name_pattern: '^hnx-[0-9]{8}T[0-9]{6}Z\Z'
+# every account the role manages, root first. name is literal for root and read from name_ref for the others
+synapse_cortex_accounts: >-
+  {%- set out = [{'name': 'root', 'name_ref': '', 'password_ref': synapse_cortex_root_login_ref,
+                  'admin': true, 'roles': []}] -%}
+  {%- for u in synapse_cortex_users -%}
+  {%- set _ = out.append({'name': '', 'name_ref': u.name_ref, 'password_ref': u.password_ref,
+                          'admin': u.admin | default(false) | bool, 'roles': u.roles | default([])}) -%}
+  {%- endfor -%}
+  {{ out }}
+# every reference the role reads
+synapse_cortex_refs: >-
+  {{ (synapse_cortex_accounts | map(attribute='name_ref') | select | list)
+     + (synapse_cortex_accounts | map(attribute='password_ref') | select | list) }}
+# how a script in the container reaches the service: its own certificate is the only trust anchor (a
+# leaf certificate stands alone), the host name is not checked (the call is to the container itself)
+synapse_cortex_https_python: |
+  import json, ssl, urllib.request, urllib.error
+  def https(port, path, body=None):
+      ctx = ssl.create_default_context(cafile="/vertex/storage/sslcert.pem")
+      ctx.check_hostname = False
+      ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+      req = urllib.request.Request("https://localhost:%d%s" % (port, path),
+                                   data=None if body is None else json.dumps(body).encode(),
+                                   headers={"Content-Type": "application/json"})
+      try:
+          with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+              return r.status, json.loads(r.read(1 << 20) or b"{}")
+      except urllib.error.HTTPError as e:
+          try:
+              return e.code, json.loads(e.read(1 << 20) or b"{}")
+          except ValueError:
+              return e.code, {}
+# the form counts of the graph, one line of JSON (the service's own form counts, summed over its layers)
+synapse_cortex_counts_script: |
+  import asyncio, json
+  import synapse.telepath as s_telepath
+  async def main():
+      async with s_telepath.withTeleEnv():
+          async with await s_telepath.openurl("cell:///vertex/storage/") as cell:
+              counts = await cell.getFormCounts()
+      print("HNX-COUNTS " + json.dumps({str(k): int(v) for k, v in counts.items()}, sort_keys=True))
+  asyncio.run(main())
+# the health script: the service is the active one, refuses a storm call that carries no session, and
+# every account (HNX_LOGINS: a JSON list of {name, passwd}, in the environment of this one command) signs in
+synapse_cortex_probe_script: |
+  import os, sys
+  {{ synapse_cortex_https_python }}
+  port = int(os.environ["HNX_PORT"])
+  status, doc = https(port, "/api/v1/active")
+  if status != 200 or doc.get("result", {}).get("active") is not True:
+      print("HNX-PROBE inactive"); sys.exit(1)
+  status, _ = https(port, "/api/v1/storm/nodes", {"query": "inet:ipv4=0.0.0.0"})
+  if status != 401:
+      print("HNX-PROBE open %s" % status); sys.exit(1)
+  bad = []
+  for acct in json.loads(os.environ.get("HNX_LOGINS", "[]")):
+      status, doc = https(port, "/api/v1/login", {"user": acct["name"], "passwd": acct["passwd"]})
+      if status != 200 or doc.get("status") != "ok":
+          bad.append(acct["i"])
+  if bad:
+      print("HNX-PROBE login %s" % bad); sys.exit(1)
+  print("HNX-PROBE ok")
+# make the accounts and roles what the site names (HNX_SPEC in the environment of this one command:
+# {port, root: {passwd}, roles: [{name, rules}], users: [{i, name, passwd, admin, roles}]}); prints one
+# line per change by index and kind, never a name or a password
+synapse_cortex_auth_script: |
+  import asyncio, os, sys
+  import synapse.telepath as s_telepath
+  {{ synapse_cortex_https_python }}
+  spec = json.loads(os.environ["HNX_SPEC"])
+  def rules_of(strings):
+      out = []
+      for s in strings:
+          allow = not s.startswith("!")
+          out.append((allow, tuple(s.lstrip("!").split("."))))
+      return out
+  def signs_in(name, passwd):
+      status, doc = https(spec["port"], "/api/v1/login", {"user": name, "passwd": passwd})
+      return status == 200 and doc.get("status") == "ok"
+  async def main():
+      changed = 0
+      async with s_telepath.withTeleEnv():
+          async with await s_telepath.openurl("cell:///vertex/storage/") as cell:
+              for role in spec["roles"]:
+                  rdef = await cell.getRoleDefByName(role["name"])
+                  if rdef is None:
+                      rdef = await cell.addRole(role["name"])
+                      print("HNX-AUTH role-created"); changed += 1
+                  want = rules_of(role["rules"])
+                  have = [(bool(a), tuple(p)) for a, p in rdef.get("rules", ())]
+                  if have != want:
+                      await cell.setRoleRules(rdef["iden"], want)
+                      print("HNX-AUTH role-rules"); changed += 1
+              root = await cell.getUserDefByName("root")
+              if not signs_in("root", spec["root"]["passwd"]):
+                  await cell.setUserPasswd(root["iden"], spec["root"]["passwd"])
+                  print("HNX-AUTH root-passwd"); changed += 1
+              for u in spec["users"]:
+                  udef = await cell.getUserDefByName(u["name"])
+                  if udef is None:
+                      udef = await cell.addUser(u["name"], passwd=u["passwd"])
+                      print("HNX-AUTH user-created %d" % u["i"]); changed += 1
+                  elif not signs_in(u["name"], u["passwd"]):
+                      await cell.setUserPasswd(udef["iden"], u["passwd"])
+                      print("HNX-AUTH user-passwd %d" % u["i"]); changed += 1
+                  if udef.get("locked"):
+                      await cell.setUserLocked(udef["iden"], False)
+                      print("HNX-AUTH user-unlocked %d" % u["i"]); changed += 1
+                  if bool(udef.get("admin")) != u["admin"]:
+                      await cell.setUserAdmin(udef["iden"], u["admin"])
+                      print("HNX-AUTH user-admin %d" % u["i"]); changed += 1
+                  haveroles = set(udef.get("roles", ()))
+                  wantroles = {}
+                  for name in u["roles"]:
+                      rdef = await cell.getRoleDefByName(name)
+                      if rdef is None:
+                          print("HNX-AUTH no-such-role %d" % u["i"]); sys.exit(1)
+                      wantroles[rdef["iden"]] = name
+                  for iden in wantroles:
+                      if iden not in haveroles:
+                          await cell.addUserRole(udef["iden"], iden)
+                          print("HNX-AUTH user-role-added %d" % u["i"]); changed += 1
+                  for iden in haveroles - set(wantroles):
+                      await cell.delUserRole(udef["iden"], iden)
+                      print("HNX-AUTH user-role-removed %d" % u["i"]); changed += 1
+      print("HNX-AUTH done %d" % changed)
+  asyncio.run(main())
+synapse_cortex_scripts: "{{ role_path }}/files"
