@@ -1811,6 +1811,25 @@
     },
     {
       "exit": {
+        "0": "sealed, checked, staged or pruned",
+        "1": "the backup, the destination or the request is refused (the reason on stderr)",
+        "2": "usage error"
+      },
+      "id": "synapse-cortex-backup",
+      "inputs": "seal BACKUP_DIR (manifest JSON on stdin) | check BACKUP_DIR | stage SOURCE DEST | prune BACKUPS_DIR KEEP",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the manifest (check, stage) or the names removed (prune) as JSON on stdout; seal writes hnx-manifest.json and hnx-listing.jsonl (0600) into BACKUP_DIR; stage writes DEST (0700, files 0600)",
+      "owner": "platform",
+      "path": "modules/synapse-cortex/roles/synapse_cortex/files/synapse_cortex_backup.py",
+      "purpose": "Seal, check, stage and prune the synapse_cortex role's backups (a backup made by Synapse's own backup machinery), refusing a copy that is not exactly what its listing says.",
+      "status": "active",
+      "trigger": [
+        "role:synapse_cortex"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "verification is disabled somewhere",
         "2": "usage error or a missing dependency"
