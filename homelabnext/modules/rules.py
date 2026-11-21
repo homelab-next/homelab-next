@@ -1293,7 +1293,8 @@ def site_problems(
         for e in _egress(m):
             for t in e["to"]:
                 needs = t == "internet" or t.removeprefix("svc:") in authority
-                if needs and t not in granted.get(e["host"], []):
+                # an optional entry is a per-site option: allowed when granted, never owed
+                if needs and not e.get("optional") and t not in granted.get(e["host"], []):
                     out.append(f"{m['id']}: host {e['host']} egresses to {t} without a grant")
                 if t.startswith("svc:") and not _is_service(t[4:], services):
                     out.append(f"{m['id']}: host {e['host']} egresses to {t}, which is no service")

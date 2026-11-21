@@ -447,6 +447,25 @@
     },
     {
       "exit": {
+        "0": "done, or every check held",
+        "1": "refused, or a check failed (the reason on stderr; nothing is changed by a refused restore)",
+        "2": "usage error"
+      },
+      "id": "dns-zone-ctl",
+      "inputs": "a subcommand and its options; the admin password in the environment variable --password-env names",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON document on stdout; the reason for a refusal on stderr",
+      "owner": "platform",
+      "path": "modules/technitium/roles/technitium/files/technitium_ctl.py",
+      "purpose": "Inventory, export, restore, verify and compare the zones of the dns provider's server, restore its archived config from a tar, and ask it questions over DNS; every check that finds nothing where something is expected is an error.",
+      "status": "active",
+      "trigger": [
+        "role:technitium"
+      ]
+    },
+    {
+      "exit": {
         "0": "done (for restore, the target equals the manifest by counts and by every file's checksum)",
         "1": "a count or a checksum differs, or the dump is not intact",
         "2": "usage error, a refused target or a command on an endpoint failed"

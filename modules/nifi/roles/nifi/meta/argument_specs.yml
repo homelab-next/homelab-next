@@ -185,6 +185,12 @@ argument_specs:
         description: 'More sensitive parameters a site''s flows read: HNX_* parameter name to secret:
           reference.'
         default: {}
+      nifi_jdbc_drivers: &idjdbc
+        type: list
+        elements: dict
+        description: 'JDBC driver jars flows need: a list of {name: <file>.jar, url: https://..., sha256: <64 hex>}, each
+          fetched on the guest, refused unless its sha256 matches, and mounted read-only at <container home>/drivers/<name>.'
+        default: []
       nifi_parameter_provider: &id042
         type: str
         description: Name of the parameter provider the role keeps (it reads the container's environment).
@@ -315,6 +321,7 @@ argument_specs:
       nifi_s3_signing_ref: *id039
       nifi_events_auth_ref: *id040
       nifi_extra_parameters: *id041
+      nifi_jdbc_drivers: *idjdbc
       nifi_parameter_provider: *id042
       nifi_parameter_group: *id043
       nifi_parameter_context: *id044
@@ -384,6 +391,7 @@ argument_specs:
       nifi_s3_signing_ref: *id039
       nifi_events_auth_ref: *id040
       nifi_extra_parameters: *id041
+      nifi_jdbc_drivers: *idjdbc
       nifi_parameter_provider: *id042
       nifi_parameter_group: *id043
       nifi_parameter_context: *id044
@@ -452,6 +460,7 @@ argument_specs:
       nifi_s3_signing_ref: *id039
       nifi_events_auth_ref: *id040
       nifi_extra_parameters: *id041
+      nifi_jdbc_drivers: *idjdbc
       nifi_parameter_provider: *id042
       nifi_parameter_group: *id043
       nifi_parameter_context: *id044
@@ -521,6 +530,7 @@ argument_specs:
       nifi_s3_signing_ref: *id039
       nifi_events_auth_ref: *id040
       nifi_extra_parameters: *id041
+      nifi_jdbc_drivers: *idjdbc
       nifi_parameter_provider: *id042
       nifi_parameter_group: *id043
       nifi_parameter_context: *id044
@@ -593,6 +603,7 @@ argument_specs:
       nifi_s3_signing_ref: *id039
       nifi_events_auth_ref: *id040
       nifi_extra_parameters: *id041
+      nifi_jdbc_drivers: *idjdbc
       nifi_parameter_provider: *id042
       nifi_parameter_group: *id043
       nifi_parameter_context: *id044
@@ -672,6 +683,7 @@ argument_specs:
       nifi_s3_signing_ref: *id039
       nifi_events_auth_ref: *id040
       nifi_extra_parameters: *id041
+      nifi_jdbc_drivers: *idjdbc
       nifi_parameter_provider: *id042
       nifi_parameter_group: *id043
       nifi_parameter_context: *id044
