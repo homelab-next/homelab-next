@@ -66,6 +66,7 @@ class Server:
                     self._send(401, {"status": "err", "code": "NotAuthenticated"})
 
         ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.load_cert_chain(str(self.cert), str(key))
         self._srv = ThreadingHTTPServer(("localhost", 0), H)
         self._srv.socket = ctx.wrap_socket(self._srv.socket, server_side=True)
