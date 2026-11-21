@@ -53,4 +53,5 @@ slots:
   chat:                {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   dataflow:            {stage: null, contract: null, stateful: true, export_formats: [json]}
   forge:               {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
+  case-management:     {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   inference:           {stage: null, contract: inference.py, stateful: false, required_in_core: true}

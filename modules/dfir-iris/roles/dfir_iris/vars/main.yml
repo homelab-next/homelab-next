@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# The containers reach each other by their compose service names on the project's own network;
+# the database's and the broker's users are the ones their images are built for.
+dfir_iris_service_app: app
+dfir_iris_container_front_port: 8443
+dfir_iris_container_app_port: 8000
+dfir_iris_db_name: iris_db
+dfir_iris_db_user: postgres
+dfir_iris_db_admin_user: raptor
+dfir_iris_container_pgdata: /var/lib/postgresql/data
+dfir_iris_container_export: /var/lib/postgresql/export
+dfir_iris_container_broker_data: /var/lib/rabbitmq
+dfir_iris_container_certs: /www/certs
+dfir_iris_cert_file: chain.pem
+dfir_iris_key_file: server.key
+dfir_iris_ca_file: ca.pem
+# the product's own state under /home/iris: the datastore (uploaded evidence), the templates and the downloads
+dfir_iris_files_subdirs: [server_data, user_templates, downloads]
+dfir_iris_container_files: /home/iris
+dfir_iris_fixed_env:
+  DOCKERIZED: "1"
+  POSTGRES_SERVER: db
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: iris_db
+  POSTGRES_USER: postgres
+  POSTGRES_ADMIN_USER: raptor
+  CELERY_BROKER: amqp://broker
+  IRIS_AUTHENTICATION_TYPE: local
+dfir_iris_app_repository: "{{ dfir_iris_app_image.split('@')[0].rsplit(':', 1)[0] }}"
+dfir_iris_app_tag: "{{ dfir_iris_app_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+dfir_iris_app_digest: "{{ dfir_iris_app_image.split('@')[1] | default('') }}"
+dfir_iris_db_repository: "{{ dfir_iris_db_image.split('@')[0].rsplit(':', 1)[0] }}"
+dfir_iris_db_tag: "{{ dfir_iris_db_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+dfir_iris_db_digest: "{{ dfir_iris_db_image.split('@')[1] | default('') }}"
+dfir_iris_nginx_repository: "{{ dfir_iris_nginx_image.split('@')[0].rsplit(':', 1)[0] }}"
+dfir_iris_nginx_tag: "{{ dfir_iris_nginx_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+dfir_iris_nginx_digest: "{{ dfir_iris_nginx_image.split('@')[1] | default('') }}"
+dfir_iris_broker_repository: "{{ dfir_iris_broker_image.split('@')[0].rsplit(':', 1)[0] }}"
+dfir_iris_broker_tag: "{{ dfir_iris_broker_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+dfir_iris_broker_digest: "{{ dfir_iris_broker_image.split('@')[1] | default('') }}"
+dfir_iris_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+dfir_iris_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+dfir_iris_hostname_pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+\Z'
+dfir_iris_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+dfir_iris_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+dfir_iris_username_pattern: '^[a-z][a-z0-9._-]{0,62}\Z'
+dfir_iris_email_pattern: '^[A-Za-z0-9._+-]{1,64}@[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+\Z'
+# a database password is safe in the database URL and in the env_file (no quote, no line break,
+# no character a URL would read) and long enough to matter
+dfir_iris_db_value_pattern: '^[A-Za-z0-9._~-]{24,128}\Z'
+# the product's session key and password salt: any env_file-safe printable string (no space, no
+# quote), because after a migration they are the source's and a source's may be any
+dfir_iris_key_value_pattern: '^[\x21\x23-\x26\x28-\x7e]{16,256}\Z'
+# the API key: a bearer token, so URL- and header-safe
+dfir_iris_api_value_pattern: '^[A-Za-z0-9._~-]{32,128}\Z'
+# the admin password: the product asks for lower, upper, digit and special
+dfir_iris_admin_value_pattern: '^[A-Za-z0-9._~-]{16,128}\Z'
+dfir_iris_pem_cert_pattern: '(?s)-----BEGIN CERTIFICATE-----.+-----END CERTIFICATE-----'
+dfir_iris_pem_key_pattern: '(?s)-----BEGIN (RSA |EC )?PRIVATE KEY-----.+-----END (RSA |EC )?PRIVATE KEY-----'
+# a real newline for the config lines curl reads from its standard input (a Jinja string literal keeps "\n" as two characters)
+dfir_iris_nl: "\n"
+dfir_iris_bs: "\\"

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The case-management provider: DFIR-IRIS (app, worker, database, broker and a TLS front) as compose_app containers, the database and the evidence under the module's data root."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

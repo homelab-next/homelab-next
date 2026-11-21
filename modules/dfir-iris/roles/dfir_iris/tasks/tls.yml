@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The certificate chain, its key and the lab CA, written from their secrets. The front reads them
+# at start, so a change restarts it (main.yml); the health hook verifies the service against the CA.
+- name: Write the certificate chain, the key and the CA
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ dfir_iris_data_root }}/tls/{{ item.name }}"
+    owner: "{{ dfir_iris_owner }}"
+    group: "{{ dfir_iris_front_gid | int }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {name: "{{ dfir_iris_cert_file }}", mode: "0644", content: "{{ lookup('hnx_secret', dfir_iris_tls_cert_ref) | trim ~ '\n' }}"}
+    - {name: "{{ dfir_iris_key_file }}", mode: "0440", content: "{{ lookup('hnx_secret', dfir_iris_tls_key_ref) | trim ~ '\n' }}"}
+    - {name: "{{ dfir_iris_ca_file }}", mode: "0644", content: "{{ lookup('hnx_secret', dfir_iris_ca_ref) | trim ~ '\n' }}"}
+  loop_control:
+    label: "{{ item.name }}"
+  register: dfir_iris_tls_files
+  no_log: true
+  tags: [restore]
