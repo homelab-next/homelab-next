@@ -9,36 +9,20 @@ resolver gives (``HNX_ENDPOINT_DOCUMENTS``; no default, no credential, nothing i
 
 from __future__ import annotations
 
-import urllib.error
-import urllib.request
 from typing import Any
 
 from homelabnext.conform.adapters._env import resolve
+from homelabnext.conform.adapters._status_probe import StatusProbe
 
 __all__ = ["DocumentsProbe", "make"]
 
 
-class DocumentsProbe:
-    def __init__(self, base_url: str, timeout: float = 10.0) -> None:
-        self._base = base_url.rstrip("/")
-        self._timeout = timeout
-
-    def _status(self, path: str) -> int:
-        req = urllib.request.Request(self._base + path, method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as r:
-                return int(r.status)
-        except urllib.error.HTTPError as e:
-            return int(e.code)
-
+class DocumentsProbe(StatusProbe):
     def health(self) -> bool:
         return self._status("/accounts/login/") == 200
 
     def library_is_private(self) -> bool:
         return self._status("/api/documents/?page_size=1") in (401, 403)
-
-    def close(self) -> None:  # the harness's teardown; nothing is held
-        return None
 
 
 def make(

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the database first (export_first), stop and remove the containers, and delete the
+# env_files (the database password and the application secret). The data root (with the export in
+# it) and the rest of the compose project are kept for the operator to archive or delete; the
+# decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the service.
+# Every job, report, configuration and account is in the database: removing the module and its data
+# root ends them.
+- name: Remove the enrichment provider
+  hosts: mod_intelowl_server
+  become: true
+  tasks:
+    - name: Export the database first
+      ansible.builtin.include_role:
+        name: intelowl
+        tasks_from: export
+    - name: Stop and remove the containers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ intelowl_dir | default('/opt/compose/intelowl') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credentials the containers were given
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ intelowl_dir | default('/opt/compose/intelowl') }}/secrets/postgres.env"
+        - "{{ intelowl_dir | default('/opt/compose/intelowl') }}/secrets/uwsgi.env"
+        - "{{ intelowl_dir | default('/opt/compose/intelowl') }}/secrets/daphne.env"
+        - "{{ intelowl_dir | default('/opt/compose/intelowl') }}/secrets/beat.env"
+        - "{{ intelowl_dir | default('/opt/compose/intelowl') }}/secrets/worker.env"

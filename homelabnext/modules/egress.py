@@ -408,7 +408,12 @@ def _role_policy(s: _Site, mod: str, role: str) -> tuple[list[Allow], bool]:
     for e in eg if isinstance(eg, list) else []:
         if not isinstance(e, dict) or e.get("host") != role:
             continue
+        # an optional entry is a per-site option: each target counts only when the site's grants list it for this role
+        # (grants.egress.<module>.<role>), and then behaves exactly like a mandatory one (internet, svc: rows, any role kind)
+        granted = ((s.site.get("grants") or {}).get("egress") or {}).get(mod, {}).get(role, [])
         for t in e.get("to", []):
+            if e.get("optional") and t not in granted:
+                continue
             if t == "internet":
                 internet = True
             elif t == "external":

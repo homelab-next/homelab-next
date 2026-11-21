@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade to a new pinned image: the role validates and records the bump, the zones are exported
+# before the new image opens its config, then the role converges on the new pin.
+- name: Upgrade Technitium
+  hosts: mod_technitium_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: technitium
+        tasks_from: upgrade
+    - name: Export the zones before the new image opens them
+      ansible.builtin.include_role:
+        name: technitium
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: technitium
+      vars:
+        technitium_image: "{{ technitium_target_image }}"

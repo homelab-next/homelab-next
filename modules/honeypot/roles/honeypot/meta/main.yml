@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "Honeypot event receiver (ingest-only socket and spool), a daily lake writer that lands the events in the lake's honeypot events table through the query service, and a daily intel report job, with credentials as systemd credentials and a freshness-judging health hook."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

@@ -123,6 +123,18 @@ SOURCES: dict[str, tuple[str, str]] = {
     "role:freshrss/freshrss_image": ("github", "FreshRSS/FreshRSS"),
     "role:gitea/gitea_image": ("github", "go-gitea/gitea"),
     "role:synapse_cortex/synapse_cortex_image": ("github", "vertexproject/synapse"),
+    "role:intelowl/intelowl_image": ("github", "intelowlproject/IntelOwl"),
+    "role:intelowl/intelowl_nginx_image": ("github", "intelowlproject/IntelOwl"),
+    "role:intelowl/intelowl_postgres_image": (
+        "none",
+        "the Docker official image (docker.io/library/postgres): compare its tags with the PostgreSQL "
+        "release page by hand, a minor version only (a major one is a dump and a restore)",
+    ),
+    "role:intelowl/intelowl_redis_image": (
+        "none",
+        "the Docker official image (docker.io/library/redis): compare its tags with the Redis release "
+        "page by hand, within the pinned major version (the broker holds queued tasks only)",
+    ),
     "role:keycloak/keycloak_image": ("github", "keycloak/keycloak"),
     "role:keycloak/keycloak_postgres_image": (
         "none",
@@ -163,6 +175,7 @@ SOURCES: dict[str, tuple[str, str]] = {
     "role:media_automation/media_automation_tdarr_image": ("github", "HaveAGitGat/Tdarr"),
     "role:nifi/nifi_image": ("github", "apache/nifi"),
     "role:ntfy/ntfy_image": ("github", "binwiederhier/ntfy"),
+    "role:technitium/technitium_image": ("github", "TechnitiumSoftware/DnsServer"),
     "role:llamacpp/llamacpp_image": (
         "none",
         "ggml-org/llama.cpp tags builds bNNNNN, which the github source does not parse, and only "
@@ -246,6 +259,25 @@ NOTES: dict[str, str] = {
     "role:keycloak/keycloak_image": (
         "an image (modules/keycloak): bump the tag and its digest together, with product.version "
         "in modules/keycloak/module.yml and the lab registry's version"
+    ),
+    "role:intelowl/intelowl_image": (
+        "an image (modules/intelowl): bump the tag and its digest together with intelowl_nginx_image "
+        "(one release), product.version in modules/intelowl/module.yml and the lab registry's version; "
+        "the same or a newer release only (the application migrates its database forward on first start "
+        "and cannot go back; the upgrade playbook refuses an older one and exports first). Check the "
+        "candidate image's library versions before a bump that is meant to fix a library CVE"
+    ),
+    "role:intelowl/intelowl_nginx_image": (
+        "an image (modules/intelowl): the tag and its digest together with intelowl_image, the same "
+        "release tag (the upgrade playbook refuses a pair that differs)"
+    ),
+    "role:intelowl/intelowl_postgres_image": (
+        "an image (modules/intelowl): the tag and its digest together, a minor version only "
+        "(a major one is a dump and a restore)"
+    ),
+    "role:intelowl/intelowl_redis_image": (
+        "an image (modules/intelowl): the tag and its digest together, within the pinned major version; "
+        "the broker holds queued tasks only, nothing to migrate"
     ),
     "role:keycloak/keycloak_postgres_image": (
         "an image (modules/keycloak): the tag and its digest together, a minor version only "
@@ -355,6 +387,11 @@ NOTES: dict[str, str] = {
     "role:ntfy/ntfy_image": (
         "an image (modules/ntfy): bump the tag and its digest together, with product.version in "
         "modules/ntfy/module.yml and the lab registry's version"
+    ),
+    "role:technitium/technitium_image": (
+        "an image (modules/technitium): bump the tag and its digest together, with product.version in "
+        "modules/technitium/module.yml and the lab registry's version; the zones are exported first "
+        "(the upgrade playbook does it) and the config folder keeps its settings"
     ),
     "role:tunnel/tunnel_image": (
         "an image (modules/tunnel): bump the tag and its digest together, with product.version in "

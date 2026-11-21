@@ -231,6 +231,7 @@ def run(
         cfg.audience,
         cfg.access_control,
         cfg.posture_rules,
+        frozenset(cfg.posture_rules_disabled),
     )
     gate_log = cfg.state_dir / "gate.jsonl"
     net: Transport = NoNetwork()  # stage: whatever a caller passes, no call is possible

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The module pins no artefact or image: its scripts ship with the role, so an upgrade is the
+# role's own re-converge. This hook validates the inputs and refuses to go on when the installed
+# lake script's table contract is not the table's (a writer upgrade must not meet a different
+# shape first on the live table); the converge is the install.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Resolve the lake's and the gateway's URLs
+      ansible.builtin.include_tasks: resolve.yml
+    - name: The table is the contract's before the writer changes
+      ansible.builtin.command:
+        argv: ["{{ honeypot_runtime_python }}", -I, "{{ honeypot_lake_script }}", schema-check]
+      environment: "{{ honeypot_script_env }}"
+      no_log: true
+      register: honeypot_upgrade_schema
+      changed_when: false
+      failed_when: honeypot_upgrade_schema.rc != 0
+  tags: [upgrade]

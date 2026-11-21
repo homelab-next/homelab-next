@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (intelowl_target_image together with
+# intelowl_target_nginx_image, one release; or intelowl_target_postgres_image within its major
+# version; or intelowl_target_redis_image), export first, then converge with the new pin (set
+# intelowl_image and intelowl_nginx_image, intelowl_postgres_image or intelowl_redis_image to the
+# target in the overlay). The application migrates its database on first start.
+#   ansible-playbook -i <inventory> modules/intelowl/playbooks/upgrade.yml \
+#     -e intelowl_target_image=<ref> -e intelowl_target_nginx_image=<ref>
+- name: Upgrade the enrichment provider
+  hosts: mod_intelowl_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: intelowl
+        tasks_from: upgrade
+    - name: Export the database before the new image opens it
+      ansible.builtin.include_role:
+        name: intelowl
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: intelowl
+      vars:
+        intelowl_image: "{{ intelowl_target_image | default(intelowl_image, true) }}"
+        intelowl_nginx_image: "{{ intelowl_target_nginx_image | default(intelowl_nginx_image, true) }}"
+        intelowl_postgres_image: "{{ intelowl_target_postgres_image | default(intelowl_postgres_image, true) }}"
+        intelowl_redis_image: "{{ intelowl_target_redis_image | default(intelowl_redis_image, true) }}"

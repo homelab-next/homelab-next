@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the state and reports first (lifecycle.remove.export_first), stop and disable the
+# receiver and the timers, then remove the units, the rotation, the credentials and the scripts, and
+# reload systemd. The data root (the spool, the state, the reports, the exports) is kept for the
+# operator to archive or delete, and the lake's events table is never touched. The decommission
+# audit (module.yml lifecycle.remove.audit) checks nothing still names the module. Repointing the
+# honeypot's push target away from this receiver is the overlay's and the honeypot's own change.
+- name: Remove the honeypot receiver, lake writer and intel report
+  hosts: mod_honeypot_receiver
+  become: true
+  tasks:
+    - name: Export the state and the reports first
+      ansible.builtin.include_role:
+        name: honeypot
+        tasks_from: export
+    - name: Stop and disable the receiver and the timers (a no-op when one is not there)
+      ansible.builtin.systemd_service:
+        name: "hnx-{{ honeypot_logical_id }}-{{ item }}"
+        state: stopped
+        enabled: false
+      loop: [receiver.service, lake.timer, report.timer]
+      failed_when: false
+    - name: Remove the units, the rotation, the credentials and the scripts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/etc/systemd/system/hnx-{{ honeypot_logical_id }}-receiver.service"
+        - "/etc/systemd/system/hnx-{{ honeypot_logical_id }}-lake.service"
+        - "/etc/systemd/system/hnx-{{ honeypot_logical_id }}-lake.timer"
+        - "/etc/systemd/system/hnx-{{ honeypot_logical_id }}-report.service"
+        - "/etc/systemd/system/hnx-{{ honeypot_logical_id }}-report.timer"
+        - "/etc/logrotate.d/hnx-{{ honeypot_logical_id }}"
+        - "{{ honeypot_config_dir | default('/etc/hnx/' ~ honeypot_logical_id) }}/credentials"
+        - /usr/local/libexec/homelabnext/hnx-honeypot-receiver
+        - /usr/local/libexec/homelabnext/hnx-honeypot-lake
+        - /usr/local/libexec/homelabnext/hnx-honeypot-report
+    - name: Reload systemd
+      ansible.builtin.command:
+        argv: [systemctl, daemon-reload]
+      changed_when: true

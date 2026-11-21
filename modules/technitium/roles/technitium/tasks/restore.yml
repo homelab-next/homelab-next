@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore every zone from an export (technitium_restore_source): the directory is checked first,
+# without writing (owner, modes, the listing, single-link regular files, sizes, sha256, one zone
+# file per listed zone); then each zone is imported through the admin API, overwriting, and its
+# record count must equal the export's. An export that lists no zone restores nothing and fails.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Name the export to restore
+      ansible.builtin.assert:
+        that: technitium_restore_source != ''
+        fail_msg: "technitium: set technitium_restore_source to the export directory"
+    - name: Install the zone tooling
+      ansible.builtin.include_tasks: ctl.yml
+    - name: Check the export before changing anything
+      ansible.builtin.command:
+        argv: [python3, -I, "{{ technitium_ctl_path }}", restore-check, --src, "{{ technitium_restore_source }}", --uid, "{{ technitium_uid | int }}"]
+      changed_when: false
+    - name: Import every listed zone and check its record count
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -I
+          - "{{ technitium_ctl_path }}"
+          - restore-apply
+          - --api
+          - "{{ technitium_api_url }}"
+          - --user
+          - "{{ technitium_admin_user }}"
+          - --src
+          - "{{ technitium_restore_source }}"
+          - --uid
+          - "{{ technitium_uid | int }}"
+      environment:
+        HNX_TECHNITIUM_PASSWORD: "{{ lookup('hnx_secret', technitium_admin_login_ref) }}"
+      changed_when: true
+      no_log: true
+  tags: [restore]

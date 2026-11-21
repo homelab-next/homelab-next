@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.8",
+  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.9",
   "title": "Guest (compute) descriptor",
   "description": "One VM, container or physical host, described in vendor-neutral values. Zones are referenced by id (a site model owns them); capabilities by cap: id. Generators render Terraform, libvirt, cloud-init, an Ansible inventory, registry hosts and backup jobs from a directory of these files.",
   "type": "object",
@@ -167,7 +167,11 @@
           }
         },
         "bridge": {"type": "string", "pattern": "^(?:default|[a-z][a-z0-9_.-]{0,14})$", "default": "default"},
-        "vlan_tag_mode": {"enum": ["in_bridge", "per_vlan_bridge"], "default": "in_bridge"},
+        "vlan_tag_mode": {
+          "enum": ["in_bridge", "per_vlan_bridge", "native"],
+          "default": "in_bridge",
+          "description": "How the NIC reaches its zone's VLAN. in_bridge: the NIC carries the zone's VLAN tag on the (VLAN-aware) bridge. per_vlan_bridge: the NIC attaches to the bridge <bridge>v<vlan>, untagged. (1.9) native: the zone's VLAN is the bridge's native (untagged) VLAN, so the NIC attaches to the bridge with NO VLAN tag; a tag on the native VLAN is dropped or mis-delivered by the switch port. The node must declare it (_nodes.yml native_vlans: {<bridge>: <vlan id>}, equal to the zone's vlan_id), and a bridge has one native VLAN."
+        },
         "firewall": {
           "enum": ["inherit", "enabled", "disabled"],
           "default": "enabled",

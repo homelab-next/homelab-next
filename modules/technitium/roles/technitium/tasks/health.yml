@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy, the admin signs in with the stored password,
+# the server holds zones (and, where the site names expected counts, exactly those records), and
+# it ANSWERS over DNS: the SOA of every expected zone and every configured probe. Without a zone
+# or a probe to ask about there is nothing to prove an answer with, so that is a failure, never
+# a pass. Read-only: it changes nothing on the server.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Install the zone tooling
+      ansible.builtin.include_tasks: ctl.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: technitium
+        compose_app_dir: "{{ technitium_app.compose_app_dir }}"
+        compose_app_spec: "{{ technitium_app.compose_app_spec }}"
+    - name: There is something to ask the server about
+      ansible.builtin.assert:
+        that: technitium_expected_zones | length > 0 or technitium_health_probes | length > 0
+        fail_msg: >-
+          technitium: nothing to prove an answer with: set technitium_expected_zones (zone to record
+          count) or technitium_health_probes
+    - name: The admin signs in with the stored password and the zones are the expected ones
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -I
+          - "{{ technitium_ctl_path }}"
+          - verify
+          - --api
+          - "{{ technitium_api_url }}"
+          - --user
+          - "{{ technitium_admin_user }}"
+          - --expect
+          - "{{ technitium_expected_zones | to_json }}"
+          - --recursion
+          - "{{ technitium_recursion }}"
+      environment:
+        HNX_TECHNITIUM_PASSWORD: "{{ lookup('hnx_secret', technitium_admin_login_ref) }}"
+      register: technitium_verify
+      changed_when: false
+      no_log: true
+    - name: The server answers the SOA of every expected zone over DNS
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -I
+          - "{{ technitium_ctl_path }}"
+          - answers
+          - --server
+          - "{{ technitium_bind }}"
+          - --port
+          - "{{ technitium_dns_port | int }}"
+          - --name
+          - "{{ item }}"
+          - --type
+          - SOA
+      loop: "{{ technitium_expected_zones.keys() | sort }}"
+      changed_when: false
+    - name: The server answers every probe over DNS
+      ansible.builtin.command:
+        argv: >-
+          {{ ['python3', '-I', technitium_ctl_path, 'answers', '--server', technitium_bind,
+              '--port', technitium_dns_port | int | string, '--name', item.name,
+              '--type', item.type | default('A')]
+             + (['--expect', item.expect | join(',')] if item.expect is defined else []) }}
+      loop: "{{ technitium_health_probes }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+  tags: [health]
