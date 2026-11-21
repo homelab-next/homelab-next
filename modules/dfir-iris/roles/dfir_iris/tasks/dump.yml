@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+# The export (object-tree): db/iris.dump (pg_dump's custom format, written in the database's
+# container as its own user, so the file is the database's and never root's), files.tar (the
+# product's datastore, templates and downloads, written by the host's tar into root's export/),
+# then listing.jsonl (key, size, sha256). A snapshot: every run writes a new one (the hook reports
+# changed). The database is dumped first, then the files, so a file a row names is in the tar;
+# freeze the app (stop app, worker and front) for a cutover copy (README, "Migrating in").
+- name: Dump the database (pg_dump, custom format, in its container)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ dfir_iris_dir }}/docker-compose.yml", exec, -T, db,
+           pg_dump, -U, "{{ dfir_iris_db_user }}", -d, "{{ dfir_iris_db_name }}", -Fc, --no-owner, --no-acl,
+           -f, "{{ dfir_iris_container_export }}/.iris.dump.tmp"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Put the dump in place
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ dfir_iris_dir }}/docker-compose.yml", exec, -T, db,
+           mv, -f, "{{ dfir_iris_container_export }}/.iris.dump.tmp",
+           "{{ dfir_iris_container_export }}/iris.dump"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Archive the datastore, the templates and the downloads
+  ansible.builtin.command:
+    argv: [tar, --create, --file, "{{ dfir_iris_data_root }}/export/.files.tar.tmp",
+           --directory, "{{ dfir_iris_data_root }}/files", .]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Put the files archive in place
+  ansible.builtin.command:
+    argv: [mv, -f, "{{ dfir_iris_data_root }}/export/.files.tar.tmp",
+           "{{ dfir_iris_data_root }}/export/files.tar"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Read the two files (size, sha256)
+  ansible.builtin.stat:
+    path: "{{ dfir_iris_data_root }}/export/{{ item }}"
+    checksum_algorithm: sha256
+  loop: [db/iris.dump, files.tar]
+  register: dfir_iris_export_stat
+  tags: [backup, export]
+
+- name: Refuse an empty dump (a database with no schema is not a copy)
+  ansible.builtin.assert:
+    that: dfir_iris_export_stat.results[0].stat.size | int > 0
+    fail_msg: "case-management: the database dump is empty; nothing was listed"
+  tags: [backup, export]
+
+- name: Write the listing
+  ansible.builtin.copy:
+    content: |
+      {% for r in dfir_iris_export_stat.results %}{{ {'key': r.item, 'size': r.stat.size, 'sha256': r.stat.checksum} | to_json(sort_keys=true) }}
+      {% endfor %}
+    dest: "{{ dfir_iris_data_root }}/export/listing.jsonl"
+    owner: "{{ dfir_iris_owner }}"
+    group: "{{ dfir_iris_group }}"
+    mode: "0600"
+  tags: [backup, export]

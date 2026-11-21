@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - dfir_iris_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - dfir_iris_hostname is match(dfir_iris_hostname_pattern)
+      - dfir_iris_app_image is match(dfir_iris_pinned_ref_pattern)
+      - dfir_iris_db_image is match(dfir_iris_pinned_ref_pattern)
+      - dfir_iris_nginx_image is match(dfir_iris_pinned_ref_pattern)
+      - dfir_iris_broker_image is match(dfir_iris_pinned_ref_pattern)
+      # the product's release tag (vX.Y.Z): its version, which health reads back from the API
+      - dfir_iris_app_tag is match('^v[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - dfir_iris_db_tag is match('^v[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - dfir_iris_nginx_tag is match('^v[0-9]+\.[0-9]+\.[0-9]+\Z')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - dfir_iris_bind is match(dfir_iris_ipv4_pattern)
+      - dfir_iris_bind != '0.0.0.0'
+      - dfir_iris_port | int >= 1 and dfir_iris_port | int <= 65535
+      - dfir_iris_app_uid | int >= 1000 and dfir_iris_app_gid | int >= 1000
+      - >-
+        [dfir_iris_db_uid, dfir_iris_db_gid, dfir_iris_broker_uid, dfir_iris_broker_gid,
+         dfir_iris_front_uid, dfir_iris_front_gid] | map('int') | select('lt', 1) | list | length == 0
+      - >-
+        [dfir_iris_db_uid, dfir_iris_db_gid, dfir_iris_broker_uid, dfir_iris_broker_gid,
+         dfir_iris_front_uid, dfir_iris_front_gid] | map('int') | select('gt', 65534) | list | length == 0
+      - dfir_iris_admin_user is match(dfir_iris_username_pattern)
+      - dfir_iris_admin_email is match(dfir_iris_email_pattern)
+      - >-
+        [dfir_iris_admin_login_ref, dfir_iris_access_ref, dfir_iris_db_login_ref,
+         dfir_iris_db_admin_login_ref, dfir_iris_session_key_ref, dfir_iris_salt_ref,
+         dfir_iris_tls_cert_ref, dfir_iris_tls_key_ref, dfir_iris_ca_ref]
+        | reject('match', dfir_iris_ref_pattern) | list | length == 0
+      - >-
+        [dfir_iris_admin_login_ref, dfir_iris_access_ref, dfir_iris_db_login_ref,
+         dfir_iris_db_admin_login_ref, dfir_iris_session_key_ref, dfir_iris_salt_ref,
+         dfir_iris_tls_cert_ref, dfir_iris_tls_key_ref, dfir_iris_ca_ref] | unique | length == 9
+      - >-
+        [dfir_iris_dir, dfir_iris_data_root] | reject('match', dfir_iris_path_pattern) | list | length == 0
+      - >-
+        [dfir_iris_app_mem_limit, dfir_iris_worker_mem_limit, dfir_iris_db_mem_limit,
+         dfir_iris_broker_mem_limit, dfir_iris_nginx_mem_limit]
+        | reject('match', '^[1-9][0-9]{0,5}[kmg]\Z') | list | length == 0
+    fail_msg: >-
+      case-management: a registry id, an internal hostname (a DNS name), four images pinned by tag
+      and digest (the three product images tagged vX.Y.Z), the guest's IPv4 address to publish on (not
+      all interfaces), a port, an application user of 1000 or more, the images' own user ids, an
+      administrator's login and email, nine distinct secret: references, absolute canonical
+      directories and memory limits like 512m
+  tags: [health, backup, restore, export, upgrade]

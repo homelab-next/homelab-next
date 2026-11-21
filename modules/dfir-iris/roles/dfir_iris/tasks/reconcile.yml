@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The first administrator's API key is the secret's value, set in the database (the product's own
+# `user.api_key` column) once the app is up: the product would otherwise generate a random one on an
+# empty database and keep whatever a restored database held, and the consumers hold the secret.
+# One UPDATE, run by psql in the database's container with the statement on its standard input (the
+# key is never in an argument), under no_log; it changes a row only when the key differs, so a
+# second run changes nothing. The key's form (URL- and quote-safe) is checked in credentials.yml, so
+# it cannot end the statement; the administrator's login is checked in validate.yml. Zero rows
+# changed is no error here: health then says whether the key is accepted.
+- name: Set the administrator's API key
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ dfir_iris_dir }}/docker-compose.yml", exec, -T, db,
+           psql, -U, "{{ dfir_iris_db_user }}", -d, "{{ dfir_iris_db_name }}", --no-psqlrc,
+           --tuples-only, --no-align, -v, ON_ERROR_STOP=1, --file, '-']
+    stdin: >-
+      UPDATE "user" SET api_key = '{{ lookup('hnx_secret', dfir_iris_access_ref) }}'
+      WHERE "user" = '{{ dfir_iris_admin_user }}'
+      AND api_key IS DISTINCT FROM '{{ lookup('hnx_secret', dfir_iris_access_ref) }}' RETURNING 1;
+  register: dfir_iris_key_set
+  changed_when: dfir_iris_key_set.stdout | trim == '1'
+  no_log: true

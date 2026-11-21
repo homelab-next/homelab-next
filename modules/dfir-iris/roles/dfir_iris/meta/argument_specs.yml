@@ -1,0 +1,1241 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the IRIS app, its worker, the database, the broker and a TLS front as compose_app
+      containers.
+    options:
+      dfir_iris_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cases).
+        required: true
+      dfir_iris_hostname:
+        type: str
+        description: The internal name the certificate is issued for and the front answers to (cases.<domain>).
+        required: true
+      dfir_iris_app_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS application image (the web app and the
+          worker); the tag is the product version (vX.Y.Z).
+        default: ghcr.io/dfir-iris/iriswebapp_app:v2.4.29@sha256:d7d23026bdde593278075821d3abc8649fe28d618d5784cc9875bd7a3d05699b
+      dfir_iris_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS database image (PostgreSQL with the product's
+          role and extension set-up).
+        default: ghcr.io/dfir-iris/iriswebapp_db:v2.4.29@sha256:081ad194332887ca584a9240e8e9dea94129a235e8b38ff42c1938358be432f5
+      dfir_iris_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS TLS front image.
+        default: ghcr.io/dfir-iris/iriswebapp_nginx:v2.4.29@sha256:887b1eb8ceae5b1e1483a4a7601d79a6b070e314db5772a617e0a9190c556644
+      dfir_iris_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
+          from.
+        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+      dfir_iris_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      dfir_iris_port:
+        type: int
+        description: Host port of the HTTPS front (the registry row's port).
+        default: 8443
+      dfir_iris_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/dfir-iris
+      dfir_iris_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      dfir_iris_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      dfir_iris_data_root:
+        type: path
+        description: 'The module''s data root on the host: pgdata/, broker/, files/, tls/ and export/.'
+        default: /var/lib/hnx-modules/dfir-iris
+      dfir_iris_app_uid:
+        type: int
+        description: The app and worker user id (1000 or more); owns files/.
+        default: 61031
+      dfir_iris_app_gid:
+        type: int
+        description: The app and worker group id (1000 or more).
+        default: 61031
+      dfir_iris_admin_user:
+        type: str
+        description: The first administrator's login, created on an empty database.
+        default: administrator
+      dfir_iris_admin_email:
+        type: str
+        description: The first administrator's email address, created on an empty database.
+        default: administrator@iris.example.internal
+      dfir_iris_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (used only on an empty
+          database).'
+        default: secret:dfir-iris/admin-password
+      dfir_iris_access_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s API key, the bearer key consumers
+          and the health hook call the API with.'
+        default: secret:dfir-iris/api-key
+      dfir_iris_db_login_ref:
+        type: str
+        description: 'secret: reference of the database role''s password.'
+        default: secret:dfir-iris/db-password
+      dfir_iris_db_admin_login_ref:
+        type: str
+        description: 'secret: reference of the database administrator role''s password.'
+        default: secret:dfir-iris/db-admin-password
+      dfir_iris_session_key_ref:
+        type: str
+        description: 'secret: reference of the product''s session key (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/session-key
+      dfir_iris_salt_ref:
+        type: str
+        description: 'secret: reference of the product''s password-hash salt (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/password-salt
+      dfir_iris_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate chain (PEM) the lab CA issued for the
+          internal name.'
+        default: secret:dfir-iris/tls-cert
+      dfir_iris_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:dfir-iris/tls-key
+      dfir_iris_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
+          with.'
+        default: secret:dfir-iris/ca
+      dfir_iris_db_uid:
+        type: int
+        description: The database image's user id (postgres in the image).
+        default: 70
+      dfir_iris_db_gid:
+        type: int
+        description: The database image's group id.
+        default: 70
+      dfir_iris_broker_uid:
+        type: int
+        description: The broker image's user id (rabbitmq in the image).
+        default: 100
+      dfir_iris_broker_gid:
+        type: int
+        description: The broker image's group id.
+        default: 101
+      dfir_iris_front_uid:
+        type: int
+        description: The front image's user id (www-data in the image).
+        default: 33
+      dfir_iris_front_gid:
+        type: int
+        description: The front image's group id; may enter tls/ and read the certificate key.
+        default: 33
+      dfir_iris_app_mem_limit:
+        type: str
+        description: Memory limit of the app container (like 2g).
+        default: 2g
+      dfir_iris_worker_mem_limit:
+        type: str
+        description: Memory limit of the worker container.
+        default: 2g
+      dfir_iris_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      dfir_iris_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 512m
+      dfir_iris_nginx_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 128m
+      dfir_iris_start:
+        type: bool
+        description: Start the containers (false only renders them).
+        default: true
+      dfir_iris_validate_with_docker:
+        type: bool
+        description: Validate the rendered file with docker compose config.
+        default: true
+      dfir_iris_health_timeout:
+        type: int
+        description: Seconds each API call of the health hook may take.
+        default: 15
+      dfir_iris_ready_timeout:
+        type: int
+        description: Seconds main waits for the API to answer after a start (the first start creates the
+          schema).
+        default: 600
+  health:
+    short_description: Check the containers, the database, and the API (refuses no key, answers with the
+      key, reports the pinned version) over verified TLS.
+    options:
+      dfir_iris_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cases).
+        required: true
+      dfir_iris_hostname:
+        type: str
+        description: The internal name the certificate is issued for and the front answers to (cases.<domain>).
+        required: true
+      dfir_iris_app_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS application image (the web app and the
+          worker); the tag is the product version (vX.Y.Z).
+        default: ghcr.io/dfir-iris/iriswebapp_app:v2.4.29@sha256:d7d23026bdde593278075821d3abc8649fe28d618d5784cc9875bd7a3d05699b
+      dfir_iris_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS database image (PostgreSQL with the product's
+          role and extension set-up).
+        default: ghcr.io/dfir-iris/iriswebapp_db:v2.4.29@sha256:081ad194332887ca584a9240e8e9dea94129a235e8b38ff42c1938358be432f5
+      dfir_iris_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS TLS front image.
+        default: ghcr.io/dfir-iris/iriswebapp_nginx:v2.4.29@sha256:887b1eb8ceae5b1e1483a4a7601d79a6b070e314db5772a617e0a9190c556644
+      dfir_iris_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
+          from.
+        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+      dfir_iris_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      dfir_iris_port:
+        type: int
+        description: Host port of the HTTPS front (the registry row's port).
+        default: 8443
+      dfir_iris_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/dfir-iris
+      dfir_iris_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      dfir_iris_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      dfir_iris_data_root:
+        type: path
+        description: 'The module''s data root on the host: pgdata/, broker/, files/, tls/ and export/.'
+        default: /var/lib/hnx-modules/dfir-iris
+      dfir_iris_app_uid:
+        type: int
+        description: The app and worker user id (1000 or more); owns files/.
+        default: 61031
+      dfir_iris_app_gid:
+        type: int
+        description: The app and worker group id (1000 or more).
+        default: 61031
+      dfir_iris_admin_user:
+        type: str
+        description: The first administrator's login, created on an empty database.
+        default: administrator
+      dfir_iris_admin_email:
+        type: str
+        description: The first administrator's email address, created on an empty database.
+        default: administrator@iris.example.internal
+      dfir_iris_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (used only on an empty
+          database).'
+        default: secret:dfir-iris/admin-password
+      dfir_iris_access_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s API key, the bearer key consumers
+          and the health hook call the API with.'
+        default: secret:dfir-iris/api-key
+      dfir_iris_db_login_ref:
+        type: str
+        description: 'secret: reference of the database role''s password.'
+        default: secret:dfir-iris/db-password
+      dfir_iris_db_admin_login_ref:
+        type: str
+        description: 'secret: reference of the database administrator role''s password.'
+        default: secret:dfir-iris/db-admin-password
+      dfir_iris_session_key_ref:
+        type: str
+        description: 'secret: reference of the product''s session key (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/session-key
+      dfir_iris_salt_ref:
+        type: str
+        description: 'secret: reference of the product''s password-hash salt (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/password-salt
+      dfir_iris_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate chain (PEM) the lab CA issued for the
+          internal name.'
+        default: secret:dfir-iris/tls-cert
+      dfir_iris_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:dfir-iris/tls-key
+      dfir_iris_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
+          with.'
+        default: secret:dfir-iris/ca
+      dfir_iris_db_uid:
+        type: int
+        description: The database image's user id (postgres in the image).
+        default: 70
+      dfir_iris_db_gid:
+        type: int
+        description: The database image's group id.
+        default: 70
+      dfir_iris_broker_uid:
+        type: int
+        description: The broker image's user id (rabbitmq in the image).
+        default: 100
+      dfir_iris_broker_gid:
+        type: int
+        description: The broker image's group id.
+        default: 101
+      dfir_iris_front_uid:
+        type: int
+        description: The front image's user id (www-data in the image).
+        default: 33
+      dfir_iris_front_gid:
+        type: int
+        description: The front image's group id; may enter tls/ and read the certificate key.
+        default: 33
+      dfir_iris_app_mem_limit:
+        type: str
+        description: Memory limit of the app container (like 2g).
+        default: 2g
+      dfir_iris_worker_mem_limit:
+        type: str
+        description: Memory limit of the worker container.
+        default: 2g
+      dfir_iris_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      dfir_iris_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 512m
+      dfir_iris_nginx_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 128m
+      dfir_iris_start:
+        type: bool
+        description: Start the containers (false only renders them).
+        default: true
+      dfir_iris_validate_with_docker:
+        type: bool
+        description: Validate the rendered file with docker compose config.
+        default: true
+      dfir_iris_health_timeout:
+        type: int
+        description: Seconds each API call of the health hook may take.
+        default: 15
+      dfir_iris_ready_timeout:
+        type: int
+        description: Seconds main waits for the API to answer after a start (the first start creates the
+          schema).
+        default: 600
+  readiness:
+    short_description: Check the container engine, curl and that every credential resolves in its form.
+    options:
+      dfir_iris_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cases).
+        required: true
+      dfir_iris_hostname:
+        type: str
+        description: The internal name the certificate is issued for and the front answers to (cases.<domain>).
+        required: true
+      dfir_iris_app_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS application image (the web app and the
+          worker); the tag is the product version (vX.Y.Z).
+        default: ghcr.io/dfir-iris/iriswebapp_app:v2.4.29@sha256:d7d23026bdde593278075821d3abc8649fe28d618d5784cc9875bd7a3d05699b
+      dfir_iris_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS database image (PostgreSQL with the product's
+          role and extension set-up).
+        default: ghcr.io/dfir-iris/iriswebapp_db:v2.4.29@sha256:081ad194332887ca584a9240e8e9dea94129a235e8b38ff42c1938358be432f5
+      dfir_iris_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS TLS front image.
+        default: ghcr.io/dfir-iris/iriswebapp_nginx:v2.4.29@sha256:887b1eb8ceae5b1e1483a4a7601d79a6b070e314db5772a617e0a9190c556644
+      dfir_iris_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
+          from.
+        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+      dfir_iris_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      dfir_iris_port:
+        type: int
+        description: Host port of the HTTPS front (the registry row's port).
+        default: 8443
+      dfir_iris_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/dfir-iris
+      dfir_iris_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      dfir_iris_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      dfir_iris_data_root:
+        type: path
+        description: 'The module''s data root on the host: pgdata/, broker/, files/, tls/ and export/.'
+        default: /var/lib/hnx-modules/dfir-iris
+      dfir_iris_app_uid:
+        type: int
+        description: The app and worker user id (1000 or more); owns files/.
+        default: 61031
+      dfir_iris_app_gid:
+        type: int
+        description: The app and worker group id (1000 or more).
+        default: 61031
+      dfir_iris_admin_user:
+        type: str
+        description: The first administrator's login, created on an empty database.
+        default: administrator
+      dfir_iris_admin_email:
+        type: str
+        description: The first administrator's email address, created on an empty database.
+        default: administrator@iris.example.internal
+      dfir_iris_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (used only on an empty
+          database).'
+        default: secret:dfir-iris/admin-password
+      dfir_iris_access_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s API key, the bearer key consumers
+          and the health hook call the API with.'
+        default: secret:dfir-iris/api-key
+      dfir_iris_db_login_ref:
+        type: str
+        description: 'secret: reference of the database role''s password.'
+        default: secret:dfir-iris/db-password
+      dfir_iris_db_admin_login_ref:
+        type: str
+        description: 'secret: reference of the database administrator role''s password.'
+        default: secret:dfir-iris/db-admin-password
+      dfir_iris_session_key_ref:
+        type: str
+        description: 'secret: reference of the product''s session key (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/session-key
+      dfir_iris_salt_ref:
+        type: str
+        description: 'secret: reference of the product''s password-hash salt (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/password-salt
+      dfir_iris_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate chain (PEM) the lab CA issued for the
+          internal name.'
+        default: secret:dfir-iris/tls-cert
+      dfir_iris_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:dfir-iris/tls-key
+      dfir_iris_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
+          with.'
+        default: secret:dfir-iris/ca
+      dfir_iris_db_uid:
+        type: int
+        description: The database image's user id (postgres in the image).
+        default: 70
+      dfir_iris_db_gid:
+        type: int
+        description: The database image's group id.
+        default: 70
+      dfir_iris_broker_uid:
+        type: int
+        description: The broker image's user id (rabbitmq in the image).
+        default: 100
+      dfir_iris_broker_gid:
+        type: int
+        description: The broker image's group id.
+        default: 101
+      dfir_iris_front_uid:
+        type: int
+        description: The front image's user id (www-data in the image).
+        default: 33
+      dfir_iris_front_gid:
+        type: int
+        description: The front image's group id; may enter tls/ and read the certificate key.
+        default: 33
+      dfir_iris_app_mem_limit:
+        type: str
+        description: Memory limit of the app container (like 2g).
+        default: 2g
+      dfir_iris_worker_mem_limit:
+        type: str
+        description: Memory limit of the worker container.
+        default: 2g
+      dfir_iris_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      dfir_iris_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 512m
+      dfir_iris_nginx_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 128m
+      dfir_iris_start:
+        type: bool
+        description: Start the containers (false only renders them).
+        default: true
+      dfir_iris_validate_with_docker:
+        type: bool
+        description: Validate the rendered file with docker compose config.
+        default: true
+      dfir_iris_health_timeout:
+        type: int
+        description: Seconds each API call of the health hook may take.
+        default: 15
+      dfir_iris_ready_timeout:
+        type: int
+        description: Seconds main waits for the API to answer after a start (the first start creates the
+          schema).
+        default: 600
+  backup:
+    short_description: Write a consistent dump and files archive into export/, then take the compose_app
+      backup manifest.
+    options:
+      dfir_iris_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cases).
+        required: true
+      dfir_iris_hostname:
+        type: str
+        description: The internal name the certificate is issued for and the front answers to (cases.<domain>).
+        required: true
+      dfir_iris_app_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS application image (the web app and the
+          worker); the tag is the product version (vX.Y.Z).
+        default: ghcr.io/dfir-iris/iriswebapp_app:v2.4.29@sha256:d7d23026bdde593278075821d3abc8649fe28d618d5784cc9875bd7a3d05699b
+      dfir_iris_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS database image (PostgreSQL with the product's
+          role and extension set-up).
+        default: ghcr.io/dfir-iris/iriswebapp_db:v2.4.29@sha256:081ad194332887ca584a9240e8e9dea94129a235e8b38ff42c1938358be432f5
+      dfir_iris_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS TLS front image.
+        default: ghcr.io/dfir-iris/iriswebapp_nginx:v2.4.29@sha256:887b1eb8ceae5b1e1483a4a7601d79a6b070e314db5772a617e0a9190c556644
+      dfir_iris_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
+          from.
+        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+      dfir_iris_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      dfir_iris_port:
+        type: int
+        description: Host port of the HTTPS front (the registry row's port).
+        default: 8443
+      dfir_iris_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/dfir-iris
+      dfir_iris_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      dfir_iris_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      dfir_iris_data_root:
+        type: path
+        description: 'The module''s data root on the host: pgdata/, broker/, files/, tls/ and export/.'
+        default: /var/lib/hnx-modules/dfir-iris
+      dfir_iris_app_uid:
+        type: int
+        description: The app and worker user id (1000 or more); owns files/.
+        default: 61031
+      dfir_iris_app_gid:
+        type: int
+        description: The app and worker group id (1000 or more).
+        default: 61031
+      dfir_iris_admin_user:
+        type: str
+        description: The first administrator's login, created on an empty database.
+        default: administrator
+      dfir_iris_admin_email:
+        type: str
+        description: The first administrator's email address, created on an empty database.
+        default: administrator@iris.example.internal
+      dfir_iris_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (used only on an empty
+          database).'
+        default: secret:dfir-iris/admin-password
+      dfir_iris_access_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s API key, the bearer key consumers
+          and the health hook call the API with.'
+        default: secret:dfir-iris/api-key
+      dfir_iris_db_login_ref:
+        type: str
+        description: 'secret: reference of the database role''s password.'
+        default: secret:dfir-iris/db-password
+      dfir_iris_db_admin_login_ref:
+        type: str
+        description: 'secret: reference of the database administrator role''s password.'
+        default: secret:dfir-iris/db-admin-password
+      dfir_iris_session_key_ref:
+        type: str
+        description: 'secret: reference of the product''s session key (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/session-key
+      dfir_iris_salt_ref:
+        type: str
+        description: 'secret: reference of the product''s password-hash salt (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/password-salt
+      dfir_iris_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate chain (PEM) the lab CA issued for the
+          internal name.'
+        default: secret:dfir-iris/tls-cert
+      dfir_iris_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:dfir-iris/tls-key
+      dfir_iris_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
+          with.'
+        default: secret:dfir-iris/ca
+      dfir_iris_db_uid:
+        type: int
+        description: The database image's user id (postgres in the image).
+        default: 70
+      dfir_iris_db_gid:
+        type: int
+        description: The database image's group id.
+        default: 70
+      dfir_iris_broker_uid:
+        type: int
+        description: The broker image's user id (rabbitmq in the image).
+        default: 100
+      dfir_iris_broker_gid:
+        type: int
+        description: The broker image's group id.
+        default: 101
+      dfir_iris_front_uid:
+        type: int
+        description: The front image's user id (www-data in the image).
+        default: 33
+      dfir_iris_front_gid:
+        type: int
+        description: The front image's group id; may enter tls/ and read the certificate key.
+        default: 33
+      dfir_iris_app_mem_limit:
+        type: str
+        description: Memory limit of the app container (like 2g).
+        default: 2g
+      dfir_iris_worker_mem_limit:
+        type: str
+        description: Memory limit of the worker container.
+        default: 2g
+      dfir_iris_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      dfir_iris_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 512m
+      dfir_iris_nginx_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 128m
+      dfir_iris_start:
+        type: bool
+        description: Start the containers (false only renders them).
+        default: true
+      dfir_iris_validate_with_docker:
+        type: bool
+        description: Validate the rendered file with docker compose config.
+        default: true
+      dfir_iris_health_timeout:
+        type: int
+        description: Seconds each API call of the health hook may take.
+        default: 15
+      dfir_iris_ready_timeout:
+        type: int
+        description: Seconds main waits for the API to answer after a start (the first start creates the
+          schema).
+        default: 600
+  export:
+    short_description: 'Write the object-tree export: db/iris.dump, files.tar and listing.jsonl.'
+    options:
+      dfir_iris_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cases).
+        required: true
+      dfir_iris_hostname:
+        type: str
+        description: The internal name the certificate is issued for and the front answers to (cases.<domain>).
+        required: true
+      dfir_iris_app_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS application image (the web app and the
+          worker); the tag is the product version (vX.Y.Z).
+        default: ghcr.io/dfir-iris/iriswebapp_app:v2.4.29@sha256:d7d23026bdde593278075821d3abc8649fe28d618d5784cc9875bd7a3d05699b
+      dfir_iris_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS database image (PostgreSQL with the product's
+          role and extension set-up).
+        default: ghcr.io/dfir-iris/iriswebapp_db:v2.4.29@sha256:081ad194332887ca584a9240e8e9dea94129a235e8b38ff42c1938358be432f5
+      dfir_iris_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS TLS front image.
+        default: ghcr.io/dfir-iris/iriswebapp_nginx:v2.4.29@sha256:887b1eb8ceae5b1e1483a4a7601d79a6b070e314db5772a617e0a9190c556644
+      dfir_iris_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
+          from.
+        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+      dfir_iris_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      dfir_iris_port:
+        type: int
+        description: Host port of the HTTPS front (the registry row's port).
+        default: 8443
+      dfir_iris_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/dfir-iris
+      dfir_iris_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      dfir_iris_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      dfir_iris_data_root:
+        type: path
+        description: 'The module''s data root on the host: pgdata/, broker/, files/, tls/ and export/.'
+        default: /var/lib/hnx-modules/dfir-iris
+      dfir_iris_app_uid:
+        type: int
+        description: The app and worker user id (1000 or more); owns files/.
+        default: 61031
+      dfir_iris_app_gid:
+        type: int
+        description: The app and worker group id (1000 or more).
+        default: 61031
+      dfir_iris_admin_user:
+        type: str
+        description: The first administrator's login, created on an empty database.
+        default: administrator
+      dfir_iris_admin_email:
+        type: str
+        description: The first administrator's email address, created on an empty database.
+        default: administrator@iris.example.internal
+      dfir_iris_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (used only on an empty
+          database).'
+        default: secret:dfir-iris/admin-password
+      dfir_iris_access_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s API key, the bearer key consumers
+          and the health hook call the API with.'
+        default: secret:dfir-iris/api-key
+      dfir_iris_db_login_ref:
+        type: str
+        description: 'secret: reference of the database role''s password.'
+        default: secret:dfir-iris/db-password
+      dfir_iris_db_admin_login_ref:
+        type: str
+        description: 'secret: reference of the database administrator role''s password.'
+        default: secret:dfir-iris/db-admin-password
+      dfir_iris_session_key_ref:
+        type: str
+        description: 'secret: reference of the product''s session key (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/session-key
+      dfir_iris_salt_ref:
+        type: str
+        description: 'secret: reference of the product''s password-hash salt (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/password-salt
+      dfir_iris_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate chain (PEM) the lab CA issued for the
+          internal name.'
+        default: secret:dfir-iris/tls-cert
+      dfir_iris_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:dfir-iris/tls-key
+      dfir_iris_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
+          with.'
+        default: secret:dfir-iris/ca
+      dfir_iris_db_uid:
+        type: int
+        description: The database image's user id (postgres in the image).
+        default: 70
+      dfir_iris_db_gid:
+        type: int
+        description: The database image's group id.
+        default: 70
+      dfir_iris_broker_uid:
+        type: int
+        description: The broker image's user id (rabbitmq in the image).
+        default: 100
+      dfir_iris_broker_gid:
+        type: int
+        description: The broker image's group id.
+        default: 101
+      dfir_iris_front_uid:
+        type: int
+        description: The front image's user id (www-data in the image).
+        default: 33
+      dfir_iris_front_gid:
+        type: int
+        description: The front image's group id; may enter tls/ and read the certificate key.
+        default: 33
+      dfir_iris_app_mem_limit:
+        type: str
+        description: Memory limit of the app container (like 2g).
+        default: 2g
+      dfir_iris_worker_mem_limit:
+        type: str
+        description: Memory limit of the worker container.
+        default: 2g
+      dfir_iris_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      dfir_iris_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 512m
+      dfir_iris_nginx_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 128m
+      dfir_iris_start:
+        type: bool
+        description: Start the containers (false only renders them).
+        default: true
+      dfir_iris_validate_with_docker:
+        type: bool
+        description: Validate the rendered file with docker compose config.
+        default: true
+      dfir_iris_health_timeout:
+        type: int
+        description: Seconds each API call of the health hook may take.
+        default: 15
+      dfir_iris_ready_timeout:
+        type: int
+        description: Seconds main waits for the API to answer after a start (the first start creates the
+          schema).
+        default: 600
+  restore:
+    short_description: 'Restore a checked export: stop the app, restore the database and the files, start,
+      prove health.'
+    options:
+      dfir_iris_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cases).
+        required: true
+      dfir_iris_hostname:
+        type: str
+        description: The internal name the certificate is issued for and the front answers to (cases.<domain>).
+        required: true
+      dfir_iris_app_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS application image (the web app and the
+          worker); the tag is the product version (vX.Y.Z).
+        default: ghcr.io/dfir-iris/iriswebapp_app:v2.4.29@sha256:d7d23026bdde593278075821d3abc8649fe28d618d5784cc9875bd7a3d05699b
+      dfir_iris_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS database image (PostgreSQL with the product's
+          role and extension set-up).
+        default: ghcr.io/dfir-iris/iriswebapp_db:v2.4.29@sha256:081ad194332887ca584a9240e8e9dea94129a235e8b38ff42c1938358be432f5
+      dfir_iris_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS TLS front image.
+        default: ghcr.io/dfir-iris/iriswebapp_nginx:v2.4.29@sha256:887b1eb8ceae5b1e1483a4a7601d79a6b070e314db5772a617e0a9190c556644
+      dfir_iris_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
+          from.
+        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+      dfir_iris_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      dfir_iris_port:
+        type: int
+        description: Host port of the HTTPS front (the registry row's port).
+        default: 8443
+      dfir_iris_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/dfir-iris
+      dfir_iris_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      dfir_iris_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      dfir_iris_data_root:
+        type: path
+        description: 'The module''s data root on the host: pgdata/, broker/, files/, tls/ and export/.'
+        default: /var/lib/hnx-modules/dfir-iris
+      dfir_iris_app_uid:
+        type: int
+        description: The app and worker user id (1000 or more); owns files/.
+        default: 61031
+      dfir_iris_app_gid:
+        type: int
+        description: The app and worker group id (1000 or more).
+        default: 61031
+      dfir_iris_admin_user:
+        type: str
+        description: The first administrator's login, created on an empty database.
+        default: administrator
+      dfir_iris_admin_email:
+        type: str
+        description: The first administrator's email address, created on an empty database.
+        default: administrator@iris.example.internal
+      dfir_iris_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (used only on an empty
+          database).'
+        default: secret:dfir-iris/admin-password
+      dfir_iris_access_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s API key, the bearer key consumers
+          and the health hook call the API with.'
+        default: secret:dfir-iris/api-key
+      dfir_iris_db_login_ref:
+        type: str
+        description: 'secret: reference of the database role''s password.'
+        default: secret:dfir-iris/db-password
+      dfir_iris_db_admin_login_ref:
+        type: str
+        description: 'secret: reference of the database administrator role''s password.'
+        default: secret:dfir-iris/db-admin-password
+      dfir_iris_session_key_ref:
+        type: str
+        description: 'secret: reference of the product''s session key (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/session-key
+      dfir_iris_salt_ref:
+        type: str
+        description: 'secret: reference of the product''s password-hash salt (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/password-salt
+      dfir_iris_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate chain (PEM) the lab CA issued for the
+          internal name.'
+        default: secret:dfir-iris/tls-cert
+      dfir_iris_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:dfir-iris/tls-key
+      dfir_iris_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
+          with.'
+        default: secret:dfir-iris/ca
+      dfir_iris_db_uid:
+        type: int
+        description: The database image's user id (postgres in the image).
+        default: 70
+      dfir_iris_db_gid:
+        type: int
+        description: The database image's group id.
+        default: 70
+      dfir_iris_broker_uid:
+        type: int
+        description: The broker image's user id (rabbitmq in the image).
+        default: 100
+      dfir_iris_broker_gid:
+        type: int
+        description: The broker image's group id.
+        default: 101
+      dfir_iris_front_uid:
+        type: int
+        description: The front image's user id (www-data in the image).
+        default: 33
+      dfir_iris_front_gid:
+        type: int
+        description: The front image's group id; may enter tls/ and read the certificate key.
+        default: 33
+      dfir_iris_app_mem_limit:
+        type: str
+        description: Memory limit of the app container (like 2g).
+        default: 2g
+      dfir_iris_worker_mem_limit:
+        type: str
+        description: Memory limit of the worker container.
+        default: 2g
+      dfir_iris_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      dfir_iris_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 512m
+      dfir_iris_nginx_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 128m
+      dfir_iris_start:
+        type: bool
+        description: Start the containers (false only renders them).
+        default: true
+      dfir_iris_validate_with_docker:
+        type: bool
+        description: Validate the rendered file with docker compose config.
+        default: true
+      dfir_iris_health_timeout:
+        type: int
+        description: Seconds each API call of the health hook may take.
+        default: 15
+      dfir_iris_ready_timeout:
+        type: int
+        description: Seconds main waits for the API to answer after a start (the first start creates the
+          schema).
+        default: 600
+      dfir_iris_restore_source:
+        type: path
+        description: The export directory to restore from (holds db/iris.dump, files.tar and listing.jsonl).
+        required: true
+  upgrade:
+    short_description: Validate and record a pinned image bump (not older than the running image).
+    options:
+      dfir_iris_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cases).
+        required: true
+      dfir_iris_hostname:
+        type: str
+        description: The internal name the certificate is issued for and the front answers to (cases.<domain>).
+        required: true
+      dfir_iris_app_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS application image (the web app and the
+          worker); the tag is the product version (vX.Y.Z).
+        default: ghcr.io/dfir-iris/iriswebapp_app:v2.4.29@sha256:d7d23026bdde593278075821d3abc8649fe28d618d5784cc9875bd7a3d05699b
+      dfir_iris_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS database image (PostgreSQL with the product's
+          role and extension set-up).
+        default: ghcr.io/dfir-iris/iriswebapp_db:v2.4.29@sha256:081ad194332887ca584a9240e8e9dea94129a235e8b38ff42c1938358be432f5
+      dfir_iris_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the IRIS TLS front image.
+        default: ghcr.io/dfir-iris/iriswebapp_nginx:v2.4.29@sha256:887b1eb8ceae5b1e1483a4a7601d79a6b070e314db5772a617e0a9190c556644
+      dfir_iris_broker_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
+          from.
+        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+      dfir_iris_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      dfir_iris_port:
+        type: int
+        description: Host port of the HTTPS front (the registry row's port).
+        default: 8443
+      dfir_iris_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/dfir-iris
+      dfir_iris_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      dfir_iris_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      dfir_iris_data_root:
+        type: path
+        description: 'The module''s data root on the host: pgdata/, broker/, files/, tls/ and export/.'
+        default: /var/lib/hnx-modules/dfir-iris
+      dfir_iris_app_uid:
+        type: int
+        description: The app and worker user id (1000 or more); owns files/.
+        default: 61031
+      dfir_iris_app_gid:
+        type: int
+        description: The app and worker group id (1000 or more).
+        default: 61031
+      dfir_iris_admin_user:
+        type: str
+        description: The first administrator's login, created on an empty database.
+        default: administrator
+      dfir_iris_admin_email:
+        type: str
+        description: The first administrator's email address, created on an empty database.
+        default: administrator@iris.example.internal
+      dfir_iris_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (used only on an empty
+          database).'
+        default: secret:dfir-iris/admin-password
+      dfir_iris_access_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s API key, the bearer key consumers
+          and the health hook call the API with.'
+        default: secret:dfir-iris/api-key
+      dfir_iris_db_login_ref:
+        type: str
+        description: 'secret: reference of the database role''s password.'
+        default: secret:dfir-iris/db-password
+      dfir_iris_db_admin_login_ref:
+        type: str
+        description: 'secret: reference of the database administrator role''s password.'
+        default: secret:dfir-iris/db-admin-password
+      dfir_iris_session_key_ref:
+        type: str
+        description: 'secret: reference of the product''s session key (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/session-key
+      dfir_iris_salt_ref:
+        type: str
+        description: 'secret: reference of the product''s password-hash salt (after a migration, the source''s
+          value).'
+        default: secret:dfir-iris/password-salt
+      dfir_iris_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate chain (PEM) the lab CA issued for the
+          internal name.'
+        default: secret:dfir-iris/tls-cert
+      dfir_iris_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:dfir-iris/tls-key
+      dfir_iris_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
+          with.'
+        default: secret:dfir-iris/ca
+      dfir_iris_db_uid:
+        type: int
+        description: The database image's user id (postgres in the image).
+        default: 70
+      dfir_iris_db_gid:
+        type: int
+        description: The database image's group id.
+        default: 70
+      dfir_iris_broker_uid:
+        type: int
+        description: The broker image's user id (rabbitmq in the image).
+        default: 100
+      dfir_iris_broker_gid:
+        type: int
+        description: The broker image's group id.
+        default: 101
+      dfir_iris_front_uid:
+        type: int
+        description: The front image's user id (www-data in the image).
+        default: 33
+      dfir_iris_front_gid:
+        type: int
+        description: The front image's group id; may enter tls/ and read the certificate key.
+        default: 33
+      dfir_iris_app_mem_limit:
+        type: str
+        description: Memory limit of the app container (like 2g).
+        default: 2g
+      dfir_iris_worker_mem_limit:
+        type: str
+        description: Memory limit of the worker container.
+        default: 2g
+      dfir_iris_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      dfir_iris_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 512m
+      dfir_iris_nginx_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 128m
+      dfir_iris_start:
+        type: bool
+        description: Start the containers (false only renders them).
+        default: true
+      dfir_iris_validate_with_docker:
+        type: bool
+        description: Validate the rendered file with docker compose config.
+        default: true
+      dfir_iris_health_timeout:
+        type: int
+        description: Seconds each API call of the health hook may take.
+        default: 15
+      dfir_iris_ready_timeout:
+        type: int
+        description: Seconds main waits for the API to answer after a start (the first start creates the
+          schema).
+        default: 600
+      dfir_iris_target_image:
+        type: str
+        description: The pinned target (repository:tag@sha256:<digest>) for the IRIS application image;
+          name exactly one target.
+        default: ''
+      dfir_iris_target_nginx_image:
+        type: str
+        description: The pinned target (repository:tag@sha256:<digest>) for the front image; name exactly
+          one target.
+        default: ''
+      dfir_iris_target_db_image:
+        type: str
+        description: The pinned target (repository:tag@sha256:<digest>) for the database image; name exactly
+          one target.
+        default: ''
+      dfir_iris_target_broker_image:
+        type: str
+        description: The pinned target (repository:tag@sha256:<digest>) for the broker image; name exactly
+          one target.
+        default: ''
