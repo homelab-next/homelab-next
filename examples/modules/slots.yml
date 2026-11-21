@@ -43,6 +43,7 @@ slots:
   media:               {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   documents:           {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   feed-reader:         {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
+  graph-store:         {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   tts:                 {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   context:             {stage: null, contract: context.py, stateful: false}
   metrics:             {stage: null, contract: null, stateful: false}

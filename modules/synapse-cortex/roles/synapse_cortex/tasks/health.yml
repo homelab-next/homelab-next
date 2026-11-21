@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy (the image's own health check against the
+# service); the service is the active one; a storm call that carries no session is REFUSED (the
+# graph is private); root and every configured account sign in; and the graph holds at least the
+# expected number of nodes (a graph that lost its nodes is never "healthy" empty). Read-only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: synapse-cortex
+        compose_app_dir: "{{ synapse_cortex_app.compose_app_dir }}"
+        compose_app_spec: "{{ synapse_cortex_app.compose_app_spec }}"
+    - name: Resolve the logins (never printed)
+      ansible.builtin.set_fact:
+        synapse_cortex_logins: >-
+          {%- set out = [{'i': 0, 'name': 'root', 'passwd': lookup('hnx_secret', synapse_cortex_root_login_ref)}] -%}
+          {%- for u in synapse_cortex_users -%}
+          {%- set _ = out.append({'i': loop.index, 'name': lookup('hnx_secret', u.name_ref), 'passwd': lookup('hnx_secret', u.password_ref)}) -%}
+          {%- endfor -%}
+          {{ out }}
+      no_log: true
+    - name: The service is active, refuses an anonymous call and signs every account in
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ synapse_cortex_dir }}/docker-compose.yml", exec, -T, -e, HNX_PORT, -e, HNX_LOGINS, app,
+               python, -c, "{{ synapse_cortex_probe_script }}"]
+        expand_argument_vars: false  # the script holds $NAME-like text for the container's shell: never the controller's
+      environment:
+        HNX_PORT: "{{ synapse_cortex_https_port | int }}"
+        HNX_LOGINS: "{{ synapse_cortex_logins | to_json }}"
+      register: synapse_cortex_probed
+      changed_when: false
+      check_mode: false
+      failed_when: synapse_cortex_probed.rc != 0 or 'HNX-PROBE ok' not in synapse_cortex_probed.stdout_lines
+      no_log: true
+    - name: Count the nodes by form
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ synapse_cortex_dir }}/docker-compose.yml", exec, -T, app,
+               python, -c, "{{ synapse_cortex_counts_script }}"]
+        expand_argument_vars: false
+      register: synapse_cortex_counted
+      changed_when: false
+      check_mode: false
+      failed_when: synapse_cortex_counted.rc != 0 or (synapse_cortex_counted.stdout_lines | select('match', '^HNX-COUNTS \{') | list | length) != 1
+    - name: The graph holds the nodes it is expected to
+      ansible.builtin.assert:
+        that:
+          - >-
+            (synapse_cortex_counted.stdout_lines | select('match', '^HNX-COUNTS ') | first | regex_replace('^HNX-COUNTS ', '') | from_json).values() | map('int') | sum
+            >= synapse_cortex_expected_min_nodes | int
+        fail_msg: "synapse-cortex: the graph holds fewer nodes than synapse_cortex_expected_min_nodes ({{ synapse_cortex_expected_min_nodes }})"
+  tags: [health]

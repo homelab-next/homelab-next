@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup manifest names the export directory only: the sealed backups the service's own backup
+# machinery wrote (consistent across its slabs). The live slabs under storage/ are deliberately NOT
+# named: a file-level copy of LMDB slabs taken while the service runs is not a consistent graph, and
+# a guest backup must not stand in for the export. Take an export (the export hook) before a copy
+# that must hold the graph.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Create the compose project directory
+      ansible.builtin.file:
+        path: "{{ synapse_cortex_dir }}"
+        state: directory
+        owner: "{{ synapse_cortex_owner }}"
+        group: "{{ synapse_cortex_group }}"
+        mode: "0750"
+    - name: Write the backup manifest (the export directory)
+      ansible.builtin.copy:
+        dest: "{{ synapse_cortex_dir }}/backup-manifest.json"
+        content: "{{ {'app': 'synapse-cortex', 'paths': [synapse_cortex_data_root ~ '/export']} | to_nice_json }}\n"
+        owner: "{{ synapse_cortex_owner }}"
+        group: "{{ synapse_cortex_group }}"
+        mode: "0640"
+  tags: [backup]
