@@ -853,6 +853,9 @@ def test_the_helper_extracts_only_the_event_directories_and_counts_them(tmp_path
         "1514/5757162",
     ]
     assert (dest / "1313" / "5699623").read_bytes() == b"sample one"
+    # owner-only: the application's entrypoint gives the tree to its own user at its next start
+    assert oct((dest / "1313" / "5699623").stat().st_mode & 0o777) == "0o600"
+    assert oct((dest / "1313").stat().st_mode & 0o777) == "0o750"
     assert not (dest / "system-content").exists() and not (tmp_path / "configs").exists()
 
 

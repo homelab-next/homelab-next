@@ -116,11 +116,13 @@ def files(cfg: dict) -> dict:
             rel = m.name[len("files/") :].rstrip("/")
             target = os.path.join(dest, rel)
             if m.isdir():
-                os.makedirs(target, mode=0o755, exist_ok=True)
+                os.makedirs(target, mode=0o750, exist_ok=True)
                 continue
-            os.makedirs(os.path.dirname(target), mode=0o755, exist_ok=True)
-            # a file already there is never replaced and a link is never followed
-            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            os.makedirs(os.path.dirname(target), mode=0o750, exist_ok=True)
+            # a file already there is never replaced and a link is never followed; the modes are
+            # the owner's alone (the application's entrypoint takes the directory over at its next
+            # start and gives it the web server's user and its own modes)
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, "wb") as out:
                 src_f = tar.extractfile(m)
                 assert src_f is not None
