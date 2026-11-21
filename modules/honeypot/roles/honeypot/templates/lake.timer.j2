@@ -1,0 +1,14 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ honeypot_marker }}, instance {{ honeypot_logical_id }}); local changes are overwritten.
+# Daily on the calendar, never an interval: every run is lake commits, and OnBootSec plus
+# OnUnitActiveSec can stop firing for good after a reboot at the wrong moment.
+[Unit]
+Description=honeypot {{ honeypot_logical_id }}: land the events in the lake, daily
+
+[Timer]
+OnCalendar={{ honeypot_lake_oncalendar }}
+Persistent=true
+Unit={{ honeypot_lake_unit }}
+
+[Install]
+WantedBy=timers.target

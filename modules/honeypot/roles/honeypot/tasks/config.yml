@@ -1,0 +1,131 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Resolve the lake's and the gateway's URLs
+  ansible.builtin.include_tasks: resolve.yml
+
+- name: Create the script, configuration and credentials directories (root's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ honeypot_owner }}"
+    group: "{{ honeypot_owner_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ honeypot_bin_dir }}", mode: "0755"}
+    - {path: "{{ honeypot_config_dir }}", mode: "0755"}
+    - {path: "{{ honeypot_auth_dir }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the scripts
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ honeypot_owner }}"
+    group: "{{ honeypot_owner_group }}"
+    mode: "0755"
+  loop:
+    - {src: hnx_honeypot_receiver.py, dest: "{{ honeypot_receiver_script }}"}
+    - {src: hnx_honeypot_lake.py, dest: "{{ honeypot_lake_script }}"}
+    - {src: hnx_honeypot_report.py, dest: "{{ honeypot_report_script }}"}
+  loop_control:
+    label: "{{ item.dest }}"
+  register: honeypot_scripts
+
+- name: Write the environment (no secret in it)
+  ansible.builtin.template:
+    src: honeypot.env.j2
+    dest: "{{ honeypot_env_file }}"
+    owner: "{{ honeypot_owner }}"
+    group: "{{ honeypot_owner_group }}"
+    mode: "0644"
+  register: honeypot_env
+
+- name: Write the lake login for the units (an environment file, root-only; systemd reads it as root)
+  ansible.builtin.copy:
+    content: "HNX_SECRET_HONEYPOT_LAKE_LOGIN={{ lookup('hnx_secret', honeypot_lake_login_ref) }}\n"
+    dest: "{{ honeypot_lake_login_env_file }}"
+    owner: "{{ honeypot_owner }}"
+    group: "{{ honeypot_owner_group }}"
+    mode: "0600"
+  no_log: true
+
+- name: Write the gateway key (root-only; the report's unit loads it as a systemd credential)
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', honeypot_gateway_key_ref) }}\n"
+    dest: "{{ honeypot_gateway_key_file }}"
+    owner: "{{ honeypot_owner }}"
+    group: "{{ honeypot_owner_group }}"
+    mode: "0600"
+  when: honeypot_gateway_id != ''
+  no_log: true
+
+- name: Write the lake CA
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', honeypot_lake_ca_ref) }}\n"
+    dest: "{{ honeypot_ca_file }}"
+    owner: "{{ honeypot_owner }}"
+    group: "{{ honeypot_owner_group }}"
+    mode: "0644"
+  when: honeypot_lake_ca_ref != ''
+  no_log: true
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ honeypot_last_run_dir }}"
+    last_run_group: "{{ honeypot_last_run_group }}"
+    last_run_writer: "{{ honeypot_last_run_writer }}"
+
+- name: Write the units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ honeypot_unit_dir }}/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - {src: receiver.service.j2, dest: "{{ honeypot_receiver_unit }}", when: true}
+    - {src: lake.service.j2, dest: "{{ honeypot_lake_unit }}", when: true}
+    - {src: lake.timer.j2, dest: "{{ honeypot_lake_timer }}", when: true}
+    - {src: report.service.j2, dest: "{{ honeypot_report_unit }}", when: "{{ honeypot_report_enabled }}"}
+    - {src: report.timer.j2, dest: "{{ honeypot_report_timer }}", when: "{{ honeypot_report_enabled }}"}
+  loop_control:
+    label: "{{ item.dest }}"
+  when: item.when | bool
+  register: honeypot_units
+
+- name: Remove the report's units when the report is turned off
+  ansible.builtin.file:
+    path: "{{ honeypot_unit_dir }}/{{ item }}"
+    state: absent
+  loop: ["{{ honeypot_report_unit }}", "{{ honeypot_report_timer }}"]
+  when: not (honeypot_report_enabled | bool)
+
+- name: Write the spool's rotation (the lake writer lands the tail first)
+  ansible.builtin.template:
+    src: logrotate.j2
+    dest: "{{ honeypot_logrotate_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Reload systemd after a unit changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: honeypot_units.changed | bool and not ansible_check_mode
+
+- name: Run the receiver (enabled); restart it when its script, environment or unit changed
+  ansible.builtin.systemd_service:
+    name: "{{ honeypot_receiver_unit }}"
+    enabled: true
+    state: "{{ 'restarted' if (honeypot_scripts.changed or honeypot_env.changed or honeypot_units.changed) else 'started' }}"
+  when: not ansible_check_mode
+
+- name: Enable the timers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: "{{ [honeypot_lake_timer] + ([honeypot_report_timer] if honeypot_report_enabled | bool else []) }}"
+  when: not ansible_check_mode
