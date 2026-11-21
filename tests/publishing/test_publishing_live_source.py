@@ -305,7 +305,7 @@ def test_the_live_dir_may_not_be_or_nest_with_another_directory_of_the_run(tmp_p
 def test_a_lane_source_may_not_be_the_live_dir(tmp_path):
     base, _pub, _cfg = setup_lab(tmp_path, "stage")
     real = str(base / "handoff" / "real")
-    with pytest.raises(cf.ConfigError, match="own|same directory"):
+    with pytest.raises(cf.ConfigError, match=r"own|same directory"):
         cf.load(
             _write(
                 base,
