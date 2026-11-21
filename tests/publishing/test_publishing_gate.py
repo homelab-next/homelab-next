@@ -97,6 +97,44 @@ def test_posture_rules_can_be_switched_off_but_the_deny_list_cannot(tmp_path):
     assert verdict(tmp_path, {"a.html": "our estate"}, posture_rules=False).ok
 
 
+def test_a_named_posture_rule_can_be_disabled_and_the_others_still_block(tmp_path):
+    off = {"posture_rules_disabled": frozenset({"affected-assets"})}
+    assert verdict(tmp_path / "a", {"a.html": "patch affected systems"}, **off).ok
+    assert not verdict(tmp_path / "b", {"a.html": "patch affected systems"}).ok
+    # "our affected hosts" is not possessive-posture (its adjectives are own/internal/...): that wording
+    # was only ever caught by affected-assets, so it passes once that rule is off
+    assert verdict(tmp_path / "f", {"a.html": "our affected hosts"}, **off).ok
+    assert "posture" in rules(
+        verdict(tmp_path / "c", {"a.html": "our own hosts, affected systems"}, **off)
+    )
+    assert not verdict(tmp_path / "d", {"a.html": "our estate"}, **off).ok
+    assert not verdict(tmp_path / "e", {"a.html": "we run it"}, **off).ok
+
+
+def test_disabling_posture_rules_never_touches_the_deny_list_tlp_or_secret_shapes(tmp_path):
+    every = {"posture_rules_disabled": frozenset(gt.POSTURE_RULE_NAMES)}
+    assert verdict(tmp_path / "a", {"a.html": "our estate"}, **every).ok
+    assert "deny-list" in rules(
+        verdict(tmp_path / "b", {"a.html": "see vault.example.internal"}, **every)
+    )
+    assert "secret-shape" in rules(
+        verdict(tmp_path / "c", {"a.txt": "api_key = " + "x" * 24}, **every)
+    )
+    assert not verdict(tmp_path / "d", {"a.txt": "x"}, tlp_claim="amber", **every).ok
+
+
+@pytest.mark.parametrize(
+    "bad", [["deny-list"], ["secret-shape"], ["tlp"], ["nope"], "affected-assets", [3]]
+)
+def test_an_unknown_or_non_posture_rule_name_is_refused(bad):
+    with pytest.raises(gt.GateError):
+        policy(posture_rules_disabled=bad)
+
+
+def test_the_bool_still_switches_all_posture_rules_off(tmp_path):
+    assert verdict(tmp_path, {"a.html": "our affected hosts, we run it"}, posture_rules=False).ok
+
+
 def test_an_empty_deny_list_is_refused():
     for text in ("", "# only a comment\n", "!only.an.exception\n"):
         with pytest.raises(gt.GateError):

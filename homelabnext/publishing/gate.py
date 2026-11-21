@@ -192,6 +192,22 @@ _POSTURE: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
 )
 
+POSTURE_RULE_NAMES: tuple[str, ...] = tuple(name for name, _ in _POSTURE)
+
+
+def check_posture_rules_disabled(names: object) -> frozenset[str]:
+    """The posture rules a site switched off by name: a list of known posture rule names. Only the
+    posture rules are nameable; the deny-list, the TLP checks and the secret shapes are not."""
+    if not isinstance(names, (list, tuple, frozenset, set)):
+        raise GateError("posture_rules_disabled is a list of posture rule names")
+    bad = sorted(str(n) for n in names if not isinstance(n, str) or n not in POSTURE_RULE_NAMES)
+    if bad:
+        raise GateError(
+            f"unknown posture rule(s) {', '.join(bad)}: "
+            f"the posture rules are {', '.join(POSTURE_RULE_NAMES)}"
+        )
+    return frozenset(names)
+
 
 @dataclass(frozen=True)
 class Policy:
@@ -200,8 +216,10 @@ class Policy:
     audience: str = "public"
     access_control: str = ""
     posture_rules: bool = True
+    posture_rules_disabled: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
+        check_posture_rules_disabled(self.posture_rules_disabled)
         if self.ceiling not in (tlp.Label.CLEAR, tlp.Label.GREEN):
             raise GateError("tlp_allowed is clear or green: amber and red never pass")
         if self.audience not in ("public", "community"):
@@ -422,7 +440,7 @@ def _scan(
                 reasons.append(Reason("deny-list", unit, f"line #{i + 1} of the deny-list"))
             if policy.posture_rules:
                 for name, pat in _POSTURE:
-                    if pat.search(variant):
+                    if name not in policy.posture_rules_disabled and pat.search(variant):
                         reasons.append(Reason("posture", unit, name))
         if shapes:
             for name, pat in _SECRET_SHAPES:
