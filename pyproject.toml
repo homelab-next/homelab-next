@@ -186,9 +186,7 @@ suite_budgets = [
   # 7440.2 s on 3.12) and #458 (6953 s) were that rate at about 2900 roles tests.  8900 is about
   # 1.2x 7440.2 s, the slowest figure: shard count moves the number, so recalibrate it from a
   # twelve-shard run if the shard count changes again
-  # 10800 since the graph-store module and the other wave-3 modules joined: CI measured 9083.6 s on 3.12
-  # (pull request #542, over 8900 with the main of the day), 10800 is about 1.2x that
-  "tests/roles = 10800",
+  "tests/roles = 8900",
   # 300 since the orchestration conformance harness's strict fault-injection test (stage 2.8)
   # builds the controller and runs the whole suite against it: main measured 180-186 s summed
   # over the shards (2026-11-09), and the pull request that added it 245.8 s, over 240
@@ -216,8 +214,7 @@ suite_budgets = [
   # cutover wave-1 modules joined: 3.12 measured 152.2 s (#424, red over 150), about 1.3x
   # 300 since the wave-2 modules joined: main measured 206s on 3.12 (7a21c99b, red over 200), the stackstorm pull
   # request 222s; 300 is about 1.3x that with two module test files still to land
-  # 400 since the wave-3 modules joined: 3.12 measured 322.9 s (#542, over 300), 400 is about 1.2x that
-  "tests/modules = 400",
+  "tests/modules = 300",
   "tests/packaging = 120",  # builds and installs the wheel and the sdist
   # each test builds the whole repository graph (about 2s a build), so the suite grows with the docs;
   # 100 since CI measured 91s with 30 ADRs; 130 since CI measured 100.8s with 32 ADRs and the
