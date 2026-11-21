@@ -1,0 +1,1466 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Render and start the seven containers, seed the API token and (when asked) the administrator
+      and the OTX key.
+    options:
+      intelowl_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. enrichment).
+        required: true
+      intelowl_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (its four processes).
+        default: docker.io/intelowlproject/intelowl:v6.7.0@sha256:b5d5c36466b5046600f98a5edf67ec3d6ae8d3a3fe8dbe7ae13b3d142890ab04
+      intelowl_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web front's image (the application's release).
+        default: docker.io/intelowlproject/intelowl_nginx:v6.7.0@sha256:e8e7c8128579b91c5f84c1ef411d27d6705c8ae16338e53c2e37bcd1ce8405c3
+      intelowl_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      intelowl_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      intelowl_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      intelowl_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      intelowl_dir:
+        type: path
+        description: The compose project directory (secrets/ and config/ under it).
+        default: /opt/compose/intelowl
+      intelowl_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      intelowl_group:
+        type: str
+        description: Their group.
+        default: root
+      intelowl_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, logs/, static/, files/ and export/.'
+        default: /var/lib/hnx-modules/intelowl
+      intelowl_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61050
+      intelowl_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61050
+      intelowl_broker_uid:
+        type: int
+        description: The broker container's user id.
+        default: 61051
+      intelowl_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61051
+      intelowl_db_name:
+        type: str
+        description: The database's name.
+        default: intel_owl_db
+      intelowl_db_user:
+        type: str
+        description: The database role's name.
+        default: intelowl
+      intelowl_web_domain:
+        type: str
+        description: 'The name the application writes in its links (empty: the guest''s address).'
+        default: ''
+      intelowl_old_jobs_retention_days:
+        type: int
+        description: Jobs older than this many days are flushed by the scheduler.
+        default: 14
+      intelowl_uwsgi_processes:
+        type: int
+        description: The application server's worker processes.
+        default: 4
+      intelowl_signing_ref:
+        type: str
+        description: 'secret: reference of the application''s signing secret (after a migration, the source''s own).'
+        default: secret:intelowl/django-secret
+      intelowl_db_login_ref:
+        type: str
+        description: 'secret: reference of the database password.'
+        default: secret:intelowl/db-password
+      intelowl_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (read only when intelowl_admin_bootstrap).'
+        default: secret:intelowl/admin-password
+      intelowl_api_login_ref:
+        type: str
+        description: 'secret: reference of the API token (40 letters and digits) the role seeds for the consumers.'
+        default: secret:intelowl/api-token
+      intelowl_otx_key_ref:
+        type: str
+        description: 'Optional secret: reference of a free-tier OTX key (empty: none, nothing is read).'
+        default: ''
+      intelowl_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty user table (false when a database is restored).
+        default: true
+      intelowl_admin_user:
+        type: str
+        description: The first administrator's user name.
+        default: admin
+      intelowl_admin_email:
+        type: str
+        description: The first administrator's e-mail address.
+        default: admin@intelowl.example.internal
+      intelowl_api_user:
+        type: str
+        description: The account the API token belongs to.
+        default: admin
+      intelowl_required_analyzers:
+        type: dict
+        description: Observable class (ip, domain, url, hash, generic) to the analyzer names the consumers request,
+          exactly as the instance registers them; health checks them against the running instance.
+        default:
+          ip:
+          - Abusix
+          - BGP_Ranking
+          - GreyNoiseCommunity
+          - Feodo_Tracker
+          - TorProject
+          domain:
+          - Classic_DNS
+          - CloudFlare_DNS
+          - CheckDMARC
+          - URLhaus
+          - ThreatFox
+          url:
+          - URLhaus
+          - Classic_DNS
+          hash:
+          - MalwareBazaar_Get_Observable
+          - ThreatFox
+          - Cymru_Hash_Registry_Get_Observable
+          generic:
+          - ThreatFox
+      intelowl_expected_min_analyzers:
+        type: int
+        description: 'Health fails when the instance holds fewer analyzer configurations (0: not checked).'
+        default: 200
+      intelowl_expected_min_jobs:
+        type: int
+        description: 'Health fails when the database holds fewer jobs (0: not checked); set at a cutover.'
+        default: 0
+      intelowl_restore_keep_keys:
+        type: bool
+        description: 'Keep the free-tier keys the source stored with its plugin configuration (false: they are cleared
+          after a restore).'
+        default: false
+      intelowl_restore_dump:
+        type: str
+        description: 'restore: absolute path of the dump to restore.'
+        default: ''
+      intelowl_restore_sha256:
+        type: str
+        description: 'restore: the dump''s sha256 (the export''s listing, or the archive''s manifest).'
+        default: ''
+      intelowl_restore_expected_counts:
+        type: dict
+        description: 'restore: the counts the source holds (jobs, analyzer_configs, playbooks, users); the restored
+          tables must equal them.'
+        default: {}
+      intelowl_mem_limit:
+        type: str
+        description: Memory limit of the web worker, the websocket server and the scheduler.
+        default: 2g
+      intelowl_worker_mem_limit:
+        type: str
+        description: Memory limit of the task worker.
+        default: 2g
+      intelowl_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      intelowl_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      intelowl_front_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 256m
+      intelowl_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      intelowl_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      intelowl_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      intelowl_ready_timeout:
+        type: int
+        description: Seconds main waits for the front to answer after a start (the first start migrates the database).
+        default: 600
+  readiness:
+    short_description: The container engine is ready and every credential resolves in its form.
+    options:
+      intelowl_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. enrichment).
+        required: true
+      intelowl_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (its four processes).
+        default: docker.io/intelowlproject/intelowl:v6.7.0@sha256:b5d5c36466b5046600f98a5edf67ec3d6ae8d3a3fe8dbe7ae13b3d142890ab04
+      intelowl_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web front's image (the application's release).
+        default: docker.io/intelowlproject/intelowl_nginx:v6.7.0@sha256:e8e7c8128579b91c5f84c1ef411d27d6705c8ae16338e53c2e37bcd1ce8405c3
+      intelowl_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      intelowl_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      intelowl_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      intelowl_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      intelowl_dir:
+        type: path
+        description: The compose project directory (secrets/ and config/ under it).
+        default: /opt/compose/intelowl
+      intelowl_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      intelowl_group:
+        type: str
+        description: Their group.
+        default: root
+      intelowl_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, logs/, static/, files/ and export/.'
+        default: /var/lib/hnx-modules/intelowl
+      intelowl_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61050
+      intelowl_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61050
+      intelowl_broker_uid:
+        type: int
+        description: The broker container's user id.
+        default: 61051
+      intelowl_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61051
+      intelowl_db_name:
+        type: str
+        description: The database's name.
+        default: intel_owl_db
+      intelowl_db_user:
+        type: str
+        description: The database role's name.
+        default: intelowl
+      intelowl_web_domain:
+        type: str
+        description: 'The name the application writes in its links (empty: the guest''s address).'
+        default: ''
+      intelowl_old_jobs_retention_days:
+        type: int
+        description: Jobs older than this many days are flushed by the scheduler.
+        default: 14
+      intelowl_uwsgi_processes:
+        type: int
+        description: The application server's worker processes.
+        default: 4
+      intelowl_signing_ref:
+        type: str
+        description: 'secret: reference of the application''s signing secret (after a migration, the source''s own).'
+        default: secret:intelowl/django-secret
+      intelowl_db_login_ref:
+        type: str
+        description: 'secret: reference of the database password.'
+        default: secret:intelowl/db-password
+      intelowl_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (read only when intelowl_admin_bootstrap).'
+        default: secret:intelowl/admin-password
+      intelowl_api_login_ref:
+        type: str
+        description: 'secret: reference of the API token (40 letters and digits) the role seeds for the consumers.'
+        default: secret:intelowl/api-token
+      intelowl_otx_key_ref:
+        type: str
+        description: 'Optional secret: reference of a free-tier OTX key (empty: none, nothing is read).'
+        default: ''
+      intelowl_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty user table (false when a database is restored).
+        default: true
+      intelowl_admin_user:
+        type: str
+        description: The first administrator's user name.
+        default: admin
+      intelowl_admin_email:
+        type: str
+        description: The first administrator's e-mail address.
+        default: admin@intelowl.example.internal
+      intelowl_api_user:
+        type: str
+        description: The account the API token belongs to.
+        default: admin
+      intelowl_required_analyzers:
+        type: dict
+        description: Observable class (ip, domain, url, hash, generic) to the analyzer names the consumers request,
+          exactly as the instance registers them; health checks them against the running instance.
+        default:
+          ip:
+          - Abusix
+          - BGP_Ranking
+          - GreyNoiseCommunity
+          - Feodo_Tracker
+          - TorProject
+          domain:
+          - Classic_DNS
+          - CloudFlare_DNS
+          - CheckDMARC
+          - URLhaus
+          - ThreatFox
+          url:
+          - URLhaus
+          - Classic_DNS
+          hash:
+          - MalwareBazaar_Get_Observable
+          - ThreatFox
+          - Cymru_Hash_Registry_Get_Observable
+          generic:
+          - ThreatFox
+      intelowl_expected_min_analyzers:
+        type: int
+        description: 'Health fails when the instance holds fewer analyzer configurations (0: not checked).'
+        default: 200
+      intelowl_expected_min_jobs:
+        type: int
+        description: 'Health fails when the database holds fewer jobs (0: not checked); set at a cutover.'
+        default: 0
+      intelowl_restore_keep_keys:
+        type: bool
+        description: 'Keep the free-tier keys the source stored with its plugin configuration (false: they are cleared
+          after a restore).'
+        default: false
+      intelowl_restore_dump:
+        type: str
+        description: 'restore: absolute path of the dump to restore.'
+        default: ''
+      intelowl_restore_sha256:
+        type: str
+        description: 'restore: the dump''s sha256 (the export''s listing, or the archive''s manifest).'
+        default: ''
+      intelowl_restore_expected_counts:
+        type: dict
+        description: 'restore: the counts the source holds (jobs, analyzer_configs, playbooks, users); the restored
+          tables must equal them.'
+        default: {}
+      intelowl_mem_limit:
+        type: str
+        description: Memory limit of the web worker, the websocket server and the scheduler.
+        default: 2g
+      intelowl_worker_mem_limit:
+        type: str
+        description: Memory limit of the task worker.
+        default: 2g
+      intelowl_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      intelowl_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      intelowl_front_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 256m
+      intelowl_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      intelowl_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      intelowl_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      intelowl_ready_timeout:
+        type: int
+        description: Seconds main waits for the front to answer after a start (the first start migrates the database).
+        default: 600
+  health:
+    short_description: Containers healthy, the database, the front and the refused anonymous call, every requested
+      analyzer present and enabled, the token reading each one, the instance's counts.
+    options:
+      intelowl_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. enrichment).
+        required: true
+      intelowl_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (its four processes).
+        default: docker.io/intelowlproject/intelowl:v6.7.0@sha256:b5d5c36466b5046600f98a5edf67ec3d6ae8d3a3fe8dbe7ae13b3d142890ab04
+      intelowl_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web front's image (the application's release).
+        default: docker.io/intelowlproject/intelowl_nginx:v6.7.0@sha256:e8e7c8128579b91c5f84c1ef411d27d6705c8ae16338e53c2e37bcd1ce8405c3
+      intelowl_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      intelowl_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      intelowl_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      intelowl_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      intelowl_dir:
+        type: path
+        description: The compose project directory (secrets/ and config/ under it).
+        default: /opt/compose/intelowl
+      intelowl_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      intelowl_group:
+        type: str
+        description: Their group.
+        default: root
+      intelowl_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, logs/, static/, files/ and export/.'
+        default: /var/lib/hnx-modules/intelowl
+      intelowl_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61050
+      intelowl_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61050
+      intelowl_broker_uid:
+        type: int
+        description: The broker container's user id.
+        default: 61051
+      intelowl_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61051
+      intelowl_db_name:
+        type: str
+        description: The database's name.
+        default: intel_owl_db
+      intelowl_db_user:
+        type: str
+        description: The database role's name.
+        default: intelowl
+      intelowl_web_domain:
+        type: str
+        description: 'The name the application writes in its links (empty: the guest''s address).'
+        default: ''
+      intelowl_old_jobs_retention_days:
+        type: int
+        description: Jobs older than this many days are flushed by the scheduler.
+        default: 14
+      intelowl_uwsgi_processes:
+        type: int
+        description: The application server's worker processes.
+        default: 4
+      intelowl_signing_ref:
+        type: str
+        description: 'secret: reference of the application''s signing secret (after a migration, the source''s own).'
+        default: secret:intelowl/django-secret
+      intelowl_db_login_ref:
+        type: str
+        description: 'secret: reference of the database password.'
+        default: secret:intelowl/db-password
+      intelowl_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (read only when intelowl_admin_bootstrap).'
+        default: secret:intelowl/admin-password
+      intelowl_api_login_ref:
+        type: str
+        description: 'secret: reference of the API token (40 letters and digits) the role seeds for the consumers.'
+        default: secret:intelowl/api-token
+      intelowl_otx_key_ref:
+        type: str
+        description: 'Optional secret: reference of a free-tier OTX key (empty: none, nothing is read).'
+        default: ''
+      intelowl_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty user table (false when a database is restored).
+        default: true
+      intelowl_admin_user:
+        type: str
+        description: The first administrator's user name.
+        default: admin
+      intelowl_admin_email:
+        type: str
+        description: The first administrator's e-mail address.
+        default: admin@intelowl.example.internal
+      intelowl_api_user:
+        type: str
+        description: The account the API token belongs to.
+        default: admin
+      intelowl_required_analyzers:
+        type: dict
+        description: Observable class (ip, domain, url, hash, generic) to the analyzer names the consumers request,
+          exactly as the instance registers them; health checks them against the running instance.
+        default:
+          ip:
+          - Abusix
+          - BGP_Ranking
+          - GreyNoiseCommunity
+          - Feodo_Tracker
+          - TorProject
+          domain:
+          - Classic_DNS
+          - CloudFlare_DNS
+          - CheckDMARC
+          - URLhaus
+          - ThreatFox
+          url:
+          - URLhaus
+          - Classic_DNS
+          hash:
+          - MalwareBazaar_Get_Observable
+          - ThreatFox
+          - Cymru_Hash_Registry_Get_Observable
+          generic:
+          - ThreatFox
+      intelowl_expected_min_analyzers:
+        type: int
+        description: 'Health fails when the instance holds fewer analyzer configurations (0: not checked).'
+        default: 200
+      intelowl_expected_min_jobs:
+        type: int
+        description: 'Health fails when the database holds fewer jobs (0: not checked); set at a cutover.'
+        default: 0
+      intelowl_restore_keep_keys:
+        type: bool
+        description: 'Keep the free-tier keys the source stored with its plugin configuration (false: they are cleared
+          after a restore).'
+        default: false
+      intelowl_restore_dump:
+        type: str
+        description: 'restore: absolute path of the dump to restore.'
+        default: ''
+      intelowl_restore_sha256:
+        type: str
+        description: 'restore: the dump''s sha256 (the export''s listing, or the archive''s manifest).'
+        default: ''
+      intelowl_restore_expected_counts:
+        type: dict
+        description: 'restore: the counts the source holds (jobs, analyzer_configs, playbooks, users); the restored
+          tables must equal them.'
+        default: {}
+      intelowl_mem_limit:
+        type: str
+        description: Memory limit of the web worker, the websocket server and the scheduler.
+        default: 2g
+      intelowl_worker_mem_limit:
+        type: str
+        description: Memory limit of the task worker.
+        default: 2g
+      intelowl_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      intelowl_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      intelowl_front_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 256m
+      intelowl_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      intelowl_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      intelowl_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      intelowl_ready_timeout:
+        type: int
+        description: Seconds main waits for the front to answer after a start (the first start migrates the database).
+        default: 600
+  backup:
+    short_description: Dump the database into export/ and hand the data root to compose_app's backup.
+    options:
+      intelowl_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. enrichment).
+        required: true
+      intelowl_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (its four processes).
+        default: docker.io/intelowlproject/intelowl:v6.7.0@sha256:b5d5c36466b5046600f98a5edf67ec3d6ae8d3a3fe8dbe7ae13b3d142890ab04
+      intelowl_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web front's image (the application's release).
+        default: docker.io/intelowlproject/intelowl_nginx:v6.7.0@sha256:e8e7c8128579b91c5f84c1ef411d27d6705c8ae16338e53c2e37bcd1ce8405c3
+      intelowl_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      intelowl_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      intelowl_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      intelowl_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      intelowl_dir:
+        type: path
+        description: The compose project directory (secrets/ and config/ under it).
+        default: /opt/compose/intelowl
+      intelowl_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      intelowl_group:
+        type: str
+        description: Their group.
+        default: root
+      intelowl_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, logs/, static/, files/ and export/.'
+        default: /var/lib/hnx-modules/intelowl
+      intelowl_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61050
+      intelowl_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61050
+      intelowl_broker_uid:
+        type: int
+        description: The broker container's user id.
+        default: 61051
+      intelowl_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61051
+      intelowl_db_name:
+        type: str
+        description: The database's name.
+        default: intel_owl_db
+      intelowl_db_user:
+        type: str
+        description: The database role's name.
+        default: intelowl
+      intelowl_web_domain:
+        type: str
+        description: 'The name the application writes in its links (empty: the guest''s address).'
+        default: ''
+      intelowl_old_jobs_retention_days:
+        type: int
+        description: Jobs older than this many days are flushed by the scheduler.
+        default: 14
+      intelowl_uwsgi_processes:
+        type: int
+        description: The application server's worker processes.
+        default: 4
+      intelowl_signing_ref:
+        type: str
+        description: 'secret: reference of the application''s signing secret (after a migration, the source''s own).'
+        default: secret:intelowl/django-secret
+      intelowl_db_login_ref:
+        type: str
+        description: 'secret: reference of the database password.'
+        default: secret:intelowl/db-password
+      intelowl_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (read only when intelowl_admin_bootstrap).'
+        default: secret:intelowl/admin-password
+      intelowl_api_login_ref:
+        type: str
+        description: 'secret: reference of the API token (40 letters and digits) the role seeds for the consumers.'
+        default: secret:intelowl/api-token
+      intelowl_otx_key_ref:
+        type: str
+        description: 'Optional secret: reference of a free-tier OTX key (empty: none, nothing is read).'
+        default: ''
+      intelowl_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty user table (false when a database is restored).
+        default: true
+      intelowl_admin_user:
+        type: str
+        description: The first administrator's user name.
+        default: admin
+      intelowl_admin_email:
+        type: str
+        description: The first administrator's e-mail address.
+        default: admin@intelowl.example.internal
+      intelowl_api_user:
+        type: str
+        description: The account the API token belongs to.
+        default: admin
+      intelowl_required_analyzers:
+        type: dict
+        description: Observable class (ip, domain, url, hash, generic) to the analyzer names the consumers request,
+          exactly as the instance registers them; health checks them against the running instance.
+        default:
+          ip:
+          - Abusix
+          - BGP_Ranking
+          - GreyNoiseCommunity
+          - Feodo_Tracker
+          - TorProject
+          domain:
+          - Classic_DNS
+          - CloudFlare_DNS
+          - CheckDMARC
+          - URLhaus
+          - ThreatFox
+          url:
+          - URLhaus
+          - Classic_DNS
+          hash:
+          - MalwareBazaar_Get_Observable
+          - ThreatFox
+          - Cymru_Hash_Registry_Get_Observable
+          generic:
+          - ThreatFox
+      intelowl_expected_min_analyzers:
+        type: int
+        description: 'Health fails when the instance holds fewer analyzer configurations (0: not checked).'
+        default: 200
+      intelowl_expected_min_jobs:
+        type: int
+        description: 'Health fails when the database holds fewer jobs (0: not checked); set at a cutover.'
+        default: 0
+      intelowl_restore_keep_keys:
+        type: bool
+        description: 'Keep the free-tier keys the source stored with its plugin configuration (false: they are cleared
+          after a restore).'
+        default: false
+      intelowl_restore_dump:
+        type: str
+        description: 'restore: absolute path of the dump to restore.'
+        default: ''
+      intelowl_restore_sha256:
+        type: str
+        description: 'restore: the dump''s sha256 (the export''s listing, or the archive''s manifest).'
+        default: ''
+      intelowl_restore_expected_counts:
+        type: dict
+        description: 'restore: the counts the source holds (jobs, analyzer_configs, playbooks, users); the restored
+          tables must equal them.'
+        default: {}
+      intelowl_mem_limit:
+        type: str
+        description: Memory limit of the web worker, the websocket server and the scheduler.
+        default: 2g
+      intelowl_worker_mem_limit:
+        type: str
+        description: Memory limit of the task worker.
+        default: 2g
+      intelowl_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      intelowl_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      intelowl_front_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 256m
+      intelowl_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      intelowl_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      intelowl_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      intelowl_ready_timeout:
+        type: int
+        description: Seconds main waits for the front to answer after a start (the first start migrates the database).
+        default: 600
+  export:
+    short_description: 'Write the object-tree exit copy: db/intel_owl.dump and listing.jsonl.'
+    options:
+      intelowl_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. enrichment).
+        required: true
+      intelowl_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (its four processes).
+        default: docker.io/intelowlproject/intelowl:v6.7.0@sha256:b5d5c36466b5046600f98a5edf67ec3d6ae8d3a3fe8dbe7ae13b3d142890ab04
+      intelowl_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web front's image (the application's release).
+        default: docker.io/intelowlproject/intelowl_nginx:v6.7.0@sha256:e8e7c8128579b91c5f84c1ef411d27d6705c8ae16338e53c2e37bcd1ce8405c3
+      intelowl_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      intelowl_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      intelowl_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      intelowl_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      intelowl_dir:
+        type: path
+        description: The compose project directory (secrets/ and config/ under it).
+        default: /opt/compose/intelowl
+      intelowl_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      intelowl_group:
+        type: str
+        description: Their group.
+        default: root
+      intelowl_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, logs/, static/, files/ and export/.'
+        default: /var/lib/hnx-modules/intelowl
+      intelowl_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61050
+      intelowl_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61050
+      intelowl_broker_uid:
+        type: int
+        description: The broker container's user id.
+        default: 61051
+      intelowl_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61051
+      intelowl_db_name:
+        type: str
+        description: The database's name.
+        default: intel_owl_db
+      intelowl_db_user:
+        type: str
+        description: The database role's name.
+        default: intelowl
+      intelowl_web_domain:
+        type: str
+        description: 'The name the application writes in its links (empty: the guest''s address).'
+        default: ''
+      intelowl_old_jobs_retention_days:
+        type: int
+        description: Jobs older than this many days are flushed by the scheduler.
+        default: 14
+      intelowl_uwsgi_processes:
+        type: int
+        description: The application server's worker processes.
+        default: 4
+      intelowl_signing_ref:
+        type: str
+        description: 'secret: reference of the application''s signing secret (after a migration, the source''s own).'
+        default: secret:intelowl/django-secret
+      intelowl_db_login_ref:
+        type: str
+        description: 'secret: reference of the database password.'
+        default: secret:intelowl/db-password
+      intelowl_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (read only when intelowl_admin_bootstrap).'
+        default: secret:intelowl/admin-password
+      intelowl_api_login_ref:
+        type: str
+        description: 'secret: reference of the API token (40 letters and digits) the role seeds for the consumers.'
+        default: secret:intelowl/api-token
+      intelowl_otx_key_ref:
+        type: str
+        description: 'Optional secret: reference of a free-tier OTX key (empty: none, nothing is read).'
+        default: ''
+      intelowl_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty user table (false when a database is restored).
+        default: true
+      intelowl_admin_user:
+        type: str
+        description: The first administrator's user name.
+        default: admin
+      intelowl_admin_email:
+        type: str
+        description: The first administrator's e-mail address.
+        default: admin@intelowl.example.internal
+      intelowl_api_user:
+        type: str
+        description: The account the API token belongs to.
+        default: admin
+      intelowl_required_analyzers:
+        type: dict
+        description: Observable class (ip, domain, url, hash, generic) to the analyzer names the consumers request,
+          exactly as the instance registers them; health checks them against the running instance.
+        default:
+          ip:
+          - Abusix
+          - BGP_Ranking
+          - GreyNoiseCommunity
+          - Feodo_Tracker
+          - TorProject
+          domain:
+          - Classic_DNS
+          - CloudFlare_DNS
+          - CheckDMARC
+          - URLhaus
+          - ThreatFox
+          url:
+          - URLhaus
+          - Classic_DNS
+          hash:
+          - MalwareBazaar_Get_Observable
+          - ThreatFox
+          - Cymru_Hash_Registry_Get_Observable
+          generic:
+          - ThreatFox
+      intelowl_expected_min_analyzers:
+        type: int
+        description: 'Health fails when the instance holds fewer analyzer configurations (0: not checked).'
+        default: 200
+      intelowl_expected_min_jobs:
+        type: int
+        description: 'Health fails when the database holds fewer jobs (0: not checked); set at a cutover.'
+        default: 0
+      intelowl_restore_keep_keys:
+        type: bool
+        description: 'Keep the free-tier keys the source stored with its plugin configuration (false: they are cleared
+          after a restore).'
+        default: false
+      intelowl_restore_dump:
+        type: str
+        description: 'restore: absolute path of the dump to restore.'
+        default: ''
+      intelowl_restore_sha256:
+        type: str
+        description: 'restore: the dump''s sha256 (the export''s listing, or the archive''s manifest).'
+        default: ''
+      intelowl_restore_expected_counts:
+        type: dict
+        description: 'restore: the counts the source holds (jobs, analyzer_configs, playbooks, users); the restored
+          tables must equal them.'
+        default: {}
+      intelowl_mem_limit:
+        type: str
+        description: Memory limit of the web worker, the websocket server and the scheduler.
+        default: 2g
+      intelowl_worker_mem_limit:
+        type: str
+        description: Memory limit of the task worker.
+        default: 2g
+      intelowl_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      intelowl_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      intelowl_front_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 256m
+      intelowl_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      intelowl_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      intelowl_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      intelowl_ready_timeout:
+        type: int
+        description: Seconds main waits for the front to answer after a start (the first start migrates the database).
+        default: 600
+  restore:
+    short_description: Restore a checked dump with the application stopped, prove the source's counts, seed the
+      token, run health.
+    options:
+      intelowl_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. enrichment).
+        required: true
+      intelowl_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (its four processes).
+        default: docker.io/intelowlproject/intelowl:v6.7.0@sha256:b5d5c36466b5046600f98a5edf67ec3d6ae8d3a3fe8dbe7ae13b3d142890ab04
+      intelowl_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web front's image (the application's release).
+        default: docker.io/intelowlproject/intelowl_nginx:v6.7.0@sha256:e8e7c8128579b91c5f84c1ef411d27d6705c8ae16338e53c2e37bcd1ce8405c3
+      intelowl_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      intelowl_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      intelowl_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      intelowl_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      intelowl_dir:
+        type: path
+        description: The compose project directory (secrets/ and config/ under it).
+        default: /opt/compose/intelowl
+      intelowl_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      intelowl_group:
+        type: str
+        description: Their group.
+        default: root
+      intelowl_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, logs/, static/, files/ and export/.'
+        default: /var/lib/hnx-modules/intelowl
+      intelowl_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61050
+      intelowl_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61050
+      intelowl_broker_uid:
+        type: int
+        description: The broker container's user id.
+        default: 61051
+      intelowl_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61051
+      intelowl_db_name:
+        type: str
+        description: The database's name.
+        default: intel_owl_db
+      intelowl_db_user:
+        type: str
+        description: The database role's name.
+        default: intelowl
+      intelowl_web_domain:
+        type: str
+        description: 'The name the application writes in its links (empty: the guest''s address).'
+        default: ''
+      intelowl_old_jobs_retention_days:
+        type: int
+        description: Jobs older than this many days are flushed by the scheduler.
+        default: 14
+      intelowl_uwsgi_processes:
+        type: int
+        description: The application server's worker processes.
+        default: 4
+      intelowl_signing_ref:
+        type: str
+        description: 'secret: reference of the application''s signing secret (after a migration, the source''s own).'
+        default: secret:intelowl/django-secret
+      intelowl_db_login_ref:
+        type: str
+        description: 'secret: reference of the database password.'
+        default: secret:intelowl/db-password
+      intelowl_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (read only when intelowl_admin_bootstrap).'
+        default: secret:intelowl/admin-password
+      intelowl_api_login_ref:
+        type: str
+        description: 'secret: reference of the API token (40 letters and digits) the role seeds for the consumers.'
+        default: secret:intelowl/api-token
+      intelowl_otx_key_ref:
+        type: str
+        description: 'Optional secret: reference of a free-tier OTX key (empty: none, nothing is read).'
+        default: ''
+      intelowl_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty user table (false when a database is restored).
+        default: true
+      intelowl_admin_user:
+        type: str
+        description: The first administrator's user name.
+        default: admin
+      intelowl_admin_email:
+        type: str
+        description: The first administrator's e-mail address.
+        default: admin@intelowl.example.internal
+      intelowl_api_user:
+        type: str
+        description: The account the API token belongs to.
+        default: admin
+      intelowl_required_analyzers:
+        type: dict
+        description: Observable class (ip, domain, url, hash, generic) to the analyzer names the consumers request,
+          exactly as the instance registers them; health checks them against the running instance.
+        default:
+          ip:
+          - Abusix
+          - BGP_Ranking
+          - GreyNoiseCommunity
+          - Feodo_Tracker
+          - TorProject
+          domain:
+          - Classic_DNS
+          - CloudFlare_DNS
+          - CheckDMARC
+          - URLhaus
+          - ThreatFox
+          url:
+          - URLhaus
+          - Classic_DNS
+          hash:
+          - MalwareBazaar_Get_Observable
+          - ThreatFox
+          - Cymru_Hash_Registry_Get_Observable
+          generic:
+          - ThreatFox
+      intelowl_expected_min_analyzers:
+        type: int
+        description: 'Health fails when the instance holds fewer analyzer configurations (0: not checked).'
+        default: 200
+      intelowl_expected_min_jobs:
+        type: int
+        description: 'Health fails when the database holds fewer jobs (0: not checked); set at a cutover.'
+        default: 0
+      intelowl_restore_keep_keys:
+        type: bool
+        description: 'Keep the free-tier keys the source stored with its plugin configuration (false: they are cleared
+          after a restore).'
+        default: false
+      intelowl_restore_dump:
+        type: str
+        description: 'restore: absolute path of the dump to restore.'
+        default: ''
+      intelowl_restore_sha256:
+        type: str
+        description: 'restore: the dump''s sha256 (the export''s listing, or the archive''s manifest).'
+        default: ''
+      intelowl_restore_expected_counts:
+        type: dict
+        description: 'restore: the counts the source holds (jobs, analyzer_configs, playbooks, users); the restored
+          tables must equal them.'
+        default: {}
+      intelowl_mem_limit:
+        type: str
+        description: Memory limit of the web worker, the websocket server and the scheduler.
+        default: 2g
+      intelowl_worker_mem_limit:
+        type: str
+        description: Memory limit of the task worker.
+        default: 2g
+      intelowl_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      intelowl_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      intelowl_front_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 256m
+      intelowl_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      intelowl_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      intelowl_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      intelowl_ready_timeout:
+        type: int
+        description: Seconds main waits for the front to answer after a start (the first start migrates the database).
+        default: 600
+  upgrade:
+    short_description: Validate and record a pinned image bump.
+    options:
+      intelowl_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. enrichment).
+        required: true
+      intelowl_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (its four processes).
+        default: docker.io/intelowlproject/intelowl:v6.7.0@sha256:b5d5c36466b5046600f98a5edf67ec3d6ae8d3a3fe8dbe7ae13b3d142890ab04
+      intelowl_nginx_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web front's image (the application's release).
+        default: docker.io/intelowlproject/intelowl_nginx:v6.7.0@sha256:e8e7c8128579b91c5f84c1ef411d27d6705c8ae16338e53c2e37bcd1ce8405c3
+      intelowl_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      intelowl_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image.
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      intelowl_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      intelowl_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      intelowl_dir:
+        type: path
+        description: The compose project directory (secrets/ and config/ under it).
+        default: /opt/compose/intelowl
+      intelowl_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      intelowl_group:
+        type: str
+        description: Their group.
+        default: root
+      intelowl_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, logs/, static/, files/ and export/.'
+        default: /var/lib/hnx-modules/intelowl
+      intelowl_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61050
+      intelowl_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61050
+      intelowl_broker_uid:
+        type: int
+        description: The broker container's user id.
+        default: 61051
+      intelowl_broker_gid:
+        type: int
+        description: The broker container's group id.
+        default: 61051
+      intelowl_db_name:
+        type: str
+        description: The database's name.
+        default: intel_owl_db
+      intelowl_db_user:
+        type: str
+        description: The database role's name.
+        default: intelowl
+      intelowl_web_domain:
+        type: str
+        description: 'The name the application writes in its links (empty: the guest''s address).'
+        default: ''
+      intelowl_old_jobs_retention_days:
+        type: int
+        description: Jobs older than this many days are flushed by the scheduler.
+        default: 14
+      intelowl_uwsgi_processes:
+        type: int
+        description: The application server's worker processes.
+        default: 4
+      intelowl_signing_ref:
+        type: str
+        description: 'secret: reference of the application''s signing secret (after a migration, the source''s own).'
+        default: secret:intelowl/django-secret
+      intelowl_db_login_ref:
+        type: str
+        description: 'secret: reference of the database password.'
+        default: secret:intelowl/db-password
+      intelowl_admin_login_ref:
+        type: str
+        description: 'secret: reference of the first administrator''s password (read only when intelowl_admin_bootstrap).'
+        default: secret:intelowl/admin-password
+      intelowl_api_login_ref:
+        type: str
+        description: 'secret: reference of the API token (40 letters and digits) the role seeds for the consumers.'
+        default: secret:intelowl/api-token
+      intelowl_otx_key_ref:
+        type: str
+        description: 'Optional secret: reference of a free-tier OTX key (empty: none, nothing is read).'
+        default: ''
+      intelowl_admin_bootstrap:
+        type: bool
+        description: Create the first administrator on an empty user table (false when a database is restored).
+        default: true
+      intelowl_admin_user:
+        type: str
+        description: The first administrator's user name.
+        default: admin
+      intelowl_admin_email:
+        type: str
+        description: The first administrator's e-mail address.
+        default: admin@intelowl.example.internal
+      intelowl_api_user:
+        type: str
+        description: The account the API token belongs to.
+        default: admin
+      intelowl_required_analyzers:
+        type: dict
+        description: Observable class (ip, domain, url, hash, generic) to the analyzer names the consumers request,
+          exactly as the instance registers them; health checks them against the running instance.
+        default:
+          ip:
+          - Abusix
+          - BGP_Ranking
+          - GreyNoiseCommunity
+          - Feodo_Tracker
+          - TorProject
+          domain:
+          - Classic_DNS
+          - CloudFlare_DNS
+          - CheckDMARC
+          - URLhaus
+          - ThreatFox
+          url:
+          - URLhaus
+          - Classic_DNS
+          hash:
+          - MalwareBazaar_Get_Observable
+          - ThreatFox
+          - Cymru_Hash_Registry_Get_Observable
+          generic:
+          - ThreatFox
+      intelowl_expected_min_analyzers:
+        type: int
+        description: 'Health fails when the instance holds fewer analyzer configurations (0: not checked).'
+        default: 200
+      intelowl_expected_min_jobs:
+        type: int
+        description: 'Health fails when the database holds fewer jobs (0: not checked); set at a cutover.'
+        default: 0
+      intelowl_restore_keep_keys:
+        type: bool
+        description: 'Keep the free-tier keys the source stored with its plugin configuration (false: they are cleared
+          after a restore).'
+        default: false
+      intelowl_restore_dump:
+        type: str
+        description: 'restore: absolute path of the dump to restore.'
+        default: ''
+      intelowl_restore_sha256:
+        type: str
+        description: 'restore: the dump''s sha256 (the export''s listing, or the archive''s manifest).'
+        default: ''
+      intelowl_restore_expected_counts:
+        type: dict
+        description: 'restore: the counts the source holds (jobs, analyzer_configs, playbooks, users); the restored
+          tables must equal them.'
+        default: {}
+      intelowl_mem_limit:
+        type: str
+        description: Memory limit of the web worker, the websocket server and the scheduler.
+        default: 2g
+      intelowl_worker_mem_limit:
+        type: str
+        description: Memory limit of the task worker.
+        default: 2g
+      intelowl_db_mem_limit:
+        type: str
+        description: Memory limit of the database container.
+        default: 1g
+      intelowl_broker_mem_limit:
+        type: str
+        description: Memory limit of the broker container.
+        default: 256m
+      intelowl_front_mem_limit:
+        type: str
+        description: Memory limit of the front container.
+        default: 256m
+      intelowl_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      intelowl_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      intelowl_health_timeout:
+        type: int
+        description: Seconds an HTTP check waits for an answer.
+        default: 15
+      intelowl_ready_timeout:
+        type: int
+        description: Seconds main waits for the front to answer after a start (the first start migrates the database).
+        default: 600
+      intelowl_target_image:
+        type: str
+        description: 'upgrade: the application image to move to (with intelowl_target_nginx_image).'
+      intelowl_target_nginx_image:
+        type: str
+        description: 'upgrade: the front image to move to (the same release tag).'
+      intelowl_target_postgres_image:
+        type: str
+        description: 'upgrade: the database image to move to (a minor version only).'
+      intelowl_target_redis_image:
+        type: str
+        description: 'upgrade: the broker image to move to.'

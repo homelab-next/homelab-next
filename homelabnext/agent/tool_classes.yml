@@ -111,6 +111,7 @@ capabilities:
   cap:media: [read]  # the media slot: a server that plays a library to its clients
   cap:media-automation: [exec]  # the media-automation slot: requests, downloads through a VPN and imports into the library change files and spend bandwidth
   cap:documents: [read]  # the documents slot: a library of filed documents read through its API
+  cap:enrichment: [read]  # the enrichment slot: a service that looks an observable up in public sources and answers (it changes nothing the lab holds)
   cap:feed-reader: [read]  # the feed-reader slot: subscribed feeds and their entries read through the Fever and Google Reader APIs
   cap:tts: [read]  # the tts slot: a service that renders text to speech in the operator's voice (it changes nothing)
   cap:chat: [exec]  # the chat slot: a front end that sends people's prompts to the model gateway under its own key; broker-only, an agent has no use for it

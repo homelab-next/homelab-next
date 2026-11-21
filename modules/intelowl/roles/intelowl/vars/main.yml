@@ -1,0 +1,145 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+intelowl_front_port: 80
+intelowl_daphne_port: 8011
+intelowl_container_logs: /var/log/intel_owl
+intelowl_container_static: /opt/deploy/intel_owl/static
+intelowl_container_files: /opt/deploy/files_required
+intelowl_container_pgdata: /var/lib/postgresql/data
+intelowl_container_export: /var/lib/postgresql/export
+intelowl_repository: "{{ intelowl_image.split('@')[0].rsplit(':', 1)[0] }}"
+intelowl_tag: "{{ intelowl_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+intelowl_digest: "{{ intelowl_image.split('@')[1] | default('') }}"
+intelowl_front_repository: "{{ intelowl_nginx_image.split('@')[0].rsplit(':', 1)[0] }}"
+intelowl_front_tag: "{{ intelowl_nginx_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+intelowl_front_digest: "{{ intelowl_nginx_image.split('@')[1] | default('') }}"
+intelowl_db_repository: "{{ intelowl_postgres_image.split('@')[0].rsplit(':', 1)[0] }}"
+intelowl_db_tag: "{{ intelowl_postgres_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+intelowl_db_digest: "{{ intelowl_postgres_image.split('@')[1] | default('') }}"
+intelowl_broker_repository: "{{ intelowl_redis_image.split('@')[0].rsplit(':', 1)[0] }}"
+intelowl_broker_tag: "{{ intelowl_redis_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+intelowl_broker_digest: "{{ intelowl_redis_image.split('@')[1] | default('') }}"
+intelowl_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+# the application's own version tag (vMAJOR.MINOR.PATCH): the front image carries the same one
+intelowl_version_tag_pattern: '^v[0-9]+\.[0-9]+\.[0-9]+\Z'
+intelowl_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+intelowl_domain_pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\Z'
+intelowl_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+intelowl_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+intelowl_user_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z'
+intelowl_email_pattern: '^[A-Za-z0-9._+-]+@[a-z0-9.-]+\.[a-z]{2,}\Z'
+# the same shapes the other providers hold their credentials to: a database password safe in an
+# env_file, the application's signing secret (any env_file-safe string of 32 or more, because the
+# source's is carried over), the admin password and the API token (the framework's own 40-character form)
+intelowl_db_value_pattern: '^[A-Za-z0-9._~-]{24,128}\Z'
+intelowl_django_value_pattern: '^[A-Za-z0-9._~+/=-]{32,256}\Z'
+intelowl_admin_value_pattern: '^[A-Za-z0-9._~-]{16,128}\Z'
+intelowl_api_value_pattern: '^[A-Za-z0-9]{40}\Z'
+intelowl_otx_value_pattern: '^[A-Za-z0-9]{32,128}\Z'
+# an analyzer's registered name, exactly as the instance lists it
+intelowl_analyzer_name_pattern: '^[A-Za-z][A-Za-z0-9_]{0,99}\Z'
+intelowl_observable_classes: [ip, domain, url, hash, generic]
+intelowl_count_keys: [jobs, analyzer_configs, playbooks, users]
+# the tables the counts and the restore's recognition read (a dump without them is not this product's)
+intelowl_count_tables:
+  jobs: api_app_job
+  analyzer_configs: analyzers_manager_analyzerconfig
+  playbooks: playbooks_manager_playbookconfig
+  users: certego_saas_user_user
+intelowl_refs: "{{ [intelowl_signing_ref, intelowl_db_login_ref, intelowl_api_login_ref] + ([intelowl_admin_login_ref] if intelowl_admin_bootstrap | bool else []) + ([intelowl_otx_key_ref] if intelowl_otx_key_ref | length > 0 else []) }}"
+# what the containers need from root: they start as root, change the owner of their log and
+# download directories and drop to the image's service user (uWSGI, the front's workers)
+intelowl_app_caps: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+intelowl_front_caps: [CHOWN, DAC_OVERRIDE, NET_BIND_SERVICE, SETGID, SETUID]
+# the application's own, non-secret settings (the secrets go in compose_app_secret_env)
+intelowl_fixed_env:
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_SSL: "False"
+  LOCAL_STORAGE: "True"
+  STAGE: production
+  DEBUG: "False"
+  LDAP_ENABLED: "False"
+  RADIUS_AUTH_ENABLED: "False"
+  MOCK_CONNECTIONS: "False"
+  DISABLE_LOGGING_TEST: "False"
+  HTTPS_ENABLED: not_enabled
+  PUBLIC_DEPLOYMENT: "False"
+  ELASTICSEARCH_DSL_ENABLED: "False"
+  ELASTICSEARCH_BI_ENABLED: "False"
+  BROKER_URL: redis://redis/1
+  WEBSOCKETS_URL: redis://redis/0
+# run inside the uwsgi container (manage.py shell). Each prints one HNX-... line.
+intelowl_admin_code: |
+  import os
+  from django.contrib.auth import get_user_model
+  User = get_user_model()
+  if User.objects.filter(is_superuser=True).exists():
+      print("HNX-ADMIN present")
+  else:
+      u = User.objects.create_superuser(
+          username=os.environ["HNX_ADMIN_USER"], email=os.environ["HNX_ADMIN_EMAIL"],
+          password=os.environ["HNX_ADMIN_PASSWORD"], first_name="Admin", last_name="Account")
+      print("HNX-ADMIN created")
+intelowl_api_seed_code: |
+  import os
+  from django.contrib.auth import get_user_model
+  from rest_framework.authtoken.models import Token
+  user = get_user_model().objects.filter(username=os.environ["HNX_API_USER"]).first()
+  if user is None:
+      print("HNX-TOKEN no-user")
+  else:
+      want = os.environ["HNX_API_TOKEN"]
+      have = Token.objects.filter(user=user).first()
+      if have is not None and have.key == want:
+          print("HNX-TOKEN unchanged")
+      else:
+          state = "replaced" if have is not None else "created"
+          Token.objects.filter(user=user).delete()
+          Token.objects.create(user=user, key=want)
+          print("HNX-TOKEN " + state)
+intelowl_otx_code: |
+  import os
+  from api_app.analyzers_manager.models import AnalyzerConfig
+  from api_app.models import Parameter, PluginConfig
+  key = os.environ["HNX_OTX_KEY"]
+  n = 0
+  for a in AnalyzerConfig.objects.filter(name__in=["OTXQuery", "OTX_Check_Hash"]):
+      param = Parameter.objects.get(python_module=a.python_module, name="api_key_name")
+      PluginConfig.objects.update_or_create(
+          parameter=param, analyzer_config=a, owner=None, for_organization=False,
+          defaults={"value": key})
+      n += 1
+  print("HNX-OTX %d" % n)
+  if n == 0:
+      raise SystemExit(1)
+intelowl_strip_code: |
+  from api_app.models import PluginConfig
+  rows = PluginConfig.objects.filter(parameter__is_secret=True).exclude(value="")
+  names = sorted({(p.analyzer_config.name if p.analyzer_config_id else "-") for p in rows})
+  n = rows.count()
+  rows.update(value="")
+  print("HNX-STRIP %d %s" % (n, ",".join(names)))
+# run inside the uwsgi container: what the instance holds (the counts) and whether the analyzers the
+# consumers request exist, are enabled and cover every observable class. It reads the model's own
+# `disabled` flag: the API's `disabled` field of 6.7.0 is `disabled OR health_check_status`, which is
+# true for every analyzer that is healthy, so it cannot be used for this.
+intelowl_state_code: |
+  import json, os
+  from api_app.analyzers_manager.models import AnalyzerConfig
+  from api_app.models import Job
+  from certego_saas.apps.user.models import User
+  from api_app.playbooks_manager.models import PlaybookConfig
+  want = json.loads(os.environ["HNX_WANT"])
+  names = sorted({n for v in want.values() for n in v})
+  have = {a.name: a for a in AnalyzerConfig.objects.filter(name__in=names)}
+  missing = [n for n in names if n not in have]
+  disabled = [n for n in names if n in have and have[n].disabled]
+  empty = sorted(
+      c for c, ns in want.items()
+      if not any(n in have and not have[n].disabled and c in (have[n].observable_supported or []) for n in ns))
+  counts = {"analyzer_configs": AnalyzerConfig.objects.count(), "jobs": Job.objects.count(),
+            "playbooks": PlaybookConfig.objects.count(), "users": User.objects.count()}
+  ok = not missing and not disabled and not empty
+  print("HNX-STATE " + json.dumps({"ok": ok, "missing": missing, "disabled": disabled, "uncovered": empty,
+                                   "counts": counts}, sort_keys=True))

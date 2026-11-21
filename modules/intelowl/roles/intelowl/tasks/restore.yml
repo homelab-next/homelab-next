@@ -1,0 +1,153 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore a dump (README, "Migrating in"): the source is checked first and nothing is written until
+# it passes (a regular file, not a link, with the sha256 named in intelowl_restore_sha256, which the
+# export's listing or the archive's manifest holds; and the counts the source is known to have,
+# intelowl_restore_expected_counts, which MUST name jobs, analyzer_configs, playbooks and users, the
+# analyzer configurations and users above zero: an unrecognised or empty source is an error, never a
+# pass). Then, with every application container STOPPED, the dump is staged in export/db/ as the
+# database's user, hashed again (what is restored is what was checked), recognised (its table of
+# contents names the four tables the counts read) and restored with pg_restore --clean --if-exists in
+# one transaction; the four tables are counted and must EQUAL the expected counts before anything
+# starts. The free-tier keys the source stored with its plugin configuration are cleared unless
+# intelowl_restore_keep_keys (the module is keyless by default), the API token is seeded, and health
+# proves the restored service. Run again with a newer dump for the final delta after a freeze:
+# --clean replaces everything the first restore wrote.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Refuse a restore that does not say what it restores
+      ansible.builtin.assert:
+        that:
+          - intelowl_restore_dump is match(intelowl_path_pattern)
+          - intelowl_restore_sha256 is match('^[0-9a-f]{64}\Z')
+          - intelowl_restore_expected_counts is mapping
+          - intelowl_restore_expected_counts.keys() | sort == intelowl_count_keys | sort
+          - intelowl_restore_expected_counts.values() | reject('integer') | list | length == 0
+          - intelowl_restore_expected_counts.values() | select('lt', 0) | list | length == 0
+          - intelowl_restore_expected_counts.analyzer_configs | int > 0
+          - intelowl_restore_expected_counts.users | int > 0
+        fail_msg: >-
+          intelowl: a restore names the dump (intelowl_restore_dump, an absolute canonical path), its sha256
+          (intelowl_restore_sha256) and the counts the source has (intelowl_restore_expected_counts:
+          {{ intelowl_count_keys | join(', ') }}, whole numbers, analyzer_configs and users above zero)
+    - name: Read the source (size, sha256)
+      ansible.builtin.stat:
+        path: "{{ intelowl_restore_dump }}"
+        checksum_algorithm: sha256
+        follow: false
+      register: intelowl_restore_stat
+    - name: Refuse a source that is not exactly what was named (nothing is written)
+      ansible.builtin.assert:
+        that:
+          - intelowl_restore_stat.stat.exists
+          - intelowl_restore_stat.stat.isreg
+          - intelowl_restore_stat.stat.size | int > 0
+          - intelowl_restore_stat.stat.checksum == intelowl_restore_sha256
+        fail_msg: "intelowl: {{ intelowl_restore_dump }} is not an intact dump (missing, not a regular file, empty, or its sha256 differs from the one named)"
+    - name: Restore with the application stopped
+      block:
+        - name: Make sure the database and the broker are up
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", up, -d, --wait, postgres, redis]
+          changed_when: false
+        - name: Stop the application and its front
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", stop, nginx, worker, beat, daphne, uwsgi]
+          changed_when: true
+        - name: Stage the dump as the database's user
+          ansible.builtin.copy:
+            src: "{{ intelowl_restore_dump }}"
+            dest: "{{ intelowl_data_root }}/export/db/.restore.dump"
+            remote_src: true
+            owner: "{{ intelowl_db_uid | int }}"
+            group: "{{ intelowl_db_gid | int }}"
+            mode: "0600"
+        - name: Hash the staged copy
+          ansible.builtin.stat:
+            path: "{{ intelowl_data_root }}/export/db/.restore.dump"
+            checksum_algorithm: sha256
+          register: intelowl_staged
+        - name: What is staged is what was checked
+          ansible.builtin.assert:
+            that: intelowl_staged.stat.checksum == intelowl_restore_sha256
+            fail_msg: "intelowl: the staged dump differs from the checked one"
+        - name: Read the dump's table of contents
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", exec, -T, postgres,
+                   pg_restore, --list, "{{ intelowl_container_export }}/.restore.dump"]
+          register: intelowl_toc
+          changed_when: false
+        - name: Refuse a dump that is not this product's database
+          ansible.builtin.assert:
+            that: >-
+              intelowl_count_tables.values() | map('regex_replace', '^', 'TABLE DATA public ') | map('regex_replace', '$', ' ')
+              | reject('in', intelowl_toc.stdout) | list | length == 0
+            fail_msg: >-
+              intelowl: the dump's table of contents does not hold the product's tables
+              ({{ intelowl_count_tables.values() | join(', ') }}): not restored
+        - name: Restore the database (one transaction)
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", exec, -T, postgres,
+                   pg_restore, -U, "{{ intelowl_db_user }}", -d, "{{ intelowl_db_name }}",
+                   --clean, --if-exists, --no-owner, --no-acl, --single-transaction, --exit-on-error,
+                   "{{ intelowl_container_export }}/.restore.dump"]
+          changed_when: true
+        - name: Count the restored tables
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", exec, -T, postgres,
+                   psql, -U, "{{ intelowl_db_user }}", -d, "{{ intelowl_db_name }}", -At, -c,
+                   "select count(*) from {{ intelowl_count_tables[item] }}"]
+          loop: "{{ intelowl_count_keys }}"
+          register: intelowl_counted
+          changed_when: false
+        - name: The restored tables hold exactly what the source held
+          ansible.builtin.assert:
+            that:
+              - >-
+                intelowl_counted.results | map(attribute='stdout') | map('trim') | map('int') | list
+                == intelowl_count_keys | map('extract', intelowl_restore_expected_counts) | map('int') | list
+            fail_msg: >-
+              intelowl: after the restore {{ intelowl_count_keys | zip(intelowl_counted.results | map(attribute='stdout') | map('trim')) | map('join', '=') | join(', ') }}
+              where the source held {{ intelowl_count_keys | zip(intelowl_count_keys | map('extract', intelowl_restore_expected_counts)) | map('join', '=') | join(', ') }}
+              (the application is left stopped; nothing was started on a database that does not match)
+      always:
+        - name: Remove the staged copy
+          ansible.builtin.file:
+            path: "{{ intelowl_data_root }}/export/db/.restore.dump"
+            state: absent
+    - name: Start the application and its front (the first start migrates the restored schema to the running image)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", up, -d, --wait,
+               --wait-timeout, "{{ intelowl_ready_timeout | int }}"]
+      changed_when: true
+    - name: Wait for the application to answer behind the front
+      ansible.builtin.uri:
+        url: "http://{{ intelowl_bind }}:{{ intelowl_port | int }}/api/analyzer"
+        status_code: [401, 403]
+        timeout: "{{ intelowl_health_timeout | int }}"
+      register: intelowl_up
+      until: intelowl_up.status | default(0) in [401, 403]
+      retries: "{{ ((intelowl_ready_timeout | int) / 5) | int }}"
+      delay: 5
+      changed_when: false
+    - name: Clear the keys the source stored (the module is keyless by default)
+      ansible.builtin.include_tasks: exec.yml
+      vars:
+        intelowl_exec_label: STRIP
+        intelowl_exec_hide: false
+        intelowl_exec_code: "{{ intelowl_strip_code }}"
+        intelowl_exec_env: {}
+      when: not (intelowl_restore_keep_keys | bool)
+    - name: Say which analyzers lost a stored key
+      ansible.builtin.debug:
+        msg: "intelowl: {{ intelowl_exec_out.stdout_lines | select('match', '^HNX-STRIP ') | first }} (analyzers that need a key of their own fail until one is set: intelowl_otx_key_ref, or intelowl_restore_keep_keys)"
+      when: not (intelowl_restore_keep_keys | bool)
+    - name: Seed the API token
+      ansible.builtin.include_tasks: token.yml
+    - name: Prove the restored service (health)
+      ansible.builtin.include_tasks: health.yml
+  tags: [restore]

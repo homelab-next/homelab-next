@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Run one snippet of Django code in the application container (manage.py shell). The caller sets
+# intelowl_exec_code, intelowl_exec_env (name: value, passed through the command's own environment,
+# never an argument; intelowl_exec_hide false when none is a secret, so a failure shows its output) and intelowl_exec_label (the HNX-<label> line the snippet prints); the result is
+# in intelowl_exec_out.
+- name: "Run the snippet ({{ intelowl_exec_label }})"
+  ansible.builtin.command:
+    argv: "{{ ['docker', 'compose', '-f', intelowl_dir ~ '/docker-compose.yml', 'exec', '-T']
+             + ((['-e'] * (intelowl_exec_env | length)) | zip(intelowl_exec_env.keys() | sort) | flatten)
+             + ['uwsgi', 'python3', 'manage.py', 'shell', '-c', intelowl_exec_code] }}"
+  environment: "{{ intelowl_exec_env }}"
+  register: intelowl_exec_out
+  changed_when: false
+  failed_when: intelowl_exec_out.rc != 0 or ('HNX-' ~ intelowl_exec_label ~ ' ') not in intelowl_exec_out.stdout
+  no_log: "{{ intelowl_exec_hide | default(true) | bool }}"
