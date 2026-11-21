@@ -11,7 +11,8 @@
 # starts. The free-tier keys the source stored with its plugin configuration are cleared unless
 # intelowl_restore_keep_keys (the module is keyless by default), the API token is seeded, and health
 # proves the restored service. Run again with a newer dump for the final delta after a freeze:
-# --clean replaces everything the first restore wrote.
+# --clean replaces everything the first restore wrote. A target that holds anything is exported first
+# (export/db/pre-restore-<UTC timestamp>.dump, kept); an empty target needs none.
 - block:
     - name: Validate the inputs
       ansible.builtin.include_tasks: validate.yml
@@ -54,6 +55,26 @@
           ansible.builtin.command:
             argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", up, -d, --wait, postgres, redis]
           changed_when: false
+        # --clean replaces everything: a target that holds anything is exported first, kept next to the
+        # data with a timestamp (a restore into an empty database has nothing to lose)
+        - name: Does the target hold the product's tables
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", exec, -T, postgres,
+                   psql, -U, "{{ intelowl_db_user }}", -d, "{{ intelowl_db_name }}", -At, -c,
+                   "select count(*) from information_schema.tables where table_schema = 'public' and table_name in ('{{ intelowl_count_tables.users }}', '{{ intelowl_count_tables.jobs }}')"]
+          register: intelowl_target_tables
+          changed_when: false
+        - name: Count what the target holds
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", exec, -T, postgres,
+                   psql, -U, "{{ intelowl_db_user }}", -d, "{{ intelowl_db_name }}", -At, -c,
+                   "select (select count(*) from {{ intelowl_count_tables.users }}) + (select count(*) from {{ intelowl_count_tables.jobs }})"]
+          register: intelowl_target_rows
+          changed_when: false
+          when: intelowl_target_tables.stdout | trim | int == 2
+        - name: Take a safety export of the live database before it is replaced
+          ansible.builtin.include_tasks: safety.yml
+          when: intelowl_target_tables.stdout | trim | int == 2 and intelowl_target_rows.stdout | trim | int > 0
         - name: Stop the application and its front
           ansible.builtin.command:
             argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", stop, nginx, worker, beat, daphne, uwsgi]

@@ -9,36 +9,20 @@ call to the API is refused), from the endpoint the registry resolver gives
 
 from __future__ import annotations
 
-import urllib.error
-import urllib.request
 from typing import Any
 
 from homelabnext.conform.adapters._env import resolve
+from homelabnext.conform.adapters._status_probe import StatusProbe
 
 __all__ = ["EnrichmentProbe", "make"]
 
 
-class EnrichmentProbe:
-    def __init__(self, base_url: str, timeout: float = 10.0) -> None:
-        self._base = base_url.rstrip("/")
-        self._timeout = timeout
-
-    def _status(self, path: str) -> int:
-        req = urllib.request.Request(self._base + path, method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as r:
-                return int(r.status)
-        except urllib.error.HTTPError as e:
-            return int(e.code)
-
+class EnrichmentProbe(StatusProbe):
     def health(self) -> bool:
         return self._status("/hc") == 200
 
     def api_is_private(self) -> bool:
         return self._status("/api/analyzer") in (401, 403)
-
-    def close(self) -> None:  # the harness's teardown; nothing is held
-        return None
 
 
 def make(

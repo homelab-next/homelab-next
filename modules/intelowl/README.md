@@ -107,11 +107,13 @@ counts   jobs 3105, analyzer_configs 219, playbooks 16, users 6    (read from th
    yet: no account);
 2. copy the dump onto the guest (an absolute canonical path), then the `restore` hook with
    `intelowl_restore_dump`, `intelowl_restore_sha256` and `intelowl_restore_expected_counts` as above. It
+   first exports a target that already holds accounts or jobs (`export/db/pre-restore-<UTC timestamp>.dump` and its
+   sha256, kept; none for an empty target) and stops if that export cannot be taken; then it
    stages the dump as the database's user, hashes it again, restores with `pg_restore --clean --if-exists
    --single-transaction --exit-on-error` with the application stopped, counts the four tables and requires
    them to EQUAL the source's before anything starts (otherwise the application is left stopped), starts
    everything (the first start migrates the restored schema to the running image: "No migrations to apply"
-   at the same release), clears the stored keys, seeds the API token and runs `health`;
+   at the same release), clears the stored keys (this site keeps them: its overlay sets `intelowl_restore_keep_keys: true`; the module default stays clear), seeds the API token and runs `health`;
 3. `main` again: `changed=0`. The jobs older than `intelowl_old_jobs_retention_days` (14) are flushed by
    the scheduler after the first start, so the job count falls later; the counts are proved BEFORE the
    scheduler runs.

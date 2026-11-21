@@ -323,6 +323,10 @@ elif "pg_restore" in a and "--list" in a:
     sys.stdout.write(read("toc.txt", {TOC!r}))
 elif "pg_restore" in a:
     sys.exit(0 if os.path.exists(host(a[-1])) else 3)
+elif "psql" in a and "information_schema" in a[-1]:
+    sys.stdout.write(read("tables.n", "2").strip() + "\\n")
+elif "psql" in a and "(select count(*)" in a[-1]:
+    sys.stdout.write(read("live.n", "5").strip() + "\\n")
 elif "psql" in a:
     table = a[-1].rsplit(" ", 1)[-1]
     counts = json.loads(read("counts.json", {json.dumps(COUNTS)!r}))
@@ -586,10 +590,11 @@ def test_restore_stops_the_application_restores_counts_then_starts_clears_keys_a
         order = [
             next(i for i, c in enumerate(calls) if k in c)
             for k in (
+                "pre-restore-",
                 " stop nginx worker beat daphne uwsgi",
                 "pg_restore --list",
                 "pg_restore -U",
-                "select count(*) from api_app_job",
+                "-c select count(*) from api_app_job",
                 " up -d --wait --wait-timeout",
                 "HNX-STRIP",
                 "HNX_API_TOKEN",
@@ -605,6 +610,57 @@ def test_restore_stops_the_application_restores_counts_then_starts_clears_keys_a
         )
         assert not (tmp_path / "data" / "export" / "db" / ".restore.dump").exists()
         assert "HNX-STRIP 3" in r.stdout  # the stored keys were cleared and the run says which
+
+
+def _safety_files(tmp_path):
+    return sorted(p.name for p in (tmp_path / "data" / "export" / "db").glob("pre-restore-*"))
+
+
+def test_restore_exports_a_target_that_holds_data_first_and_keeps_the_export(tmp_path):
+    with Server(known=NAMES) as front:
+        r, _ = _restore(tmp_path, front)
+        assert r.returncode == 0, r.stdout + r.stderr
+        files = _safety_files(tmp_path)
+        assert len(files) == 2 and files[0].endswith(".dump") and files[1] == files[0] + ".sha256"
+        assert files[0].startswith("pre-restore-") and files[0].endswith("Z.dump")
+        dump = tmp_path / "data" / "export" / "db" / files[0]
+        assert dump.read_bytes() == b"PGDMP fake dump"
+        listed = (tmp_path / "data" / "export" / "db" / files[1]).read_text().split()
+        assert listed == [hashlib.sha256(dump.read_bytes()).hexdigest(), files[0]]
+        calls = _calls(tmp_path)
+        dump_at = next(i for i, c in enumerate(calls) if "pg_dump" in c and "pre-restore-" in c)
+        stop_at = next(i for i, c in enumerate(calls) if " stop " in f" {c} ")
+        clean_at = next(i for i, c in enumerate(calls) if "pg_restore -U" in c)
+        assert dump_at < stop_at < clean_at
+
+
+@pytest.mark.parametrize("file, value", [("live.n", "0"), ("tables.n", "0")])
+def test_restore_into_an_empty_target_takes_no_safety_export(tmp_path, file, value):
+    """An unmigrated database (no tables) and a migrated one with no accounts and no jobs hold nothing
+    a restore would lose."""
+    with Server(known=NAMES) as front:
+        env = {**SECRETS, **_docker(tmp_path)}
+        exp = _export(tmp_path, env, pv(tmp_path))
+        (tmp_path / "docker.log").unlink()
+        (tmp_path / file).write_text(value)
+        r = run_role(tmp_path, ROLE, "restore", _restore_vars(tmp_path, front, exp), env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert _safety_files(tmp_path) == []
+        assert not [c for c in _calls(tmp_path) if "pg_dump" in c]
+
+
+def test_restore_stops_before_replacing_anything_when_the_safety_export_cannot_be_taken(tmp_path):
+    with Server(known=NAMES) as front:
+        env = {**SECRETS, **_docker(tmp_path)}
+        exp = _export(tmp_path, env, pv(tmp_path))
+        (tmp_path / "docker.log").unlink()
+        # the dump command fails: nothing may be stopped or restored
+        fake(
+            tmp_path / "bin" / "docker", "import sys\nsys.exit(1 if 'pg_dump' in sys.argv else 0)\n"
+        )
+        r = run_role(tmp_path, ROLE, "restore", _restore_vars(tmp_path, front, exp), env=env)
+        assert r.returncode != 0
+        assert not [c for c in _calls(tmp_path) if "pg_restore -U" in c]
 
 
 def test_restore_keeps_the_stored_keys_only_when_asked(tmp_path):
