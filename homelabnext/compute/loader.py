@@ -134,8 +134,29 @@ def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
             out[str(name)]["mirror"] = _mirror(p, name, spec["mirror"])
         if isinstance(spec, dict) and "notify" in spec:
             out[str(name)]["notify"] = _notify(p, name, spec["notify"])
+        if isinstance(spec, dict) and "native_vlans" in spec:
+            out[str(name)]["native_vlans"] = _native_vlans(p, name, spec["native_vlans"])
         if isinstance(spec, dict) and "host_firewall" in spec:
             out[str(name)]["host_firewall"] = _host_firewall(p, name, spec["host_firewall"])
+    return out
+
+
+def _native_vlans(p: Path, name: Any, raw: Any) -> dict[str, int]:
+    """``{bridge: vlan id}``: the VLAN each VLAN-aware bridge of the node carries untagged (its
+    native VLAN: the switch port's untagged VLAN).  A bridge has one, so a mapping, and the
+    bridge is a name (``default`` for the site's default bridge)."""
+    where = f"{p}: node {name!r}: native_vlans"
+    if not isinstance(raw, dict) or not raw:
+        raise ComputeError(f"{where} must be a mapping of bridge name to VLAN id")
+    out: dict[str, int] = {}
+    for bridge, vid in raw.items():
+        if not isinstance(bridge, str) or not re.fullmatch(
+            r"default|[a-z][a-z0-9_.-]{0,14}", bridge
+        ):
+            raise ComputeError(f"{where}: {bridge!r} is not a bridge name")
+        if not _count(vid) or vid > 4094:
+            raise ComputeError(f"{where}: bridge {bridge!r} needs a VLAN id from 1 to 4094")
+        out[bridge] = vid
     return out
 
 
