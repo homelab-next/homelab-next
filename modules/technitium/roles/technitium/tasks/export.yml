@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data zones, zone-file): <data root>/export/<zone>.zone for every primary zone,
+# settings.zip (the server's own settings backup, without the accounts) and listing.jsonl (key,
+# size, sha256, and each zone's record count). Written through the admin API while the server
+# runs; a zone that is gone is moved to export/stale/, never deleted.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Install the zone tooling
+      ansible.builtin.include_tasks: ctl.yml
+    - name: Export every primary zone and the settings
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -I
+          - "{{ technitium_ctl_path }}"
+          - export
+          - --api
+          - "{{ technitium_api_url }}"
+          - --user
+          - "{{ technitium_admin_user }}"
+          - --out
+          - "{{ technitium_data_root }}/export"
+      environment:
+        HNX_TECHNITIUM_PASSWORD: "{{ lookup('hnx_secret', technitium_admin_login_ref) }}"
+      register: technitium_export
+      changed_when: true
+      no_log: true
+  tags: [export]
