@@ -7,6 +7,9 @@
       - honeypot_logical_id is match('^[a-z][a-z0-9-]{0,30}\Z')
       - honeypot_port | int >= 1 and honeypot_port | int <= 65535
       - honeypot_bind is match('^[0-9a-fA-F.:]{2,45}\Z')
+      - honeypot_allow_any_bind | bool or honeypot_bind not in ['0.0.0.0', '::']
+      - honeypot_idle_timeout_s | int >= 5
+      - honeypot_max_connections | int >= 1
       - honeypot_max_line_bytes | int >= 1024
       - honeypot_spool_max_bytes | int >= 1048576
       - honeypot_batch_rows | int >= 1

@@ -218,8 +218,8 @@ def test_literals_quote_escape_and_survive_nul_and_lone_surrogates():
     lone = json.loads('"\\ud800x"')
     assert lake.lit(lone).endswith("x'")
     assert lake.lit(T0) == "TIMESTAMP '2026-11-21 12:00:00.000000 UTC'"
-    with pytest.raises(TypeError):
-        lake.lit(True)
+    assert lake.lit(True) == "'true'"  # a flag where text is expected is its text, not an error
+    assert lake.lit({"a": 1}) == "'{\"a\": 1}'"
 
 
 def test_statements_stay_under_the_bound_and_cover_every_row():
@@ -549,3 +549,116 @@ def test_no_script_turns_certificate_verification_off_or_carries_a_lab_value():
         found = re.findall(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])", text)
         # only the unspecified bind-all address may appear in a script
         assert all(ipaddress.ip_address(x).is_unspecified for x in found), (f.name, found)
+
+
+# ----------------------------------------------------------------------------- hostile input
+
+
+@pytest.mark.parametrize(
+    "line",
+    ['{"alert":"x"}', '{"http":["a"]}', '{"payload":true}', '{"dest_port":1e400}',
+     '{"src_port":99999999999999999999999}', '{"dns":5}', "[1]", "{"],
+)  # fmt: skip
+def test_a_malformed_record_is_quarantined_and_never_wedges_the_writer(tmp_path, line):
+    good = json.dumps(EV).encode() + b"\n"
+    spool = tmp_path / "spool.json"
+    spool.write_bytes(good + line.encode() + b"\n" + good)
+    state, fake = tmp_path / "state", FakeLake()
+    res = lake.land(fake, spool, state, "c.s.t")
+    assert res["ok"] and res["landed"] >= 2 and res["skipped"] <= 1
+    assert _offset(state) == spool.stat().st_size  # always moves past it
+    again = FakeLake()
+    assert lake.land(again, spool, state, "c.s.t")["landed"] == 0 and again.sql == []
+
+
+def test_the_three_known_poison_lines_together_land_the_rest_and_fill_the_dead_letter(tmp_path):
+    lines = [EV, {"alert": "x"}, {"http": ["a"]}, {"payload": True}, {"src_port": 2**70}, EV]
+    spool, state, fake = _spool(tmp_path, lines), tmp_path / "state", FakeLake()
+    res = lake.land(fake, spool, state, "c.s.t")
+    assert res["ok"] and res["skipped"] >= 3 and res["landed"] + res["skipped"] == 6
+    dead = [json.loads(x) for x in (state / "dead-letter.jsonl").read_text().splitlines()]
+    assert len(dead) == res["skipped"] and all(d["reason"] and d["line"] for d in dead)
+    assert int((state / "dead-letter-count").read_text()) == res["skipped"]
+    assert _offset(state) == spool.stat().st_size
+
+
+def test_the_dead_letter_file_is_capped_but_still_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(lake, "DEAD_LETTER_MAX_BYTES", 50)
+    state = tmp_path / "state"
+    lake.quarantine(state, [("a" * 100, "r")])
+    size = (state / "dead-letter.jsonl").stat().st_size
+    lake.quarantine(state, [("b" * 100, "r")] * 3)
+    assert (state / "dead-letter.jsonl").stat().st_size == size  # past the cap: counted only
+    assert int((state / "dead-letter-count").read_text()) == 4
+    long = tmp_path / "s2"
+    monkeypatch.setattr(lake, "DEAD_LETTER_MAX_BYTES", 10**6)
+    lake.quarantine(long, [("c" * 99999, "r")])
+    entry = json.loads((long / "dead-letter.jsonl").read_text())
+    assert len(entry["line"]) == lake.DEAD_LETTER_ENTRY_CHARS
+
+
+def test_cross_reference_sql_takes_only_real_addresses(report, monkeypatch):
+    seen = []
+
+    class Fake:
+        def query(self, sql):
+            seen.append(sql)
+            return ["v"], []
+
+    monkeypatch.setattr(report, "_LAKE", Fake())
+    monkeypatch.setattr(report, "CTI_TABLE", "c.s.t")
+    hostile = [
+        "x'] OR true --",
+        f"{ip(0xC6336401)}'; DROP TABLE a;--",
+        f"{ipaddress.IPv6Address(1)}%e'th",
+        "",
+        None,
+        "'",
+        ipv(0xC6336407),
+    ]
+    report.cti_crossref(hostile)
+    assert len(seen) == 1 and seen[0].count("'") == 4  # i.type='ip' and one address
+    assert "DROP" not in seen[0] and "OR true" not in seen[0]
+    seen.clear()
+    assert report.cti_crossref(hostile[:-1]) == {} and seen == []  # nothing valid: no query at all
+
+
+def ipv(n):
+    return ip(n)
+
+
+def test_the_receiver_refuses_all_interfaces_and_no_bind_unless_told(monkeypatch):
+    with pytest.raises(ValueError, match="not set"):
+        rcv.check_bind("", False)
+    for any_ in (ip(0), "::"):
+        with pytest.raises(ValueError, match="all interfaces"):
+            rcv.check_bind(any_, False)
+        assert rcv.check_bind(any_, True) == any_
+    assert rcv.check_bind(DOC_A, False) == DOC_A
+    monkeypatch.delenv("HNX_HP_BIND", raising=False)
+    monkeypatch.setenv("HNX_HP_SPOOL", "x")
+    assert rcv.main() == 1
+
+
+def test_an_idle_connection_is_closed_and_connections_past_the_cap_are_refused(tmp_path):
+    spool = rcv.Spool(str(tmp_path / "s.json"), cap=10_000)
+    rcv.Server.max_connections = 1
+    srv = rcv.Server(("localhost", 0), rcv.make_handler(spool, 100, idle_timeout=0.3))
+    port = srv.server_address[1]
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        first = socket.create_connection(("localhost", port), timeout=5)
+        first.sendall(b'{"n":1}\n')
+        second = socket.create_connection(("localhost", port), timeout=5)
+        second.settimeout(5)
+        assert second.recv(10) == b""  # over the cap: closed at once
+        first.settimeout(5)
+        assert first.recv(10) == b""  # idle past the timeout: closed by the server
+        first.close()
+        second.close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        t.join(timeout=5)
+        rcv.Server.max_connections = 32

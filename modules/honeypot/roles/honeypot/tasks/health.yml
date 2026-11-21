@@ -64,6 +64,16 @@
           - (now(utc=true).timestamp() | int) - (honeypot_last_run_stat.stat.mtime | int) <= (honeypot_landing_max_age_h | int) * 3600
         fail_msg: "honeypot: no successful landing in {{ honeypot_landing_max_age_h }} h (the lake writer failed or never ran: journalctl -u {{ honeypot_lake_unit }})"
       when: honeypot_landing_max_age_h | int > 0
+    - name: Read the dead-letter counter (lines the writer could not map are quarantined, never wedging it)
+      ansible.builtin.slurp:
+        src: "{{ honeypot_state_dir }}/dead-letter-count"
+      register: honeypot_dead_letter
+      failed_when: false
+    - name: Report the quarantined lines
+      ansible.builtin.debug:
+        msg: >-
+          honeypot: {{ (honeypot_dead_letter.content | default('MA==') | b64decode | trim) or 0 }} line(s) quarantined so far in
+          {{ honeypot_state_dir }}/dead-letter.jsonl (capped; a growing count means the sender is shipping malformed events)
     - name: The events table is the contract's
       ansible.builtin.command:
         argv: ["{{ honeypot_runtime_python }}", -I, "{{ honeypot_lake_script }}", schema-check]

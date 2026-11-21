@@ -33,8 +33,20 @@ argument_specs:
         default: true
       honeypot_bind:
         type: str
-        description: The address the receiver listens on (the interface the honeypot's pushes arrive on).
-        default: 0.0.0.0
+        description: 'The guest address the receiver listens on (the interface the honeypot pushes arrive on). Required; all interfaces is refused unless honeypot_allow_any_bind.'
+        required: true
+      honeypot_allow_any_bind:
+        type: bool
+        description: 'Allow honeypot_bind to be all interfaces (0.0.0.0 or ::). Leave false: the receiver has no authentication and relies on the firewall.'
+        default: false
+      honeypot_idle_timeout_s:
+        type: int
+        description: A connection idle this many seconds is closed.
+        default: 120
+      honeypot_max_connections:
+        type: int
+        description: Concurrent connections allowed; more are closed at once.
+        default: 32
       honeypot_port:
         type: int
         description: The TCP port the receiver listens on.

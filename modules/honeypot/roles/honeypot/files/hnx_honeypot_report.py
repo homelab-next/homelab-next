@@ -574,7 +574,18 @@ def enrich_ips(ips):
 def cti_crossref(ips):
     if not ips or not CTI_TABLE:
         return {}
-    arr = "ARRAY[" + ",".join("'" + ip + "'" for ip in ips) + "]"
+    # src_ip comes from the sender: only a real IP address may reach the statement (no quote, no text)
+    valid = []
+    for ip in ips:
+        try:
+            text = str(ipaddress.ip_address(ip))
+            if re.fullmatch(r"[0-9a-f.:]+", text):  # no scope id, nothing but address characters
+                valid.append(text)
+        except (ValueError, TypeError):
+            continue
+    if not valid:
+        return {}
+    arr = "ARRAY[" + ",".join("'" + ip + "'" for ip in sorted(set(valid))) + "]"
     hits = {}
     try:
         _, rows = lake_query(

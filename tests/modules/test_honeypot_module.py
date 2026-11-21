@@ -81,7 +81,10 @@ def test_the_defaults_hold_no_address_and_no_lab_name():
     spec = yaml.safe_load((ROLE / "meta" / "argument_specs.yml").read_text())["argument_specs"][
         "main"
     ]["options"]
-    assert spec["honeypot_lake_catalog"]["required"] is True
+    assert (
+        spec["honeypot_lake_catalog"]["required"] is True
+        and spec["honeypot_bind"]["required"] is True
+    )
 
 
 def _dump(doc) -> str:

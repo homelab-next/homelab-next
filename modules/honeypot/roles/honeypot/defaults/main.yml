@@ -21,7 +21,11 @@ honeypot_manage_accounts: true
 # --- the receiver ---------------------------------------------------------------------------------
 # the address and port the honeypot's shipper pushes to. Bind the interface the pushes arrive on
 # (the overlay's tunnel address); the guest firewall admits only the sender's address.
-honeypot_bind: 0.0.0.0
+# honeypot_bind (required): the guest address the pushes arrive on; no default (all interfaces is refused)
+honeypot_allow_any_bind: false
+# a connection idle this long is closed; connections past the cap are refused
+honeypot_idle_timeout_s: 120
+honeypot_max_connections: 32
 honeypot_port: 9000
 honeypot_max_line_bytes: 1000000
 # the spool stops accepting (and counts the drops) at this size: a flood cannot fill the guest

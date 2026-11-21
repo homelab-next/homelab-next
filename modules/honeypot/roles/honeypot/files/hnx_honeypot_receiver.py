@@ -81,9 +81,18 @@ class Spool:
         return True
 
 
-def make_handler(spool: Spool, max_line: int):
+def make_handler(spool: Spool, max_line: int, idle_timeout: float = 120.0):
     class Handler(socketserver.StreamRequestHandler):
+        # a sender that goes quiet mid-connection is dropped (readline raises the timeout)
+        timeout = idle_timeout
+
         def handle(self):
+            try:
+                self._pump()
+            except OSError:  # idle timeout, reset: this connection is over, the server is not
+                return
+
+        def _pump(self):
             peer = self.client_address[0]
             while True:
                 raw = self.rfile.readline(max_line + 1)
@@ -109,10 +118,48 @@ def make_handler(spool: Spool, max_line: int):
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+    max_connections = 32
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._slots = threading.BoundedSemaphore(self.max_connections)
+
+    def process_request(self, request, client_address):
+        # a connection past the cap is closed at once, so a flood of idle ones cannot hold threads
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
+def check_bind(host: str, allow_any: bool) -> str:
+    """The address to listen on: the guest's own address the pushes arrive on. Empty, or all
+    interfaces, is refused unless the site says so (a receiver with no authentication is held by
+    the network ACL and the firewall, so it must not listen wider than it has to)."""
+    if not host:
+        raise ValueError("HNX_HP_BIND is not set (the guest address the pushes arrive on)")
+    if host in ("0.0.0.0", "::") and not allow_any:
+        raise ValueError(
+            "HNX_HP_BIND is all interfaces; set a guest address, or HNX_HP_ALLOW_ANY_BIND=1"
+        )
+    return host
 
 
 def main() -> int:
-    host = os.environ.get("HNX_HP_BIND", "0.0.0.0")
+    allow_any = os.environ.get("HNX_HP_ALLOW_ANY_BIND", "") == "1"
+    try:
+        host = check_bind(os.environ.get("HNX_HP_BIND", ""), allow_any)
+    except ValueError as exc:
+        print(f"cannot start: {exc}", file=sys.stderr)
+        return 1
+    idle = float(os.environ.get("HNX_HP_IDLE_TIMEOUT_S", "120"))
+    Server.max_connections = int(os.environ.get("HNX_HP_MAX_CONNECTIONS", "32"))
     port = int(os.environ.get("HNX_HP_PORT", "9000"))
     path = os.environ.get("HNX_HP_SPOOL", "")
     if not path:
@@ -122,7 +169,7 @@ def main() -> int:
     cap = int(os.environ.get("HNX_HP_SPOOL_MAX_BYTES", str(SPOOL_MAX_DEFAULT)))
     try:
         spool = Spool(path, cap)
-        srv = Server((host, port), make_handler(spool, max_line))
+        srv = Server((host, port), make_handler(spool, max_line, idle))
     except OSError as exc:
         print(f"cannot start: {exc}", file=sys.stderr)
         return 1

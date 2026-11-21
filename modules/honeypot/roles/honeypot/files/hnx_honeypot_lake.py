@@ -167,9 +167,13 @@ def lit(v) -> str:
     if v is None:
         return "NULL"
     if isinstance(v, bool):
-        raise TypeError("no boolean column")
+        v = str(v).lower()  # a flag where text is expected: its text, never an error
     if isinstance(v, int):
+        if not -(2**63) <= v < 2**63:
+            raise ValueError("integer outside bigint")
         return str(v)
+    if isinstance(v, dict | list):
+        v = json.dumps(v, ensure_ascii=False)
     if isinstance(v, datetime):
         return "TIMESTAMP '" + v.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S.%f") + " UTC'"
     s = str(v).replace("\x00", "\ufffd").encode("utf-8", "replace").decode("utf-8")
@@ -178,6 +182,11 @@ def lit(v) -> str:
 
 def tuple_sql(row: dict) -> str:
     return "(" + ",".join(lit(row[c]) for c, _t in COLUMNS) + ")"
+
+
+BAD_LINE = (ValueError, AttributeError, TypeError, KeyError, OverflowError, RecursionError)
+DEAD_LETTER_MAX_BYTES = 10 * 1024 * 1024
+DEAD_LETTER_ENTRY_CHARS = 4000
 
 
 def statements(rows, table, max_chars=MAX_STATEMENT_CHARS):
@@ -353,10 +362,13 @@ def now() -> datetime:
 
 
 def read_batches(spool: Path, offset: int, ingested_at: datetime, batch_rows: int):
-    """Yield (rows, end_offset, skipped) over the spool from offset. Binary mode with a
-    per-line decode (errors="replace"): a spliced line must never kill the run, which would leave the
-    offset stuck on the same byte forever. Only whole lines (ending in a newline) are consumed."""
-    rows, skipped, pos = [], 0, offset
+    """Yield (rows, end_offset, bad) over the spool from offset; bad is a list of (line, reason).
+    Binary mode with a per-line decode (errors="replace"). EVERY record is validated here, to the
+    SQL tuple it will become: whatever shape a line has (not an object, a string where an object is
+    expected, a number out of range), it is either a row or a quarantined line and the offset moves
+    past it. A line that could stop the run would leave the offset stuck on the same byte forever.
+    Only whole lines (ending in a newline) are consumed."""
+    rows, bad, pos = [], [], offset
     with spool.open("rb") as fh:
         fh.seek(offset)
         for raw_line in fh:
@@ -370,14 +382,43 @@ def read_batches(spool: Path, offset: int, ingested_at: datetime, batch_rows: in
                 outer = json.loads(line)
                 if not isinstance(outer, dict):
                     raise ValueError("not an object")
-                rows.append(to_row(outer, ingested_at))
-            except ValueError:
-                skipped += 1
+                row = to_row(outer, ingested_at)
+                tuple_sql(row)  # the same encoding the INSERT will use
+                rows.append(row)
+            except BAD_LINE as exc:
+                bad.append((line, f"{type(exc).__name__}: {str(exc)[:100]}"))
                 continue
             if len(rows) >= batch_rows:
-                yield rows, pos, skipped
-                rows, skipped = [], 0
-    yield rows, pos, skipped
+                yield rows, pos, bad
+                rows, bad = [], []
+    yield rows, pos, bad
+
+
+def quarantine(state_dir: Path, bad) -> int:
+    """Append bad lines to the capped dead-letter file (one JSON object per line: the reason and the
+    line cut to DEAD_LETTER_ENTRY_CHARS) and bump the running counter. Past the cap lines are only
+    counted. Returns the lines quarantined in this call (all of `bad`, written or counted)."""
+    if not bad:
+        return 0
+    state_dir.mkdir(parents=True, exist_ok=True)
+    dead = state_dir / "dead-letter.jsonl"
+    try:
+        size = dead.stat().st_size
+    except OSError:
+        size = 0
+    if size < DEAD_LETTER_MAX_BYTES:
+        with dead.open("a", encoding="utf-8") as fh:
+            for line, reason in bad:
+                fh.write(
+                    json.dumps({"reason": reason, "line": line[:DEAD_LETTER_ENTRY_CHARS]}) + "\n"
+                )
+    counter = state_dir / "dead-letter-count"
+    try:
+        total = int(counter.read_text().strip() or 0)
+    except (OSError, ValueError):
+        total = 0
+    counter.write_text(str(total + len(bad)))
+    return len(bad)
 
 
 def land(
@@ -407,7 +448,8 @@ def land(
         raise SystemExit(f"refused: {table} is not the honeypot events contract: {problem}")
     ingested_at = now()
     total = skipped_total = 0
-    for rows, end, skipped in read_batches(spool, offset, ingested_at, batch_rows):
+    for rows, end, bad in read_batches(spool, offset, ingested_at, batch_rows):
+        skipped = quarantine(state_dir, bad)
         skipped_total += skipped
         for sql, n in statements(rows, table, max_chars):
             lake.run(sql)
@@ -416,7 +458,10 @@ def land(
         result["landed"], result["skipped"] = total, skipped_total
     print(f"landed {total} honeypot event(s) -> {table}")
     if skipped_total:
-        print(f"skipped {skipped_total} malformed line(s) (landed {total})", file=sys.stderr)
+        print(
+            f"quarantined {skipped_total} malformed line(s) to {state_dir / 'dead-letter.jsonl'} (landed {total})",
+            file=sys.stderr,
+        )
         if total == 0:
             result["ok"] = False
             save_run(state_dir / "last-run.json", result)

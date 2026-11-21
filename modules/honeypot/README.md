@@ -71,7 +71,11 @@ interval: an earlier version ran every two minutes and left thousands of snapsho
 The lake module's maintenance timer expires them; the writer's size is the thing to keep small.
 The offset is saved after each statement; a crash between a statement and the save lands that one
 statement again on the next run (at-least-once, one statement wide). A line that cannot be parsed is
-counted and reported on stderr, never dropped silently; a run in which every line failed exits 1.
+quarantined, never dropped silently and never able to stop the writer: every record is validated to the
+SQL it will become (a non-object, a string where an object is expected, a number out of range), a bad
+line goes to `state/dead-letter.jsonl` (capped at 10 MiB, each entry cut to 4000 characters, with the
+reason; past the cap lines are only counted), a running counter (`state/dead-letter-count`) is reported
+by the health hook, and the offset always moves past it. A run in which every line failed exits 1.
 
 ## Secrets
 
@@ -109,6 +113,12 @@ says so in words (never a stack trace) and the data below it is complete. The un
   `honeypot_lake_ca_ref`, `honeypot_gateway_id` + `honeypot_gateway_model`, `honeypot_site_label`,
   `honeypot_friendly_ips` (the site's own egress addresses: probes from them are not catch),
   optionally `honeypot_cti_table`.
+* **The receiver has no authentication (as in the deployment it replaces): it is network-ACL-only.** The
+  overlay firewall must admit the receiver's port from the AWS honeypot sender's address (its tunnel
+  address) only; the module does not enforce it. `honeypot_bind` is required, is the guest address the
+  pushes arrive on, and all interfaces (`0.0.0.0`, `::`) is refused unless `honeypot_allow_any_bind`.
+  A connection idle for `honeypot_idle_timeout_s` (120) is closed and connections past
+  `honeypot_max_connections` (32) are refused.
 * Firewall: the receiver's port admitted from the sender's address only (the one-way property is
   this rule plus the unit's sandbox); the guest's egress to the query service, the gateway and, for
   enrichment, the internet.
