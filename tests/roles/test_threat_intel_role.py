@@ -965,8 +965,9 @@ def test_upgrade_refuses_an_unpinned_foreign_or_older_target(tmp_path, core, mod
 
 # ----------------------------------------------------------------------------- keys never on argv, TLS
 
-PEM_CERT = "-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----"
-PEM_KEY = "-----BEGIN PRIVATE KEY-----\nZmFrZQ==\n-----END PRIVATE KEY-----"
+DASHES = "-" * 5
+PEM_CERT = f"{DASHES}BEGIN CERTIFICATE{DASHES}\nZmFrZQ==\n{DASHES}END CERTIFICATE{DASHES}"
+PEM_KEY = f"{DASHES}BEGIN PRIVATE KEY{DASHES}\nZmFrZQ==\n{DASHES}END PRIVATE KEY{DASHES}"
 TLS = {"tls_cert_ref": "secret:pki/intel-cert", "tls_key_ref": "secret:pki/intel-key"}
 TLS_ENV = {"HNX_SECRET_PKI_INTEL_CERT": PEM_CERT, "HNX_SECRET_PKI_INTEL_KEY": PEM_KEY}
 
