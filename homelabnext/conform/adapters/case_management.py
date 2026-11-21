@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -37,6 +38,8 @@ class CaseManagementError(RuntimeError):
 class CaseManagementTarget:
     """A read-only view of one case-management service."""
 
+    __slots__ = ("_base", "_get_key", "_limits", "_opener")
+
     def __init__(
         self,
         base_url: str,
@@ -46,13 +49,13 @@ class CaseManagementTarget:
         timeout: float = 10.0,
         max_bytes: int = DEFAULT_MAX_BYTES,
     ):
-        if not base_url.startswith(("http://", "https://")):
+        parts = urllib.parse.urlsplit(base_url)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
             raise ValueError("base_url must be an http(s) URL supplied by the caller")
-        self._base = base_url.rstrip("/")
-        self._token = token  # a callable returning the API key, or None
+        self._base = f"{parts.scheme}://{parts.netloc}"
+        self._get_key = token  # a callable returning the API key, or None
         self._opener = credential_opener(ca_file)
-        self.timeout = timeout
-        self.max_bytes = max_bytes
+        self._limits = (timeout, max_bytes)  # seconds, bytes of body
 
     def __repr__(self) -> str:
         return f"CaseManagementTarget({self._base!r})"
@@ -60,14 +63,15 @@ class CaseManagementTarget:
     def _open(self, path: str, *, authed: bool) -> tuple[int, bytes]:
         headers = {"Accept": "application/json"}
         if authed:
-            value = self._token() if self._token is not None else ""
+            value = self._get_key() if self._get_key is not None else ""
             if not value or any(c in value for c in "\r\n\0"):
                 raise CaseManagementError("no credential that can be sent as a header")
             headers["Authorization"] = f"Bearer {value}"
         req = urllib.request.Request(self._base + path, headers=headers, method="GET")
         try:
-            with self._opener.open(req, timeout=self.timeout) as resp:
-                return resp.status, read_bounded(resp, self.max_bytes)
+            timeout, max_bytes = self._limits
+            with self._opener.open(req, timeout=timeout) as resp:
+                return resp.status, read_bounded(resp, max_bytes)
         except urllib.error.HTTPError as exc:
             return exc.code, b""
         except (urllib.error.URLError, OSError, ValueError) as exc:
