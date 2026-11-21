@@ -17,7 +17,7 @@ directory names a real host, address, VM id or secret value.
 | Host role | `server`: kind `vm`, baseline `base`, 2 vCPU, 4 GB, 40 GB (the footprint is a floor: raise the heap with the flows) |
 | Role | `nifi` (role interface v1), a wrapper of the core `compose_app` |
 | Requires | `cap:secrets`, `cap:object-store`, `cap:lake-catalog`, `cap:lake-query`, `cap:events` |
-| Egress | none (a feed flow adds an `internet` target, see "Egress") |
+| Egress | none by default; `internet` is a per-site option (`optional: true`, see "Egress") |
 | Public route | none; HTTPS on the guest's own address, port 9443 (`trino` has 8443 on the same guest) |
 
 ## What the role does
@@ -137,13 +137,20 @@ NiFi publishes to the events forwarder by **HTTP**, the way every other publishe
 
 ## Egress
 
-The module asks for no internet egress: its own steps and the smoke flow need none, and the service
-reaches the lake and the bus through required slots, which need no grant. A flow that pulls a public
-feed makes the change in one overlay edit: the module (or a feed module) adds
-`egress: [{host: server, to: [internet], purpose: <what the feed is>}]` and the overlay adds
-`grants.egress.nifi.server: [internet]` in the same change (a grant waiting for a target is refused).
-The container's own network namespace is outside the host's per-slice ruleset (docs/modules/egress.md,
-"What it does not cover"): the grant is the policy, the guest's NIC firewall is the control.
+The module's own steps and the smoke flow need no internet, and **a site that grants nothing gets none**. The manifest
+declares `egress: [{host: server, to: [internet], optional: true}]`: an `optional` entry (docs/modules/egress.md) is
+allowed but never owed, so `hnx modules check` is clean without a grant, and a site whose flows pull a public feed opts in
+with one overlay line, `grants.egress.nifi.server: [internet]`. The container's own network namespace is outside the host's
+per-slice ruleset (docs/modules/egress.md, "What it does not cover"), and the generated policy never opens an optional entry:
+the grant is the policy, the guest's NIC firewall is the control, so scope the feed's hosts there.
+
+## JDBC drivers
+
+The image ships no JDBC driver. A flow that writes through the query engine as its own user (so the engine's access rules
+govern it, instead of the lake's object-store key) needs the engine's driver. `nifi_jdbc_drivers` (default `[]`) lists
+`{name: <file>.jar, url: https://..., sha256: <64 hex>}`; the role fetches each on the guest, **refuses it unless its sha256
+matches**, and mounts the directory **read-only** at `<container home>/drivers/<name>` for a database connection pool's
+"Database Driver Locations". The fetch needs https egress from the guest at deploy time (not from the container).
 
 ## Hooks
 

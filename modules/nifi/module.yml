@@ -113,10 +113,14 @@ provides:
       provisional: true
       reason: dataflow has no contract yet; the obvious standard is the service answering its version, its single-node cluster summary and its controller status, which is what the status hub's collector and the role's health hook read
       migration: {formats: [json], export: role:nifi, import: role:nifi}
-# No internet egress is requested: the smoke flow and the module's own steps need none. A flow that
-# pulls a public feed adds `egress: [{host: server, to: [internet], purpose: ...}]` in the same
-# change as the overlay's `grants.egress.nifi.server: [internet]` (README, "Egress").
-egress: none
+# Internet egress is a per-site OPTION, default none (docs/modules/egress.md, `optional: true`): the smoke flow and the module's own
+# steps need none, and a site that grants nothing gets none. A site whose flows pull a public feed opts in with
+# `grants.egress.nifi.server: [internet]` in its overlay.
+egress:
+  - host: server
+    to: [internet]
+    optional: true
+    purpose: a flow that pulls a public feed (a site opts in with the grant; the module's own steps and the smoke flow need none)
 contributes:
   roles:
     - file: roles/nifi

@@ -575,7 +575,7 @@ def _defs() -> dict[str, Any]:
             desc="What the module offers: slots (provider only) and interfaces (any kind).",
         ),
         "egress": {
-            "description": "Where the module's hosts may connect beyond the slots they require or prefer (those are reached by requirement, per requires.capabilities[].hosts, without a grant): none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every internet target and every authority or privileged service named here (svc:secrets, svc:broker, ...) needs an overlay grant naming it (grants.egress.<module>.<role>), and so does every kind: external host role (external). The generated network policy enforces it (homelabnext.modules.egress, hnx modules render).",
+            "description": "Where the module's hosts may connect beyond the slots they require or prefer (those are reached by requirement, per requires.capabilities[].hosts, without a grant): none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every non-optional internet target and every authority or privileged service named here (svc:secrets, svc:broker, ...) needs an overlay grant naming it (grants.egress.<module>.<role>), and so does every kind: external host role (external). The generated network policy enforces it (homelabnext.modules.egress, hnx modules render).",
             "default": "none",
             "oneOf": [
                 {"const": "none"},
@@ -585,6 +585,11 @@ def _defs() -> dict[str, Any]:
                             "host": pat(SLUG, "One of the module's host roles.", 64),
                             "to": arr({"oneOf": [ref("svc_ref"), {"const": "internet"}]}, None, 1),
                             "purpose": text(200),
+                            "optional": {
+                                "type": "boolean",
+                                "default": False,
+                                "description": "A per-site option: the entry is allowed but NOT owed. A site that does not grant it gets the module with no such egress (the default); one that lists the target under grants.egress.<module>.<role> opts in. The generated network policy never opens an optional entry (it cannot see grants): the grant is the policy and the guest's own firewall the control.",
+                            },
                         },
                         ["host", "to"],
                     ),

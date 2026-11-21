@@ -71,6 +71,11 @@ nifi_s3_signing_ref: secret:nifi/s3-secret-key
 nifi_events_auth_ref: secret:nifi/events-token
 # more sensitive parameters a site's flows read: parameter name (upper case, HNX_ first) -> secret ref
 nifi_extra_parameters: {}
+# JDBC driver jars a site's flows need (a database connection pool controller service names the jar by path): none by default.
+# Each entry {name: <file>.jar, url: https://..., sha256: <64 hex>} is fetched by the role on the guest, refused unless its
+# sha256 matches, and mounted READ-ONLY at <container home>/drivers/<name>. The image ships no JDBC driver; a flow that
+# writes through the query engine as its own user (so the engine's access rules apply) needs that engine's driver here.
+nifi_jdbc_drivers: []
 # the parameter provider the role keeps and the context it fills (flows bind to the context by name)
 nifi_parameter_provider: hnx-environment
 nifi_parameter_group: hnx
