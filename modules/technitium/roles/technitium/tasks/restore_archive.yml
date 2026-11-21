@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: Apache-2.0
+# Seed the server from an ARCHIVED config tar (technitium_restore_archive: a tar of the old
+# server's config folder, as the decommission archive keeps it). Only the zones and the settings
+# that shape answers are taken from it (zones/*.zone, scopes, dns.config, allowed, blocked and
+# blocklist config); never the accounts (auth.config: the admin password is the secret store's),
+# the web service's bind address, statistics, cache or downloaded block lists. The tar is read
+# and listed first, without writing; the server is stopped for the swap and started again
+# whatever happened; and the result is checked against technitium_expected_zones: a restore
+# with no expected counts, or whose counts differ, fails (it would verify nothing).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Name the archive and the counts it must produce
+      ansible.builtin.assert:
+        that:
+          - technitium_restore_archive != ''
+          - technitium_expected_zones | length > 0
+        fail_msg: >-
+          technitium: set technitium_restore_archive (the config tar) and technitium_expected_zones
+          (zone to record count): a restore that is not counted is not verified
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Install the zone tooling
+      ansible.builtin.include_tasks: ctl.yml
+    - name: List what the archive would restore, without writing
+      ansible.builtin.command:
+        argv: [python3, -I, "{{ technitium_ctl_path }}", archive-check, --tar, "{{ technitium_restore_archive }}"]
+      register: technitium_archive_plan
+      changed_when: false
+    - name: Replace the config files with the server stopped
+      block:
+        - name: Stop the server
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ technitium_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Place the allowlisted files
+          ansible.builtin.command:
+            argv: >-
+              {{ ['python3', '-I', technitium_ctl_path, 'archive-apply', '--tar', technitium_restore_archive,
+                  '--config', technitium_data_root ~ '/config', '--uid', technitium_uid | int | string,
+                  '--gid', technitium_gid | int | string]
+                 + (['--overwrite'] if technitium_restore_archive_overwrite | bool else []) }}
+          changed_when: true
+      always:
+        - name: Start the server again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ technitium_dir }}/docker-compose.yml", up, -d]
+          changed_when: true
+    - name: Wait for the admin API
+      ansible.builtin.uri:
+        url: "{{ technitium_api_url }}/api/user/session/get"
+        status_code: 200
+        timeout: "{{ technitium_health_timeout | int }}"
+      register: technitium_api_up
+      until: technitium_api_up.status | default(0) == 200
+      retries: 30
+      delay: 2
+      changed_when: false
+    # A restored dns.config brings the old server's recursion setting: it must be the site's. If the
+    # check fails the server is stopped again (an open resolver is worse than none) and the hook fails.
+    - name: The zones, their counts and the recursion setting are the site's
+      block:
+        - name: Every expected zone is there with its record count and the recursion is the site's
+          ansible.builtin.command:
+            argv:
+              - python3
+              - -I
+              - "{{ technitium_ctl_path }}"
+              - verify
+              - --api
+              - "{{ technitium_api_url }}"
+              - --user
+              - "{{ technitium_admin_user }}"
+              - --expect
+              - "{{ technitium_expected_zones | to_json }}"
+              - --recursion
+              - "{{ technitium_recursion }}"
+          environment:
+            HNX_TECHNITIUM_PASSWORD: "{{ lookup('hnx_secret', technitium_admin_login_ref) }}"
+          changed_when: false
+          no_log: true
+      rescue:
+        - name: Stop the server that was restored wrongly
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ technitium_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Fail the restore
+          ansible.builtin.fail:
+            msg: >-
+              technitium: the restored server failed its check (a zone count, or a recursion setting
+              that is not {{ technitium_recursion }}); it has been stopped
+  tags: [restore_archive]

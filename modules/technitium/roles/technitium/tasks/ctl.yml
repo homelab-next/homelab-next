@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# The zone tooling (files/technitium_ctl.py) on the guest: the project owner's (root by default), 0755, in the shared libexec
+# directory. The hooks run it with the admin password in the environment, never in an argument.
+- name: The libexec directory
+  ansible.builtin.file:
+    path: "{{ technitium_ctl_dir }}"
+    state: directory
+    owner: "{{ technitium_owner }}"
+    mode: "0755"
+  tags: [health, backup, restore, restore_archive, export]
+
+- name: Install the zone tooling
+  ansible.builtin.copy:
+    src: technitium_ctl.py
+    dest: "{{ technitium_ctl_path }}"
+    owner: "{{ technitium_owner }}"
+    mode: "0755"
+  tags: [health, backup, restore, restore_archive, export]

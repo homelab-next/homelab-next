@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# Nothing here opens the web console to the world (it is published on the guest's address only),
+# turns on HTTPS or DNS over HTTPS, or names a block list.
+technitium_fixed_env:
+  DNS_SERVER_LOG_USING_LOCAL_TIME: "false"
+# the container's folders: the config (zones, settings), the log, the exit copy
+technitium_container_config_dir: /etc/dns
+technitium_container_log_dir: /var/log/technitium
+technitium_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+technitium_username_pattern: '^[-_.a-zA-Z0-9]{1,64}\Z'
+technitium_zone_pattern: '^[A-Za-z0-9._-]{1,253}\Z'
+technitium_recursion_modes: [Deny, Allow, AllowOnlyForPrivateNetworks]
+technitium_repository: "{{ technitium_image.split('@')[0].rsplit(':', 1)[0] }}"
+technitium_tag: "{{ technitium_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+technitium_digest: "{{ technitium_image.split('@')[1] | default('') }}"
+technitium_api_url: "http://{{ technitium_bind }}:{{ technitium_api_port | int }}"
+technitium_ctl_env: "HNX_TECHNITIUM_PASSWORD"

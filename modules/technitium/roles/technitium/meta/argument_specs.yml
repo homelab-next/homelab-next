@@ -1,0 +1,758 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run Technitium DNS Server as a compose_app, published on the guest address, with the zone tooling installed.
+    options:
+      technitium_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Technitium DNS Server image.
+        default: docker.io/technitium/dns-server:15.4.0@sha256:df7d90ef0f7b6fff6916d291a7022cd902290cc31c3141d4158b6c375a641b41
+      technitium_bind:
+        type: str
+        description: The guest's own IPv4 address the ports are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      technitium_dns_port:
+        type: int
+        description: Host port for DNS, udp and tcp (the registry row's port).
+        default: 53
+      technitium_api_port:
+        type: int
+        description: Host port for the admin API and web console.
+        default: 5380
+      technitium_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/technitium
+      technitium_owner:
+        type: str
+        description: Owner of the compose project and the data root (config/ and log/ belong to technitium_uid).
+        default: root
+      technitium_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ technitium_gid }}'
+      technitium_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the zones and settings), log/ and export/.'
+        default: /var/lib/hnx-modules/technitium
+      technitium_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/ and log/.
+        default: 61000
+      technitium_gid:
+        type: int
+        description: The container's group id.
+        default: 61000
+      technitium_server_domain:
+        type: str
+        description: The server's own name (NS and SOA records name it); read on the first start, a restored config brings its own.
+        default: '{{ technitium_logical_id }}'
+      technitium_admin_user:
+        type: str
+        description: The admin account's name.
+        default: admin
+      technitium_admin_login_ref:
+        type: str
+        description: secret:<name> of the admin password (given to the first start; health signs in with it).
+        default: secret:technitium/admin-password
+      technitium_recursion:
+        type: str
+        description: 'Who may recurse through the server: Deny, Allow or AllowOnlyForPrivateNetworks.'
+        default: AllowOnlyForPrivateNetworks
+      technitium_forwarders:
+        type: list
+        description: 'Forwarder addresses, first start only (empty: full recursion from the root servers).'
+        default: &id001 []
+      technitium_block_list_urls:
+        type: list
+        description: https block list URLs, first start only (a restored config brings its own).
+        default: &id002 []
+      technitium_mem_limit:
+        type: str
+        description: The container's memory limit, like 512m.
+        default: 512m
+      technitium_start:
+        type: bool
+        description: Start the container after rendering.
+        default: true
+      technitium_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      technitium_health_timeout:
+        type: int
+        description: Seconds an API call may take.
+        default: 10
+      technitium_expected_zones:
+        type: dict
+        description: Zone name to record count (NS and SOA included). Health, restore and restore_archive check against it.
+        default: &id003 {}
+      technitium_health_probes:
+        type: list
+        description: 'Extra health probes over DNS: a list of {name, type, expect}.'
+        default: &id004 []
+      technitium_restore_archive:
+        type: path
+        description: 'restore_archive: the archived config tar on the host.'
+        default: ''
+      technitium_restore_archive_overwrite:
+        type: bool
+        description: 'restore_archive: may replace zones already in the config folder.'
+        default: false
+      technitium_restore_source:
+        type: path
+        description: 'restore: the export directory to import.'
+        default: ''
+      technitium_ctl_dir:
+        type: path
+        description: The directory the zone tooling is installed in.
+        default: /usr/local/libexec/homelabnext
+      technitium_ctl_path:
+        type: path
+        description: The zone tooling's path on the guest.
+        default: /usr/local/libexec/homelabnext/technitium-ctl
+      technitium_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dns).
+        required: true
+  health:
+    short_description: Fail unless the container is healthy, the admin signs in, the expected zones hold their record counts and the server answers over DNS.
+    options:
+      technitium_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dns).
+        required: true
+      technitium_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Technitium DNS Server image.
+        default: docker.io/technitium/dns-server:15.4.0@sha256:df7d90ef0f7b6fff6916d291a7022cd902290cc31c3141d4158b6c375a641b41
+      technitium_bind:
+        type: str
+        description: The guest's own IPv4 address the ports are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      technitium_dns_port:
+        type: int
+        description: Host port for DNS, udp and tcp (the registry row's port).
+        default: 53
+      technitium_api_port:
+        type: int
+        description: Host port for the admin API and web console.
+        default: 5380
+      technitium_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/technitium
+      technitium_owner:
+        type: str
+        description: Owner of the compose project and the data root (config/ and log/ belong to technitium_uid).
+        default: root
+      technitium_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ technitium_gid }}'
+      technitium_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the zones and settings), log/ and export/.'
+        default: /var/lib/hnx-modules/technitium
+      technitium_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/ and log/.
+        default: 61000
+      technitium_gid:
+        type: int
+        description: The container's group id.
+        default: 61000
+      technitium_server_domain:
+        type: str
+        description: The server's own name (NS and SOA records name it); read on the first start, a restored config brings its own.
+        default: '{{ technitium_logical_id }}'
+      technitium_admin_user:
+        type: str
+        description: The admin account's name.
+        default: admin
+      technitium_admin_login_ref:
+        type: str
+        description: secret:<name> of the admin password (given to the first start; health signs in with it).
+        default: secret:technitium/admin-password
+      technitium_recursion:
+        type: str
+        description: 'Who may recurse through the server: Deny, Allow or AllowOnlyForPrivateNetworks.'
+        default: AllowOnlyForPrivateNetworks
+      technitium_forwarders:
+        type: list
+        description: 'Forwarder addresses, first start only (empty: full recursion from the root servers).'
+        default: *id001
+      technitium_block_list_urls:
+        type: list
+        description: https block list URLs, first start only (a restored config brings its own).
+        default: *id002
+      technitium_mem_limit:
+        type: str
+        description: The container's memory limit, like 512m.
+        default: 512m
+      technitium_start:
+        type: bool
+        description: Start the container after rendering.
+        default: true
+      technitium_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      technitium_health_timeout:
+        type: int
+        description: Seconds an API call may take.
+        default: 10
+      technitium_expected_zones:
+        type: dict
+        description: Zone name to record count (NS and SOA included). Health, restore and restore_archive check against it.
+        default: *id003
+      technitium_health_probes:
+        type: list
+        description: 'Extra health probes over DNS: a list of {name, type, expect}.'
+        default: *id004
+      technitium_ctl_dir:
+        type: path
+        description: The directory the zone tooling is installed in.
+        default: /usr/local/libexec/homelabnext
+      technitium_ctl_path:
+        type: path
+        description: The zone tooling's path on the guest.
+        default: /usr/local/libexec/homelabnext/technitium-ctl
+  readiness:
+    short_description: Fail unless the container engine is ready and the admin password resolves in its expected form.
+    options:
+      technitium_admin_login_ref:
+        type: str
+        description: secret:<name> of the admin password (given to the first start; health signs in with it).
+        default: secret:technitium/admin-password
+  backup:
+    short_description: Export every zone, then name the data root for the backup.
+    options:
+      technitium_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dns).
+        required: true
+      technitium_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Technitium DNS Server image.
+        default: docker.io/technitium/dns-server:15.4.0@sha256:df7d90ef0f7b6fff6916d291a7022cd902290cc31c3141d4158b6c375a641b41
+      technitium_bind:
+        type: str
+        description: The guest's own IPv4 address the ports are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      technitium_dns_port:
+        type: int
+        description: Host port for DNS, udp and tcp (the registry row's port).
+        default: 53
+      technitium_api_port:
+        type: int
+        description: Host port for the admin API and web console.
+        default: 5380
+      technitium_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/technitium
+      technitium_owner:
+        type: str
+        description: Owner of the compose project and the data root (config/ and log/ belong to technitium_uid).
+        default: root
+      technitium_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ technitium_gid }}'
+      technitium_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the zones and settings), log/ and export/.'
+        default: /var/lib/hnx-modules/technitium
+      technitium_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/ and log/.
+        default: 61000
+      technitium_gid:
+        type: int
+        description: The container's group id.
+        default: 61000
+      technitium_server_domain:
+        type: str
+        description: The server's own name (NS and SOA records name it); read on the first start, a restored config brings its own.
+        default: '{{ technitium_logical_id }}'
+      technitium_admin_user:
+        type: str
+        description: The admin account's name.
+        default: admin
+      technitium_admin_login_ref:
+        type: str
+        description: secret:<name> of the admin password (given to the first start; health signs in with it).
+        default: secret:technitium/admin-password
+      technitium_recursion:
+        type: str
+        description: 'Who may recurse through the server: Deny, Allow or AllowOnlyForPrivateNetworks.'
+        default: AllowOnlyForPrivateNetworks
+      technitium_forwarders:
+        type: list
+        description: 'Forwarder addresses, first start only (empty: full recursion from the root servers).'
+        default: *id001
+      technitium_block_list_urls:
+        type: list
+        description: https block list URLs, first start only (a restored config brings its own).
+        default: *id002
+      technitium_mem_limit:
+        type: str
+        description: The container's memory limit, like 512m.
+        default: 512m
+      technitium_start:
+        type: bool
+        description: Start the container after rendering.
+        default: true
+      technitium_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      technitium_health_timeout:
+        type: int
+        description: Seconds an API call may take.
+        default: 10
+      technitium_expected_zones:
+        type: dict
+        description: Zone name to record count (NS and SOA included). Health, restore and restore_archive check against it.
+        default: *id003
+      technitium_health_probes:
+        type: list
+        description: 'Extra health probes over DNS: a list of {name, type, expect}.'
+        default: *id004
+      technitium_ctl_dir:
+        type: path
+        description: The directory the zone tooling is installed in.
+        default: /usr/local/libexec/homelabnext
+      technitium_ctl_path:
+        type: path
+        description: The zone tooling's path on the guest.
+        default: /usr/local/libexec/homelabnext/technitium-ctl
+  export:
+    short_description: Write the open-format exit copy (zone files, settings, listing) to <data root>/export.
+    options:
+      technitium_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dns).
+        required: true
+      technitium_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Technitium DNS Server image.
+        default: docker.io/technitium/dns-server:15.4.0@sha256:df7d90ef0f7b6fff6916d291a7022cd902290cc31c3141d4158b6c375a641b41
+      technitium_bind:
+        type: str
+        description: The guest's own IPv4 address the ports are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      technitium_dns_port:
+        type: int
+        description: Host port for DNS, udp and tcp (the registry row's port).
+        default: 53
+      technitium_api_port:
+        type: int
+        description: Host port for the admin API and web console.
+        default: 5380
+      technitium_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/technitium
+      technitium_owner:
+        type: str
+        description: Owner of the compose project and the data root (config/ and log/ belong to technitium_uid).
+        default: root
+      technitium_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ technitium_gid }}'
+      technitium_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the zones and settings), log/ and export/.'
+        default: /var/lib/hnx-modules/technitium
+      technitium_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/ and log/.
+        default: 61000
+      technitium_gid:
+        type: int
+        description: The container's group id.
+        default: 61000
+      technitium_server_domain:
+        type: str
+        description: The server's own name (NS and SOA records name it); read on the first start, a restored config brings its own.
+        default: '{{ technitium_logical_id }}'
+      technitium_admin_user:
+        type: str
+        description: The admin account's name.
+        default: admin
+      technitium_admin_login_ref:
+        type: str
+        description: secret:<name> of the admin password (given to the first start; health signs in with it).
+        default: secret:technitium/admin-password
+      technitium_recursion:
+        type: str
+        description: 'Who may recurse through the server: Deny, Allow or AllowOnlyForPrivateNetworks.'
+        default: AllowOnlyForPrivateNetworks
+      technitium_forwarders:
+        type: list
+        description: 'Forwarder addresses, first start only (empty: full recursion from the root servers).'
+        default: *id001
+      technitium_block_list_urls:
+        type: list
+        description: https block list URLs, first start only (a restored config brings its own).
+        default: *id002
+      technitium_mem_limit:
+        type: str
+        description: The container's memory limit, like 512m.
+        default: 512m
+      technitium_start:
+        type: bool
+        description: Start the container after rendering.
+        default: true
+      technitium_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      technitium_health_timeout:
+        type: int
+        description: Seconds an API call may take.
+        default: 10
+      technitium_expected_zones:
+        type: dict
+        description: Zone name to record count (NS and SOA included). Health, restore and restore_archive check against it.
+        default: *id003
+      technitium_health_probes:
+        type: list
+        description: 'Extra health probes over DNS: a list of {name, type, expect}.'
+        default: *id004
+      technitium_ctl_dir:
+        type: path
+        description: The directory the zone tooling is installed in.
+        default: /usr/local/libexec/homelabnext
+      technitium_ctl_path:
+        type: path
+        description: The zone tooling's path on the guest.
+        default: /usr/local/libexec/homelabnext/technitium-ctl
+  restore:
+    short_description: Check an export (listing, sizes, sha256) and import every zone from it, then check each record count.
+    options:
+      technitium_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dns).
+        required: true
+      technitium_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Technitium DNS Server image.
+        default: docker.io/technitium/dns-server:15.4.0@sha256:df7d90ef0f7b6fff6916d291a7022cd902290cc31c3141d4158b6c375a641b41
+      technitium_bind:
+        type: str
+        description: The guest's own IPv4 address the ports are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      technitium_dns_port:
+        type: int
+        description: Host port for DNS, udp and tcp (the registry row's port).
+        default: 53
+      technitium_api_port:
+        type: int
+        description: Host port for the admin API and web console.
+        default: 5380
+      technitium_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/technitium
+      technitium_owner:
+        type: str
+        description: Owner of the compose project and the data root (config/ and log/ belong to technitium_uid).
+        default: root
+      technitium_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ technitium_gid }}'
+      technitium_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the zones and settings), log/ and export/.'
+        default: /var/lib/hnx-modules/technitium
+      technitium_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/ and log/.
+        default: 61000
+      technitium_gid:
+        type: int
+        description: The container's group id.
+        default: 61000
+      technitium_server_domain:
+        type: str
+        description: The server's own name (NS and SOA records name it); read on the first start, a restored config brings its own.
+        default: '{{ technitium_logical_id }}'
+      technitium_admin_user:
+        type: str
+        description: The admin account's name.
+        default: admin
+      technitium_admin_login_ref:
+        type: str
+        description: secret:<name> of the admin password (given to the first start; health signs in with it).
+        default: secret:technitium/admin-password
+      technitium_recursion:
+        type: str
+        description: 'Who may recurse through the server: Deny, Allow or AllowOnlyForPrivateNetworks.'
+        default: AllowOnlyForPrivateNetworks
+      technitium_forwarders:
+        type: list
+        description: 'Forwarder addresses, first start only (empty: full recursion from the root servers).'
+        default: *id001
+      technitium_block_list_urls:
+        type: list
+        description: https block list URLs, first start only (a restored config brings its own).
+        default: *id002
+      technitium_mem_limit:
+        type: str
+        description: The container's memory limit, like 512m.
+        default: 512m
+      technitium_start:
+        type: bool
+        description: Start the container after rendering.
+        default: true
+      technitium_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      technitium_health_timeout:
+        type: int
+        description: Seconds an API call may take.
+        default: 10
+      technitium_expected_zones:
+        type: dict
+        description: Zone name to record count (NS and SOA included). Health, restore and restore_archive check against it.
+        default: *id003
+      technitium_health_probes:
+        type: list
+        description: 'Extra health probes over DNS: a list of {name, type, expect}.'
+        default: *id004
+      technitium_ctl_dir:
+        type: path
+        description: The directory the zone tooling is installed in.
+        default: /usr/local/libexec/homelabnext
+      technitium_ctl_path:
+        type: path
+        description: The zone tooling's path on the guest.
+        default: /usr/local/libexec/homelabnext/technitium-ctl
+      technitium_restore_source:
+        type: path
+        description: 'restore: the export directory to import.'
+        required: true
+  restore_archive:
+    short_description: Seed the config folder from an archived config tar (allowlisted files only), with the server stopped, then check the zone record counts.
+    options:
+      technitium_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dns).
+        required: true
+      technitium_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Technitium DNS Server image.
+        default: docker.io/technitium/dns-server:15.4.0@sha256:df7d90ef0f7b6fff6916d291a7022cd902290cc31c3141d4158b6c375a641b41
+      technitium_bind:
+        type: str
+        description: The guest's own IPv4 address the ports are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      technitium_dns_port:
+        type: int
+        description: Host port for DNS, udp and tcp (the registry row's port).
+        default: 53
+      technitium_api_port:
+        type: int
+        description: Host port for the admin API and web console.
+        default: 5380
+      technitium_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/technitium
+      technitium_owner:
+        type: str
+        description: Owner of the compose project and the data root (config/ and log/ belong to technitium_uid).
+        default: root
+      technitium_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ technitium_gid }}'
+      technitium_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the zones and settings), log/ and export/.'
+        default: /var/lib/hnx-modules/technitium
+      technitium_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/ and log/.
+        default: 61000
+      technitium_gid:
+        type: int
+        description: The container's group id.
+        default: 61000
+      technitium_server_domain:
+        type: str
+        description: The server's own name (NS and SOA records name it); read on the first start, a restored config brings its own.
+        default: '{{ technitium_logical_id }}'
+      technitium_admin_user:
+        type: str
+        description: The admin account's name.
+        default: admin
+      technitium_admin_login_ref:
+        type: str
+        description: secret:<name> of the admin password (given to the first start; health signs in with it).
+        default: secret:technitium/admin-password
+      technitium_recursion:
+        type: str
+        description: 'Who may recurse through the server: Deny, Allow or AllowOnlyForPrivateNetworks.'
+        default: AllowOnlyForPrivateNetworks
+      technitium_forwarders:
+        type: list
+        description: 'Forwarder addresses, first start only (empty: full recursion from the root servers).'
+        default: *id001
+      technitium_block_list_urls:
+        type: list
+        description: https block list URLs, first start only (a restored config brings its own).
+        default: *id002
+      technitium_mem_limit:
+        type: str
+        description: The container's memory limit, like 512m.
+        default: 512m
+      technitium_start:
+        type: bool
+        description: Start the container after rendering.
+        default: true
+      technitium_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      technitium_health_timeout:
+        type: int
+        description: Seconds an API call may take.
+        default: 10
+      technitium_expected_zones:
+        type: dict
+        description: Zone name to record count (NS and SOA included). Health, restore and restore_archive check against it.
+        default: *id003
+      technitium_health_probes:
+        type: list
+        description: 'Extra health probes over DNS: a list of {name, type, expect}.'
+        default: *id004
+      technitium_ctl_dir:
+        type: path
+        description: The directory the zone tooling is installed in.
+        default: /usr/local/libexec/homelabnext
+      technitium_ctl_path:
+        type: path
+        description: The zone tooling's path on the guest.
+        default: /usr/local/libexec/homelabnext/technitium-ctl
+      technitium_restore_archive:
+        type: path
+        description: 'restore_archive: the archived config tar on the host.'
+        required: true
+      technitium_restore_archive_overwrite:
+        type: bool
+        description: 'restore_archive: may replace zones already in the config folder.'
+        default: false
+  upgrade:
+    short_description: Validate an image bump (tag and digest) and record it as pending.
+    options:
+      technitium_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dns).
+        required: true
+      technitium_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the Technitium DNS Server image.
+        default: docker.io/technitium/dns-server:15.4.0@sha256:df7d90ef0f7b6fff6916d291a7022cd902290cc31c3141d4158b6c375a641b41
+      technitium_bind:
+        type: str
+        description: The guest's own IPv4 address the ports are published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      technitium_dns_port:
+        type: int
+        description: Host port for DNS, udp and tcp (the registry row's port).
+        default: 53
+      technitium_api_port:
+        type: int
+        description: Host port for the admin API and web console.
+        default: 5380
+      technitium_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/technitium
+      technitium_owner:
+        type: str
+        description: Owner of the compose project and the data root (config/ and log/ belong to technitium_uid).
+        default: root
+      technitium_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ technitium_gid }}'
+      technitium_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ (the zones and settings), log/ and export/.'
+        default: /var/lib/hnx-modules/technitium
+      technitium_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns config/ and log/.
+        default: 61000
+      technitium_gid:
+        type: int
+        description: The container's group id.
+        default: 61000
+      technitium_server_domain:
+        type: str
+        description: The server's own name (NS and SOA records name it); read on the first start, a restored config brings its own.
+        default: '{{ technitium_logical_id }}'
+      technitium_admin_user:
+        type: str
+        description: The admin account's name.
+        default: admin
+      technitium_admin_login_ref:
+        type: str
+        description: secret:<name> of the admin password (given to the first start; health signs in with it).
+        default: secret:technitium/admin-password
+      technitium_recursion:
+        type: str
+        description: 'Who may recurse through the server: Deny, Allow or AllowOnlyForPrivateNetworks.'
+        default: AllowOnlyForPrivateNetworks
+      technitium_forwarders:
+        type: list
+        description: 'Forwarder addresses, first start only (empty: full recursion from the root servers).'
+        default: *id001
+      technitium_block_list_urls:
+        type: list
+        description: https block list URLs, first start only (a restored config brings its own).
+        default: *id002
+      technitium_mem_limit:
+        type: str
+        description: The container's memory limit, like 512m.
+        default: 512m
+      technitium_start:
+        type: bool
+        description: Start the container after rendering.
+        default: true
+      technitium_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      technitium_health_timeout:
+        type: int
+        description: Seconds an API call may take.
+        default: 10
+      technitium_expected_zones:
+        type: dict
+        description: Zone name to record count (NS and SOA included). Health, restore and restore_archive check against it.
+        default: *id003
+      technitium_health_probes:
+        type: list
+        description: 'Extra health probes over DNS: a list of {name, type, expect}.'
+        default: *id004
+      technitium_ctl_dir:
+        type: path
+        description: The directory the zone tooling is installed in.
+        default: /usr/local/libexec/homelabnext
+      technitium_ctl_path:
+        type: path
+        description: The zone tooling's path on the guest.
+        default: /usr/local/libexec/homelabnext/technitium-ctl
+      technitium_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> to move to.
+        required: true
