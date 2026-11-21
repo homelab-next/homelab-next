@@ -1448,7 +1448,7 @@
               "optional": {
                 "type": "boolean",
                 "default": false,
-                "description": "A per-site option: the entry is allowed but NOT owed. A site that does not grant it gets the module with no such egress (the default); one that lists the target under grants.egress.<module>.<role> opts in. The generated network policy never opens an optional entry (it cannot see grants): the grant is the policy and the guest's own firewall the control."
+                "description": "A per-site option: the entry is allowed but NOT owed. A site that does not grant it gets the module with no such egress (the default); one that lists the target under grants.egress.<module>.<role> opts in. The generated network policy opens an optional target only when the site grants it, and then treats it like any other."
               }
             }
           },

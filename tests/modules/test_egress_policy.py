@@ -682,12 +682,27 @@ def test_each_placed_container_role_is_warned_about_and_no_other(tmp_path):
     assert eg.unenforced(site, sel, dirs, load) == []
 
 
-def test_an_optional_internet_entry_opens_nothing_in_the_generated_policy():
-    """`optional: true` is a per-site option the policy cannot see grants for: it renders as if absent."""
-    site = SITES["full"]
+def _publisher_nft(optional: bool, granted: bool) -> str:
+    site = copy.deepcopy(SITES["full"])
     host = site["features"]["publishing"]["placement"]["publisher"]
     mods = copy.deepcopy(MODULES)
     for e in mods["publishing"]["egress"]:
-        e["optional"] = True
-    nft = render(site, mods)[f"{host}/hnx-egress.nft"]
-    assert "ip daddr != @not_internet4 accept" not in chain(nft, "publishing", "publisher")
+        e["optional"] = optional
+    if granted:
+        site["grants"] = {"egress": {"publishing": {"publisher": ["internet"]}}}
+    else:
+        (site.get("grants") or {}).get("egress", {}).pop("publishing", None)
+    return render(site, mods)[f"{host}/hnx-egress.nft"]
+
+
+def test_an_optional_entry_opens_only_what_the_site_grants_and_then_acts_like_a_mandatory_one():
+    internet = "ip daddr != @not_internet4 accept"
+    assert internet in chain(
+        _publisher_nft(False, True), "publishing", "publisher"
+    )  # mandatory: always
+    assert internet not in chain(
+        _publisher_nft(True, False), "publishing", "publisher"
+    )  # optional, not granted
+    granted = _publisher_nft(True, True)
+    assert internet in chain(granted, "publishing", "publisher")  # optional, granted
+    assert granted == _publisher_nft(False, True)  # identical to the mandatory rendering
