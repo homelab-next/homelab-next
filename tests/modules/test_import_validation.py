@@ -262,6 +262,7 @@ MIGRATION_PROOF = {
     "idp": "reference: the idp protocol has no export/import_ yet",
     "lake-catalog": "reference: the lake protocol has no export/import_ yet",
     "documents": "reference: the slot is provisional (no contract), so nothing can add export/import_",
+    "graph-store": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "enrichment": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "feed-reader": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "media": "reference: the slot is provisional (no contract), so nothing can add export/import_",

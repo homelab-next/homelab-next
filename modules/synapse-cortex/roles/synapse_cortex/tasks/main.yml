@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Render and start the graph store
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ synapse_cortex_app.compose_app_name }}"
+    compose_app_dir: "{{ synapse_cortex_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ synapse_cortex_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ synapse_cortex_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ synapse_cortex_app.compose_app_owner }}"
+    compose_app_group: "{{ synapse_cortex_app.compose_app_group }}"
+    compose_app_start: "{{ synapse_cortex_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ synapse_cortex_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ synapse_cortex_app.compose_app_spec }}"
+    compose_app_bind_roots: ["{{ synapse_cortex_dir }}", "{{ synapse_cortex_data_root }}"]
+  no_log: true
+
+- name: Wait for the service to answer and be the active one (opening a large graph takes minutes)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ synapse_cortex_dir }}/docker-compose.yml", exec, -T, -e, HNX_PORT, app,
+           python, -c, "{{ synapse_cortex_probe_script }}"]
+    expand_argument_vars: false  # the script holds $NAME-like text for the container's shell: never the controller's
+  environment:
+    HNX_PORT: "{{ synapse_cortex_https_port | int }}"
+  register: synapse_cortex_up
+  until: synapse_cortex_up.rc == 0
+  retries: "{{ ((synapse_cortex_ready_timeout | int) / 10) | int }}"
+  delay: 10
+  changed_when: false
+  when: synapse_cortex_start | bool
+
+- name: Make the accounts and roles what the site names
+  ansible.builtin.include_tasks: auth.yml
+  when: synapse_cortex_start | bool

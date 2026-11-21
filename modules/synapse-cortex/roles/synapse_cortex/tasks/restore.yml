@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the graph from a sealed backup (README, "Restore"): synapse_cortex_restore_source is the
+# backups/hnx-<stamp> directory. The source is checked first and nothing is written until it passes
+# (the listing names exactly the files that are there, each of the size and sha256 listed, no link, a
+# manifest whose counts are equal and not empty). The restore is into an EMPTY storage/ only, with the
+# service stopped: a restore is never a merge and never overwrites a graph. The files are copied
+# (hashed as written, and re-read) into a sibling directory, given to the container's account, and
+# renamed into place; nothing is deleted. The service is then started and the node count of EVERY
+# form must equal the manifest's, with a graph that is not empty: a different count, or no nodes
+# where nodes are expected, is an error. Then root's password and the site's accounts are made what
+# the secrets say (they are the restored graph's accounts, with their passwords reset).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Refuse a source that is not a path
+      ansible.builtin.assert:
+        that:
+          - synapse_cortex_restore_source is defined
+          - synapse_cortex_restore_source is match(synapse_cortex_path_pattern)
+        fail_msg: "synapse-cortex: synapse_cortex_restore_source must be an absolute canonical path to a sealed backup directory"
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Check the source (nothing is written)
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', synapse_cortex_scripts ~ '/synapse_cortex_backup.py') }}",
+               check, "{{ synapse_cortex_restore_source }}"]
+      register: synapse_cortex_restore_check
+      changed_when: false
+    - name: Refuse a source of another version (the storage migrates forward only)
+      ansible.builtin.assert:
+        that:
+          - (synapse_cortex_restore_check.stdout | from_json).version is match(synapse_cortex_version_tag_pattern)
+          - >-
+            (synapse_cortex_restore_check.stdout | from_json).version[1:].split('.') | map('int') | list
+            <= synapse_cortex_tag[1:].split('.') | map('int') | list
+        fail_msg: "synapse-cortex: the backup is of a newer version than the pinned image (a restore never goes back)"
+    - name: Look for a running service
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ synapse_cortex_dir }}/docker-compose.yml", ps, -q, --status, running, app]
+      register: synapse_cortex_running
+      changed_when: false
+      failed_when: false
+    - name: Refuse to restore under a running service
+      ansible.builtin.assert:
+        that: synapse_cortex_running.stdout | trim | length == 0
+        fail_msg: "synapse-cortex: the service is running; stop it (deploy with synapse_cortex_start false) before a restore"
+    - name: Look at what storage and the staging directory hold
+      ansible.builtin.find:
+        paths: "{{ synapse_cortex_data_root }}/storage"
+        file_type: any
+        hidden: true
+      register: synapse_cortex_storage_held
+    - name: Look for a staging directory an earlier restore left
+      ansible.builtin.stat:
+        path: "{{ synapse_cortex_data_root }}/storage.restoring"
+        follow: false
+      register: synapse_cortex_stale
+    - name: Refuse to restore over a graph, or over a staging directory
+      ansible.builtin.assert:
+        that:
+          - synapse_cortex_storage_held.matched | int == 0
+          - not synapse_cortex_stale.stat.exists
+        fail_msg: >-
+          synapse-cortex: {{ synapse_cortex_data_root }}/storage holds files, or {{ synapse_cortex_data_root }}/storage.restoring
+          is left from an earlier restore. A restore never merges and never overwrites: move the old one aside
+          (the operator's act) and restore into an empty storage/
+    - name: Stage the files (hashed as written, re-read against the listing)
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', synapse_cortex_scripts ~ '/synapse_cortex_backup.py') }}",
+               stage, "{{ synapse_cortex_restore_source }}", "{{ synapse_cortex_data_root }}/storage.restoring"]
+      changed_when: true
+    - name: Give the staged tree to the container's account
+      ansible.builtin.file:
+        path: "{{ synapse_cortex_data_root }}/storage.restoring"
+        state: directory
+        recurse: true
+        owner: "{{ synapse_cortex_uid | int }}"
+        group: "{{ synapse_cortex_gid | int }}"
+    - name: Put it in place (storage/ is empty, so this is a rename and nothing is deleted)
+      ansible.builtin.command:
+        argv: [mv, -T, "{{ synapse_cortex_data_root }}/storage.restoring", "{{ synapse_cortex_data_root }}/storage"]
+      changed_when: true
+    - name: Start the service on the restored storage
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ synapse_cortex_dir }}/docker-compose.yml", up, -d, --wait, --wait-timeout, "{{ synapse_cortex_ready_timeout | int }}", app]
+      changed_when: true
+    - name: Count the nodes by form
+      ansible.builtin.include_tasks: count.yml
+    - name: Every form's count equals the backup's, and the graph is not empty
+      ansible.builtin.assert:
+        that:
+          - synapse_cortex_counts == (synapse_cortex_restore_check.stdout | from_json).counts_after
+          - synapse_cortex_counts.values() | map('int') | sum > 0
+        fail_msg: >-
+          synapse-cortex: the restored graph's node counts differ from the backup's (or it is empty). The
+          storage is LEFT in place for inspection; nothing was removed
+    - name: Make root's password and the site's accounts what the secrets say
+      ansible.builtin.include_tasks: auth.yml
+  tags: [restore]

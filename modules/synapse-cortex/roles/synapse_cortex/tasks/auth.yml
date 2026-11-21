@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# Make root's password and the site's roles and accounts what the secrets and the settings say
+# (idempotent: an account whose password already signs in is no change). The names and passwords
+# reach the service's own API only in the environment of the one command, never an argument of it.
+- name: Resolve the accounts (names and passwords, never printed)
+  ansible.builtin.set_fact:
+    synapse_cortex_auth_spec: >-
+      {{ {'port': synapse_cortex_https_port | int,
+          'root': {'passwd': lookup('hnx_secret', synapse_cortex_root_login_ref)},
+          'roles': synapse_cortex_roles,
+          'users': synapse_cortex_users_resolved} }}
+  vars:
+    synapse_cortex_users_resolved: >-
+      {%- set out = [] -%}
+      {%- for u in synapse_cortex_users -%}
+      {%- set _ = out.append({'i': loop.index, 'name': lookup('hnx_secret', u.name_ref), 'passwd': lookup('hnx_secret', u.password_ref),
+                              'admin': u.admin | default(false) | bool, 'roles': u.roles | default([])}) -%}
+      {%- endfor -%}
+      {{ out }}
+  no_log: true
+
+- name: Make them so
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ synapse_cortex_dir }}/docker-compose.yml", exec, -T, -e, HNX_SPEC, app,
+           python, -c, "{{ synapse_cortex_auth_script }}"]
+    expand_argument_vars: false  # the script holds $NAME-like text for the container's shell: never the controller's
+  environment:
+    HNX_SPEC: "{{ synapse_cortex_auth_spec | to_json }}"
+  register: synapse_cortex_authed
+  changed_when: (synapse_cortex_authed.stdout_lines | select('match', '^HNX-AUTH done ') | first | default('HNX-AUTH done 1')).split()[-1] | int > 0
+  failed_when: >-
+    synapse_cortex_authed.rc != 0 or
+    (synapse_cortex_authed.stdout_lines | select('match', '^HNX-AUTH done ') | list | length) != 1
+  no_log: true

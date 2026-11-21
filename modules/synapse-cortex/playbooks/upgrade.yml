@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (synapse_cortex_target_image, tag and digest; the
+# same or a newer version, never an older one: the storage cannot be migrated back), export the
+# graph first (a newer service migrates its own storage on first start), then converge with the new
+# pin (set synapse_cortex_image to the target in the overlay).
+#   ansible-playbook -i <inventory> modules/synapse-cortex/playbooks/upgrade.yml -e synapse_cortex_target_image=<ref>
+- name: Upgrade the graph store
+  hosts: mod_synapse_cortex_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: synapse_cortex
+        tasks_from: upgrade
+    - name: Export the graph before the new image opens the storage
+      ansible.builtin.include_role:
+        name: synapse_cortex
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: synapse_cortex
+      vars:
+        synapse_cortex_image: "{{ synapse_cortex_target_image }}"

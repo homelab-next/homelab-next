@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# The running service writes the backup itself (one consistent hold across all its slabs) into the
+# backups directory it was configured with.
+- name: Ask the running service for a backup
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ synapse_cortex_dir }}/docker-compose.yml", exec, -T, app,
+           python, -m, synapse.tools.service.livebackup, --name, "{{ synapse_cortex_backup_name }}"]
+  async: "{{ synapse_cortex_backup_timeout | int }}"
+  poll: 3
+  changed_when: true

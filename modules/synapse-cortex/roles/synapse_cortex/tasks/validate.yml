@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - synapse_cortex_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - synapse_cortex_image is match(synapse_cortex_pinned_ref_pattern)
+      - synapse_cortex_tag is match(synapse_cortex_version_tag_pattern)
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - synapse_cortex_bind is match(synapse_cortex_ipv4_pattern)
+      - synapse_cortex_bind != '0.0.0.0'
+      - synapse_cortex_https_port | int >= 1 and synapse_cortex_https_port | int <= 65535
+      - synapse_cortex_telepath_port | int >= 0 and synapse_cortex_telepath_port | int <= 65535
+      - synapse_cortex_telepath_port | int != synapse_cortex_https_port | int
+      - synapse_cortex_telepath_port | int == 0 or synapse_cortex_telepath_hostname is match(synapse_cortex_hostname_pattern)
+      - synapse_cortex_uid | int >= 1 and synapse_cortex_gid | int >= 1
+      - >-
+        [synapse_cortex_dir, synapse_cortex_data_root] | reject('match', synapse_cortex_path_pattern) | list | length == 0
+      # a recursive removal under the data root (the backups' pruning) needs the root to be a real directory, never a shallow one
+      - synapse_cortex_data_root.split('/') | length >= 4
+      - synapse_cortex_root_login_ref is match(synapse_cortex_ref_pattern)
+      - synapse_cortex_roles is sequence and synapse_cortex_roles is not string and synapse_cortex_roles is not mapping
+      - synapse_cortex_roles | select('mapping') | list | length == synapse_cortex_roles | length
+      - >-
+        synapse_cortex_roles | reject('mapping') | list | length > 0 or
+        synapse_cortex_roles | map('dict2items') | map('map', attribute='key') | map('difference', ['name', 'rules']) | select | list | length == 0
+      - >-
+        synapse_cortex_roles | reject('mapping') | list | length > 0 or
+        (synapse_cortex_roles | selectattr('name', 'defined') | list | length == synapse_cortex_roles | length
+         and synapse_cortex_roles | selectattr('rules', 'defined') | list | length == synapse_cortex_roles | length)
+      - >-
+        synapse_cortex_roles | reject('mapping') | list | length > 0 or
+        (synapse_cortex_roles | map(attribute='name', default='') | reject('match', synapse_cortex_role_pattern) | list | length == 0
+         and synapse_cortex_roles | map(attribute='name', default='') | unique | list | length == synapse_cortex_roles | length)
+      - >-
+        synapse_cortex_roles | reject('mapping') | list | length > 0 or
+        (synapse_cortex_roles | map(attribute='rules', default=[]) | select('string') | list | length == 0
+         and synapse_cortex_roles | map(attribute='rules', default=[]) | flatten | reject('string') | list | length == 0
+         and synapse_cortex_roles | map(attribute='rules', default=[]) | flatten | reject('match', synapse_cortex_rule_pattern) | list | length == 0)
+      - synapse_cortex_users is sequence and synapse_cortex_users is not string and synapse_cortex_users is not mapping
+      - synapse_cortex_users | select('mapping') | list | length == synapse_cortex_users | length
+      - >-
+        synapse_cortex_users | reject('mapping') | list | length > 0 or
+        synapse_cortex_users | map('dict2items') | map('map', attribute='key') | map('difference', ['name_ref', 'password_ref', 'admin', 'roles']) | select | list | length == 0
+      - >-
+        synapse_cortex_users | reject('mapping') | list | length > 0 or
+        (synapse_cortex_users | selectattr('name_ref', 'defined') | list | length == synapse_cortex_users | length
+         and synapse_cortex_users | selectattr('password_ref', 'defined') | list | length == synapse_cortex_users | length)
+      - >-
+        synapse_cortex_users | reject('mapping') | list | length > 0 or
+        (synapse_cortex_users | map(attribute='admin', default=false) | reject('boolean') | list | length == 0
+         and synapse_cortex_users | map(attribute='roles', default=[]) | reject('sequence') | list | length == 0
+         and synapse_cortex_users | map(attribute='roles', default=[]) | select('string') | list | length == 0
+         and synapse_cortex_users | map(attribute='roles', default=[]) | flatten | difference(synapse_cortex_roles | map(attribute='name', default='') | list) | length == 0)
+      - synapse_cortex_refs | reject('match', synapse_cortex_ref_pattern) | list | length == 0
+      - synapse_cortex_refs | unique | length == synapse_cortex_refs | length
+      - synapse_cortex_expected_min_nodes | int >= 0
+      - synapse_cortex_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - synapse_cortex_export_mode in ['live', 'offline']
+      - synapse_cortex_export_keep | int >= 1
+      - synapse_cortex_backup_timeout | int >= 60
+    fail_msg: >-
+      synapse-cortex: a registry id, an image pinned by tag and digest (the tag a version like v2.247.0),
+      the guest's IPv4 address to publish on (not all interfaces), a port, a telepath port of 0 or a
+      port other than the HTTPS one with a host name, a uid and gid of 1 or more, absolute canonical
+      directories, a root password reference, roles that are mappings with name and rules (permission
+      strings) only, accounts that are mappings with name_ref and password_ref (and admin, roles that
+      name the configured roles) only, distinct secret: references, a memory limit like 6g, an export
+      mode of live or offline, a keep of 1 or more and a backup timeout of 60 seconds or more
+  tags: [health, backup, restore, export, upgrade]
