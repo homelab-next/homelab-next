@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root and the project's own directories. pgdata/ and export/db/ belong to the database's
+# user, broker/ to the broker's, files/ (the datastore, the templates, the downloads) to the app's;
+# tls/ is root's with the front's group able to enter it; export/ is root's. Nothing here is ever
+# removed by the role (a bind-mounted directory taken away under a running container breaks it).
+- name: Create the data root, the containers' directories and the project's
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ dfir_iris_data_root }}", owner: "{{ dfir_iris_owner }}", group: "{{ dfir_iris_group }}", mode: "0750"}
+    - {path: "{{ dfir_iris_data_root }}/pgdata", owner: "{{ dfir_iris_db_uid | int }}", group: "{{ dfir_iris_db_gid | int }}", mode: "0700"}
+    - {path: "{{ dfir_iris_data_root }}/broker", owner: "{{ dfir_iris_broker_uid | int }}", group: "{{ dfir_iris_broker_gid | int }}", mode: "0700"}
+    - {path: "{{ dfir_iris_data_root }}/files", owner: "{{ dfir_iris_app_uid | int }}", group: "{{ dfir_iris_app_gid | int }}", mode: "0750"}
+    - {path: "{{ dfir_iris_data_root }}/export", owner: "{{ dfir_iris_owner }}", group: "{{ dfir_iris_group }}", mode: "0700"}
+    - {path: "{{ dfir_iris_data_root }}/export/db", owner: "{{ dfir_iris_db_uid | int }}", group: "{{ dfir_iris_db_gid | int }}", mode: "0700"}
+    - {path: "{{ dfir_iris_data_root }}/tls", owner: "{{ dfir_iris_owner }}", group: "{{ dfir_iris_front_gid | int }}", mode: "0750"}
+    - {path: "{{ dfir_iris_dir }}", owner: "{{ dfir_iris_owner }}", group: "{{ dfir_iris_group }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]
+
+- name: Create the datastore's directories
+  ansible.builtin.file:
+    path: "{{ dfir_iris_data_root }}/files/{{ item }}"
+    state: directory
+    owner: "{{ dfir_iris_app_uid | int }}"
+    group: "{{ dfir_iris_app_gid | int }}"
+    mode: "0750"
+  loop: "{{ dfir_iris_files_subdirs }}"
+  tags: [backup, export, restore]

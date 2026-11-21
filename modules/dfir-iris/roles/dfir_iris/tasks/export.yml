@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (object-tree, docs/modules/data.md): <data root>/export/{db/iris.dump, files.tar,
+# listing.jsonl}. The dump is the restore's source (every case, alert, note, account with its
+# password hash and API key, setting); the tar holds the evidence and templates. Secret-bearing:
+# the export directory is 0700.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Dump, archive and list
+      ansible.builtin.include_tasks: dump.yml
+  tags: [export]
