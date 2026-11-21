@@ -37,6 +37,23 @@
       - publishing_gate_lane_sources | map(attribute='lane', default='') | unique | list | length == publishing_gate_lane_sources | length
       - publishing_gate_lane_sources | map(attribute='dir', default='') | unique | list | length == publishing_gate_lane_sources | length
       - publishing_gate_lane_sources | map(attribute='dir', default='') | select('equalto', publishing_gate_publishable_dir) | list | length == 0
+      - publishing_gate_live_source is mapping
+      - publishing_gate_live_source | length == 0 or (publishing_gate_live_source | length == 3 and publishing_gate_live_source.lane is defined and publishing_gate_live_source.dir is defined and publishing_gate_live_source.root is defined)
+      - publishing_gate_live_source | length == 0 or (publishing_gate_live_source.lane is string and publishing_gate_live_source.lane is match(publishing_gate_lane_pattern) and publishing_gate_live_source.lane | length <= 32)
+      - publishing_gate_live_source | length == 0 or (publishing_gate_live_source.dir is string and publishing_gate_live_source.dir is match(publishing_gate_path_pattern))
+      - publishing_gate_live_source | length == 0 or (publishing_gate_live_source.root is string and publishing_gate_live_source.root is match(publishing_gate_path_pattern))
+      # a POSITIVE check: the real lane's directory, exactly <root>/<lane> (the run re-checks by real path and inode)
+      - publishing_gate_live_source | length == 0 or publishing_gate_live_source.lane in ['real']
+      - publishing_gate_live_source | length == 0 or publishing_gate_live_source.dir == publishing_gate_live_source.root ~ '/' ~ publishing_gate_live_source.lane
+      - publishing_gate_live_source | length == 0 or (publishing_gate_lane_sources | map(attribute='lane', default='') | select('equalto', publishing_gate_live_source.lane) | list | length == 0)
+      # the shadow lane is never the live source: not by lane name, not by any path component
+      - publishing_gate_live_source | length == 0 or publishing_gate_live_source.lane is not search(publishing_gate_shadow_pattern)
+      - publishing_gate_live_source | length == 0 or (publishing_gate_live_source.dir | split('/') | select('search', publishing_gate_shadow_pattern) | list | length == 0)
+      # nor the same place as a stage-only lane, a lane's parent or the module's own areas
+      - publishing_gate_live_source | length == 0 or (publishing_gate_lane_sources | map(attribute='dir', default='') | select('equalto', publishing_gate_live_source.dir) | list | length == 0)
+      - >-
+        publishing_gate_live_source | length == 0 or
+        ([publishing_gate_staging_dir, publishing_gate_state_dir, publishing_gate_cred_src_dir] | select('equalto', publishing_gate_live_source.dir) | list | length == 0)
       - publishing_gate_extra_groups is sequence and publishing_gate_extra_groups is not string
       - publishing_gate_extra_groups | reject('match', publishing_gate_group_pattern) | list | length == 0
       - >-
@@ -66,4 +83,24 @@
       - publishing_gate_r2_bucket == '' or (publishing_gate_cloudflare_account_id != '' and publishing_gate_feed_public_base_url != '' and publishing_gate_feed_title != '' and publishing_gate_feed_description != '' and publishing_gate_feed_author != '' and publishing_gate_feed_owner_email != '')
     fail_msg: "publishing: name at least one destination (a Pages project or an R2 bucket); a bucket needs the account id and the whole feed identity"
   when: publishing_gate_mode != 'stage'
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Stat the live source's root and its parent (no lane user may be able to repoint them)
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ [publishing_gate_live_source.root, publishing_gate_live_source.root | dirname] if publishing_gate_live_source else [] }}"
+  register: publishing_gate_live_parents
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: The live source's root and parent are the root owner's and not group- or world-writable
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists or (item.stat.pw_name == publishing_gate_root_owner and item.stat.mode is match('^[0-7][0-7][0145][0145]$'))
+    fail_msg: >-
+      publishing: the live source's root and its parent must be owned by {{ publishing_gate_root_owner }} and not
+      writable by group or others: a lane user who could write them could repoint the live source after validation
+  loop: "{{ publishing_gate_live_parents.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default('') }}"
+  when: publishing_gate_live_source | length > 0
   tags: [health, backup, restore, export, upgrade, readiness]

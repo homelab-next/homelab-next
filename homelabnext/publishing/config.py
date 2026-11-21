@@ -76,6 +76,23 @@ class LaneSource:
     dir: Path
 
 
+_LIVE_KEYS = {"lane", "dir", "root"}
+# the lanes that may be live: a positive list (a name deny-list is evaded by `shadows`, `shdw`, ...)
+LIVE_LANES = ("real",)
+_SHADOW_RE = re.compile(r"(^|[-_.])shadow($|[-_.])", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class LiveSource:
+    """The ONE directory whose items are the live source (it replaces ``publishable_dir`` as what
+    the run gates, stages, deploys and uploads).  It names a lane only so the site says which
+    producer lane it is; the shadow lane can never be it (by name, or by any ``shadow`` component of
+    the real path), and no ``lane_sources`` entry may be or nest with it."""
+
+    lane: str
+    dir: Path
+
+
 @dataclass(frozen=True)
 class Config:
     mode: str
@@ -99,6 +116,7 @@ class Config:
     staging_keep: int = 48
     staging_min_age_s: float = 172800.0
     lane_sources: tuple[LaneSource, ...] = ()
+    live_source: LiveSource | None = None
 
 
 def _abs(doc: dict, key: str) -> Path:
@@ -157,6 +175,72 @@ def _lanes(items: object, others: list[Path]) -> tuple[LaneSource, ...]:
     return tuple(out)
 
 
+def _same_inode(a: str, b: str) -> bool:
+    """True when two paths are one directory on disk (a bind mount has another path, the same
+    ``(st_dev, st_ino)``, which realpath cannot see).  A path that does not exist is nobody's."""
+    try:
+        x, y = os.stat(a), os.stat(b)
+    except OSError:
+        return False
+    return (x.st_dev, x.st_ino) == (y.st_dev, y.st_ino)
+
+
+def _not_lane_writable(path: str) -> None:
+    """A live source's root and its parent are the producer's trust anchor: a lane user who could
+    write either could swap what the parents resolve to after validation.  Owned by root (or this
+    user) and not group- or world-writable; an absent one is not yet installed and is skipped."""
+    for p in (path, os.path.dirname(path)):
+        try:
+            st = os.stat(p)
+        except OSError:
+            continue
+        if st.st_uid not in (0, os.geteuid()) or st.st_mode & 0o022:
+            raise ConfigError(
+                f"the live source's root {path!r} and its parent must be owned by root and not "
+                "writable by group or others (a lane user must not be able to repoint them)"
+            )
+
+
+def _live(item: object, others: list[Path], lanes: tuple[LaneSource, ...]) -> LiveSource:
+    """``{lane, dir, root}``: the single live source (see :class:`LiveSource`)."""
+    if not isinstance(item, dict) or set(item) != _LIVE_KEYS:
+        raise ConfigError("live_source is {lane, dir, root} and nothing else")
+    lane = item["lane"]
+    if not isinstance(lane, str) or not LANE_RE.match(lane) or len(lane) > 32:
+        raise ConfigError("the live source's lane is a short slug")
+    if _SHADOW_RE.search(lane):
+        raise ConfigError("the shadow lane can never be the live source")
+    d = _abs(item, "dir")
+    real = os.path.realpath(
+        d
+    )  # a link, a doubled slash or a bind-style alias is judged by what it is
+    if any(_SHADOW_RE.search(part) for part in Path(real).parts[1:]) or any(
+        _SHADOW_RE.search(part) for part in d.parts[1:]
+    ):
+        raise ConfigError("the live source's dir is under a shadow path: refused")
+    # POSITIVE check: the live dir is exactly <root>/<lane> (by real path) for an allowed lane that
+    # is no stage-only lane, and is not the same directory on disk (st_dev, st_ino) as any lane source
+    if lane not in LIVE_LANES:
+        raise ConfigError(f"the live source's lane is one of {', '.join(LIVE_LANES)}")
+    root = _abs(item, "root")
+    if real != os.path.realpath(root / lane):
+        raise ConfigError("the live source's dir is not exactly <root>/<lane> (by real path)")
+    if any(x.lane == lane for x in lanes):
+        raise ConfigError(f"lane {lane!r} is a stage-only lane source: it cannot also be live")
+    for x in lanes:
+        if _same_inode(str(d), str(x.dir)):
+            raise ConfigError("the live source's dir is the same directory as a lane source's")
+    if _same_inode(str(d), str(root / "shadow")):
+        raise ConfigError("the live source's dir is the shadow lane's directory")
+    _not_lane_writable(os.path.realpath(root))
+    if any(_nested(real, os.path.realpath(o)) for o in others):
+        raise ConfigError(
+            "the live source's dir is its own: not nested with a lane source, staging_dir, "
+            "state_dir or credentials_dir"
+        )
+    return LiveSource(lane, d)
+
+
 def load(path: Path, mode_override: str | None = None) -> Config:
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
@@ -197,12 +281,26 @@ def load(path: Path, mode_override: str | None = None) -> Config:
             category=doc.get("feed", {}).get("category", "Technology"),
         )
     notify = doc.get("notify") or {}
+    publishable = _abs(doc, "publishable_dir")
+    staging, state, creds = (
+        _abs(doc, "staging_dir"),
+        _abs(doc, "state_dir"),
+        _abs(doc, "credentials_dir"),
+    )
+    lanes = _lanes(doc.get("lane_sources", []), [publishable, staging, state, creds])
+    live = None
+    if doc.get("live_source") is not None:
+        live = _live(doc["live_source"], [*(x.dir for x in lanes), staging, state, creds], lanes)
+        if _nested(os.path.realpath(live.dir), os.path.realpath(publishable)) and os.path.realpath(
+            live.dir
+        ) != os.path.realpath(publishable):
+            raise ConfigError("the live source's dir may not nest with publishable_dir")
     return Config(
         mode=mode,
-        publishable_dir=_abs(doc, "publishable_dir"),
-        staging_dir=_abs(doc, "staging_dir"),
-        state_dir=_abs(doc, "state_dir"),
-        credentials_dir=_abs(doc, "credentials_dir"),
+        publishable_dir=live.dir if live else publishable,
+        staging_dir=staging,
+        state_dir=state,
+        credentials_dir=creds,
         ceiling=ceiling,
         audience=doc.get("audience", "public"),
         access_control=doc.get("access_control", ""),
@@ -218,11 +316,6 @@ def load(path: Path, mode_override: str | None = None) -> Config:
         legacy_exceptions=_legacy(doc.get("legacy_exceptions", [])),
         staging_keep=int(doc.get("staging_keep", 48)),
         staging_min_age_s=float(doc.get("staging_min_age_s", 172800)),
-        lane_sources=_lanes(
-            doc.get("lane_sources", []),
-            [
-                _abs(doc, k)
-                for k in ("publishable_dir", "staging_dir", "state_dir", "credentials_dir")
-            ],
-        ),
+        lane_sources=lanes,
+        live_source=live,
     )

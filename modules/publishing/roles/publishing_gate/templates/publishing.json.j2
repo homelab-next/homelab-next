@@ -18,6 +18,9 @@
 {% if publishing_gate_lane_sources %}
 {% set _ = cfg.update({'lane_sources': publishing_gate_lane_sources | list}) %}
 {% endif %}
+{% if publishing_gate_live_source %}
+{% set _ = cfg.update({'live_source': publishing_gate_live_source}) %}
+{% endif %}
 {% if publishing_gate_pages_project != '' %}
 {% set _ = cfg.update({'pages': {
   'project': publishing_gate_pages_project,
