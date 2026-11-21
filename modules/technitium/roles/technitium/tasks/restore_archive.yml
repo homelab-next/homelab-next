@@ -58,21 +58,37 @@
       retries: 30
       delay: 2
       changed_when: false
-    - name: Every expected zone is there with its record count
-      ansible.builtin.command:
-        argv:
-          - python3
-          - -I
-          - "{{ technitium_ctl_path }}"
-          - verify
-          - --api
-          - "{{ technitium_api_url }}"
-          - --user
-          - "{{ technitium_admin_user }}"
-          - --expect
-          - "{{ technitium_expected_zones | to_json }}"
-      environment:
-        HNX_TECHNITIUM_PASSWORD: "{{ lookup('hnx_secret', technitium_admin_login_ref) }}"
-      changed_when: false
-      no_log: true
+    # A restored dns.config brings the old server's recursion setting: it must be the site's. If the
+    # check fails the server is stopped again (an open resolver is worse than none) and the hook fails.
+    - name: The zones, their counts and the recursion setting are the site's
+      block:
+        - name: Every expected zone is there with its record count and the recursion is the site's
+          ansible.builtin.command:
+            argv:
+              - python3
+              - -I
+              - "{{ technitium_ctl_path }}"
+              - verify
+              - --api
+              - "{{ technitium_api_url }}"
+              - --user
+              - "{{ technitium_admin_user }}"
+              - --expect
+              - "{{ technitium_expected_zones | to_json }}"
+              - --recursion
+              - "{{ technitium_recursion }}"
+          environment:
+            HNX_TECHNITIUM_PASSWORD: "{{ lookup('hnx_secret', technitium_admin_login_ref) }}"
+          changed_when: false
+          no_log: true
+      rescue:
+        - name: Stop the server that was restored wrongly
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ technitium_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Fail the restore
+          ansible.builtin.fail:
+            msg: >-
+              technitium: the restored server failed its check (a zone count, or a recursion setting
+              that is not {{ technitium_recursion }}); it has been stopped
   tags: [restore_archive]

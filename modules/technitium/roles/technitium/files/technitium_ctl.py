@@ -54,22 +54,25 @@ from typing import Any
 
 MAX_API_BYTES = 64 * 1024 * 1024
 MAX_MEMBER_BYTES = 64 * 1024 * 1024
-ZONE_FILE = re.compile(r"^[A-Za-z0-9._-]{1,200}\.zone$")
-ZONE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
+MAX_RESTORED_BYTES = 256 * 1024 * 1024  # everything an archive restore would place, in all
+MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024  # every regular member, ignored ones included
+MAX_MEMBERS = 10000
+ZONE_FILE = re.compile(r"[A-Za-z0-9._-]{1,200}\.zone")
+ZONE_NAME = re.compile(r"[A-Za-z0-9._-]{1,253}")
 # what an archived config tar may restore: the zones and the settings that shape answers. Never
 # the admin accounts (auth.config: the new admin password is the secret store's), the web
 # service's bind address, the statistics, the cache or the downloaded blocklists.
 ARCHIVE_ALLOW = (
-    re.compile(r"^config/zones/[A-Za-z0-9._-]{1,200}\.zone$"),
-    re.compile(r"^config/scopes/[A-Za-z0-9._ -]{1,100}\.scope$"),
-    re.compile(r"^config/(dns|allowed|blocked|blocklist)\.config$"),
+    re.compile(r"config/zones/[A-Za-z0-9._-]{1,200}\.zone"),
+    re.compile(r"config/scopes/[A-Za-z0-9._ -]{1,100}\.scope"),
+    re.compile(r"config/(dns|allowed|blocked|blocklist)\.config"),
 )
 ARCHIVE_IGNORED = (
-    re.compile(r"^config/?$"),
-    re.compile(r"^config/(zones|scopes|apps|stats|blocklists)/?$"),
-    re.compile(r"^config/(auth|webservice|log)\.config$"),
-    re.compile(r"^config/(stats|blocklists)/[^/]+$"),
-    re.compile(r"^config/cache\.bin$"),
+    re.compile(r"config/?"),
+    re.compile(r"config/(zones|scopes|apps|stats|blocklists)/?"),
+    re.compile(r"config/(auth|webservice|log)\.config"),
+    re.compile(r"config/(stats|blocklists)/[^/]+"),
+    re.compile(r"config/cache\.bin"),
 )
 
 
@@ -200,8 +203,14 @@ def check_counts(have: dict[str, dict[str, Any]], expect: dict[str, int]) -> lis
 
 
 def cmd_verify(args: argparse.Namespace) -> dict[str, Any]:
-    have = inventory(_api(args))
+    api = _api(args)
+    have = inventory(api)
     problems = check_counts(have, _expect(args.expect) if args.expect else {})
+    if args.recursion:
+        # a restored config brings its own recursion setting: it must be the one the site chose
+        got = api.call("settings/get")["response"].get("recursion")
+        if got != args.recursion:
+            problems.append(f"recursion is {got!r}, the site's setting is {args.recursion!r}")
     if problems:
         raise Refused("; ".join(problems))
     return {"zones": have}
@@ -239,7 +248,7 @@ def cmd_export(args: argparse.Namespace) -> dict[str, Any]:
         raise Refused("the server has no primary zone to export")
     for z in zones:
         name = str(z["name"])
-        if not ZONE_NAME.match(name):
+        if not ZONE_NAME.fullmatch(name):
             raise Refused(f"zone name {name!r} is not one this export names")
         text = api.raw("zones/export", zone=name)
         if b"$ORIGIN" not in text:
@@ -333,7 +342,7 @@ def read_export(src: str, uid: int) -> list[dict[str, Any]]:
             if (
                 not isinstance(key, str)
                 or key in rows
-                or not (key == "settings.zip" or ZONE_FILE.match(key))
+                or not (key == "settings.zip" or ZONE_FILE.fullmatch(key))
             ):
                 raise Refused("the listing names an unknown or repeated file")
             rows[key] = r
@@ -402,10 +411,18 @@ def _archive_plan(path: str) -> list[tarfile.TarInfo]:
         raise Refused(f"{path}: cannot be read") from None
     if not stat.S_ISREG(st.st_mode):
         raise Refused(f"{path}: not a regular file (or a link)")
-    plan = []
+    plan: list[tarfile.TarInfo] = []
+    members = total = restored = 0
+    seen: set[str] = set()
     try:
         with tarfile.open(path, "r:") as tf:
             for m in tf:
+                members += 1
+                if members > MAX_MEMBERS:
+                    raise Refused(f"the archive holds more than {MAX_MEMBERS} members")
+                total += m.size if m.isreg() else 0
+                if total > MAX_ARCHIVE_BYTES:
+                    raise Refused(f"the archive holds more than {MAX_ARCHIVE_BYTES} bytes")
                 name = m.name.rstrip("/") if m.isdir() else m.name
                 if name.startswith("/") or ".." in name.split("/"):
                     raise Refused(f"{m.name!r}: an absolute or climbing path")
@@ -413,17 +430,25 @@ def _archive_plan(path: str) -> list[tarfile.TarInfo]:
                     raise Refused(
                         f"{m.name!r}: only plain files and directories are restored from an archive"
                     )
-                if any(p.match(name) for p in ARCHIVE_ALLOW):
+                if any(p.fullmatch(name) for p in ARCHIVE_ALLOW):
                     if not m.isreg() or m.size > MAX_MEMBER_BYTES:
                         raise Refused(
                             f"{m.name!r}: not a regular file within {MAX_MEMBER_BYTES} bytes"
                         )
+                    if name in seen:
+                        raise Refused(f"{m.name!r}: named twice")
+                    seen.add(name)
+                    restored += m.size
+                    if restored > MAX_RESTORED_BYTES:
+                        raise Refused(
+                            f"the files to restore hold more than {MAX_RESTORED_BYTES} bytes"
+                        )
                     plan.append(m)
-                elif not any(p.match(name) for p in ARCHIVE_IGNORED):
+                elif not any(p.fullmatch(name) for p in ARCHIVE_IGNORED):
                     raise Refused(f"{m.name!r}: not a path this archive is expected to hold")
     except tarfile.TarError as exc:
         raise Refused(f"{path}: not a readable tar ({exc})") from None
-    if not any(ARCHIVE_ALLOW[0].match(m.name) for m in plan):
+    if not any(ARCHIVE_ALLOW[0].fullmatch(m.name) for m in plan):
         raise Refused("the archive holds no zone file (an empty restore is an error)")
     return plan
 
@@ -435,6 +460,11 @@ def cmd_archive_check(args: argparse.Namespace) -> dict[str, Any]:
 def cmd_archive_apply(args: argparse.Namespace) -> dict[str, Any]:
     plan = _archive_plan(args.tar)
     config = _safe_dir(args.config)
+    for entry in sorted(
+        os.listdir(config)
+    ):  # the container owns this folder: no link may steer a write
+        if stat.S_ISLNK(os.lstat(os.path.join(config, entry)).st_mode):
+            raise Refused(f"{entry}: a link inside the config folder (the restore follows none)")
     zones = os.path.join(config, "zones")
     if (
         os.path.isdir(zones)
@@ -654,6 +684,7 @@ def _parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("verify")
     api_args(sp)
     sp.add_argument("--expect")
+    sp.add_argument("--recursion", help="fail unless the server's recursion setting is this")
     sp.set_defaults(fn=cmd_verify)
     sp = sub.add_parser("export")
     api_args(sp)

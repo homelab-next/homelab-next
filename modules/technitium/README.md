@@ -39,7 +39,10 @@ names a real host, address, VM id, zone or secret value; those live only in the 
   stored secret, so a rotation that was not applied shows up there.
 - **First-start settings** are the server name (`technitium_server_domain`, which NS and SOA
   records name), recursion (`AllowOnlyForPrivateNetworks`), optional forwarders and block list
-  URLs. A restored `dns.config` brings its own, replacing these.
+  URLs. A restored `dns.config` brings its own, replacing these, **except recursion: `health` and
+  `restore_archive` read the server's recursion setting through the API and fail unless it equals
+  `technitium_recursion` (an archived `Allow` would otherwise make an open resolver); a failed
+  `restore_archive` stops the server again.**
 - **The healthcheck** is a TCP connect to the web service through `bash` (the image has no `wget`
   or `curl`).
 
@@ -78,7 +81,7 @@ device, an absolute or climbing path, or no zone file at all is refused.
 | `export` | `export/<zone>.zone`, `settings.zip` and `listing.jsonl`, written through the API while the server runs |
 | `backup` | the export, then `compose_app`'s backup manifest (the data root, export included) |
 | `restore` | checks `technitium_restore_source` (an export) without writing, then imports every listed zone, overwriting, and requires each record count to equal the export's |
-| `restore_archive` | reads the archived config tar (`technitium_restore_archive`) and lists what it would restore; stops the server, places the allowlisted files, starts it again whatever happened, then requires `technitium_expected_zones` to hold exactly. A restore with no expected counts is refused. It refuses to replace zones already in `config/` unless `technitium_restore_archive_overwrite` is set |
+| `restore_archive` | reads the archived config tar (members, total bytes and per-member bytes are capped, names are matched whole, a name given twice or a link inside `config/` is refused) (`technitium_restore_archive`) and lists what it would restore; stops the server, places the allowlisted files, starts it again whatever happened, then requires `technitium_expected_zones` to hold exactly. A restore with no expected counts is refused. It refuses to replace zones already in `config/` unless `technitium_restore_archive_overwrite` is set |
 | `upgrade` | refuses a target not pinned by tag and digest or from another repository, then records the bump (`compose_app` upgrade) |
 
 ## Data
@@ -153,8 +156,8 @@ HNX_ENDPOINT_DNS=http://<guest>:5380 HNX_DNS_PASSWORD=<admin password> \
   travels unencrypted on the guest's network. The hypervisor's per-VM firewall is the control.
 - **No secondary zones.** The adapter, `export` and `compare` work on **primary** zones. A server
   that is a secondary of another keeps its zones by transfer; this module does not configure that.
-- **First start only.** The admin password, server name, recursion, forwarders and block lists
-  from the role's variables are read on the first start; a later change needs the console or API.
+- **First start only.** The admin password, server name, forwarders and block lists
+  from the role's variables are read on the first start (recursion is also checked at every `health`); a later change needs the console or API.
 - **The container's network is Docker's default bridge**, so `egress: internet` is what the server
   is configured to do, not a network rule.
 - **Removal** exports first, takes the container down and deletes `secrets/technitium.env`; the data

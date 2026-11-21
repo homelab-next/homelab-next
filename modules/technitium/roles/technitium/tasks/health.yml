@@ -38,6 +38,8 @@
           - "{{ technitium_admin_user }}"
           - --expect
           - "{{ technitium_expected_zones | to_json }}"
+          - --recursion
+          - "{{ technitium_recursion }}"
       environment:
         HNX_TECHNITIUM_PASSWORD: "{{ lookup('hnx_secret', technitium_admin_login_ref) }}"
       register: technitium_verify

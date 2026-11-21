@@ -300,6 +300,22 @@ def test_health_fails_when_a_probe_is_answered_differently(tmp_path):
     assert r.returncode != 0 and "answers every probe" in r.stdout
 
 
+def test_health_fails_when_the_server_recurses_for_everyone(tmp_path):
+    with FakeDnsAdmin(password=PASSWORD) as srv, Answerer(ANSWERS) as ans:
+        _seed(srv)
+        srv.recursion = "Allow"  # an open resolver
+        r = _health(tmp_path, srv, ans)
+    assert r.returncode != 0 and "The admin signs in" in r.stdout
+
+
+def test_health_passes_when_the_recursion_is_the_sites_own_setting(tmp_path):
+    with FakeDnsAdmin(password=PASSWORD) as srv, Answerer(ANSWERS) as ans:
+        _seed(srv)
+        srv.recursion = "Deny"
+        r = _health(tmp_path, srv, ans, recursion="Deny")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_health_fails_when_the_container_is_unhealthy(tmp_path):
     with FakeDnsAdmin(password=PASSWORD) as srv, Answerer(ANSWERS) as ans:
         _seed(srv)
@@ -426,7 +442,22 @@ def test_restore_archive_fails_on_a_wrong_record_count_but_starts_the_server_aga
                   expected_zones={**COUNTS, "lab.example.internal": 5})  # fmt: skip
         r = run_role(tmp_path, ROLE, "restore_archive", v, env={**SECRETS, **_docker(tmp_path)})
     assert r.returncode != 0 and "Every expected zone is there" in r.stdout
-    assert (tmp_path / "docker.log").read_text().splitlines()[-1].endswith("up -d")
+    calls = (tmp_path / "docker.log").read_text().splitlines()
+    # started again after the swap, then stopped because the restored server failed its check
+    assert any(c.endswith("up -d") for c in calls) and calls[-1].endswith(" stop")
+
+
+def test_restore_archive_stops_a_server_whose_restored_config_recurses_for_everyone(tmp_path):
+    """The archived dns.config carries the old server's recursion setting. Here the restored
+    server says Allow (open to everyone): the hook fails and the server is stopped again."""
+    tar = _archive(tmp_path / "old-config.tar")
+    with FakeDnsAdmin(password=PASSWORD) as srv, Answerer(ANSWERS) as ans:
+        _seed(srv)
+        srv.recursion = "Allow"
+        v = _live(tmp_path, srv, ans, restore_archive=str(tar), expected_zones=COUNTS)
+        r = run_role(tmp_path, ROLE, "restore_archive", v, env={**SECRETS, **_docker(tmp_path)})
+    assert r.returncode != 0 and "recursion setting" in r.stdout
+    assert (tmp_path / "docker.log").read_text().splitlines()[-1].endswith(" stop")
 
 
 def test_restore_archive_refuses_without_expected_counts_or_with_a_bad_tar(tmp_path):
@@ -646,3 +677,90 @@ def test_the_password_is_never_an_argument_or_a_url(monkeypatch, capsys):
         assert ctl.main(["inventory", "--api", srv.url]) == 1
         assert CTL_ENV in capsys.readouterr().err
         assert PASSWORD not in capsys.readouterr().err
+
+
+# ------------------------------------------------- archive limits, names and links (the tooling)
+def _small_tar(tmp_path, members):
+    return _tar(tmp_path, "limits.tar", [(n, d) for n, d in members])
+
+
+ZONE = "config/zones/a.zone"
+
+
+def test_the_per_member_size_refusal_works(tmp_path, monkeypatch):
+    monkeypatch.setattr(ctl, "MAX_MEMBER_BYTES", 10)
+    ok = _small_tar(tmp_path, [(ZONE, b"x" * 10)])
+    assert [m.name for m in ctl._archive_plan(str(ok))] == [ZONE]
+    big = _small_tar(tmp_path, [(ZONE, b"x" * 11)])
+    with pytest.raises(ctl.Refused, match="within 10 bytes"):
+        ctl._archive_plan(str(big))
+
+
+def test_the_total_restored_bytes_cap_works(tmp_path, monkeypatch):
+    monkeypatch.setattr(ctl, "MAX_RESTORED_BYTES", 10)
+    ok = _small_tar(tmp_path, [(ZONE, b"x" * 6), ("config/dns.config", b"x" * 4)])
+    assert len(ctl._archive_plan(str(ok))) == 2
+    over = _small_tar(tmp_path, [(ZONE, b"x" * 6), ("config/dns.config", b"x" * 5)])
+    with pytest.raises(ctl.Refused, match="files to restore hold more than"):
+        ctl._archive_plan(str(over))
+
+
+def test_the_whole_archive_bytes_cap_counts_ignored_members_too(tmp_path, monkeypatch):
+    monkeypatch.setattr(ctl, "MAX_ARCHIVE_BYTES", 10)
+    over = _small_tar(tmp_path, [(ZONE, b"x"), ("config/cache.bin", b"x" * 10)])
+    with pytest.raises(ctl.Refused, match="archive holds more than 10 bytes"):
+        ctl._archive_plan(str(over))
+
+
+def test_the_member_count_cap_works(tmp_path, monkeypatch):
+    monkeypatch.setattr(ctl, "MAX_MEMBERS", 3)
+    ok = _small_tar(tmp_path, [(ZONE, b"z"), ("config/cache.bin", b""), ("config/log.config", b"")])
+    assert len(ctl._archive_plan(str(ok))) == 1
+    over = _small_tar(
+        tmp_path, [(ZONE, b"z")] + [(f"config/stats/{n}.stat", b"") for n in range(3)]
+    )
+    with pytest.raises(ctl.Refused, match="more than 3 members"):
+        ctl._archive_plan(str(over))
+
+
+def test_a_member_named_twice_is_refused(tmp_path):
+    dup = _small_tar(tmp_path, [(ZONE, b"one"), (ZONE, b"two")])
+    with pytest.raises(ctl.Refused, match="named twice"):
+        ctl._archive_plan(str(dup))
+
+
+@pytest.mark.parametrize("name", [ZONE + "\n", "config/dns.config\n", "config/zones/a.zone/x"])
+def test_the_allowlist_matches_the_whole_name(tmp_path, name):
+    # a pattern ending in $ would let a trailing newline through
+    bad = _small_tar(tmp_path, [(ZONE, b"z"), (name, b"x")])
+    with pytest.raises(ctl.Refused, match="not a path"):
+        ctl._archive_plan(str(bad))
+    assert ctl.ZONE_FILE.fullmatch("a.zone\n") is None and ctl.ZONE_NAME.fullmatch("a\n") is None
+
+
+@pytest.mark.parametrize("link", ["zones", "scopes", "anything"])
+def test_a_link_inside_the_config_folder_is_refused_at_restore(tmp_path, link):
+    tar = _archive(tmp_path / "t.tar")
+    config = tmp_path / "data" / "config"
+    config.mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (config / link).symlink_to(elsewhere)
+    args = ctl._parser().parse_args(["archive-apply", "--tar", str(tar), "--config", str(config),
+                                     "--uid", str(os.getuid()), "--gid", str(os.getgid()),
+                                     "--overwrite"])  # fmt: skip
+    with pytest.raises(ctl.Refused, match="a link inside the config folder"):
+        ctl.cmd_archive_apply(args)
+    assert list(elsewhere.iterdir()) == [] and not list(config.glob(".restore-*"))
+
+
+def test_verify_checks_the_recursion_setting(monkeypatch, capsys):
+    monkeypatch.setenv(CTL_ENV, PASSWORD)
+    with FakeDnsAdmin(password=PASSWORD) as srv:
+        _seed(srv)
+        base = ["verify", "--api", srv.url, "--expect", json.dumps(COUNTS)]
+        assert ctl.main([*base, "--recursion", "AllowOnlyForPrivateNetworks"]) == 0
+        capsys.readouterr()
+        srv.recursion = "Allow"
+        assert ctl.main([*base, "--recursion", "AllowOnlyForPrivateNetworks"]) == 1
+        assert "recursion is 'Allow'" in capsys.readouterr().err

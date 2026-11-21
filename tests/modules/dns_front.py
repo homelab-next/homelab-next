@@ -80,6 +80,7 @@ class FakeDnsAdmin:
         self.zones: dict[str, list[dict[str, Any]]] = {}
         self.tokens: set[str] = set()
         self.logins = 0
+        self.recursion = "AllowOnlyForPrivateNetworks"
         self._sessions = itertools.count(1)
         self._lock = threading.Lock()
         self._httpd = ThreadingHTTPServer((LOOPBACK, 0), self._handler())
@@ -124,6 +125,8 @@ class FakeDnsAdmin:
             return 200, {"status": "ok"}, "json"
         if path == "user/session/get":
             return 200, {"username": self.user, "status": "ok"}, "json"
+        if path == "settings/get":
+            return 200, {"response": {"recursion": self.recursion}, "status": "ok"}, "json"
         if path == "zones/list":
             zs = [{"name": n, "type": "Primary"} for n in sorted(self.zones)]
             return 200, {"response": {"zones": zs}, "status": "ok"}, "json"
