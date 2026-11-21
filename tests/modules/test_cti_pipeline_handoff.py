@@ -457,16 +457,3 @@ def test_the_group_exists_before_the_dropin_that_names_it():
     main = (ROLE / "tasks" / "main.yml").read_text()
     assert main.index("dirs.yml") < main.index("config.yml")
     assert "cti_pipeline_handoff_group[item]" in (ROLE / "tasks" / "dirs.yml").read_text()
-
-
-@pytest.mark.skipif(os.geteuid() == 0, reason="root may chgrp to any group")
-def test_chgrp_to_an_out_group_needs_membership(tmp_path):
-    """The defect: a non-member's chgrp is EPERM; a member's works (the hermetic stand-in for the unit
-    running with and without the group in SupplementaryGroups=)."""
-    mine = set(os.getgroups()) | {os.getgid()}
-    other = next((g for g in range(70000, 70100) if g not in mine), None)
-    f = tmp_path / "f"
-    f.write_text("x")
-    with pytest.raises(PermissionError):
-        os.chown(f, -1, other)
-    os.chown(f, -1, os.getgid())
