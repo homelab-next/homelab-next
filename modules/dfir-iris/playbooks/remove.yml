@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the database and the files (export_first), stop and remove the containers, and
+# delete the env_files (the passwords, the keys and the API key). The data root (with the export in
+# it) and the rest of the compose project are kept for the operator to archive or delete; the
+# decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the service.
+# Every case, alert and account is in the database: removing the module and its data root ends them.
+- name: Remove the case-management provider
+  hosts: mod_dfir_iris_server
+  become: true
+  tasks:
+    - name: Export the database and the files first
+      ansible.builtin.include_role:
+        name: dfir_iris
+        tasks_from: export
+    - name: Stop and remove the containers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ dfir_iris_dir | default('/opt/compose/dfir-iris') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credentials the containers were given
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ dfir_iris_dir | default('/opt/compose/dfir-iris') }}/secrets/db.env"
+        - "{{ dfir_iris_dir | default('/opt/compose/dfir-iris') }}/secrets/app.env"
+        - "{{ dfir_iris_dir | default('/opt/compose/dfir-iris') }}/secrets/worker.env"

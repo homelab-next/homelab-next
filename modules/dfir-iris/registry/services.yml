@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes: keyed by the slot, renamed to the
+# instance the site selects; version is product.version, host the module's host role (docs/modules/
+# registry-rows.md). Internal only, no public route: HTTPS with a certificate from the lab's internal
+# CA, accounts of its own (auth: own). The consumers (the triage agents) call the API with the
+# first administrator's API key as a bearer token. The health path is the sign-in page, which answers without a credential; the role's health hook is the one that proves the API
+# 401 to a caller with no key, so the row's own probe reads "up" from a refusal; the role's health
+# hook is the one that proves the key is accepted.
+services:
+  case-management:
+    capability: case-management
+    impl: dfir-iris
+    host: server
+    protocol: https
+    port: 8443
+    health: {kind: http, path: /login, expect_status: 200, interval_s: 60}
+    owner: operator
+    tls: internal
+    auth: own
+    tags: [cases, dfir]
+    description: DFIR-IRIS, incident cases, alerts and notes with an API; local accounts, bearer API key for consumers. No public route.

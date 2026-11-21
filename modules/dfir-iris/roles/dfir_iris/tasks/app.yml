@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). No
+# environment holds a secret: the passwords, the keys and the API key go in compose_app_secret_env.
+# The web app and the worker are one image with two commands; the worker holds no administrator
+# credential (the app creates the administrator before it listens, and the worker waits for it).
+# The worker is NOT given IRIS_WORKER: with it the product skips its start-up and its session key
+# and salt, which the worker's module hooks decrypt stored settings with (the official compose
+# leaves it unset). Only the front publishes a port.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    dfir_iris_app:
+      compose_app_name: dfir-iris
+      compose_app_dir: "{{ dfir_iris_dir }}"
+      compose_app_data_dir: "{{ dfir_iris_data_root }}"
+      compose_app_export_dir: "{{ dfir_iris_data_root }}/export"
+      compose_app_owner: "{{ dfir_iris_owner }}"
+      compose_app_group: "{{ dfir_iris_group }}"
+      compose_app_start: "{{ dfir_iris_start }}"
+      compose_app_validate_with_docker: "{{ dfir_iris_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          broker:
+            image: "{{ dfir_iris_broker_repository }}"
+            tag: "{{ dfir_iris_broker_tag }}"
+            digest: "{{ dfir_iris_broker_digest }}"
+            user: "{{ dfir_iris_broker_uid | int }}:{{ dfir_iris_broker_gid | int }}"
+            volumes: ["{{ dfir_iris_data_root }}/broker:{{ dfir_iris_container_broker_data }}"]
+            mem_limit: "{{ dfir_iris_broker_mem_limit }}"
+            healthcheck:
+              test: [CMD, rabbitmq-diagnostics, -q, ping]
+              interval: 15s
+              timeout: 10s
+              retries: 5
+              start_period: 60s
+          db:
+            image: "{{ dfir_iris_db_repository }}"
+            tag: "{{ dfir_iris_db_tag }}"
+            digest: "{{ dfir_iris_db_digest }}"
+            user: "{{ dfir_iris_db_uid | int }}:{{ dfir_iris_db_gid | int }}"
+            environment:
+              POSTGRES_DB: "{{ dfir_iris_db_name }}"
+              POSTGRES_USER: "{{ dfir_iris_db_user }}"
+              POSTGRES_ADMIN_USER: "{{ dfir_iris_db_admin_user }}"
+            volumes:
+              - "{{ dfir_iris_data_root }}/pgdata:{{ dfir_iris_container_pgdata }}"
+              - "{{ dfir_iris_data_root }}/export/db:{{ dfir_iris_container_export }}"
+            mem_limit: "{{ dfir_iris_db_mem_limit }}"
+            healthcheck:
+              test: [CMD, pg_isready, -q, -U, "{{ dfir_iris_db_user }}", -d, "{{ dfir_iris_db_name }}"]
+              interval: 15s
+              timeout: 5s
+              retries: 5
+              start_period: 30s
+          app:
+            image: "{{ dfir_iris_app_repository }}"
+            tag: "{{ dfir_iris_app_tag }}"
+            digest: "{{ dfir_iris_app_digest }}"
+            command: [nohup, ./iris-entrypoint.sh, iriswebapp]
+            user: "{{ dfir_iris_app_uid | int }}:{{ dfir_iris_app_gid | int }}"
+            depends_on: [db, broker]
+            environment: >-
+              {{ dfir_iris_fixed_env | combine({'IRIS_ADM_USERNAME': dfir_iris_admin_user,
+                                                'IRIS_ADM_EMAIL': dfir_iris_admin_email}) }}
+            volumes:
+              - "{{ dfir_iris_data_root }}/files/server_data:{{ dfir_iris_container_files }}/server_data"
+              - "{{ dfir_iris_data_root }}/files/user_templates:{{ dfir_iris_container_files }}/user_templates"
+              - "{{ dfir_iris_data_root }}/files/downloads:{{ dfir_iris_container_files }}/downloads"
+            mem_limit: "{{ dfir_iris_app_mem_limit }}"
+            healthcheck:
+              test: [CMD, curl, -fsS, -o, /dev/null, "http://localhost:{{ dfir_iris_container_app_port }}/login"]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 180s
+          worker:
+            image: "{{ dfir_iris_app_repository }}"
+            tag: "{{ dfir_iris_app_tag }}"
+            digest: "{{ dfir_iris_app_digest }}"
+            command: [./wait-for-iriswebapp.sh, "app:{{ dfir_iris_container_app_port }}", ./iris-entrypoint.sh, iris-worker]
+            user: "{{ dfir_iris_app_uid | int }}:{{ dfir_iris_app_gid | int }}"
+            depends_on: [db, broker, app]
+            environment: "{{ dfir_iris_fixed_env }}"
+            volumes:
+              - "{{ dfir_iris_data_root }}/files/server_data:{{ dfir_iris_container_files }}/server_data"
+              - "{{ dfir_iris_data_root }}/files/user_templates:{{ dfir_iris_container_files }}/user_templates"
+              - "{{ dfir_iris_data_root }}/files/downloads:{{ dfir_iris_container_files }}/downloads"
+            mem_limit: "{{ dfir_iris_worker_mem_limit }}"
+            healthcheck:
+              test: [CMD, pgrep, -f, celery]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 120s
+          nginx:
+            image: "{{ dfir_iris_nginx_repository }}"
+            tag: "{{ dfir_iris_nginx_tag }}"
+            digest: "{{ dfir_iris_nginx_digest }}"
+            user: "{{ dfir_iris_front_uid | int }}:{{ dfir_iris_front_gid | int }}"
+            depends_on: [app]
+            environment:
+              IRIS_UPSTREAM_SERVER: app
+              IRIS_UPSTREAM_PORT: "{{ dfir_iris_container_app_port }}"
+              INTERFACE_HTTPS_PORT: "{{ dfir_iris_container_front_port }}"
+              SERVER_NAME: "{{ dfir_iris_hostname }}"
+              CERT_FILENAME: "{{ dfir_iris_cert_file }}"
+              KEY_FILENAME: "{{ dfir_iris_key_file }}"
+              IRIS_AUTHENTICATION_TYPE: local
+            ports: ["{{ dfir_iris_bind }}:{{ dfir_iris_port | int }}:{{ dfir_iris_container_front_port }}"]
+            volumes: ["{{ dfir_iris_data_root }}/tls:{{ dfir_iris_container_certs }}:ro"]
+            mem_limit: "{{ dfir_iris_nginx_mem_limit }}"
+            healthcheck:
+              test: [CMD, curl, --fail, -k, -o, /dev/null, -sS, "https://localhost:{{ dfir_iris_container_front_port }}/"]
+              interval: 15s
+              timeout: 5s
+              retries: 5
+              start_period: 20s
+  tags: [health, backup, restore, export, upgrade]

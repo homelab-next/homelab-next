@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Write the certificate files
+  ansible.builtin.include_tasks: tls.yml
+
+# The passwords and keys reach only the env_files (0600). The product creates the first
+# administrator (login and password) when it meets an EMPTY database and ignores the password
+# afterwards, so rotating it is done in the product, not here (README). The API key does not reach a
+# container at all: it is set in the database once the app is up (reconcile.yml). A reference with
+# no value stops the run in credentials.yml, naming it, before any file is written.
+- name: Read the credentials
+  ansible.builtin.set_fact:
+    dfir_iris_secret_env:
+      db:
+        POSTGRES_PASSWORD: "{{ lookup('hnx_secret', dfir_iris_db_login_ref) }}"
+        POSTGRES_ADMIN_PASSWORD: "{{ lookup('hnx_secret', dfir_iris_db_admin_login_ref) }}"
+      app:
+        POSTGRES_PASSWORD: "{{ lookup('hnx_secret', dfir_iris_db_login_ref) }}"
+        POSTGRES_ADMIN_PASSWORD: "{{ lookup('hnx_secret', dfir_iris_db_admin_login_ref) }}"
+        IRIS_SECRET_KEY: "{{ lookup('hnx_secret', dfir_iris_session_key_ref) }}"
+        IRIS_SECURITY_PASSWORD_SALT: "{{ lookup('hnx_secret', dfir_iris_salt_ref) }}"
+        IRIS_ADM_PASSWORD: "{{ lookup('hnx_secret', dfir_iris_admin_login_ref) }}"
+      worker:
+        POSTGRES_PASSWORD: "{{ lookup('hnx_secret', dfir_iris_db_login_ref) }}"
+        POSTGRES_ADMIN_PASSWORD: "{{ lookup('hnx_secret', dfir_iris_db_admin_login_ref) }}"
+        IRIS_SECRET_KEY: "{{ lookup('hnx_secret', dfir_iris_session_key_ref) }}"
+        IRIS_SECURITY_PASSWORD_SALT: "{{ lookup('hnx_secret', dfir_iris_salt_ref) }}"
+  no_log: true
+
+- name: Render and start the service
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ dfir_iris_app.compose_app_name }}"
+    compose_app_dir: "{{ dfir_iris_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ dfir_iris_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ dfir_iris_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ dfir_iris_app.compose_app_owner }}"
+    compose_app_group: "{{ dfir_iris_app.compose_app_group }}"
+    compose_app_start: "{{ dfir_iris_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ dfir_iris_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ dfir_iris_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ dfir_iris_secret_env }}"
+    compose_app_bind_roots: ["{{ dfir_iris_dir }}", "{{ dfir_iris_data_root }}"]
+  no_log: true
+
+# the certificate is read at start: a change takes a restart of the front
+- name: Restart the front to read a changed certificate
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ dfir_iris_dir }}/docker-compose.yml", restart, nginx]
+  changed_when: true
+  when: dfir_iris_start | bool and dfir_iris_tls_files is changed
+
+- name: Wait for the app to be up (it refuses a caller with no key)
+  ansible.builtin.include_tasks: probe.yml
+  vars:
+    dfir_iris_probe_path: /api/ping
+    dfir_iris_probe_keyed: false
+    dfir_iris_probe_wait: true
+    dfir_iris_probe_expect: ['401', '403']
+  when: dfir_iris_start | bool
+
+- name: Make the administrator's API key the secret's value
+  ansible.builtin.include_tasks: reconcile.yml
+  when: dfir_iris_start | bool and not ansible_check_mode
+
+- name: Wait for the API to answer with the key
+  ansible.builtin.include_tasks: wait.yml
+  when: dfir_iris_start | bool

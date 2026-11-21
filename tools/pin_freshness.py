@@ -168,6 +168,15 @@ SOURCES: dict[str, tuple[str, str]] = {
         "some builds have an image: compare with the server-<backend>-bNNNNN tags of "
         "ghcr.io/ggml-org/llama.cpp by hand",
     ),
+    "role:dfir_iris/dfir_iris_app_image": ("github", "dfir-iris/iris-web"),
+    "role:dfir_iris/dfir_iris_db_image": ("github", "dfir-iris/iris-web"),
+    "role:dfir_iris/dfir_iris_nginx_image": ("github", "dfir-iris/iris-web"),
+    "role:dfir_iris/dfir_iris_broker_image": (
+        "none",
+        "the Docker official image (docker.io/library/rabbitmq): the same pin as the stackstorm "
+        "module's (one image, one pin: tools/tests/test_pin_consistency.py), so move both together; "
+        "compare its tags with the RabbitMQ release notes by hand",
+    ),
     "role:openproject/openproject_image": ("github", "opf/openproject"),
     "role:openproject/openproject_postgres_image": (
         "none",
@@ -352,6 +361,25 @@ NOTES: dict[str, str] = {
     "role:tunnel/tunnel_image": (
         "an image (modules/tunnel): bump the tag and its digest together, with product.version in "
         "modules/tunnel/module.yml and the lab registry's version"
+    ),
+    "role:dfir_iris/dfir_iris_app_image": (
+        "an image (modules/dfir-iris): bump the tag and its digest together, with the database and "
+        "front images (one release), product.version in modules/dfir-iris/module.yml and the lab "
+        "registry's version; the upgrade playbook exports first and refuses a target older than "
+        "the running image (a newer one migrates the database forward as it starts)"
+    ),
+    "role:dfir_iris/dfir_iris_db_image": (
+        "an image (modules/dfir-iris): the tag and its digest together, the same release as the "
+        "app image (it carries the product's role and extension set-up on PostgreSQL 12: a major "
+        "version is a dump and a restore)"
+    ),
+    "role:dfir_iris/dfir_iris_nginx_image": (
+        "an image (modules/dfir-iris): the tag and its digest together, the same release as the "
+        "app image"
+    ),
+    "role:dfir_iris/dfir_iris_broker_image": (
+        "an image (modules/dfir-iris): the tag and its digest together, within the pinned major "
+        "version (the worker's queue holds nothing that must survive)"
     ),
     "role:openproject/openproject_image": (
         "an image (modules/openproject, the -slim variant): bump the tag and its digest together, "

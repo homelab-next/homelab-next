@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (dfir_iris_target_image, or
+# dfir_iris_target_nginx_image, dfir_iris_target_db_image or dfir_iris_target_broker_image: one per
+# run), export first, then converge with the new pin (set the image in the overlay). A newer
+# product image migrates the database forward as it starts, so the export is the way back.
+#   ansible-playbook -i <inventory> modules/dfir-iris/playbooks/upgrade.yml -e dfir_iris_target_image=<ref>
+- name: Upgrade the case-management provider
+  hosts: mod_dfir_iris_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: dfir_iris
+        tasks_from: upgrade
+    - name: Export the database and the files before the new image opens them
+      ansible.builtin.include_role:
+        name: dfir_iris
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: dfir_iris
+      vars:
+        dfir_iris_app_image: "{{ dfir_iris_target_image | default(dfir_iris_app_image, true) }}"
+        dfir_iris_nginx_image: "{{ dfir_iris_target_nginx_image | default(dfir_iris_nginx_image, true) }}"
+        dfir_iris_db_image: "{{ dfir_iris_target_db_image | default(dfir_iris_db_image, true) }}"
+        dfir_iris_broker_image: "{{ dfir_iris_target_broker_image | default(dfir_iris_broker_image, true) }}"
