@@ -710,6 +710,67 @@
     },
     {
       "exit": {
+        "0": "landed (or nothing new), or the table is fresh, or the schema is as expected",
+        "1": "failed (the lake refused, a total parse failure, a stale or empty table; the reason on stderr)",
+        "2": "refused before any write (the table is missing or its schema differs from the contract) or a usage error"
+      },
+      "id": "honeypot-lake",
+      "inputs": "land | freshness MAX_AGE_HOURS | ensure-table | schema-check; environment HNX_HP_*, HNX_ENDPOINT_LAKE_QUERY and the lake login in HNX_SECRET_HONEYPOT_LAKE_LOGIN (honeypot.env and the credentials env file); runs under the hnx runtime release python",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-honeypot-lake",
+      "kind": "job",
+      "language": "python",
+      "outputs": "rows INSERTed into the events table; the state file (offset) and last-run.json under the state directory; one JSON or text line on stdout",
+      "owner": "platform",
+      "path": "modules/honeypot/roles/honeypot/files/hnx_honeypot_lake.py",
+      "purpose": "Land the receiver's spooled honeypot events into the lake's honeypot events table through the query service (offset-tracked, schema-checked first), and judge the table's freshness.",
+      "status": "active",
+      "trigger": [
+        "timer:honeypot/lake",
+        "role:honeypot",
+        "script:honeypot-report"
+      ]
+    },
+    {
+      "exit": {
+        "0": "stopped by a signal",
+        "1": "could not bind or open the spool"
+      },
+      "id": "honeypot-receiver",
+      "inputs": "environment HNX_HP_BIND, HNX_HP_PORT, HNX_HP_SPOOL, HNX_HP_MAX_LINE, HNX_HP_SPOOL_MAX_BYTES (honeypot.env)",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-honeypot-receiver",
+      "kind": "service",
+      "language": "python",
+      "outputs": "lines appended to the spool file; counters on stderr",
+      "owner": "platform",
+      "path": "modules/honeypot/roles/honeypot/files/hnx_honeypot_receiver.py",
+      "purpose": "Accept the honeypot's pushed newline-delimited JSON events on one TCP port and append each to the spool file; ingest only, no path back to the sender.",
+      "status": "active",
+      "trigger": [
+        "role:honeypot"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the report was written (the brief may say the model tier did not answer; the data below it is complete)",
+        "1": "the lake could not be queried or the report could not be written"
+      },
+      "id": "honeypot-report",
+      "inputs": "environment HNX_HP_*, HNX_ENDPOINT_LAKE_QUERY and the lake login in HNX_SECRET_HONEYPOT_LAKE_LOGIN (honeypot.env and the credentials env file), the gateway key in $CREDENTIALS_DIRECTORY; runs under the hnx runtime release python",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-honeypot-report",
+      "kind": "job",
+      "language": "python",
+      "outputs": "<reports dir>/honeypot-report.html and a dated copy; one summary line on stdout",
+      "owner": "platform",
+      "path": "modules/honeypot/roles/honeypot/files/hnx_honeypot_report.py",
+      "purpose": "Render the daily honeypot intel report from the lake's honeypot events (enriched attacker IPs, high-value commands and samples, an LLM analyst brief) as one self-contained HTML file.",
+      "status": "active",
+      "trigger": [
+        "timer:honeypot/report",
+        "role:honeypot"
+      ]
+    },
+    {
+      "exit": {
         "0": "the mode did its work (health reports its findings in problems)",
         "1": "refused input, an error from the IdP, or flow drift sync will not touch (the reason on stderr)",
         "2": "usage error"

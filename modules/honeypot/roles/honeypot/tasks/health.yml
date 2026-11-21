@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the receiver runs and listens, the timers are armed, the scripts and the
+# credentials are in place, something was received lately (the sender being silent is a finding),
+# the last landing succeeded lately, and the lake answers with the contract's table whose newest
+# event is fresh (an empty table never passes). Nothing is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Resolve the lake's and the gateway's URLs
+      ansible.builtin.include_tasks: resolve.yml
+    - name: Look for the scripts, the environment and the credentials
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: honeypot_files
+      loop: "{{ [honeypot_receiver_script, honeypot_lake_script, honeypot_report_script, honeypot_env_file, honeypot_lake_login_env_file, honeypot_runtime_python] }}"
+    - name: They are all there
+      ansible.builtin.assert:
+        that: honeypot_files.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: "honeypot: missing {{ honeypot_files.results | rejectattr('stat.exists') | map(attribute='item') | list }} (run the install)"
+    - name: Ask systemd about the receiver and the timers
+      ansible.builtin.command:
+        argv: "{{ [honeypot_systemctl_cli, 'is-active', honeypot_receiver_unit, honeypot_lake_timer] + ([honeypot_report_timer] if honeypot_report_enabled | bool else []) }}"
+      register: honeypot_active
+      changed_when: false
+      failed_when: false
+    - name: The receiver runs and the timers are armed
+      ansible.builtin.assert:
+        that: honeypot_active.rc == 0
+        fail_msg: "honeypot: the receiver or a timer is not active ({{ honeypot_active.stdout_lines | join(', ') }})"
+    - name: The receiver accepts connections
+      ansible.builtin.wait_for:
+        host: "{{ 'localhost' if honeypot_bind in ['0.0.0.0', '::'] else honeypot_bind }}"
+        port: "{{ honeypot_port | int }}"
+        timeout: "{{ honeypot_health_timeout | int }}"
+    - name: Look at the spool
+      ansible.builtin.stat:
+        path: "{{ honeypot_spool_file }}"
+      register: honeypot_spool
+    - name: Something was received lately
+      ansible.builtin.assert:
+        that:
+          - honeypot_spool.stat.exists
+          - (now(utc=true).timestamp() | int) - (honeypot_spool.stat.mtime | int) <= (honeypot_spool_max_age_h | int) * 3600
+        fail_msg: >-
+          honeypot: nothing was received for {{ honeypot_spool_max_age_h }} h (the sender is silent, the push
+          target is wrong, or the sender's path to this port is closed): the spool is {{ honeypot_spool_file }}
+      when: honeypot_spool_max_age_h | int > 0
+    - name: Read the last landing's record
+      ansible.builtin.slurp:
+        src: "{{ honeypot_state_dir }}/last-run.json"
+      register: honeypot_last_run
+      failed_when: false
+    - name: Look at the last landing's age
+      ansible.builtin.stat:
+        path: "{{ honeypot_state_dir }}/last-run.json"
+      register: honeypot_last_run_stat
+    - name: The last landing succeeded, lately
+      ansible.builtin.assert:
+        that:
+          - honeypot_last_run_stat.stat.exists
+          - (honeypot_last_run.content | b64decode | from_json).ok | default(false)
+          - (now(utc=true).timestamp() | int) - (honeypot_last_run_stat.stat.mtime | int) <= (honeypot_landing_max_age_h | int) * 3600
+        fail_msg: "honeypot: no successful landing in {{ honeypot_landing_max_age_h }} h (the lake writer failed or never ran: journalctl -u {{ honeypot_lake_unit }})"
+      when: honeypot_landing_max_age_h | int > 0
+    - name: The events table is the contract's
+      ansible.builtin.command:
+        argv: ["{{ honeypot_runtime_python }}", -I, "{{ honeypot_lake_script }}", schema-check]
+      environment: "{{ honeypot_script_env }}"
+      no_log: true
+      register: honeypot_schema
+      changed_when: false
+      failed_when: false
+    - name: The table's columns are exactly the contract
+      ansible.builtin.assert:
+        that: honeypot_schema.rc == 0
+        fail_msg: "honeypot: the events table is missing or differs from the contract: {{ honeypot_schema.stdout | default('') | truncate(400) }} {{ honeypot_schema.stderr | default('') | truncate(300) }}"
+    - name: Judge the table's freshness
+      ansible.builtin.command:
+        argv: ["{{ honeypot_runtime_python }}", -I, "{{ honeypot_lake_script }}", freshness, "{{ honeypot_freshness_max_age_h }}"]
+      environment: "{{ honeypot_script_env }}"
+      no_log: true
+      register: honeypot_fresh
+      changed_when: false
+      failed_when: false
+      when: honeypot_freshness_max_age_h | int > 0
+    - name: The newest event is fresh
+      ansible.builtin.assert:
+        that: honeypot_fresh.rc == 0
+        fail_msg: "honeypot: the events table is stale or empty: {{ honeypot_fresh.stdout | default('') | truncate(400) }}"
+      when: honeypot_freshness_max_age_h | int > 0
+  tags: [health]

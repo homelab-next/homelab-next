@@ -1,0 +1,50 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ honeypot_marker }}, instance {{ honeypot_logical_id }}); local changes are overwritten.
+# The daily intel report: reads the events table, enriches the attacker addresses from public
+# sources, asks the model tier for the brief and writes one HTML page into the reports directory.
+[Unit]
+Description=honeypot {{ honeypot_logical_id }} daily intel report
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ honeypot_user }}
+Group={{ honeypot_group }}
+EnvironmentFile={{ honeypot_env_file }}
+EnvironmentFile={{ honeypot_lake_login_env_file }}
+{% if honeypot_gateway_id != '' %}
+LoadCredential=gateway-key:{{ honeypot_gateway_key_file }}
+{% endif %}
+ExecStart=/usr/local/libexec/homelabnext/hnx-honeypot-report
+Environment=PYTHONSAFEPATH=1 PYTHONNOUSERSITE=1
+Nice=10
+# the brief retries a busy model tier: the attempts, their timeouts and the sleeps all fit
+TimeoutStartSec={{ ((honeypot_llm_attempts | int) * ((honeypot_llm_timeout_s | int) + (honeypot_llm_retry_sleep_s | int)) + 1800) }}
+{% if hnx_module_slice | default('') %}
+Slice={{ hnx_module_slice }}
+{% endif %}
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths={{ honeypot_reports_dir }}
+MemoryMax=1G

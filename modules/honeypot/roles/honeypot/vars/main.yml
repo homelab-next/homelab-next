@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# Derived, not configurable: the names every task and template shares.
+honeypot_marker: "managed by homelab-next (modules/honeypot)"
+honeypot_bin_dir: /usr/local/libexec/homelabnext
+# installed at fixed paths (the script catalog resolves a unit's ExecStart through them)
+honeypot_receiver_script: "{{ honeypot_bin_dir }}/hnx-honeypot-receiver"
+honeypot_lake_script: "{{ honeypot_bin_dir }}/hnx-honeypot-lake"
+honeypot_report_script: "{{ honeypot_bin_dir }}/hnx-honeypot-report"
+# the homelab-next runtime release's interpreter (role hnx_runtime: <prefix>/current/bin/python): the lake
+# writer and the report import the platform's own lake client from it; their shebang names it
+honeypot_runtime_python: /opt/hnx/current/bin/python
+honeypot_env_file: "{{ honeypot_config_dir }}/honeypot.env"
+honeypot_spool_dir: "{{ honeypot_data_root }}/spool"
+honeypot_spool_file: "{{ honeypot_spool_dir }}/events.json"
+honeypot_state_dir: "{{ honeypot_data_root }}/state"
+honeypot_reports_dir: "{{ honeypot_data_root }}/reports"
+honeypot_export_dir: "{{ honeypot_data_root }}/export"
+honeypot_auth_dir: "{{ honeypot_config_dir }}/credentials"
+honeypot_lake_login_env_file: "{{ honeypot_auth_dir }}/lake-login.env"
+honeypot_gateway_key_file: "{{ honeypot_auth_dir }}/gateway-key"
+honeypot_ca_file: "{{ honeypot_config_dir }}/lake-ca.pem"
+honeypot_unit_dir: /etc/systemd/system
+honeypot_receiver_unit: "hnx-{{ honeypot_logical_id }}-receiver.service"
+honeypot_lake_unit: "hnx-{{ honeypot_logical_id }}-lake.service"
+honeypot_lake_timer: "hnx-{{ honeypot_logical_id }}-lake.timer"
+honeypot_report_unit: "hnx-{{ honeypot_logical_id }}-report.service"
+honeypot_report_timer: "hnx-{{ honeypot_logical_id }}-report.timer"
+honeypot_logrotate_file: "/etc/logrotate.d/hnx-{{ honeypot_logical_id }}"
+honeypot_systemctl_cli: systemctl
+# the contract of the events table: the module's lake script holds the columns
+honeypot_forms:
+  login: '^[A-Za-z0-9._~+/=:@%^-]{8,512}\Z'
+  key: '^[A-Za-z0-9._~+/=:-]{8,512}\Z'
+honeypot_owner_group: root
+# the environment every script run by a hook (not a unit) is given: the endpoint overrides and the
+# login in the names the platform's lake client reads. The login is a secret: every task that uses
+# this carries no_log.
+honeypot_script_env:
+  HNX_HP_SPOOL: "{{ honeypot_spool_file }}"
+  HNX_HP_STATE_DIR: "{{ honeypot_state_dir }}"
+  HNX_ENDPOINT_LAKE_QUERY: "{{ honeypot_effective_lake_url | default('') }}"
+  HNX_ENDPOINT_LAKE_CATALOG: "{{ honeypot_effective_lake_url | default('') }}"
+  HNX_SECRET_HONEYPOT_LAKE_LOGIN: "{{ lookup('hnx_secret', honeypot_lake_login_ref) }}"
+  HNX_HP_LAKE_USER: "{{ honeypot_lake_user }}"
+  HNX_HP_LAKE_CA_FILE: "{{ honeypot_ca_file if honeypot_lake_ca_ref != '' else '' }}"
+  HNX_HP_LAKE_CATALOG: "{{ honeypot_lake_catalog }}"
+  HNX_HP_LAKE_SCHEMA: "{{ honeypot_lake_schema }}"
+  HNX_HP_LAKE_TABLE: "{{ honeypot_lake_table }}"

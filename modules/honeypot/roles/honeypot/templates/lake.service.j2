@@ -1,0 +1,47 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ honeypot_marker }}, instance {{ honeypot_logical_id }}); local changes are overwritten.
+# Lands the spooled events in the lake's events table; the query-service password is a systemd
+# credential (read by name from $CREDENTIALS_DIRECTORY), never an environment value.
+[Unit]
+Description=honeypot {{ honeypot_logical_id }} lands its events in the lake
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ honeypot_user }}
+Group={{ honeypot_group }}
+EnvironmentFile={{ honeypot_env_file }}
+EnvironmentFile={{ honeypot_lake_login_env_file }}
+ExecStart=/usr/local/libexec/homelabnext/hnx-honeypot-lake land
+Environment=PYTHONSAFEPATH=1 PYTHONNOUSERSITE=1
+Nice=10
+TimeoutStartSec=3600
+{% if hnx_module_slice | default('') %}
+Slice={{ hnx_module_slice }}
+{% endif %}
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths={{ honeypot_state_dir }}
+ReadOnlyPaths={{ honeypot_spool_dir }}
+MemoryMax=1G
