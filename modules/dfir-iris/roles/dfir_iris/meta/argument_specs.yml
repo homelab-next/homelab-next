@@ -30,7 +30,7 @@ argument_specs:
         type: str
         description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
           from.
-        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+        default: docker.io/library/rabbitmq:3.12.14@sha256:4dc5d5a5076f7c458b7f3468e2282f329a8911cc3c31c4ed4aefcedb27917da2
       dfir_iris_bind:
         type: str
         description: The guest's own IPv4 address the front is published on (never all interfaces).
@@ -124,11 +124,11 @@ argument_specs:
       dfir_iris_broker_uid:
         type: int
         description: The broker image's user id (rabbitmq in the image).
-        default: 100
+        default: 999
       dfir_iris_broker_gid:
         type: int
         description: The broker image's group id.
-        default: 101
+        default: 999
       dfir_iris_front_uid:
         type: int
         description: The front image's user id (www-data in the image).
@@ -204,7 +204,7 @@ argument_specs:
         type: str
         description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
           from.
-        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+        default: docker.io/library/rabbitmq:3.12.14@sha256:4dc5d5a5076f7c458b7f3468e2282f329a8911cc3c31c4ed4aefcedb27917da2
       dfir_iris_bind:
         type: str
         description: The guest's own IPv4 address the front is published on (never all interfaces).
@@ -298,11 +298,11 @@ argument_specs:
       dfir_iris_broker_uid:
         type: int
         description: The broker image's user id (rabbitmq in the image).
-        default: 100
+        default: 999
       dfir_iris_broker_gid:
         type: int
         description: The broker image's group id.
-        default: 101
+        default: 999
       dfir_iris_front_uid:
         type: int
         description: The front image's user id (www-data in the image).
@@ -377,7 +377,7 @@ argument_specs:
         type: str
         description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
           from.
-        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+        default: docker.io/library/rabbitmq:3.12.14@sha256:4dc5d5a5076f7c458b7f3468e2282f329a8911cc3c31c4ed4aefcedb27917da2
       dfir_iris_bind:
         type: str
         description: The guest's own IPv4 address the front is published on (never all interfaces).
@@ -471,11 +471,11 @@ argument_specs:
       dfir_iris_broker_uid:
         type: int
         description: The broker image's user id (rabbitmq in the image).
-        default: 100
+        default: 999
       dfir_iris_broker_gid:
         type: int
         description: The broker image's group id.
-        default: 101
+        default: 999
       dfir_iris_front_uid:
         type: int
         description: The front image's user id (www-data in the image).
@@ -551,7 +551,7 @@ argument_specs:
         type: str
         description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
           from.
-        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+        default: docker.io/library/rabbitmq:3.12.14@sha256:4dc5d5a5076f7c458b7f3468e2282f329a8911cc3c31c4ed4aefcedb27917da2
       dfir_iris_bind:
         type: str
         description: The guest's own IPv4 address the front is published on (never all interfaces).
@@ -645,11 +645,11 @@ argument_specs:
       dfir_iris_broker_uid:
         type: int
         description: The broker image's user id (rabbitmq in the image).
-        default: 100
+        default: 999
       dfir_iris_broker_gid:
         type: int
         description: The broker image's group id.
-        default: 101
+        default: 999
       dfir_iris_front_uid:
         type: int
         description: The front image's user id (www-data in the image).
@@ -724,7 +724,7 @@ argument_specs:
         type: str
         description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
           from.
-        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+        default: docker.io/library/rabbitmq:3.12.14@sha256:4dc5d5a5076f7c458b7f3468e2282f329a8911cc3c31c4ed4aefcedb27917da2
       dfir_iris_bind:
         type: str
         description: The guest's own IPv4 address the front is published on (never all interfaces).
@@ -818,11 +818,11 @@ argument_specs:
       dfir_iris_broker_uid:
         type: int
         description: The broker image's user id (rabbitmq in the image).
-        default: 100
+        default: 999
       dfir_iris_broker_gid:
         type: int
         description: The broker image's group id.
-        default: 101
+        default: 999
       dfir_iris_front_uid:
         type: int
         description: The front image's user id (www-data in the image).
@@ -898,7 +898,7 @@ argument_specs:
         type: str
         description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
           from.
-        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+        default: docker.io/library/rabbitmq:3.12.14@sha256:4dc5d5a5076f7c458b7f3468e2282f329a8911cc3c31c4ed4aefcedb27917da2
       dfir_iris_bind:
         type: str
         description: The guest's own IPv4 address the front is published on (never all interfaces).
@@ -992,11 +992,11 @@ argument_specs:
       dfir_iris_broker_uid:
         type: int
         description: The broker image's user id (rabbitmq in the image).
-        default: 100
+        default: 999
       dfir_iris_broker_gid:
         type: int
         description: The broker image's group id.
-        default: 101
+        default: 999
       dfir_iris_front_uid:
         type: int
         description: The front image's user id (www-data in the image).
@@ -1075,7 +1075,7 @@ argument_specs:
         type: str
         description: repository:tag@sha256:<digest> of the message broker image the worker takes its tasks
           from.
-        default: docker.io/library/rabbitmq:3.13.7-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
+        default: docker.io/library/rabbitmq:3.12.14@sha256:4dc5d5a5076f7c458b7f3468e2282f329a8911cc3c31c4ed4aefcedb27917da2
       dfir_iris_bind:
         type: str
         description: The guest's own IPv4 address the front is published on (never all interfaces).
@@ -1169,11 +1169,11 @@ argument_specs:
       dfir_iris_broker_uid:
         type: int
         description: The broker image's user id (rabbitmq in the image).
-        default: 100
+        default: 999
       dfir_iris_broker_gid:
         type: int
         description: The broker image's group id.
-        default: 101
+        default: 999
       dfir_iris_front_uid:
         type: int
         description: The front image's user id (www-data in the image).

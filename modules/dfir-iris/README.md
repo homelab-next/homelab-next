@@ -13,7 +13,7 @@ host, address, name, VM id or secret value; those live only in the private overl
 |---|---|
 | Slot | `case-management`, provisional (no contract yet), stateful, migration format `object-tree` |
 | Adapter | `homelabnext.conform.adapters.case_management:make` (a read-only probe: the API refuses a caller with no key, answers the key, reports its version) |
-| Product | DFIR-IRIS 2.4.29 (`ghcr.io/dfir-iris/iriswebapp_{app,db,nginx}`, one release), RabbitMQ 3.13.7 (alpine); all pinned by tag and digest |
+| Product | DFIR-IRIS 2.4.29 (`ghcr.io/dfir-iris/iriswebapp_{app,db,nginx}`, one release), RabbitMQ 3.12.14; all pinned by tag and digest |
 | Host role | `server`: kind `vm`, baseline `base`, footprint 4 vCPU, 6144 MB, 30 GB |
 | Role | `dfir_iris` (role interface v1), a wrapper of the core `compose_app` |
 | Requires | `cap:secrets` (the nine secrets, read by name at deploy time) |

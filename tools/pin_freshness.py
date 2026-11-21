@@ -173,8 +173,9 @@ SOURCES: dict[str, tuple[str, str]] = {
     "role:dfir_iris/dfir_iris_nginx_image": ("github", "dfir-iris/iris-web"),
     "role:dfir_iris/dfir_iris_broker_image": (
         "none",
-        "the Docker official image (docker.io/library/rabbitmq, the alpine variant): compare its "
-        "tags with the RabbitMQ release notes by hand, within the pinned major version",
+        "the Docker official image (docker.io/library/rabbitmq): the same pin as the stackstorm "
+        "module's (one image, one pin: tools/tests/test_pin_consistency.py), so move both together; "
+        "compare its tags with the RabbitMQ release notes by hand",
     ),
     "role:openproject/openproject_image": ("github", "opf/openproject"),
     "role:openproject/openproject_postgres_image": (
