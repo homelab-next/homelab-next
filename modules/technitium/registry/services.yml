@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes. It is keyed by the slot and
+# renamed to the instance the site selects; version is product.version (never repeated here), and
+# host is the module's host role, which the site places on a guest. The lab registry
+# (lab/services.yml) must carry it exactly as bound (hnx modules check, docs/modules/registry-rows.md):
+# the instance's name, the placed guest's name as host, the product's version, and at most the
+# lab's own standing, backup_job and scope beside it. Internal only: no public hostname; the admin
+# API and console (5380) are not a registry row, the guest firewall admits only the operator.
+services:
+  dns:
+    capability: dns
+    impl: technitium
+    host: server
+    protocol: dns
+    port: 53
+    health: {kind: tcp}
+    owner: operator
+    tls: none
+    auth: none
+    tags: [dns]
+    description: Technitium DNS Server; recursive resolver and primary for the lab's zones, answering on the guest's address. The admin API and console are on 5380, for the operator only.
