@@ -4,8 +4,9 @@
 # module's host role. The lab registry (lab/services.yml) must carry it exactly as bound
 # (hnx modules check, docs/modules/registry-rows.md). The row is the request app (the stack's
 # front door); the other web interfaces are the stack's own and are reached by their ports on the
-# same guest. Internal only: no public_hostname and no public route (an edge route for the request
-# app is a later change to this row, with the overlay's grant); every interface has its own login.
+# same guest. Only the request app is public: public_hostname is declared here with an example value (the site's value replaces it, as
+# for the media module) and a site that wants the route grants it (grants.public_routes); without the grant the row is internal. Every other
+# web interface stays internal. Every interface has its own login, and the edge adds no forward-auth (auth: own).
 services:
   media-automation:
     capability: media-automation
@@ -17,5 +18,6 @@ services:
     owner: operator
     tls: none
     auth: own
+    public_hostname: seerr.example.internal
     tags: [media]
     description: The request app of the media automation stack (library managers, download clients behind the VPN client, transcode); every web interface is internal with its own login.
