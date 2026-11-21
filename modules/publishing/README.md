@@ -161,8 +161,51 @@ another lane's, `publishable_dir`, `staging_dir`, `state_dir` or `credentials_di
 its items are opened by descriptor chain from the lane directory with `O_NOFOLLOW` (and leaf files with
 `O_NONBLOCK`, so a file swapped for a FIFO is refused, never waited on).
 
-The lane's directory is read, never written or pruned, by this module (the producer owns it). Cutover of the
-real lane is a deliberate later change (repoint `publishable_dir`), not something a lane source can do.
+The lane's directory is read, never written or pruned, by this module (the producer owns it). A lane source can
+never become the live source; the cutover of the real lane is the **live source**, below.
+
+## The live source: making ONE lane's directory what is published
+
+By default the live source is `publishable/` under the module's root (the producers' own write area). A site
+whose producer hands off per lane (the cti-pipeline module's `/var/lib/hnx-handoff/<set>/<lane>/`) names the
+real lane's directory instead, with `publishing_gate_live_source: {lane: real, dir: <the real lane's directory>}`
+(rendered as `live_source` in the config):
+
+* **Exactly one.** It is a single mapping `{lane, dir}` and nothing else; it **replaces** `publishable/` as what
+  the run gates, stages, deploys and uploads (the default area is no longer read). The published manifest, the
+  snapshots (`state/snapshots/`) and staging (`staging/`) stay the live source's own, so ids already published
+  keep their history across the switch. Items are reported by their plain id (no lane prefix), as before.
+* **The shadow lane can never be it.** Refused at validate and again at load: a lane name that contains the
+  word `shadow` as a whole word of the slug, and a `dir` any of whose components does (`shadow`, `out-shadow`);
+  the check is made on the path as written **and on its real path**, so a link that points into a shadow
+  handoff directory is refused too. A `lane_sources` entry can never be, link to or nest with it, and it may not
+  be or nest with `staging_dir`, `state_dir`, `credentials_dir` or the default `publishable_dir`.
+* **Same safety as `publishable/`**: items are read by descriptor chain from the live directory with
+  `O_NOFOLLOW` (a kind directory swapped for a link is refused), leaf files with `O_NONBLOCK` (a FIFO is refused,
+  never waited on), a hard-linked file is refused, and only a private snapshot is hashed, gated and published.
+  A live directory that cannot be read (the read group not joined yet, a file in its place) is reported as
+  `live:unreadable` in `failed` (exit non-zero); one that does not exist yet is an empty source.
+* **`lane_sources` stay stage-only**, in every mode, beside it: the same run can deploy the live source's items
+  while a shadow lane's items are only gated and staged (no transport, no runner, no credential reachable from them).
+
+### Overlay settings for the CTI switch (real lane live)
+
+cti-pipeline already creates the real lane's handoff directory (`/var/lib/hnx-handoff/<set>/real`, the lane
+user's, group `hnx-<set>-out-real`, `2750`, items `0640`/`0750`) whenever `cti_pipeline_handoff_enabled` is true
+and `real` is in `cti_pipeline_lanes`; nothing needs changing there. The overlay adds to the publishing group_vars
+(set `cti` for `<set>`):
+
+```yaml
+publishing_gate_mode: live
+publishing_gate_hosting_provider: <the static-hosting provider's logical id>
+publishing_gate_live_source: {lane: real, dir: /var/lib/hnx-handoff/cti/real}
+publishing_gate_lane_sources:
+  - {lane: shadow, dir: /var/lib/hnx-handoff/cti/shadow}   # optional: keep staging the shadow lane
+publishing_gate_extra_groups: [hnx-cti-out-real, hnx-cti-out-shadow]   # the shadow one only if it is a lane source
+```
+
+The service user must be in `hnx-<set>-out-real` (that group is the only reader of the real lane's items) and the
+group has to exist before the first run (either module creates it).
 
 ## Host preconditions
 

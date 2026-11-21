@@ -46,6 +46,11 @@ publishing_gate_staging_min_age_s: 172800
 # the publishable-item layout that a producer's lane writes (the shadow lane's handoff directory). ALWAYS
 # stage-only: gated and staged under staging/lane-<lane>/, never deployed or uploaded, in any mode.
 publishing_gate_lane_sources: []
+# The ONE live source: {lane, dir} (empty: the default publishable/ area is the live source). The directory
+# (a producer's handoff directory for the REAL lane) replaces publishable/ as what the run gates and, in
+# live mode, deploys; lane_sources stay stage-only. The shadow lane can never be it: a lane name or any path
+# component naming shadow is refused here and, by real path, by the run (homelabnext.publishing.config).
+publishing_gate_live_source: {}
 # Supplementary groups the service user joins to READ those directories (the producer's handoff group);
 # created here when absent (a system group), so the install order of the two modules does not matter.
 publishing_gate_extra_groups: []

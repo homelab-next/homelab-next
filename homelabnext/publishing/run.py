@@ -238,17 +238,44 @@ def run(
         net = ReadOnly(transport or Urllib())
     elif cfg.mode == "live":
         net = transport or Urllib()
-    _gate_source(
-        cfg,
-        discover(cfg.publishable_dir),
-        net=net,
-        runner=runner,
-        policy=policy,
-        report=report,
-        clock=clock,
-        snapshots_dir=cfg.state_dir / "snapshots",
-        lane=None,
-    )
+    live_entries: list[tuple[str, Path]] | None = []
+    if cfg.live_source is not None:
+        # the live source is a producer's handoff directory: an unreadable one (the read group not
+        # joined yet) is reported, never silently "nothing to publish"
+        try:
+            os.listdir(cfg.live_source.dir)
+            live_entries = discover(cfg.live_source.dir)
+        except FileNotFoundError:
+            live_entries = []
+        except OSError as exc:
+            live_entries = None
+            report.failed.append("live:unreadable")
+            _append(
+                gate_log,
+                {
+                    "ts": clock(),
+                    "lane": cfg.live_source.lane,
+                    "item": "live-source",
+                    "kind": "live",
+                    "ok": True,
+                    "failed": f"live-unreadable: {type(exc).__name__}",
+                },
+            )
+    else:
+        live_entries = discover(cfg.publishable_dir)
+    if live_entries is not None:
+        _gate_source(
+            cfg,
+            live_entries,
+            net=net,
+            runner=runner,
+            policy=policy,
+            report=report,
+            clock=clock,
+            snapshots_dir=cfg.state_dir / "snapshots",
+            lane=None,
+            anchor=cfg.live_source.dir if cfg.live_source else None,
+        )
     for src in cfg.lane_sources:
         # a producer lane's items: gated like any other, then STAGED ONLY, whatever the run's mode
         # (no transport, no runner, no hosting credential): its own snapshots and staging area

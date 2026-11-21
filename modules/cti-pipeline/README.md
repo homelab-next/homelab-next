@@ -271,6 +271,7 @@ reaches the publishing module by itself. The handoff carries it, without widenin
 <handoff dir>/<lane>/<kind>/<id>/           (default /var/lib/hnx-handoff/<set>/<lane>/...)
      -- read by that lane's group only (publishing_gate_extra_groups) -->
 publishing: publishing_gate_lane_sources [{lane, dir}] -> gated, STAGED ONLY under staging/lane-<lane>/
+            publishing_gate_live_source {lane: real, dir} -> the one directory that is deployed (the switch)
 ```
 
 * **Per-lane directory and group.** `<handoff dir>` is root's, `0711` (traversable, not listable). Each
@@ -279,7 +280,9 @@ publishing: publishing_gate_lane_sources [{lane, dir}] -> gated, STAGED ONLY und
   lane's never share a path or a reader, and the shadow lane's user cannot read the real lane's. The
   groups are system groups this role creates; the publishing module's user joins the one it reads
   (`publishing_gate_extra_groups: [hnx-<set>-out-shadow]`), and the publishing module creates it too if it
-  installs first (the order of the two modules does not matter).
+  installs first (the order of the two modules does not matter). At the cutover the publishing user also joins
+  the real lane's group and names its directory as `publishing_gate_live_source` (publishing's README, "The live
+  source").
 * **The item format is publishing's** ([its README](../publishing/README.md#an-item)): `<kind>/<id>/` with
   the files and `sidecar.json`. The handoff copies items whole and judges nothing about their content
   (the gate does): a new one is built beside as `.tmp-<hex>` (files `0640`, directories `0750`, whatever the

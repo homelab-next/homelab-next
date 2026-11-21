@@ -476,3 +476,66 @@ def test_live_with_a_destination_and_credentials_but_no_provider_is_refused(tmp_
     for mode in ("stage", "dry-run"):
         r = run_role(tmp_path, ROLE, "validate", {**v, "publishing_gate_mode": mode})
         assert r.returncode == 0, (mode, r.stdout + r.stderr)
+
+
+# ---- the live source ({lane, dir}) ----------------------------------------------------------------
+
+LIVE = {"lane": "real", "dir": "/var/lib/hnx-handoff/pipeline/real"}
+
+
+def test_the_configuration_names_the_live_source_and_a_lab_without_one_has_none(tmp_path):
+    (tmp_path / "etc").mkdir()
+    v = {
+        **good(tmp_path),
+        "publishing_gate_live_source": LIVE,
+        "publishing_gate_lane_sources": LANES,
+    }
+    run_role(tmp_path, ROLE, "config", v)
+    doc = json.loads((tmp_path / "etc" / "publishing.json").read_text())
+    assert doc["live_source"] == LIVE and doc["lane_sources"] == LANES
+    run_role(tmp_path, ROLE, "config", good(tmp_path))
+    assert "live_source" not in json.loads((tmp_path / "etc" / "publishing.json").read_text())
+
+
+@pytest.mark.parametrize(
+    "live",
+    [
+        "real",
+        {"lane": "real"},
+        {**LIVE, "extra": 1},
+        {"lane": "Real", "dir": LIVE["dir"]},
+        {"lane": "real", "dir": "relative/real"},
+        {"lane": "real", "dir": "/var/lib/../real"},
+        {"lane": "shadow", "dir": LIVE["dir"]},
+        {"lane": "real-shadow", "dir": LIVE["dir"]},
+        {"lane": "real", "dir": "/var/lib/hnx-handoff/pipeline/shadow"},
+        {"lane": "real", "dir": "/var/lib/hnx-handoff/pipeline/shadow/site"},
+        {"lane": "real", "dir": "/var/lib/hnx-handoff/pipeline/out-shadow"},
+    ],
+)
+def test_validate_refuses_a_malformed_or_shadow_live_source(tmp_path, live):
+    r = run_role(
+        tmp_path, ROLE, "validate", {**good(tmp_path), "publishing_gate_live_source": live}
+    )
+    assert r.returncode != 0, r.stdout
+
+
+def test_validate_refuses_a_live_source_that_is_a_lane_source_or_an_own_directory(tmp_path):
+    v = good(tmp_path)
+    for dup in (
+        {"publishing_gate_lane_sources": [{"lane": "other", "dir": LIVE["dir"]}]},
+        {"publishing_gate_state_dir": LIVE["dir"]},
+    ):
+        r = run_role(tmp_path, ROLE, "validate", {**v, "publishing_gate_live_source": LIVE, **dup})
+        assert r.returncode != 0, r.stdout
+
+
+def test_validate_accepts_the_real_lane_live_beside_a_shadow_lane_source(tmp_path):
+    v = {
+        **good(tmp_path),
+        "publishing_gate_live_source": LIVE,
+        "publishing_gate_lane_sources": LANES,
+        "publishing_gate_extra_groups": ["hnx-pipeline-out-real", "hnx-pipeline-out-shadow"],
+    }
+    r = run_role(tmp_path, ROLE, "validate", v)
+    assert r.returncode == 0, r.stdout + r.stderr

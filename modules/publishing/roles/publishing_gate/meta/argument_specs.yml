@@ -155,6 +155,10 @@ argument_specs:
         elements: dict
         description: Producer lanes, each {lane, dir} (a slug and an absolute output directory in the publishable-item layout). Always stage-only (gated and staged under staging/lane-<lane>/, never deployed or uploaded, in any mode), tagged with the lane everywhere.
         default: []
+      publishing_gate_live_source:
+        type: dict
+        description: The one live source {lane, dir}, empty for the default publishable/ area. dir (the real lane's handoff directory) replaces publishable/ as what is gated and, in live mode, deployed. The shadow lane can never be it (no lane name or path component naming shadow; the run re-checks by real path). lane_sources stay stage-only.
+        default: {}
       publishing_gate_extra_groups:
         type: list
         elements: str
