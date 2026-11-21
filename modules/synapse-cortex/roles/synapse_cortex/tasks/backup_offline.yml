@@ -13,7 +13,7 @@
                --entrypoint, python, app, -m, synapse.tools.service.backup,
                "{{ synapse_cortex_container_storage }}", "{{ synapse_cortex_container_export }}/backups/{{ synapse_cortex_backup_name }}"]
       async: "{{ synapse_cortex_backup_timeout | int }}"
-      poll: 15
+      poll: 3
       changed_when: true
   always:
     - name: Start the service again
