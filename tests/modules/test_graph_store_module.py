@@ -26,7 +26,7 @@ import yaml
 from homelabnext.conform.adapters._env import AdapterConfigError
 from homelabnext.modules import cli as mcli
 from homelabnext.modules import loader as ld
-from tests.modules.graph_store_front import Server
+from tests.modules.graph_store_front import NAME, Server
 from tests.modules.graph_store_module import MID, MODULE, ROLE, ROLE_DIR, P, ref
 from tests.modules.play_vars import without_footprint
 
@@ -212,10 +212,10 @@ def test_the_probe_reads_the_active_service_and_the_refused_call_trusting_only_i
     with pytest.raises(AdapterConfigError, match="ca_file"):
         make()  # the service's own certificate is required
     with pytest.raises(AdapterConfigError, match="HNX_ENDPOINT_GRAPH_STORE"):
-        make({"ca_file": str(tmp_path / "x.pem")})  # no default endpoint
+        make({"ca_file": str(tmp_path / "x.pem"), "server_name": NAME})  # no default endpoint
     with Server(tmp_path) as srv:
         monkeypatch.setenv("HNX_ENDPOINT_GRAPH_STORE", "https://{}:{}".format(*srv.addr))
-        probe = make({"ca_file": str(srv.cert)})
+        probe = make({"ca_file": str(srv.cert), "server_name": NAME})
         assert probe.health() and probe.api_is_private()
         assert srv.paths == ["/api/v1/active", "/api/v1/storm/nodes"]
     probe.close()
@@ -233,7 +233,20 @@ def test_the_probe_does_not_trust_a_certificate_it_was_not_given(monkeypatch, tm
     with Server(tmp_path) as srv:
         monkeypatch.setenv("HNX_ENDPOINT_GRAPH_STORE", "https://{}:{}".format(*srv.addr))
         with pytest.raises((ssl.SSLError, OSError)):
-            make({"ca_file": str(other_cert)}).health()
+            make({"ca_file": str(other_cert), "server_name": NAME}).health()
+
+
+def test_the_probe_refuses_a_name_the_certificate_does_not_carry(monkeypatch, tmp_path):
+    import ssl
+
+    from homelabnext.conform.adapters.graph_store import make
+
+    with Server(tmp_path) as srv:
+        monkeypatch.setenv("HNX_ENDPOINT_GRAPH_STORE", "https://{}:{}".format(*srv.addr))
+        with pytest.raises(AdapterConfigError, match="server_name"):
+            make({"ca_file": str(srv.cert)})
+        with pytest.raises(ssl.SSLError):
+            make({"ca_file": str(srv.cert), "server_name": "other.example.internal"}).health()
 
 
 def test_the_probe_says_so_when_the_api_accepts_an_anonymous_call(monkeypatch, tmp_path):
@@ -241,7 +254,7 @@ def test_the_probe_says_so_when_the_api_accepts_an_anonymous_call(monkeypatch, t
 
     with Server(tmp_path, open_api=True) as srv:
         monkeypatch.setenv("HNX_ENDPOINT_GRAPH_STORE", "https://{}:{}".format(*srv.addr))
-        assert make({"ca_file": str(srv.cert)}).api_is_private() is False
+        assert make({"ca_file": str(srv.cert), "server_name": NAME}).api_is_private() is False
 
 
 def test_the_probe_says_so_when_the_service_is_not_the_active_one(monkeypatch, tmp_path):
@@ -249,7 +262,7 @@ def test_the_probe_says_so_when_the_service_is_not_the_active_one(monkeypatch, t
 
     with Server(tmp_path, active=False) as srv:
         monkeypatch.setenv("HNX_ENDPOINT_GRAPH_STORE", "https://{}:{}".format(*srv.addr))
-        assert make({"ca_file": str(srv.cert)}).health() is False
+        assert make({"ca_file": str(srv.cert), "server_name": NAME}).health() is False
 
 
 # ----------------------------------------------------------------------------- lint

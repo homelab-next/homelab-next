@@ -34,33 +34,51 @@ synapse_cortex_refs: >-
   {{ (synapse_cortex_accounts | map(attribute='name_ref') | select | list)
      + (synapse_cortex_accounts | map(attribute='password_ref') | select | list) }}
 # how a script in the container reaches the service: its own certificate is the only trust anchor (a
-# leaf certificate stands alone), the host name is not checked (the call is to the container itself)
+# leaf certificate stands alone) and the name checked is the one that certificate carries, so the
+# verification is whole: only the service whose own certificate this is can answer
 synapse_cortex_https_python: |
-  import json, ssl, urllib.request, urllib.error
+  import http.client, json, socket, ssl
+  from cryptography import x509
   def https(port, path, body=None):
-      ctx = ssl.create_default_context(cafile="/vertex/storage/sslcert.pem")
-      ctx.check_hostname = False
-      ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
-      req = urllib.request.Request("https://localhost:%d%s" % (port, path),
-                                   data=None if body is None else json.dumps(body).encode(),
-                                   headers={"Content-Type": "application/json"})
+      with open("/vertex/storage/sslcert.pem", "rb") as fh:
+          pem = fh.read()
+      cert = x509.load_pem_x509_certificate(pem)
       try:
-          with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
-              return r.status, json.loads(r.read(1 << 20) or b"{}")
-      except urllib.error.HTTPError as e:
+          name = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)[0]
+      except (x509.ExtensionNotFound, IndexError):
+          name = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value
+      ctx = ssl.create_default_context(cadata=pem.decode())
+      ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+      class Conn(http.client.HTTPSConnection):
+          def connect(self):
+              self.sock = ctx.wrap_socket(socket.create_connection((self.host, self.port), self.timeout), server_hostname=name)
+      conn = Conn("localhost", port, timeout=15)
+      try:
+          conn.request("GET" if body is None else "POST", path, body=None if body is None else json.dumps(body),
+                       headers={"Content-Type": "application/json"})
+          resp = conn.getresponse()
+          raw = resp.read(1 << 20)
           try:
-              return e.code, json.loads(e.read(1 << 20) or b"{}")
+              return resp.status, json.loads(raw or b"{}")
           except ValueError:
-              return e.code, {}
-# the form counts of the graph, one line of JSON (the service's own form counts, summed over its layers)
+              return resp.status, {}
+      finally:
+          conn.close()
+# the node count of every form, one line of JSON: the service's own form counts of each layer of the
+# default view, summed (a graph of one layer is that layer's counts)
 synapse_cortex_counts_script: |
   import asyncio, json
   import synapse.telepath as s_telepath
+  STORM = "$ret = ([]) for $layr in $lib.view.get().layers { $ret.append($layr.getFormCounts()) } return($ret)"
   async def main():
       async with s_telepath.withTeleEnv():
           async with await s_telepath.openurl("cell:///vertex/storage/") as cell:
-              counts = await cell.getFormCounts()
-      print("HNX-COUNTS " + json.dumps({str(k): int(v) for k, v in counts.items()}, sort_keys=True))
+              per = await cell.callStorm(STORM)
+      counts = {}
+      for layer in per:
+          for form, n in layer.items():
+              counts[str(form)] = counts.get(str(form), 0) + int(n)
+      print("HNX-COUNTS " + json.dumps(counts, sort_keys=True))
   asyncio.run(main())
 # the health script: the service is the active one, refuses a storm call that carries no session, and
 # every account (HNX_LOGINS: a JSON list of {name, passwd}, in the environment of this one command) signs in
@@ -113,6 +131,7 @@ synapse_cortex_auth_script: |
                   if have != want:
                       await cell.setRoleRules(rdef["iden"], want)
                       print("HNX-AUTH role-rules"); changed += 1
+              allroles = {d["iden"] for d in await cell.getRoleDefs() if d["name"] == "all"}
               root = await cell.getUserDefByName("root")
               if not signs_in("root", spec["root"]["passwd"]):
                   await cell.setUserPasswd(root["iden"], spec["root"]["passwd"])
@@ -131,7 +150,8 @@ synapse_cortex_auth_script: |
                   if bool(udef.get("admin")) != u["admin"]:
                       await cell.setUserAdmin(udef["iden"], u["admin"])
                       print("HNX-AUTH user-admin %d" % u["i"]); changed += 1
-                  haveroles = set(udef.get("roles", ()))
+                  # every account holds the built-in "all" role, which is never granted or revoked
+                  haveroles = {r["iden"] if isinstance(r, dict) else r for r in udef.get("roles", ())} - allroles
                   wantroles = {}
                   for name in u["roles"]:
                       rdef = await cell.getRoleDefByName(name)

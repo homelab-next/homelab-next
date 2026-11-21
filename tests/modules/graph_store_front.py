@@ -5,43 +5,30 @@ is made for the test and written next to the test's files."""
 
 from __future__ import annotations
 
-import datetime
 import json
 import ssl
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
+from tests.suite_policy import require_tool
+
+NAME = "graph.example.internal"  # the name the stand-in's certificate carries
 
 
 def make_cert(directory: Path) -> tuple[Path, Path]:
-    """A self-signed certificate and its private key, under ``directory``."""
-    key = ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "graph.example.internal")])
-    utc = datetime.UTC
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime(2020, 1, 1, tzinfo=utc))
-        .not_valid_after(datetime.datetime(2100, 1, 1, tzinfo=utc))
-        .sign(key, hashes.SHA256())
-    )
+    """A self-signed certificate and its private key, under ``directory`` (made with openssl)."""
     cert_path, key_path = directory / "cert.pem", directory / "tls.pem"
-    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-    key_path.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
-    )
+    subprocess.run(
+        [
+            require_tool("openssl"), "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
+            "-nodes", "-days", "2", "-subj", f"/CN={NAME}", "-addext", f"subjectAltName=DNS:{NAME}",
+            "-keyout", str(key_path), "-out", str(cert_path),
+        ],
+        check=True,
+        capture_output=True,
+    )  # fmt: skip
     return cert_path, key_path
 
 

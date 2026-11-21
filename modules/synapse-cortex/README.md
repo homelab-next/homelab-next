@@ -70,7 +70,8 @@ it. Read the address, never the name, before retiring or repointing either.
   answers as the active one; a storm call with no session is **refused** (401); root and every
   configured account sign in; and with `synapse_cortex_expected_min_nodes` set, the graph holds at
   least that many nodes (a graph that lost its nodes is never "healthy" empty). The calls are made
-  from inside the container, trusting the service's own certificate and nothing else.
+  from inside the container, trusting the service's own certificate and nothing else, with the
+  certificate's name checked (verification is never turned off).
 
 ## Data root layout
 
@@ -155,8 +156,11 @@ renamed to the instance, `host` the guest, `version` the product's), selects the
 the HTTPS port, and holds the secrets. Group variables: `synapse_cortex_logical_id`,
 `synapse_cortex_users`, `synapse_cortex_roles`, and `synapse_cortex_expected_min_nodes` once the
 graph is loaded. The conformance adapter is a probe (`homelabnext.conform.adapters.graph_store`), not
-a suite: it needs `HNX_ENDPOINT_GRAPH_STORE` and the path of the service's certificate.
+a suite: it needs `HNX_ENDPOINT_GRAPH_STORE`, the path of the service's certificate (`ca_file`) and the name that certificate carries (`server_name`; the old instance's is its service name), and it verifies both.
 
-Not exercised against a live service by this module's tests: they run the role against fakes. The
-first live use on a new guest should be an empty-graph install, a health run, an export and a
-restore drill into a scratch guest, before the old lab's graph is brought over.
+The role was run end to end against the real pinned image on a scratch host (not the old lab's
+instance and not CI): install, root and account creation (a second run `changed=0`), health with real
+logins, a live export, an offline export, and a restore of a sealed backup into a fresh instance whose
+node count of every form equalled the backup's, with the service's certificate carried over. CI runs
+the role against fakes. The first use on the real guest should still be an empty-graph install, a
+health run, an export and a restore drill, before the old lab's graph is brought over.
