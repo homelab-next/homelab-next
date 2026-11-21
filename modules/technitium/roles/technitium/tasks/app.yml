@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). The
+# container runs as an id no account on the host has, with every capability dropped: Docker lets
+# an unprivileged user bind port 53 inside the container, so nothing is added back. The web
+# console and the API are published on the guest's address only.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    technitium_app:
+      compose_app_name: technitium
+      compose_app_dir: "{{ technitium_dir }}"
+      compose_app_data_dir: "{{ technitium_data_root }}"
+      compose_app_export_dir: "{{ technitium_data_root }}/export"
+      compose_app_owner: "{{ technitium_owner }}"
+      compose_app_group: "{{ technitium_group }}"
+      compose_app_start: "{{ technitium_start }}"
+      compose_app_validate_with_docker: "{{ technitium_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          technitium:
+            image: "{{ technitium_repository }}"
+            tag: "{{ technitium_tag }}"
+            digest: "{{ technitium_digest }}"
+            user: "{{ technitium_uid | int }}:{{ technitium_gid | int }}"
+            environment: >-
+              {{ technitium_fixed_env | combine({
+                   'DNS_SERVER_DOMAIN': technitium_server_domain,
+                   'DNS_SERVER_RECURSION': technitium_recursion}
+                 | combine({'DNS_SERVER_FORWARDERS': technitium_forwarders | join(',')} if technitium_forwarders | length > 0 else {})
+                 | combine({'DNS_SERVER_BLOCK_LIST_URLS': technitium_block_list_urls | join(',')} if technitium_block_list_urls | length > 0 else {})) }}
+            ports:
+              - "{{ technitium_bind }}:{{ technitium_dns_port | int }}:53/udp"
+              - "{{ technitium_bind }}:{{ technitium_dns_port | int }}:53/tcp"
+              - "{{ technitium_bind }}:{{ technitium_api_port | int }}:5380/tcp"
+            volumes:
+              - "{{ technitium_data_root }}/config:{{ technitium_container_config_dir }}"
+              - "{{ technitium_data_root }}/log:{{ technitium_container_log_dir }}"
+            mem_limit: "{{ technitium_mem_limit }}"
+            healthcheck:
+              # the image has no wget or curl: a TCP connect to the web service, through bash
+              test: [CMD, bash, -c, "exec 3<>/dev/tcp/localhost/5380"]
+              interval: 30s
+              timeout: 5s
+              retries: 5
+              start_period: 30s
+  tags: [health, backup, restore, restore_archive, export, upgrade]

@@ -8,6 +8,10 @@
 - name: Create the project, certificate and data directories
   ansible.builtin.include_tasks: dirs.yml
 
+- name: Fetch the JDBC drivers, each by its pinned digest
+  ansible.builtin.include_tasks: drivers.yml
+  when: nifi_jdbc_drivers | length > 0
+
 - name: Refuse a malformed credential before the service sees it (it would not start)
   ansible.builtin.include_tasks: credentials.yml
 

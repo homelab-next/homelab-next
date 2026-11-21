@@ -4,7 +4,7 @@ README.md).
 
 * The manifest fills the (provisional) ``dataflow`` slot with the shared read-only probe, pins its
   image by digest at the product version, keeps its secrets in its own namespace and declares every
-  secret reference its role reads; it asks for no internet egress and names no workstation.
+  secret reference its role reads; its only egress is an optional internet entry (a per-site option) and it names no workstation.
 * The registry row is the one the README describes (HTTPS, a port that does not collide with the
   query engine's on the same guest, a refusal as its liveness, no public route).
 * A fictional overlay placing it beside the three lake modules on one guest passes
@@ -94,7 +94,16 @@ def role_vars() -> dict:
 
 def test_the_module_fills_the_dataflow_slot_with_the_shared_probe():
     m = manifest()
-    assert m["kind"] == "provider" and m["egress"] == "none"
+    assert m["kind"] == "provider"
+    # internet is a per-site option, never owed: the one entry is optional
+    assert m["egress"] == [
+        {
+            "host": "server",
+            "to": ["internet"],
+            "optional": True,
+            "purpose": m["egress"][0]["purpose"],
+        }
+    ]
     assert list(m["provides"]["slots"]) == ["dataflow"]
     slot = m["provides"]["slots"]["dataflow"]
     assert slot["adapter"] == "homelabnext.conform.adapters.dataflow:make"
@@ -164,6 +173,41 @@ def test_nothing_in_the_module_names_the_operators_workstation():
     for f in MODULE.rglob("*"):
         if f.is_file():
             assert not re.search(r"192\.168\.20\.150|wsl", f.read_text().lower()), f
+
+
+def _driver_fetch_problems(text: str) -> list[str]:
+    """What must hold of the task that downloads a JDBC driver: it verifies a sha256 taken from the pinned entry and never turns
+    certificate verification off."""
+    doc = yaml.safe_load(text)
+    out = []
+    for t in doc:
+        get = t.get("ansible.builtin.get_url")
+        if get is None:
+            continue
+        if "{{ item.sha256 }}" not in str(get.get("checksum", "")) or not str(
+            get.get("checksum", "")
+        ).startswith("sha256:"):
+            out.append("get_url has no sha256 checksum from the pinned entry")
+        if get.get("validate_certs") in (False, "false", "no"):
+            out.append("get_url turns certificate verification off")
+    if not any("ansible.builtin.get_url" in t for t in doc):
+        out.append("no get_url task")
+    return out
+
+
+def test_the_driver_download_is_verified_by_the_pinned_sha256():
+    text = (ROLE / "tasks" / "drivers.yml").read_text()
+    assert _driver_fetch_problems(text) == []
+    # the check bites: without the checksum line, or with verification off, it reports
+    assert _driver_fetch_problems(re.sub(r"(?m)^\s*checksum:.*\n", "", text)) == [
+        "get_url has no sha256 checksum from the pinned entry"
+    ]
+    assert _driver_fetch_problems(
+        text.replace("    mode:", "    validate_certs: false\n    mode:")
+    ) == ["get_url turns certificate verification off"]
+    assert (
+        _driver_fetch_problems(text.replace("sha256:{{ item.sha256 }}", "{{ item.sha256 }}")) != []
+    )
 
 
 def test_the_smoke_flow_is_a_clean_export_with_no_instance_identity_and_no_secret():
@@ -305,14 +349,26 @@ def test_it_cannot_be_placed_without_a_lake_slot_it_requires(slot, tmp_path, cap
     assert code == 1 and slot in out, out
 
 
-def test_the_module_asks_for_no_internet_egress_so_no_grant_is_owed(tmp_path, capsys):
+def test_internet_egress_is_optional_so_no_grant_is_owed_and_a_grant_is_accepted(tmp_path, capsys):
     ov = overlay(tmp_path)
+    assert mcli.main(["check", *_args(ov)]) == 0, capsys.readouterr().out  # no grant: clean
+    capsys.readouterr()
     sel = ld.load_yaml(ov / "lab" / "modules.yml")
-    sel["grants"] = {"egress": {MID: {"server": ["internet"]}}}  # a grant nothing asks for
+    sel["grants"] = {"egress": {MID: {"server": ["internet"]}}}  # the site opts in
     (ov / "lab" / "modules.yml").write_text(_dump(sel))
     code = mcli.main(["check", *_args(ov)])
     out = capsys.readouterr().out
-    assert code == 1 and "internet" in out, out  # refused: a grant waiting for a target
+    assert code == 0 and "granted but not used" not in out, out
+
+
+def test_a_grant_of_a_target_the_module_does_not_name_is_still_refused(tmp_path, capsys):
+    ov = overlay(tmp_path)
+    sel = ld.load_yaml(ov / "lab" / "modules.yml")
+    sel["grants"] = {"egress": {MID: {"server": ["svc:secrets"]}}}
+    (ov / "lab" / "modules.yml").write_text(_dump(sel))
+    code = mcli.main(["check", *_args(ov)])
+    out = capsys.readouterr().out
+    assert code == 1 and "svc:secrets" in out, out
 
 
 # ----------------------------------------------------------------------------- the probe

@@ -163,6 +163,7 @@ SOURCES: dict[str, tuple[str, str]] = {
     "role:media_automation/media_automation_tdarr_image": ("github", "HaveAGitGat/Tdarr"),
     "role:nifi/nifi_image": ("github", "apache/nifi"),
     "role:ntfy/ntfy_image": ("github", "binwiederhier/ntfy"),
+    "role:technitium/technitium_image": ("github", "TechnitiumSoftware/DnsServer"),
     "role:llamacpp/llamacpp_image": (
         "none",
         "ggml-org/llama.cpp tags builds bNNNNN, which the github source does not parse, and only "
@@ -355,6 +356,11 @@ NOTES: dict[str, str] = {
     "role:ntfy/ntfy_image": (
         "an image (modules/ntfy): bump the tag and its digest together, with product.version in "
         "modules/ntfy/module.yml and the lab registry's version"
+    ),
+    "role:technitium/technitium_image": (
+        "an image (modules/technitium): bump the tag and its digest together, with product.version in "
+        "modules/technitium/module.yml and the lab registry's version; the zones are exported first "
+        "(the upgrade playbook does it) and the config folder keeps its settings"
     ),
     "role:tunnel/tunnel_image": (
         "an image (modules/tunnel): bump the tag and its digest together, with product.version in "
