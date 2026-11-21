@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Install the zone tooling
+  ansible.builtin.include_tasks: ctl.yml
+
+- name: Refuse a missing or short admin password before the server sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+# DNS_SERVER_ADMIN_PASSWORD is read on the server's FIRST start only (the account lives in the
+# config folder after that); health proves the stored secret still signs in.
+- name: Read the admin password
+  ansible.builtin.set_fact:
+    technitium_secret_env:
+      technitium:
+        DNS_SERVER_ADMIN_PASSWORD: "{{ lookup('hnx_secret', technitium_admin_login_ref) }}"
+  no_log: true
+
+- name: Render and start Technitium
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ technitium_app.compose_app_name }}"
+    compose_app_dir: "{{ technitium_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ technitium_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ technitium_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ technitium_app.compose_app_owner }}"
+    compose_app_group: "{{ technitium_app.compose_app_group }}"
+    compose_app_start: "{{ technitium_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ technitium_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ technitium_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ technitium_secret_env }}"
+  no_log: true
