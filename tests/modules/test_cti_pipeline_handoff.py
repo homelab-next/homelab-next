@@ -79,6 +79,26 @@ def _hand(body, now=NOW):
 # ---------------------------------------------------------------------------------- the wrapper
 
 
+def test_handed_off_dirs_keep_setgid_and_the_lane_out_group(tmp_path):
+    _p, body, root, dest = _with_handoff(tmp_path)
+    others = [g for g in os.getgroups() if g != os.getgid()]
+    out_gid = others[0] if others else os.getgid()  # a group the test user may chown to
+    os.chown(dest, -1, out_gid)
+    _item(root, "site", "b1", {"index.html": "<p>x</p>", "assets/a.css": "p{}"})
+    old = os.umask(0o077)
+    try:
+        _hand(body)
+    finally:
+        os.umask(old)
+    got = dest / "site" / "b1"
+    for d in (dest / "site", got, got / "assets"):
+        st = d.stat()
+        assert st.st_gid == out_gid
+        assert oct(st.st_mode & 0o7777) == "0o2750"
+    for f in (got / "index.html", got / "assets" / "a.css", got / "sidecar.json"):
+        assert f.stat().st_gid == out_gid and oct(f.stat().st_mode & 0o777) == "0o640"
+
+
 def test_new_items_are_copied_whole_with_group_readable_modes_whatever_the_umask(tmp_path):
     _p, body, root, dest = _with_handoff(tmp_path)
     _item(root, "site", "b1", {"index.html": "<p>x</p>", "assets/a.css": "p{}"})
