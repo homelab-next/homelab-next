@@ -141,7 +141,7 @@ The module's own steps and the smoke flow need no internet, and **a site that gr
 declares `egress: [{host: server, to: [internet], optional: true}]`: an `optional` entry (docs/modules/egress.md) is
 allowed but never owed, so `hnx modules check` is clean without a grant, and a site whose flows pull a public feed opts in
 with one overlay line, `grants.egress.nifi.server: [internet]`. The container's own network namespace is outside the host's
-per-slice ruleset (docs/modules/egress.md, "What it does not cover"), and the generated policy never opens an optional entry:
+per-slice ruleset (docs/modules/egress.md, "What it does not cover"):
 the grant is the policy, the guest's NIC firewall is the control, so scope the feed's hosts there.
 
 ## JDBC drivers
