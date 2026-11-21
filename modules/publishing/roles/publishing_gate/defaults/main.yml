@@ -9,6 +9,9 @@ publishing_gate_tlp_allowed: clear
 publishing_gate_audience: public
 publishing_gate_access_control: ""
 publishing_gate_posture_rules: true
+# Switch off only the named posture rules (possessive-posture, present-in-the-environment, we-run,
+# affected-assets); an unknown name is refused. The deny-list, TLP and secret shapes cannot be named.
+publishing_gate_posture_rules_disabled: []
 publishing_gate_user: hnx-publishing
 publishing_gate_group: hnx-publishing
 publishing_gate_hnx_bin: /opt/hnx/bin/hnx

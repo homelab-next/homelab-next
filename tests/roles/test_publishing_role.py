@@ -71,6 +71,11 @@ def test_validate_passes_for_the_defaults(tmp_path):
         {"publishing_gate_root": "/var/lib/../etc"},
         {"publishing_gate_pages_branch": ""},
         {"publishing_gate_mode": "live"},  # live with no destination
+        {"publishing_gate_posture_rules_disabled": ["nope"]},
+        {
+            "publishing_gate_posture_rules_disabled": ["deny-list"]
+        },  # only posture rules are nameable
+        {"publishing_gate_posture_rules_disabled": "we-run"},
     ],
 )
 def test_validate_refuses_what_cannot_be_honoured(tmp_path, over):
@@ -587,3 +592,12 @@ def test_validate_accepts_a_live_root_and_parent_only_the_owner_writes(tmp_path)
         tmp_path, ROLE, "validate", {**good(tmp_path), "publishing_gate_live_source": live}
     )
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_configuration_carries_the_named_disabled_posture_rules(tmp_path):
+    v = {**good(tmp_path), "publishing_gate_posture_rules_disabled": ["affected-assets"]}
+    (tmp_path / "etc").mkdir()
+    assert run_role(tmp_path, ROLE, "validate", v).returncode == 0
+    run_role(tmp_path, ROLE, "config", v)
+    doc = json.loads((tmp_path / "etc" / "publishing.json").read_text())
+    assert doc["posture_rules_disabled"] == ["affected-assets"] and doc["posture_rules"] is True
