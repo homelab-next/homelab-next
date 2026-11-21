@@ -175,6 +175,41 @@ def test_nothing_in_the_module_names_the_operators_workstation():
             assert not re.search(r"192\.168\.20\.150|wsl", f.read_text().lower()), f
 
 
+def _driver_fetch_problems(text: str) -> list[str]:
+    """What must hold of the task that downloads a JDBC driver: it verifies a sha256 taken from the pinned entry and never turns
+    certificate verification off."""
+    doc = yaml.safe_load(text)
+    out = []
+    for t in doc:
+        get = t.get("ansible.builtin.get_url")
+        if get is None:
+            continue
+        if "{{ item.sha256 }}" not in str(get.get("checksum", "")) or not str(
+            get.get("checksum", "")
+        ).startswith("sha256:"):
+            out.append("get_url has no sha256 checksum from the pinned entry")
+        if get.get("validate_certs") in (False, "false", "no"):
+            out.append("get_url turns certificate verification off")
+    if not any("ansible.builtin.get_url" in t for t in doc):
+        out.append("no get_url task")
+    return out
+
+
+def test_the_driver_download_is_verified_by_the_pinned_sha256():
+    text = (ROLE / "tasks" / "drivers.yml").read_text()
+    assert _driver_fetch_problems(text) == []
+    # the check bites: without the checksum line, or with verification off, it reports
+    assert _driver_fetch_problems(re.sub(r"(?m)^\s*checksum:.*\n", "", text)) == [
+        "get_url has no sha256 checksum from the pinned entry"
+    ]
+    assert _driver_fetch_problems(
+        text.replace("    mode:", "    validate_certs: false\n    mode:")
+    ) == ["get_url turns certificate verification off"]
+    assert (
+        _driver_fetch_problems(text.replace("sha256:{{ item.sha256 }}", "{{ item.sha256 }}")) != []
+    )
+
+
 def test_the_smoke_flow_is_a_clean_export_with_no_instance_identity_and_no_secret():
     flow = json.loads((ROLE / "files" / "hnx-smoke.json").read_text())
     assert flow["flowContents"]["name"] == "hnx-smoke"
