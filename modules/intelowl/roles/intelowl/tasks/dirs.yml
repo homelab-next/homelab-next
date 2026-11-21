@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root, its logs, static files and downloads, and export/ are root's (the application's
+# containers start as root and hand what they write to their service user); pgdata/ and export/db/
+# belong to the database's user. Nothing here is ever removed by the role (a bind-mounted directory
+# taken away under a running container breaks it).
+- name: Create the data root, the application's, the database's and the export directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ intelowl_data_root }}", owner: "{{ intelowl_owner }}", group: "{{ intelowl_group }}", mode: "0750"}
+    - {path: "{{ intelowl_data_root }}/pgdata", owner: "{{ intelowl_db_uid | int }}", group: "{{ intelowl_db_gid | int }}", mode: "0700"}
+    - {path: "{{ intelowl_data_root }}/logs", owner: "{{ intelowl_owner }}", group: "{{ intelowl_group }}", mode: "0755"}
+    - {path: "{{ intelowl_data_root }}/static", owner: "{{ intelowl_owner }}", group: "{{ intelowl_group }}", mode: "0755"}
+    - {path: "{{ intelowl_data_root }}/files", owner: "{{ intelowl_owner }}", group: "{{ intelowl_group }}", mode: "0755"}
+    - {path: "{{ intelowl_data_root }}/export", owner: "{{ intelowl_owner }}", group: "{{ intelowl_group }}", mode: "0700"}
+    - {path: "{{ intelowl_data_root }}/export/db", owner: "{{ intelowl_db_uid | int }}", group: "{{ intelowl_db_gid | int }}", mode: "0700"}
+    - {path: "{{ intelowl_dir }}", owner: "{{ intelowl_owner }}", group: "{{ intelowl_group }}", mode: "0750"}
+    - {path: "{{ intelowl_dir }}/config", owner: "{{ intelowl_owner }}", group: "{{ intelowl_group }}", mode: "0755"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

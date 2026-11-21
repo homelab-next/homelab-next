@@ -1,0 +1,152 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). No environment
+# holds a secret: the database password and the application secret go in compose_app_secret_env.
+# The application is one image run four ways (web worker, websocket server, scheduler, task worker);
+# its front, its database and its broker are three more containers it reaches by service name.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    intelowl_app:
+      compose_app_name: intelowl
+      compose_app_dir: "{{ intelowl_dir }}"
+      compose_app_data_dir: "{{ intelowl_data_root }}"
+      compose_app_export_dir: "{{ intelowl_data_root }}/export"
+      compose_app_owner: "{{ intelowl_owner }}"
+      compose_app_group: "{{ intelowl_group }}"
+      compose_app_start: "{{ intelowl_start }}"
+      compose_app_validate_with_docker: "{{ intelowl_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          postgres:
+            image: "{{ intelowl_db_repository }}"
+            tag: "{{ intelowl_db_tag }}"
+            digest: "{{ intelowl_db_digest }}"
+            user: "{{ intelowl_db_uid | int }}:{{ intelowl_db_gid | int }}"
+            environment:
+              POSTGRES_DB: "{{ intelowl_db_name }}"
+              POSTGRES_USER: "{{ intelowl_db_user }}"
+              PGDATA: "{{ intelowl_container_pgdata }}"
+            volumes:
+              - "{{ intelowl_data_root }}/pgdata:{{ intelowl_container_pgdata }}"
+              - "{{ intelowl_data_root }}/export/db:{{ intelowl_container_export }}"
+            mem_limit: "{{ intelowl_db_mem_limit }}"
+            healthcheck:
+              test: [CMD, pg_isready, -q, -U, "{{ intelowl_db_user }}", -d, "{{ intelowl_db_name }}"]
+              interval: 15s
+              timeout: 5s
+              retries: 5
+              start_period: 30s
+          redis:
+            image: "{{ intelowl_broker_repository }}"
+            tag: "{{ intelowl_broker_tag }}"
+            digest: "{{ intelowl_broker_digest }}"
+            user: "{{ intelowl_broker_uid | int }}:{{ intelowl_broker_gid | int }}"
+            command: [redis-server, --save, "", --appendonly, "no"]
+            mem_limit: "{{ intelowl_broker_mem_limit }}"
+            healthcheck:
+              test: [CMD, redis-cli, ping]
+              interval: 15s
+              timeout: 5s
+              retries: 5
+              start_period: 5s
+          uwsgi:
+            image: "{{ intelowl_repository }}"
+            tag: "{{ intelowl_tag }}"
+            digest: "{{ intelowl_digest }}"
+            command: [./docker/entrypoints/uwsgi.sh]
+            cap_add: "{{ intelowl_app_caps }}"
+            depends_on: [postgres, redis]
+            environment: "{{ intelowl_env }}"
+            volumes:
+              - "{{ intelowl_dir }}/config/intel_owl.ini:/etc/uwsgi/sites/intel_owl.ini:ro"
+              - "{{ intelowl_data_root }}/logs:{{ intelowl_container_logs }}"
+              - "{{ intelowl_data_root }}/static:{{ intelowl_container_static }}"
+              - "{{ intelowl_data_root }}/files:{{ intelowl_container_files }}"
+            mem_limit: "{{ intelowl_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, "nc -z localhost 8001 || exit 1"]
+              interval: 15s
+              timeout: 5s
+              retries: 10
+              start_period: 300s
+          daphne:
+            image: "{{ intelowl_repository }}"
+            tag: "{{ intelowl_tag }}"
+            digest: "{{ intelowl_digest }}"
+            command: [./docker/entrypoints/daphne.sh]
+            cap_add: "{{ intelowl_app_caps }}"
+            depends_on: [uwsgi]
+            environment: "{{ intelowl_env }}"
+            volumes:
+              - "{{ intelowl_data_root }}/logs:{{ intelowl_container_logs }}"
+              - "{{ intelowl_data_root }}/files:{{ intelowl_container_files }}"
+            mem_limit: "{{ intelowl_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, "nc -z localhost 8011 || exit 1"]
+              interval: 15s
+              timeout: 5s
+              retries: 6
+              start_period: 20s
+          beat:
+            image: "{{ intelowl_repository }}"
+            tag: "{{ intelowl_tag }}"
+            digest: "{{ intelowl_digest }}"
+            command: [./docker/entrypoints/celery_beat.sh]
+            cap_add: "{{ intelowl_app_caps }}"
+            depends_on: [uwsgi]
+            environment: "{{ intelowl_env }}"
+            volumes:
+              - "{{ intelowl_data_root }}/logs:{{ intelowl_container_logs }}"
+              - "{{ intelowl_data_root }}/files:{{ intelowl_container_files }}"
+            mem_limit: "{{ intelowl_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, "pgrep -f celery > /dev/null || exit 1"]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 60s
+          worker:
+            image: "{{ intelowl_repository }}"
+            tag: "{{ intelowl_tag }}"
+            digest: "{{ intelowl_digest }}"
+            command: [./docker/entrypoints/celery_default.sh]
+            cap_add: "{{ intelowl_app_caps }}"
+            depends_on: [uwsgi]
+            environment: "{{ intelowl_env }}"
+            volumes:
+              - "{{ intelowl_data_root }}/logs:{{ intelowl_container_logs }}"
+              - "{{ intelowl_data_root }}/files:{{ intelowl_container_files }}"
+            mem_limit: "{{ intelowl_worker_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, "pgrep -f celery > /dev/null || exit 1"]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 60s
+          nginx:
+            image: "{{ intelowl_front_repository }}"
+            tag: "{{ intelowl_front_tag }}"
+            digest: "{{ intelowl_front_digest }}"
+            cap_add: "{{ intelowl_front_caps }}"
+            depends_on: [uwsgi, daphne]
+            ports: ["{{ intelowl_bind }}:{{ intelowl_port | int }}:{{ intelowl_front_port }}"]
+            volumes:
+              - "{{ intelowl_dir }}/config/nginx/http.conf:/etc/nginx/conf.d/default.conf:ro"
+              - "{{ intelowl_dir }}/config/nginx/locations.conf:/etc/nginx/locations.conf:ro"
+              - "{{ intelowl_dir }}/config/nginx/errors.conf:/etc/nginx/errors.conf:ro"
+              - "{{ intelowl_dir }}/config/nginx/websocket.conf:/etc/nginx/websocket.conf:ro"
+              - "{{ intelowl_data_root }}/static:/var/www/static:ro"
+            mem_limit: "{{ intelowl_front_mem_limit }}"
+            healthcheck:
+              test: [CMD, curl, -fsS, -o, /dev/null, "http://localhost:{{ intelowl_front_port }}/hc"]
+              interval: 5s
+              timeout: 5s
+              retries: 5
+              start_period: 10s
+  vars:
+    intelowl_env_extra:
+      DB_USER: "{{ intelowl_db_user }}"
+      DB_NAME: "{{ intelowl_db_name }}"
+      OLD_JOBS_RETENTION_DAYS: "{{ intelowl_old_jobs_retention_days | int }}"
+      INTELOWL_WEB_CLIENT_DOMAIN: "{{ intelowl_web_domain if intelowl_web_domain | length > 0 else intelowl_bind }}"
+    intelowl_env: "{{ intelowl_fixed_env | combine(intelowl_env_extra) }}"
+  tags: [health, backup, restore, export, upgrade]

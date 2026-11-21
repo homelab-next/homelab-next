@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: Apache-2.0
+# The enrichment provider (modules/intelowl): the application as four containers of one image (web
+# worker, websocket server, scheduler, task worker), its web front, its database and its broker as
+# seven compose_app containers in the module's slice. The front listens in plain http on the guest's
+# own address and nowhere else; the database and the broker publish no port.
+# Required, with no default (the site's): intelowl_logical_id (the instance's registry id).
+intelowl_image: "docker.io/intelowlproject/intelowl:v6.7.0@sha256:b5d5c36466b5046600f98a5edf67ec3d6ae8d3a3fe8dbe7ae13b3d142890ab04"
+intelowl_nginx_image: "docker.io/intelowlproject/intelowl_nginx:v6.7.0@sha256:e8e7c8128579b91c5f84c1ef411d27d6705c8ae16338e53c2e37bcd1ce8405c3"
+intelowl_postgres_image: "docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317"
+intelowl_redis_image: "docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces
+intelowl_bind: "{{ ansible_host }}"
+intelowl_port: 8080
+intelowl_dir: /opt/compose/intelowl
+intelowl_owner: root
+intelowl_group: root
+# the module's data root: pgdata/, logs/, static/, files/ (analyzer downloads), export/ (the exit copy)
+intelowl_data_root: /var/lib/hnx-modules/intelowl
+# the database's container user (an id no account on the host has); the application's containers
+# run as the image's root and drop to its own service user (the image's design), with a minimal
+# capability set instead of root's full one
+intelowl_db_uid: 61050
+intelowl_db_gid: 61050
+intelowl_broker_uid: 61051
+intelowl_broker_gid: 61051
+intelowl_db_name: intel_owl_db
+intelowl_db_user: intelowl
+# the name links the application writes (INTELOWL_WEB_CLIENT_DOMAIN); empty: the guest's address
+intelowl_web_domain: ""
+# jobs older than this are flushed by the scheduler
+intelowl_old_jobs_retention_days: 14
+intelowl_uwsgi_processes: 4
+intelowl_signing_ref: secret:intelowl/django-secret
+intelowl_db_login_ref: secret:intelowl/db-password
+intelowl_admin_login_ref: secret:intelowl/admin-password
+intelowl_api_login_ref: secret:intelowl/api-token
+# an optional free-tier AlienVault OTX key, applied to its two analyzers (empty: none, nothing is read)
+intelowl_otx_key_ref: ""
+# the first administrator, created on an EMPTY user table from the admin password. Set false when the
+# database is restored (the restore brings its own accounts)
+intelowl_admin_bootstrap: true
+intelowl_admin_user: admin
+intelowl_admin_email: admin@intelowl.example.internal
+# the account the API token belongs to (the consumers' enrichment calls use it); the role seeds the
+# token from intelowl_api_login_ref on every run. The API authenticates with the web framework's own
+# token (one per account, 40 characters, no expiry), not the separate expiring client tokens
+# of the product's sign-in flow that the source's runbook named
+intelowl_api_user: admin
+# The analyzers the lab's consumers request, by observable class. These are the KEYLESS set the
+# CTI pipeline and the agents' enrichment tool ask for. An analyzer name that does not exist makes
+# the application answer 400 to the WHOLE submit (a known analyzer that does not support the type is
+# only dropped), so the names are checked against the running instance: health fails on a name the
+# instance does not have, on a disabled one, and on a class no listed analyzer supports.
+intelowl_required_analyzers:
+  ip: [Abusix, BGP_Ranking, GreyNoiseCommunity, Feodo_Tracker, TorProject]
+  domain: [Classic_DNS, CloudFlare_DNS, CheckDMARC, URLhaus, ThreatFox]
+  url: [URLhaus, Classic_DNS]
+  hash: [MalwareBazaar_Get_Observable, ThreatFox, Cymru_Hash_Registry_Get_Observable]
+  generic: [ThreatFox]
+# health fails when the instance has fewer analyzer configurations than this (the old instance's 219
+# at 6.7.0); 0: not checked. A restored instance with none is a failed import.
+intelowl_expected_min_analyzers: 200
+# health fails when the database holds fewer jobs than this (set at a cutover); 0: not checked
+intelowl_expected_min_jobs: 0
+# after a restore the free-tier keys stored with the plugin configuration of the source (abuse.ch,
+# Shodan, OTX) are CLEARED unless this is true: the module is keyless by default, and the archive
+# holds keys the operator never named to the new lab
+intelowl_restore_keep_keys: false
+# a restore needs the dump's sha256 (its listing, or the archive's manifest) and the source's counts
+intelowl_restore_dump: ""
+intelowl_restore_sha256: ""
+intelowl_restore_expected_counts: {}
+intelowl_mem_limit: 2g
+intelowl_worker_mem_limit: 2g
+intelowl_db_mem_limit: 1g
+intelowl_broker_mem_limit: 256m
+intelowl_front_mem_limit: 256m
+intelowl_start: true
+intelowl_validate_with_docker: true
+intelowl_health_timeout: 15
+# seconds main waits for the front to answer after a start (the first start migrates the database)
+intelowl_ready_timeout: 600
