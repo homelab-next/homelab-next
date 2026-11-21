@@ -34,6 +34,11 @@ argument_specs:
         type: bool
         description: Keep the disclosure-posture phrases of the old pipeline's guard on.
         default: true
+      publishing_gate_posture_rules_disabled:
+        type: list
+        elements: str
+        description: Posture rules to switch off by name, the rest staying on (possessive-posture, present-in-the-environment, we-run, affected-assets); an unknown name is refused. The deny-list, TLP checks and secret shapes cannot be disabled here.
+        default: []
       publishing_gate_user:
         type: str
         description: The system user the run uses.

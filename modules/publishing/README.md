@@ -50,7 +50,10 @@ unknown file type, a non-UTF-8 text file) blocks. For each item:
 5. **Disclosure posture** (on by default; `posture_rules`): the first four rules of the old pipeline's
    disclosure guard (LL-051: "our estate", "present in the environment", "we run", "affected assets"). The
    count-adjacent rule needs a context window and stays with the producer's own check; internal-name rules
-   are the deny-list's job.
+   are the deny-list's job. `posture_rules: false` turns all four off; `posture_rules_disabled: [<rule>, ...]`
+   (role: `publishing_gate_posture_rules_disabled`) turns off only the named ones (`possessive-posture`,
+   `present-in-the-environment`, `we-run`, `affected-assets`) and leaves the rest on; an unknown name is refused
+   by the loader and the role. The deny-list, TLP and secret shapes cannot be named there.
 
 A blocked item is **refused and logged**: `state/gate.jsonl` records the rule and the file, never the text
 that matched. The run exits 1 and pages once through the notify pair (`Publishing: an item was blocked by the
