@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The internal-CA certificate and key the site gave (both or neither), written to ssl/ where the
+# application's web server reads cert.pem and key.pem. Without them the image makes a self-signed
+# pair on its first start. The key is root's, 0600 (the web server's master reads it as root).
+- name: Write the certificate and its key
+  ansible.builtin.copy:
+    dest: "{{ misp_data_root }}/ssl/{{ item.name }}"
+    content: "{{ lookup('hnx_secret', item.ref) | trim }}\n"
+    owner: "{{ misp_owner }}"
+    group: "{{ misp_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {name: cert.pem, ref: "{{ misp_tls_cert_ref }}", mode: "0644"}
+    - {name: key.pem, ref: "{{ misp_tls_key_ref }}", mode: "0600"}
+  loop_control:
+    label: "{{ item.name }}"
+  register: misp_tls_files
+  no_log: true
+  when: misp_tls_refs | length > 0

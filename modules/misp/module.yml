@@ -55,6 +55,14 @@ credentials:
     identity: password
     holder: provider
     purpose: the passphrase of the instance's own GnuPG key
+  - secret: secret:misp/tls-cert
+    identity: certificate
+    holder: provider
+    purpose: the server certificate (PEM) from the lab's internal CA; read only when misp_tls_cert_ref is set (else the image makes a self-signed one no dump carries)
+  - secret: secret:misp/tls-key
+    identity: private-key
+    holder: provider
+    purpose: the server certificate's private key (PEM); read only when misp_tls_key_ref is set
 identifiers:
   - {kind: secret-name, name: misp, on_remove: keep}
 requires:

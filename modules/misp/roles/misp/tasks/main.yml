@@ -11,6 +11,9 @@
 - name: Create the data directories
   ansible.builtin.include_tasks: dirs.yml
 
+- name: Put the internal-CA certificate in place
+  ansible.builtin.include_tasks: tls.yml
+
 # The passwords reach only the env_files (0600). The application takes the database account, the
 # cache password, the administrator's first password and key, the encryption key and the GnuPG
 # passphrase from its environment; the database sets its accounts when its data directory is first
@@ -51,6 +54,12 @@
     compose_app_secret_env: "{{ misp_secret_env }}"
     compose_app_bind_roots: ["{{ misp_dir }}", "{{ misp_data_root }}"]
   no_log: true
+
+- name: Restart the application when its certificate changed (it reads it at start)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", restart, misp-core]
+  when: misp_start | bool and misp_tls_files is changed
+  changed_when: true
 
 - name: Wait for the application to answer (its first start builds the schema)
   ansible.builtin.command:

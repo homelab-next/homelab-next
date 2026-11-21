@@ -35,6 +35,12 @@ misp_gpg_passphrase_ref: secret:misp/gpg-passphrase
 # must exist (it is in the imported database, or created in the UI); the role sets the key from the
 # secret on every run (a key the application stores only as a hash), so a consumer's key is the
 # site's, never a value read back. Every key is distinct and none is the administrator's.
+# The server certificate and key (PEM) from the lab's internal CA, by reference; both or neither. They
+# are written to ssl/ (cert.pem, key.pem), where the application reads them. Empty: the image makes a
+# self-signed one on its first start, which is in no dump and is new after every rebuild, so a
+# consumer that pinned it breaks: set these for any site whose consumers verify TLS.
+misp_tls_cert_ref: ""
+misp_tls_key_ref: ""
 misp_consumers: []
 # the database engine's buffer pool (the one setting that decides whether a 40 million row attribute
 # table is read from memory) and the containers' memory limits; the sum stays below the footprint

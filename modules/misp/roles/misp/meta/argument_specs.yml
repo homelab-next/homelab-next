@@ -97,6 +97,15 @@ argument_specs:
         type: str
         description: 'secret: reference of the instance''s GnuPG key passphrase.'
         default: secret:misp/gpg-passphrase
+      misp_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM) from the lab CA; with tls_key_ref
+          or neither (empty: the image makes a self-signed one).'
+        default: ''
+      misp_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: ''
       misp_consumers:
         type: list
         description: 'The other accounts that read the platform through its API: mappings of email and
@@ -268,6 +277,15 @@ argument_specs:
         type: str
         description: 'secret: reference of the instance''s GnuPG key passphrase.'
         default: secret:misp/gpg-passphrase
+      misp_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM) from the lab CA; with tls_key_ref
+          or neither (empty: the image makes a self-signed one).'
+        default: ''
+      misp_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: ''
       misp_consumers:
         type: list
         description: 'The other accounts that read the platform through its API: mappings of email and
@@ -438,6 +456,15 @@ argument_specs:
         type: str
         description: 'secret: reference of the instance''s GnuPG key passphrase.'
         default: secret:misp/gpg-passphrase
+      misp_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM) from the lab CA; with tls_key_ref
+          or neither (empty: the image makes a self-signed one).'
+        default: ''
+      misp_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: ''
       misp_consumers:
         type: list
         description: 'The other accounts that read the platform through its API: mappings of email and
@@ -607,6 +634,15 @@ argument_specs:
         type: str
         description: 'secret: reference of the instance''s GnuPG key passphrase.'
         default: secret:misp/gpg-passphrase
+      misp_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM) from the lab CA; with tls_key_ref
+          or neither (empty: the image makes a self-signed one).'
+        default: ''
+      misp_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: ''
       misp_consumers:
         type: list
         description: 'The other accounts that read the platform through its API: mappings of email and
@@ -777,6 +813,15 @@ argument_specs:
         type: str
         description: 'secret: reference of the instance''s GnuPG key passphrase.'
         default: secret:misp/gpg-passphrase
+      misp_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM) from the lab CA; with tls_key_ref
+          or neither (empty: the image makes a self-signed one).'
+        default: ''
+      misp_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: ''
       misp_consumers:
         type: list
         description: 'The other accounts that read the platform through its API: mappings of email and
@@ -947,6 +992,15 @@ argument_specs:
         type: str
         description: 'secret: reference of the instance''s GnuPG key passphrase.'
         default: secret:misp/gpg-passphrase
+      misp_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM) from the lab CA; with tls_key_ref
+          or neither (empty: the image makes a self-signed one).'
+        default: ''
+      misp_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: ''
       misp_consumers:
         type: list
         description: 'The other accounts that read the platform through its API: mappings of email and
@@ -1117,6 +1171,15 @@ argument_specs:
         type: str
         description: 'secret: reference of the instance''s GnuPG key passphrase.'
         default: secret:misp/gpg-passphrase
+      misp_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM) from the lab CA; with tls_key_ref
+          or neither (empty: the image makes a self-signed one).'
+        default: ''
+      misp_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: ''
       misp_consumers:
         type: list
         description: 'The other accounts that read the platform through its API: mappings of email and
@@ -1294,6 +1357,15 @@ argument_specs:
         type: str
         description: 'secret: reference of the instance''s GnuPG key passphrase.'
         default: secret:misp/gpg-passphrase
+      misp_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM) from the lab CA; with tls_key_ref
+          or neither (empty: the image makes a self-signed one).'
+        default: ''
+      misp_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: ''
       misp_consumers:
         type: list
         description: 'The other accounts that read the platform through its API: mappings of email and

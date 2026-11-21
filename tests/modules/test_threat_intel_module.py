@@ -139,7 +139,7 @@ def test_the_manifest_names_the_secrets_and_internet_egress_and_no_public_route(
         ref(n)
         for n in (
             "admin-password", "admin-api-key", "mysql-password", "mysql-root-password",
-            "redis-password", "encryption-key", "gpg-passphrase",
+            "redis-password", "encryption-key", "gpg-passphrase", "tls-cert", "tls-key",
         )
     ]  # fmt: skip
     assert [c["holder"] for c in manifest["credentials"] if c["holder"] == "granted"] == ["granted"]
@@ -157,8 +157,11 @@ def test_the_manifest_names_the_secrets_and_internet_egress_and_no_public_route(
 def test_the_role_defaults_carry_the_modules_references():
     d = ld.load_yaml(MODULE / "roles" / MID / "defaults" / "main.yml")
     manifest = ld.load_yaml(MODULE / "module.yml")
-    refs = {v for k, v in d.items() if k.endswith("_ref")}
-    assert refs == {c["secret"] for c in manifest["credentials"]}
+    refs = {v for k, v in d.items() if k.endswith("_ref") and v}
+    assert refs <= {c["secret"] for c in manifest["credentials"]}
+    assert (
+        d[P + "tls_cert_ref"] == "" and d[P + "tls_key_ref"] == ""
+    )  # a site opts in, both or neither
     assert d[P + "consumers"] == []  # no account the site did not name
     # the site's own values have no default: the role's argument spec requires them
     assert P + "admin_email" not in d and P + "admin_org" not in d

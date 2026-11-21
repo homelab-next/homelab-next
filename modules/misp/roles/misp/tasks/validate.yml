@@ -38,6 +38,7 @@
       - misp_accounts | map(attribute='email') | unique | length == misp_accounts | length
       - misp_refs | reject('match', misp_ref_pattern) | list | length == 0
       - misp_refs | unique | length == misp_refs | length
+      - (misp_tls_cert_ref == '') == (misp_tls_key_ref == '')
       - misp_innodb_buffer_pool_size is match(misp_size_pattern)
       - >-
         [misp_db_mem_limit, misp_core_mem_limit, misp_modules_mem_limit, misp_redis_mem_limit]
@@ -60,5 +61,5 @@
       to publish on (not all interfaces), a port, absolute canonical directories, a timezone, an https
       base URL or empty, an administrator email and organisation, consumers that are mappings with
       email and key_ref only (distinct emails), distinct secret: references, a buffer pool like 10G,
-      memory limits like 512m, and counts that are whole numbers of the known names
+      memory limits like 512m, a TLS certificate and key both or neither, and counts that are whole numbers of the known names
   tags: [health, backup, restore, export, upgrade]

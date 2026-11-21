@@ -43,11 +43,13 @@ misp_container_export: /hnx-export
 # the consumers' accounts, administrator first
 misp_accounts: >-
   {{ [{'email': misp_admin_email, 'key_ref': misp_admin_key_ref}] + (misp_consumers | default([])) }}
+# the TLS pair, when the site gives one (both or neither)
+misp_tls_refs: "{{ [misp_tls_cert_ref, misp_tls_key_ref] | select | list }}"
 # every reference the role reads
 misp_refs: >-
   {{ [misp_admin_login_ref, misp_admin_key_ref, misp_db_login_ref, misp_db_root_login_ref,
       misp_cache_login_ref, misp_encryption_key_ref, misp_gpg_passphrase_ref]
-     + (misp_consumers | default([]) | map(attribute='key_ref') | list) }}
+     + (misp_consumers | default([]) | map(attribute='key_ref') | list) + misp_tls_refs }}
 # the background programs the application's supervisor must be running (autostart=false in the
 # image: nothing runs a job until something starts them, LL-386)
 misp_workers_program: "misp-workers:*"
@@ -58,17 +60,19 @@ misp_workers_program: "misp-workers:*"
 # (HNX_ACCEPT): with a JSON Accept the same address is an API answer and refuses an anonymous caller.
 misp_api_status_script: |
   set -eu
-  curl -ks --max-time 60 -o /dev/null -w '%{http_code}' -H "Authorization: ${HNX_KEY:-}" -H "Accept: ${HNX_ACCEPT:-application/json}" "https://localhost${HNX_PATH}"
+  { if [ -n "${HNX_KEY:-}" ]; then printf 'header = "Authorization: %s"\n' "$HNX_KEY"; fi; printf 'header = "Accept: %s"\n' "${HNX_ACCEPT:-application/json}"; } | curl -ks --max-time 60 -o /dev/null -w '%{http_code}' -K - "https://localhost${HNX_PATH}"
 misp_api_body_script: |
   set -eu
-  curl -ksf --max-time 60 -H "Authorization: ${HNX_KEY:-}" -H 'Accept: application/json' "https://localhost${HNX_PATH}"
+  { if [ -n "${HNX_KEY:-}" ]; then printf 'header = "Authorization: %s"\n' "$HNX_KEY"; fi; printf 'header = "Accept: application/json"\n'; } | curl -ksf --max-time 60 -K - "https://localhost${HNX_PATH}"
 misp_api_post_script: |
   set -eu
-  curl -ks --max-time 120 -X POST -o /dev/null -w '%{http_code}' -H "Authorization: ${HNX_KEY:-}" -H 'Accept: application/json' -H 'Content-Type: application/json' -d '{}' "https://localhost${HNX_PATH}"
-# set one account's API key from the environment (the account must exist)
+  { if [ -n "${HNX_KEY:-}" ]; then printf 'header = "Authorization: %s"\n' "$HNX_KEY"; fi; printf 'header = "Accept: application/json"\nheader = "Content-Type: application/json"\n'; } | curl -ks --max-time 120 -X POST -d '{}' -o /dev/null -w '%{http_code}' -K - "https://localhost${HNX_PATH}"
+# set one account's API key from the environment (the account must exist). The key is never an
+# argument: the console command takes its arguments from argv, so a wrapper builds them from the
+# environment inside the interpreter (a process's argv is readable by every user of the container)
 misp_set_key_script: |
   set -eu
-  /var/www/MISP/app/Console/cake user change_authkey "$HNX_EMAIL" "$HNX_KEY" >/dev/null
+  exec php -r '$a = ["cake.php", "-working", "/var/www/MISP/app", "user", "change_authkey", getenv("HNX_EMAIL"), getenv("HNX_KEY")]; $_SERVER["argv"] = $argv = $a; $_SERVER["argc"] = $argc = count($a); require "/var/www/MISP/app/Lib/cakephp/lib/Cake/Console/cake.php";' >/dev/null
 # the application's supervisor: its background workers. supervisorctl talks to the container's own
 # unix socket and reads the credentials the image's entrypoint sets for its own supervisor (the
 # image's fixed defaults, local to the container, never a secret of the lab's) from the environment

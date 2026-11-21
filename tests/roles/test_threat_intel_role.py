@@ -195,6 +195,7 @@ BAD = [
         {"consumers": [{**CONSUMERS[0], "email": "admin@example.internal"}]},
         "consumers that are mappings",
     ),
+    ({"tls_cert_ref": "secret:a/cert"}, "both or neither"),
     ({"innodb_buffer_pool_size": "lots"}, "buffer pool"),
     ({"db_mem_limit": "lots"}, "memory limits"),
     ({"expected_min_counts": {"events": -1}}, "counts that are whole numbers"),
@@ -960,3 +961,52 @@ def test_upgrade_refuses_an_unpinned_foreign_or_older_target(tmp_path, core, mod
     r = _upgrade(tmp_path, core, modules)
     assert r.returncode != 0 and "the targets must be" in r.stdout + r.stderr
     assert not (tmp_path / "app" / "pending-upgrade.json").exists()
+
+
+# ----------------------------------------------------------------------------- keys never on argv, TLS
+
+PEM_CERT = "-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----"
+PEM_KEY = "-----BEGIN PRIVATE KEY-----\nZmFrZQ==\n-----END PRIVATE KEY-----"
+TLS = {"tls_cert_ref": "secret:pki/intel-cert", "tls_key_ref": "secret:pki/intel-key"}
+TLS_ENV = {"HNX_SECRET_PKI_INTEL_CERT": PEM_CERT, "HNX_SECRET_PKI_INTEL_KEY": PEM_KEY}
+
+
+def test_no_script_the_role_runs_in_a_container_puts_a_key_in_an_argument():
+    # a process's argv is readable by every user of the container: keys go to curl's config on
+    # standard input and to the console through the environment of a wrapper
+    text = (ROLE_DIR / "vars" / "main.yml").read_text()
+    assert '-H "Authorization' not in text and "-H 'Authorization" not in text
+    assert 'change_authkey "$HNX_EMAIL" "$HNX_KEY"' not in text
+    for name in ("status", "body", "post"):
+        script = VARS[P + f"api_{name}_script"]
+        assert "-K -" in script and "Authorization: %s" in script and '"$HNX_KEY"' in script
+        assert script.count("$HNX_KEY") == 1 and "curl" in script
+    wrapper = VARS[P + "set_key_script"]
+    assert 'getenv("HNX_KEY")' in wrapper and "cake.php" in wrapper
+    assert "change_authkey" in wrapper and '$HNX_KEY"' not in wrapper.replace(
+        'getenv("HNX_KEY")', ""
+    )
+
+
+def test_a_tls_pair_is_written_to_ssl_and_a_change_restarts_the_application(tmp_path):
+    env = {**SECRETS, **TLS_ENV, **_fakes(tmp_path)}
+    v = _live(tmp_path, **TLS)
+    r = run_role(tmp_path, ROLE, "main", v, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    ssl_dir = tmp_path / "data" / "ssl"
+    assert (ssl_dir / "cert.pem").read_text() == PEM_CERT + "\n"
+    assert (ssl_dir / "key.pem").read_text() == PEM_KEY + "\n"
+    assert oct((ssl_dir / "key.pem").stat().st_mode & 0o777) == "0o600"
+    assert not [s for s in (PEM_KEY,) if s in "\n".join(_calls(tmp_path))]
+    again = run_role(tmp_path, ROLE, "main", v, env=env)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+def test_a_tls_value_that_is_not_pem_or_a_missing_one_is_refused_and_nothing_is_written(tmp_path):
+    bad = {**SECRETS, **TLS_ENV, "HNX_SECRET_PKI_INTEL_KEY": "not a key"}
+    r = run_role(tmp_path, ROLE, "main", dv(tmp_path, **TLS), env=bad)
+    assert r.returncode != 0 and "PEM" in r.stdout + r.stderr
+    assert not (tmp_path / "app").exists()
+    gone = {k: v for k, v in {**SECRETS, **TLS_ENV}.items() if k != "HNX_SECRET_PKI_INTEL_CERT"}
+    r = run_role(tmp_path, ROLE, "main", dv(tmp_path, **TLS), env=gone)
+    assert r.returncode != 0 and TLS["tls_cert_ref"] in r.stdout + r.stderr

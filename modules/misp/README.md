@@ -16,7 +16,7 @@ domain; those live in the private overlay.
 | Role | `misp` (role interface v1), a wrapper of the core `compose_app` |
 | Secrets | `secret:misp/{admin-password, admin-api-key, mysql-password, mysql-root-password, redis-password, encryption-key, gpg-passphrase}`; every consumer's key is a reference the site names (below) |
 | Egress | the internet: the feeds' own sites. **Every feed is untrusted input** |
-| Public route | **none** in the row. The platform serves HTTPS on its own port with a certificate it generates; a site that fronts it adds the route and the grant itself |
+| Public route | **none** in the row. The platform serves HTTPS on its own port with a certificate from the lab's internal CA (`misp_tls_cert_ref`, `misp_tls_key_ref`, the default for any site; the image's self-signed one is the fallback); a site that fronts it adds the route and the grant itself |
 
 The pins are the versions of the instance this module carries over, on purpose: a database dump
 loads into the engine and the schema version it was taken on, and the application never migrates
@@ -100,7 +100,9 @@ therefore **sets** keys from secrets and **asks the API** whether each is alread
 
 For each account the role calls `/users/view/me` with the key from **inside the application
 container against its own loopback**; only when that is not accepted does it run
-`cake user change_authkey`, with the address and key in the environment of that one command. A
+`cake user change_authkey`, with the address and key in the environment of that one command (a PHP wrapper builds the
+console's arguments from the environment, so the key is in no process's argv). Every API call
+reads the key from curl's config on standard input (`curl -K -`), never from its arguments. A
 second run is `changed=0`. Nothing about a key crosses the network and no certificate has to be
 trusted. Rotating a key is changing the secret and running again.
 
@@ -178,7 +180,7 @@ database that already holds events, attributes or objects.
 
 The old instance's Redis state (queued jobs, sessions: nothing to keep), its `audit_logs`, its
 GnuPG key ring (a new key is made from `misp-gpg-passphrase`) and its TLS certificate (the image
-makes its own). A user's sessions end; an API key does not, because auth keys are rows.
+makes a new self-signed one after every rebuild unless the internal-CA pair below is given). A user's sessions end; an API key does not, because auth keys are rows.
 
 ## Consumers to repoint
 
@@ -192,9 +194,13 @@ alone**:
 | The **Cortex ingest** that pushes MISP indicators to the graph store (the `misp-cortex-ingest` job) | its MISP base URL; its state (watermarks) is the job's, not the platform's, so a cold start walks the whole attribute table: **keep the job's keyset checkpointing** and run it only against the capped slice (LL-504: deep `OFFSET` paging of an unbounded attribute table pins the database for hours) |
 | The platform's other readers (the incident-response platform's MISP module, dashboards) | the same URL |
 
-The platform's certificate is the image's own; a consumer that verifies TLS needs that certificate
-(from `ssl/` in the data root) as its CA file, a consumer that cannot is pointed at the lab's edge
-proxy instead. Then stop the old instance (the decommission plan's retire step: a clean shutdown
+**TLS.** Give the platform a certificate from the lab's internal CA: `misp_tls_cert_ref` and
+`misp_tls_key_ref` (secrets `secret:misp/tls-cert`, `secret:misp/tls-key`, PEM) are written to
+`ssl/cert.pem` and `ssl/key.pem` and the application is restarted when they change, so consumers
+trust the CA and never a pinned self-signed certificate, which no dump carries and which is new
+after every rebuild. Without the pair the image makes its own on first start (consumers that
+verify TLS must then pin it from `ssl/`, or go through the lab's edge proxy, which terminates TLS
+itself). Then stop the old instance (the decommission plan's retire step: a clean shutdown
 and a seven-day soak, never a delete).
 
 ## Overlay needs
