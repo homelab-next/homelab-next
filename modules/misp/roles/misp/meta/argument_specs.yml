@@ -1,0 +1,1370 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the threat-intel platform as one compose_app project (application, modules,
+      database, cache) with secrets from references, the background workers started and every account's
+      API key set.
+    options:
+      misp_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cti).
+        required: true
+      misp_admin_email:
+        type: str
+        description: The administrator's email address (the first account; on an import the dump's own).
+        required: true
+      misp_admin_org:
+        type: str
+        description: The organisation the first account belongs to (on an import the dump's own).
+        required: true
+      misp_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. v2.5.44).
+        default: ghcr.io/misp/misp-docker/misp-core:v2.5.44@sha256:0eaa4e423d5cd965b7b76aa5665e81d5c05a35bc46a4ffec2ca52e0cfe627e86
+      misp_modules_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the modules service image (e.g. v3.0.9).
+        default: ghcr.io/misp/misp-docker/misp-modules:v3.0.9@sha256:99572d207973f804e153861bfa9d7b0da0c69c8687babc8e5534a360e1156613
+      misp_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the database image (MariaDB).
+        default: docker.io/library/mariadb:10.11.19@sha256:e5fe75b2b9de0eb9f6f9a4d9c97272fb3a7480e389ccd487a786bab2a12cc0d7
+      misp_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image (Valkey).
+        default: docker.io/valkey/valkey:7.2.14@sha256:ef0f9fb533b1f06fb7aba6478d758ca1c077d49e2bcb2b4365a4ea7f50b6d42e
+      misp_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      misp_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 443
+      misp_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/misp
+      misp_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      misp_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      misp_data_root:
+        type: path
+        description: 'The module''s data root on the host: mysql/, cache/, configs/, logs/, files/, gnupg/,
+          ssl/ and export/.'
+        default: /var/lib/hnx-modules/misp
+      misp_timezone:
+        type: str
+        description: The containers' timezone.
+        default: Etc/UTC
+      misp_base_url:
+        type: str
+        description: The name the people and agents use for the platform (an https URL); empty means the
+          guest's own address and port.
+        default: ''
+      misp_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:misp/admin-password
+      misp_admin_key_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API key (40 alphanumeric characters).'
+        default: secret:misp/admin-api-key
+      misp_db_login_ref:
+        type: str
+        description: 'secret: reference of the application''s database password.'
+        default: secret:misp/mysql-password
+      misp_db_root_login_ref:
+        type: str
+        description: 'secret: reference of the database root password.'
+        default: secret:misp/mysql-root-password
+      misp_cache_login_ref:
+        type: str
+        description: 'secret: reference of the cache password.'
+        default: secret:misp/redis-password
+      misp_encryption_key_ref:
+        type: str
+        description: 'secret: reference of the key stored credentials are encrypted with (the source''s
+          on a migration).'
+        default: secret:misp/encryption-key
+      misp_gpg_passphrase_ref:
+        type: str
+        description: 'secret: reference of the instance''s GnuPG key passphrase.'
+        default: secret:misp/gpg-passphrase
+      misp_consumers:
+        type: list
+        description: 'The other accounts that read the platform through its API: mappings of email and
+          key_ref (a secret: reference, 40 alphanumeric characters).'
+        default: []
+        elements: dict
+      misp_innodb_buffer_pool_size:
+        type: str
+        description: The database engine's buffer pool (a size like 10G).
+        default: 10G
+      misp_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 16g
+      misp_core_mem_limit:
+        type: str
+        description: The application container's memory limit.
+        default: 6g
+      misp_modules_mem_limit:
+        type: str
+        description: The modules container's memory limit.
+        default: 2g
+      misp_redis_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 1g
+      misp_expected_min_counts:
+        type: dict
+        description: Minimum row counts health and export hold the database to (events, attributes, objects,
+          galaxy_clusters, feeds, users); empty means not checked.
+        default: {}
+      misp_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      misp_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      misp_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      misp_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one builds
+          the schema).
+        default: 1800
+      misp_import_timeout:
+        type: int
+        description: Seconds an import may take (a large dump loads for hours).
+        default: 28800
+      misp_restore_dump:
+        type: str
+        description: The database dump on the guest (a zstd mysqldump, .sql.zst) the restore hook loads.
+        default: ''
+      misp_restore_sha256:
+        type: str
+        description: The sha256 of that dump; the hook refuses any other content before it writes anything.
+        default: ''
+      misp_restore_counts:
+        type: dict
+        description: The source's row counts the import must reproduce exactly (events, attributes, objects,
+          galaxy_clusters, feeds at least; users optional).
+        default: {}
+      misp_restore_files_tar:
+        type: str
+        description: 'Optional: the old instance''s files tarball on the guest; only the numeric event
+          directories are extracted.'
+        default: ''
+      misp_restore_files_sha256:
+        type: str
+        description: The sha256 of that tarball.
+        default: ''
+  health:
+    short_description: Fail unless every container is healthy, the port answers, an open API is refused,
+      every account's key is accepted at the pinned version, every worker runs and the database holds
+      the expected counts.
+    options:
+      misp_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cti).
+        required: true
+      misp_admin_email:
+        type: str
+        description: The administrator's email address (the first account; on an import the dump's own).
+        required: true
+      misp_admin_org:
+        type: str
+        description: The organisation the first account belongs to (on an import the dump's own).
+        required: true
+      misp_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. v2.5.44).
+        default: ghcr.io/misp/misp-docker/misp-core:v2.5.44@sha256:0eaa4e423d5cd965b7b76aa5665e81d5c05a35bc46a4ffec2ca52e0cfe627e86
+      misp_modules_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the modules service image (e.g. v3.0.9).
+        default: ghcr.io/misp/misp-docker/misp-modules:v3.0.9@sha256:99572d207973f804e153861bfa9d7b0da0c69c8687babc8e5534a360e1156613
+      misp_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the database image (MariaDB).
+        default: docker.io/library/mariadb:10.11.19@sha256:e5fe75b2b9de0eb9f6f9a4d9c97272fb3a7480e389ccd487a786bab2a12cc0d7
+      misp_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image (Valkey).
+        default: docker.io/valkey/valkey:7.2.14@sha256:ef0f9fb533b1f06fb7aba6478d758ca1c077d49e2bcb2b4365a4ea7f50b6d42e
+      misp_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      misp_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 443
+      misp_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/misp
+      misp_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      misp_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      misp_data_root:
+        type: path
+        description: 'The module''s data root on the host: mysql/, cache/, configs/, logs/, files/, gnupg/,
+          ssl/ and export/.'
+        default: /var/lib/hnx-modules/misp
+      misp_timezone:
+        type: str
+        description: The containers' timezone.
+        default: Etc/UTC
+      misp_base_url:
+        type: str
+        description: The name the people and agents use for the platform (an https URL); empty means the
+          guest's own address and port.
+        default: ''
+      misp_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:misp/admin-password
+      misp_admin_key_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API key (40 alphanumeric characters).'
+        default: secret:misp/admin-api-key
+      misp_db_login_ref:
+        type: str
+        description: 'secret: reference of the application''s database password.'
+        default: secret:misp/mysql-password
+      misp_db_root_login_ref:
+        type: str
+        description: 'secret: reference of the database root password.'
+        default: secret:misp/mysql-root-password
+      misp_cache_login_ref:
+        type: str
+        description: 'secret: reference of the cache password.'
+        default: secret:misp/redis-password
+      misp_encryption_key_ref:
+        type: str
+        description: 'secret: reference of the key stored credentials are encrypted with (the source''s
+          on a migration).'
+        default: secret:misp/encryption-key
+      misp_gpg_passphrase_ref:
+        type: str
+        description: 'secret: reference of the instance''s GnuPG key passphrase.'
+        default: secret:misp/gpg-passphrase
+      misp_consumers:
+        type: list
+        description: 'The other accounts that read the platform through its API: mappings of email and
+          key_ref (a secret: reference, 40 alphanumeric characters).'
+        default: []
+        elements: dict
+      misp_innodb_buffer_pool_size:
+        type: str
+        description: The database engine's buffer pool (a size like 10G).
+        default: 10G
+      misp_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 16g
+      misp_core_mem_limit:
+        type: str
+        description: The application container's memory limit.
+        default: 6g
+      misp_modules_mem_limit:
+        type: str
+        description: The modules container's memory limit.
+        default: 2g
+      misp_redis_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 1g
+      misp_expected_min_counts:
+        type: dict
+        description: Minimum row counts health and export hold the database to (events, attributes, objects,
+          galaxy_clusters, feeds, users); empty means not checked.
+        default: {}
+      misp_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      misp_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      misp_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      misp_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one builds
+          the schema).
+        default: 1800
+      misp_import_timeout:
+        type: int
+        description: Seconds an import may take (a large dump loads for hours).
+        default: 28800
+      misp_restore_dump:
+        type: str
+        description: The database dump on the guest (a zstd mysqldump, .sql.zst) the restore hook loads.
+        default: ''
+      misp_restore_sha256:
+        type: str
+        description: The sha256 of that dump; the hook refuses any other content before it writes anything.
+        default: ''
+      misp_restore_counts:
+        type: dict
+        description: The source's row counts the import must reproduce exactly (events, attributes, objects,
+          galaxy_clusters, feeds at least; users optional).
+        default: {}
+      misp_restore_files_tar:
+        type: str
+        description: 'Optional: the old instance''s files tarball on the guest; only the numeric event
+          directories are extracted.'
+        default: ''
+      misp_restore_files_sha256:
+        type: str
+        description: The sha256 of that tarball.
+        default: ''
+  readiness:
+    short_description: Fail unless the container engine, zstd and every credential in its form are in
+      place.
+    options:
+      misp_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cti).
+        required: true
+      misp_admin_email:
+        type: str
+        description: The administrator's email address (the first account; on an import the dump's own).
+        required: true
+      misp_admin_org:
+        type: str
+        description: The organisation the first account belongs to (on an import the dump's own).
+        required: true
+      misp_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. v2.5.44).
+        default: ghcr.io/misp/misp-docker/misp-core:v2.5.44@sha256:0eaa4e423d5cd965b7b76aa5665e81d5c05a35bc46a4ffec2ca52e0cfe627e86
+      misp_modules_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the modules service image (e.g. v3.0.9).
+        default: ghcr.io/misp/misp-docker/misp-modules:v3.0.9@sha256:99572d207973f804e153861bfa9d7b0da0c69c8687babc8e5534a360e1156613
+      misp_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the database image (MariaDB).
+        default: docker.io/library/mariadb:10.11.19@sha256:e5fe75b2b9de0eb9f6f9a4d9c97272fb3a7480e389ccd487a786bab2a12cc0d7
+      misp_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image (Valkey).
+        default: docker.io/valkey/valkey:7.2.14@sha256:ef0f9fb533b1f06fb7aba6478d758ca1c077d49e2bcb2b4365a4ea7f50b6d42e
+      misp_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      misp_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 443
+      misp_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/misp
+      misp_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      misp_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      misp_data_root:
+        type: path
+        description: 'The module''s data root on the host: mysql/, cache/, configs/, logs/, files/, gnupg/,
+          ssl/ and export/.'
+        default: /var/lib/hnx-modules/misp
+      misp_timezone:
+        type: str
+        description: The containers' timezone.
+        default: Etc/UTC
+      misp_base_url:
+        type: str
+        description: The name the people and agents use for the platform (an https URL); empty means the
+          guest's own address and port.
+        default: ''
+      misp_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:misp/admin-password
+      misp_admin_key_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API key (40 alphanumeric characters).'
+        default: secret:misp/admin-api-key
+      misp_db_login_ref:
+        type: str
+        description: 'secret: reference of the application''s database password.'
+        default: secret:misp/mysql-password
+      misp_db_root_login_ref:
+        type: str
+        description: 'secret: reference of the database root password.'
+        default: secret:misp/mysql-root-password
+      misp_cache_login_ref:
+        type: str
+        description: 'secret: reference of the cache password.'
+        default: secret:misp/redis-password
+      misp_encryption_key_ref:
+        type: str
+        description: 'secret: reference of the key stored credentials are encrypted with (the source''s
+          on a migration).'
+        default: secret:misp/encryption-key
+      misp_gpg_passphrase_ref:
+        type: str
+        description: 'secret: reference of the instance''s GnuPG key passphrase.'
+        default: secret:misp/gpg-passphrase
+      misp_consumers:
+        type: list
+        description: 'The other accounts that read the platform through its API: mappings of email and
+          key_ref (a secret: reference, 40 alphanumeric characters).'
+        default: []
+        elements: dict
+      misp_innodb_buffer_pool_size:
+        type: str
+        description: The database engine's buffer pool (a size like 10G).
+        default: 10G
+      misp_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 16g
+      misp_core_mem_limit:
+        type: str
+        description: The application container's memory limit.
+        default: 6g
+      misp_modules_mem_limit:
+        type: str
+        description: The modules container's memory limit.
+        default: 2g
+      misp_redis_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 1g
+      misp_expected_min_counts:
+        type: dict
+        description: Minimum row counts health and export hold the database to (events, attributes, objects,
+          galaxy_clusters, feeds, users); empty means not checked.
+        default: {}
+      misp_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      misp_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      misp_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      misp_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one builds
+          the schema).
+        default: 1800
+      misp_import_timeout:
+        type: int
+        description: Seconds an import may take (a large dump loads for hours).
+        default: 28800
+      misp_restore_dump:
+        type: str
+        description: The database dump on the guest (a zstd mysqldump, .sql.zst) the restore hook loads.
+        default: ''
+      misp_restore_sha256:
+        type: str
+        description: The sha256 of that dump; the hook refuses any other content before it writes anything.
+        default: ''
+      misp_restore_counts:
+        type: dict
+        description: The source's row counts the import must reproduce exactly (events, attributes, objects,
+          galaxy_clusters, feeds at least; users optional).
+        default: {}
+      misp_restore_files_tar:
+        type: str
+        description: 'Optional: the old instance''s files tarball on the guest; only the numeric event
+          directories are extracted.'
+        default: ''
+      misp_restore_files_sha256:
+        type: str
+        description: The sha256 of that tarball.
+        default: ''
+  backup:
+    short_description: Write the backup manifest of the data root.
+    options:
+      misp_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cti).
+        required: true
+      misp_admin_email:
+        type: str
+        description: The administrator's email address (the first account; on an import the dump's own).
+        required: true
+      misp_admin_org:
+        type: str
+        description: The organisation the first account belongs to (on an import the dump's own).
+        required: true
+      misp_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. v2.5.44).
+        default: ghcr.io/misp/misp-docker/misp-core:v2.5.44@sha256:0eaa4e423d5cd965b7b76aa5665e81d5c05a35bc46a4ffec2ca52e0cfe627e86
+      misp_modules_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the modules service image (e.g. v3.0.9).
+        default: ghcr.io/misp/misp-docker/misp-modules:v3.0.9@sha256:99572d207973f804e153861bfa9d7b0da0c69c8687babc8e5534a360e1156613
+      misp_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the database image (MariaDB).
+        default: docker.io/library/mariadb:10.11.19@sha256:e5fe75b2b9de0eb9f6f9a4d9c97272fb3a7480e389ccd487a786bab2a12cc0d7
+      misp_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image (Valkey).
+        default: docker.io/valkey/valkey:7.2.14@sha256:ef0f9fb533b1f06fb7aba6478d758ca1c077d49e2bcb2b4365a4ea7f50b6d42e
+      misp_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      misp_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 443
+      misp_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/misp
+      misp_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      misp_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      misp_data_root:
+        type: path
+        description: 'The module''s data root on the host: mysql/, cache/, configs/, logs/, files/, gnupg/,
+          ssl/ and export/.'
+        default: /var/lib/hnx-modules/misp
+      misp_timezone:
+        type: str
+        description: The containers' timezone.
+        default: Etc/UTC
+      misp_base_url:
+        type: str
+        description: The name the people and agents use for the platform (an https URL); empty means the
+          guest's own address and port.
+        default: ''
+      misp_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:misp/admin-password
+      misp_admin_key_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API key (40 alphanumeric characters).'
+        default: secret:misp/admin-api-key
+      misp_db_login_ref:
+        type: str
+        description: 'secret: reference of the application''s database password.'
+        default: secret:misp/mysql-password
+      misp_db_root_login_ref:
+        type: str
+        description: 'secret: reference of the database root password.'
+        default: secret:misp/mysql-root-password
+      misp_cache_login_ref:
+        type: str
+        description: 'secret: reference of the cache password.'
+        default: secret:misp/redis-password
+      misp_encryption_key_ref:
+        type: str
+        description: 'secret: reference of the key stored credentials are encrypted with (the source''s
+          on a migration).'
+        default: secret:misp/encryption-key
+      misp_gpg_passphrase_ref:
+        type: str
+        description: 'secret: reference of the instance''s GnuPG key passphrase.'
+        default: secret:misp/gpg-passphrase
+      misp_consumers:
+        type: list
+        description: 'The other accounts that read the platform through its API: mappings of email and
+          key_ref (a secret: reference, 40 alphanumeric characters).'
+        default: []
+        elements: dict
+      misp_innodb_buffer_pool_size:
+        type: str
+        description: The database engine's buffer pool (a size like 10G).
+        default: 10G
+      misp_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 16g
+      misp_core_mem_limit:
+        type: str
+        description: The application container's memory limit.
+        default: 6g
+      misp_modules_mem_limit:
+        type: str
+        description: The modules container's memory limit.
+        default: 2g
+      misp_redis_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 1g
+      misp_expected_min_counts:
+        type: dict
+        description: Minimum row counts health and export hold the database to (events, attributes, objects,
+          galaxy_clusters, feeds, users); empty means not checked.
+        default: {}
+      misp_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      misp_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      misp_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      misp_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one builds
+          the schema).
+        default: 1800
+      misp_import_timeout:
+        type: int
+        description: Seconds an import may take (a large dump loads for hours).
+        default: 28800
+      misp_restore_dump:
+        type: str
+        description: The database dump on the guest (a zstd mysqldump, .sql.zst) the restore hook loads.
+        default: ''
+      misp_restore_sha256:
+        type: str
+        description: The sha256 of that dump; the hook refuses any other content before it writes anything.
+        default: ''
+      misp_restore_counts:
+        type: dict
+        description: The source's row counts the import must reproduce exactly (events, attributes, objects,
+          galaxy_clusters, feeds at least; users optional).
+        default: {}
+      misp_restore_files_tar:
+        type: str
+        description: 'Optional: the old instance''s files tarball on the guest; only the numeric event
+          directories are extracted.'
+        default: ''
+      misp_restore_files_sha256:
+        type: str
+        description: The sha256 of that tarball.
+        default: ''
+  restore:
+    short_description: Import a pinned database dump into a fresh platform and prove the counts equal
+      the source's.
+    options:
+      misp_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cti).
+        required: true
+      misp_admin_email:
+        type: str
+        description: The administrator's email address (the first account; on an import the dump's own).
+        required: true
+      misp_admin_org:
+        type: str
+        description: The organisation the first account belongs to (on an import the dump's own).
+        required: true
+      misp_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. v2.5.44).
+        default: ghcr.io/misp/misp-docker/misp-core:v2.5.44@sha256:0eaa4e423d5cd965b7b76aa5665e81d5c05a35bc46a4ffec2ca52e0cfe627e86
+      misp_modules_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the modules service image (e.g. v3.0.9).
+        default: ghcr.io/misp/misp-docker/misp-modules:v3.0.9@sha256:99572d207973f804e153861bfa9d7b0da0c69c8687babc8e5534a360e1156613
+      misp_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the database image (MariaDB).
+        default: docker.io/library/mariadb:10.11.19@sha256:e5fe75b2b9de0eb9f6f9a4d9c97272fb3a7480e389ccd487a786bab2a12cc0d7
+      misp_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image (Valkey).
+        default: docker.io/valkey/valkey:7.2.14@sha256:ef0f9fb533b1f06fb7aba6478d758ca1c077d49e2bcb2b4365a4ea7f50b6d42e
+      misp_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      misp_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 443
+      misp_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/misp
+      misp_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      misp_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      misp_data_root:
+        type: path
+        description: 'The module''s data root on the host: mysql/, cache/, configs/, logs/, files/, gnupg/,
+          ssl/ and export/.'
+        default: /var/lib/hnx-modules/misp
+      misp_timezone:
+        type: str
+        description: The containers' timezone.
+        default: Etc/UTC
+      misp_base_url:
+        type: str
+        description: The name the people and agents use for the platform (an https URL); empty means the
+          guest's own address and port.
+        default: ''
+      misp_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:misp/admin-password
+      misp_admin_key_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API key (40 alphanumeric characters).'
+        default: secret:misp/admin-api-key
+      misp_db_login_ref:
+        type: str
+        description: 'secret: reference of the application''s database password.'
+        default: secret:misp/mysql-password
+      misp_db_root_login_ref:
+        type: str
+        description: 'secret: reference of the database root password.'
+        default: secret:misp/mysql-root-password
+      misp_cache_login_ref:
+        type: str
+        description: 'secret: reference of the cache password.'
+        default: secret:misp/redis-password
+      misp_encryption_key_ref:
+        type: str
+        description: 'secret: reference of the key stored credentials are encrypted with (the source''s
+          on a migration).'
+        default: secret:misp/encryption-key
+      misp_gpg_passphrase_ref:
+        type: str
+        description: 'secret: reference of the instance''s GnuPG key passphrase.'
+        default: secret:misp/gpg-passphrase
+      misp_consumers:
+        type: list
+        description: 'The other accounts that read the platform through its API: mappings of email and
+          key_ref (a secret: reference, 40 alphanumeric characters).'
+        default: []
+        elements: dict
+      misp_innodb_buffer_pool_size:
+        type: str
+        description: The database engine's buffer pool (a size like 10G).
+        default: 10G
+      misp_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 16g
+      misp_core_mem_limit:
+        type: str
+        description: The application container's memory limit.
+        default: 6g
+      misp_modules_mem_limit:
+        type: str
+        description: The modules container's memory limit.
+        default: 2g
+      misp_redis_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 1g
+      misp_expected_min_counts:
+        type: dict
+        description: Minimum row counts health and export hold the database to (events, attributes, objects,
+          galaxy_clusters, feeds, users); empty means not checked.
+        default: {}
+      misp_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      misp_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      misp_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      misp_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one builds
+          the schema).
+        default: 1800
+      misp_import_timeout:
+        type: int
+        description: Seconds an import may take (a large dump loads for hours).
+        default: 28800
+      misp_restore_dump:
+        type: str
+        description: The database dump on the guest (a zstd mysqldump, .sql.zst) the restore hook loads.
+        default: ''
+      misp_restore_sha256:
+        type: str
+        description: The sha256 of that dump; the hook refuses any other content before it writes anything.
+        default: ''
+      misp_restore_counts:
+        type: dict
+        description: The source's row counts the import must reproduce exactly (events, attributes, objects,
+          galaxy_clusters, feeds at least; users optional).
+        default: {}
+      misp_restore_files_tar:
+        type: str
+        description: 'Optional: the old instance''s files tarball on the guest; only the numeric event
+          directories are extracted.'
+        default: ''
+      misp_restore_files_sha256:
+        type: str
+        description: The sha256 of that tarball.
+        default: ''
+  export:
+    short_description: Write the exit copy (object-tree) of the database to <data root>/export/latest
+      with a manifest and a sha256 listing.
+    options:
+      misp_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cti).
+        required: true
+      misp_admin_email:
+        type: str
+        description: The administrator's email address (the first account; on an import the dump's own).
+        required: true
+      misp_admin_org:
+        type: str
+        description: The organisation the first account belongs to (on an import the dump's own).
+        required: true
+      misp_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. v2.5.44).
+        default: ghcr.io/misp/misp-docker/misp-core:v2.5.44@sha256:0eaa4e423d5cd965b7b76aa5665e81d5c05a35bc46a4ffec2ca52e0cfe627e86
+      misp_modules_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the modules service image (e.g. v3.0.9).
+        default: ghcr.io/misp/misp-docker/misp-modules:v3.0.9@sha256:99572d207973f804e153861bfa9d7b0da0c69c8687babc8e5534a360e1156613
+      misp_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the database image (MariaDB).
+        default: docker.io/library/mariadb:10.11.19@sha256:e5fe75b2b9de0eb9f6f9a4d9c97272fb3a7480e389ccd487a786bab2a12cc0d7
+      misp_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image (Valkey).
+        default: docker.io/valkey/valkey:7.2.14@sha256:ef0f9fb533b1f06fb7aba6478d758ca1c077d49e2bcb2b4365a4ea7f50b6d42e
+      misp_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      misp_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 443
+      misp_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/misp
+      misp_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      misp_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      misp_data_root:
+        type: path
+        description: 'The module''s data root on the host: mysql/, cache/, configs/, logs/, files/, gnupg/,
+          ssl/ and export/.'
+        default: /var/lib/hnx-modules/misp
+      misp_timezone:
+        type: str
+        description: The containers' timezone.
+        default: Etc/UTC
+      misp_base_url:
+        type: str
+        description: The name the people and agents use for the platform (an https URL); empty means the
+          guest's own address and port.
+        default: ''
+      misp_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:misp/admin-password
+      misp_admin_key_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API key (40 alphanumeric characters).'
+        default: secret:misp/admin-api-key
+      misp_db_login_ref:
+        type: str
+        description: 'secret: reference of the application''s database password.'
+        default: secret:misp/mysql-password
+      misp_db_root_login_ref:
+        type: str
+        description: 'secret: reference of the database root password.'
+        default: secret:misp/mysql-root-password
+      misp_cache_login_ref:
+        type: str
+        description: 'secret: reference of the cache password.'
+        default: secret:misp/redis-password
+      misp_encryption_key_ref:
+        type: str
+        description: 'secret: reference of the key stored credentials are encrypted with (the source''s
+          on a migration).'
+        default: secret:misp/encryption-key
+      misp_gpg_passphrase_ref:
+        type: str
+        description: 'secret: reference of the instance''s GnuPG key passphrase.'
+        default: secret:misp/gpg-passphrase
+      misp_consumers:
+        type: list
+        description: 'The other accounts that read the platform through its API: mappings of email and
+          key_ref (a secret: reference, 40 alphanumeric characters).'
+        default: []
+        elements: dict
+      misp_innodb_buffer_pool_size:
+        type: str
+        description: The database engine's buffer pool (a size like 10G).
+        default: 10G
+      misp_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 16g
+      misp_core_mem_limit:
+        type: str
+        description: The application container's memory limit.
+        default: 6g
+      misp_modules_mem_limit:
+        type: str
+        description: The modules container's memory limit.
+        default: 2g
+      misp_redis_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 1g
+      misp_expected_min_counts:
+        type: dict
+        description: Minimum row counts health and export hold the database to (events, attributes, objects,
+          galaxy_clusters, feeds, users); empty means not checked.
+        default: {}
+      misp_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      misp_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      misp_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      misp_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one builds
+          the schema).
+        default: 1800
+      misp_import_timeout:
+        type: int
+        description: Seconds an import may take (a large dump loads for hours).
+        default: 28800
+      misp_restore_dump:
+        type: str
+        description: The database dump on the guest (a zstd mysqldump, .sql.zst) the restore hook loads.
+        default: ''
+      misp_restore_sha256:
+        type: str
+        description: The sha256 of that dump; the hook refuses any other content before it writes anything.
+        default: ''
+      misp_restore_counts:
+        type: dict
+        description: The source's row counts the import must reproduce exactly (events, attributes, objects,
+          galaxy_clusters, feeds at least; users optional).
+        default: {}
+      misp_restore_files_tar:
+        type: str
+        description: 'Optional: the old instance''s files tarball on the guest; only the numeric event
+          directories are extracted.'
+        default: ''
+      misp_restore_files_sha256:
+        type: str
+        description: The sha256 of that tarball.
+        default: ''
+  upgrade:
+    short_description: Validate a bump of the application and modules images (tag and digest; the same
+      or a newer version) and record it as pending.
+    options:
+      misp_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cti).
+        required: true
+      misp_admin_email:
+        type: str
+        description: The administrator's email address (the first account; on an import the dump's own).
+        required: true
+      misp_admin_org:
+        type: str
+        description: The organisation the first account belongs to (on an import the dump's own).
+        required: true
+      misp_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. v2.5.44).
+        default: ghcr.io/misp/misp-docker/misp-core:v2.5.44@sha256:0eaa4e423d5cd965b7b76aa5665e81d5c05a35bc46a4ffec2ca52e0cfe627e86
+      misp_modules_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the modules service image (e.g. v3.0.9).
+        default: ghcr.io/misp/misp-docker/misp-modules:v3.0.9@sha256:99572d207973f804e153861bfa9d7b0da0c69c8687babc8e5534a360e1156613
+      misp_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the database image (MariaDB).
+        default: docker.io/library/mariadb:10.11.19@sha256:e5fe75b2b9de0eb9f6f9a4d9c97272fb3a7480e389ccd487a786bab2a12cc0d7
+      misp_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image (Valkey).
+        default: docker.io/valkey/valkey:7.2.14@sha256:ef0f9fb533b1f06fb7aba6478d758ca1c077d49e2bcb2b4365a4ea7f50b6d42e
+      misp_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      misp_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 443
+      misp_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/misp
+      misp_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      misp_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      misp_data_root:
+        type: path
+        description: 'The module''s data root on the host: mysql/, cache/, configs/, logs/, files/, gnupg/,
+          ssl/ and export/.'
+        default: /var/lib/hnx-modules/misp
+      misp_timezone:
+        type: str
+        description: The containers' timezone.
+        default: Etc/UTC
+      misp_base_url:
+        type: str
+        description: The name the people and agents use for the platform (an https URL); empty means the
+          guest's own address and port.
+        default: ''
+      misp_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:misp/admin-password
+      misp_admin_key_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API key (40 alphanumeric characters).'
+        default: secret:misp/admin-api-key
+      misp_db_login_ref:
+        type: str
+        description: 'secret: reference of the application''s database password.'
+        default: secret:misp/mysql-password
+      misp_db_root_login_ref:
+        type: str
+        description: 'secret: reference of the database root password.'
+        default: secret:misp/mysql-root-password
+      misp_cache_login_ref:
+        type: str
+        description: 'secret: reference of the cache password.'
+        default: secret:misp/redis-password
+      misp_encryption_key_ref:
+        type: str
+        description: 'secret: reference of the key stored credentials are encrypted with (the source''s
+          on a migration).'
+        default: secret:misp/encryption-key
+      misp_gpg_passphrase_ref:
+        type: str
+        description: 'secret: reference of the instance''s GnuPG key passphrase.'
+        default: secret:misp/gpg-passphrase
+      misp_consumers:
+        type: list
+        description: 'The other accounts that read the platform through its API: mappings of email and
+          key_ref (a secret: reference, 40 alphanumeric characters).'
+        default: []
+        elements: dict
+      misp_innodb_buffer_pool_size:
+        type: str
+        description: The database engine's buffer pool (a size like 10G).
+        default: 10G
+      misp_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 16g
+      misp_core_mem_limit:
+        type: str
+        description: The application container's memory limit.
+        default: 6g
+      misp_modules_mem_limit:
+        type: str
+        description: The modules container's memory limit.
+        default: 2g
+      misp_redis_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 1g
+      misp_expected_min_counts:
+        type: dict
+        description: Minimum row counts health and export hold the database to (events, attributes, objects,
+          galaxy_clusters, feeds, users); empty means not checked.
+        default: {}
+      misp_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      misp_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      misp_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      misp_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one builds
+          the schema).
+        default: 1800
+      misp_import_timeout:
+        type: int
+        description: Seconds an import may take (a large dump loads for hours).
+        default: 28800
+      misp_restore_dump:
+        type: str
+        description: The database dump on the guest (a zstd mysqldump, .sql.zst) the restore hook loads.
+        default: ''
+      misp_restore_sha256:
+        type: str
+        description: The sha256 of that dump; the hook refuses any other content before it writes anything.
+        default: ''
+      misp_restore_counts:
+        type: dict
+        description: The source's row counts the import must reproduce exactly (events, attributes, objects,
+          galaxy_clusters, feeds at least; users optional).
+        default: {}
+      misp_restore_files_tar:
+        type: str
+        description: 'Optional: the old instance''s files tarball on the guest; only the numeric event
+          directories are extracted.'
+        default: ''
+      misp_restore_files_sha256:
+        type: str
+        description: The sha256 of that tarball.
+        default: ''
+      misp_target_core_image:
+        type: str
+        description: The application image to bump to (repository:tag@sha256:<digest>).
+        required: true
+      misp_target_modules_image:
+        type: str
+        description: The modules image to bump to (repository:tag@sha256:<digest>).
+        required: true
+  feeds_resync:
+    short_description: Queue a fetch and a cache of every enabled feed through the application's API.
+    options:
+      misp_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. cti).
+        required: true
+      misp_admin_email:
+        type: str
+        description: The administrator's email address (the first account; on an import the dump's own).
+        required: true
+      misp_admin_org:
+        type: str
+        description: The organisation the first account belongs to (on an import the dump's own).
+        required: true
+      misp_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the application image (the tag is its version,
+          e.g. v2.5.44).
+        default: ghcr.io/misp/misp-docker/misp-core:v2.5.44@sha256:0eaa4e423d5cd965b7b76aa5665e81d5c05a35bc46a4ffec2ca52e0cfe627e86
+      misp_modules_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the modules service image (e.g. v3.0.9).
+        default: ghcr.io/misp/misp-docker/misp-modules:v3.0.9@sha256:99572d207973f804e153861bfa9d7b0da0c69c8687babc8e5534a360e1156613
+      misp_db_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the database image (MariaDB).
+        default: docker.io/library/mariadb:10.11.19@sha256:e5fe75b2b9de0eb9f6f9a4d9c97272fb3a7480e389ccd487a786bab2a12cc0d7
+      misp_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image (Valkey).
+        default: docker.io/valkey/valkey:7.2.14@sha256:ef0f9fb533b1f06fb7aba6478d758ca1c077d49e2bcb2b4365a4ea7f50b6d42e
+      misp_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      misp_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 443
+      misp_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/misp
+      misp_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      misp_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      misp_data_root:
+        type: path
+        description: 'The module''s data root on the host: mysql/, cache/, configs/, logs/, files/, gnupg/,
+          ssl/ and export/.'
+        default: /var/lib/hnx-modules/misp
+      misp_timezone:
+        type: str
+        description: The containers' timezone.
+        default: Etc/UTC
+      misp_base_url:
+        type: str
+        description: The name the people and agents use for the platform (an https URL); empty means the
+          guest's own address and port.
+        default: ''
+      misp_admin_login_ref:
+        type: str
+        description: 'secret: reference of the administrator''s web password.'
+        default: secret:misp/admin-password
+      misp_admin_key_ref:
+        type: str
+        description: 'secret: reference of the administrator''s API key (40 alphanumeric characters).'
+        default: secret:misp/admin-api-key
+      misp_db_login_ref:
+        type: str
+        description: 'secret: reference of the application''s database password.'
+        default: secret:misp/mysql-password
+      misp_db_root_login_ref:
+        type: str
+        description: 'secret: reference of the database root password.'
+        default: secret:misp/mysql-root-password
+      misp_cache_login_ref:
+        type: str
+        description: 'secret: reference of the cache password.'
+        default: secret:misp/redis-password
+      misp_encryption_key_ref:
+        type: str
+        description: 'secret: reference of the key stored credentials are encrypted with (the source''s
+          on a migration).'
+        default: secret:misp/encryption-key
+      misp_gpg_passphrase_ref:
+        type: str
+        description: 'secret: reference of the instance''s GnuPG key passphrase.'
+        default: secret:misp/gpg-passphrase
+      misp_consumers:
+        type: list
+        description: 'The other accounts that read the platform through its API: mappings of email and
+          key_ref (a secret: reference, 40 alphanumeric characters).'
+        default: []
+        elements: dict
+      misp_innodb_buffer_pool_size:
+        type: str
+        description: The database engine's buffer pool (a size like 10G).
+        default: 10G
+      misp_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 16g
+      misp_core_mem_limit:
+        type: str
+        description: The application container's memory limit.
+        default: 6g
+      misp_modules_mem_limit:
+        type: str
+        description: The modules container's memory limit.
+        default: 2g
+      misp_redis_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 1g
+      misp_expected_min_counts:
+        type: dict
+        description: Minimum row counts health and export hold the database to (events, attributes, objects,
+          galaxy_clusters, feeds, users); empty means not checked.
+        default: {}
+      misp_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      misp_validate_with_docker:
+        type: bool
+        description: Have compose validate the rendered project.
+        default: true
+      misp_health_timeout:
+        type: int
+        description: Seconds each health request may take.
+        default: 15
+      misp_ready_timeout:
+        type: int
+        description: Seconds main waits for the application to answer after a start (the first one builds
+          the schema).
+        default: 1800
+      misp_import_timeout:
+        type: int
+        description: Seconds an import may take (a large dump loads for hours).
+        default: 28800
+      misp_restore_dump:
+        type: str
+        description: The database dump on the guest (a zstd mysqldump, .sql.zst) the restore hook loads.
+        default: ''
+      misp_restore_sha256:
+        type: str
+        description: The sha256 of that dump; the hook refuses any other content before it writes anything.
+        default: ''
+      misp_restore_counts:
+        type: dict
+        description: The source's row counts the import must reproduce exactly (events, attributes, objects,
+          galaxy_clusters, feeds at least; users optional).
+        default: {}
+      misp_restore_files_tar:
+        type: str
+        description: 'Optional: the old instance''s files tarball on the guest; only the numeric event
+          directories are extracted.'
+        default: ''
+      misp_restore_files_sha256:
+        type: str
+        description: The sha256 of that tarball.
+        default: ''
