@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the five containers run and are healthy; the database answers (pg_isready in its
+# container); the API, over HTTPS verified against the lab CA for the service's name, REFUSES a
+# caller with no key (401 or 403), answers its ping with the key and reports the version the role
+# pins (so a container still on an older image, or a key the product does not know, is caught).
+# Read-only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: dfir-iris
+        compose_app_dir: "{{ dfir_iris_app.compose_app_dir }}"
+        compose_app_spec: "{{ dfir_iris_app.compose_app_spec }}"
+    - name: The database answers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ dfir_iris_dir }}/docker-compose.yml", exec, -T, db,
+               pg_isready, -U, "{{ dfir_iris_db_user }}", -d, "{{ dfir_iris_db_name }}"]
+      changed_when: false
+      check_mode: false
+
+    - name: Ask the API with no key
+      ansible.builtin.include_tasks: probe.yml
+      vars:
+        dfir_iris_probe_path: /api/ping
+        dfir_iris_probe_keyed: false
+    - name: The API refuses a caller with no key
+      ansible.builtin.assert:
+        that: dfir_iris_probe_code in ['401', '403']
+        fail_msg: >-
+          case-management: the API answered a call with no key with status {{ dfir_iris_probe_code }}
+          (curl exit {{ dfir_iris_probe_curl_rc }}); it must refuse it with 401 or 403 and the
+          certificate must verify against {{ dfir_iris_ca_ref }} for {{ dfir_iris_hostname }}
+
+    - name: Ask the API for its ping with the key
+      ansible.builtin.include_tasks: probe.yml
+      vars:
+        dfir_iris_probe_path: /api/ping
+        dfir_iris_probe_keyed: true
+    - name: The API answers its ping with the key
+      ansible.builtin.assert:
+        that:
+          - dfir_iris_probe_code == '200'
+          - dfir_iris_probe_body is search('pong')
+        fail_msg: >-
+          case-management: the API's ping with the key answered status {{ dfir_iris_probe_code }}
+          (curl exit {{ dfir_iris_probe_curl_rc }}); the key ({{ dfir_iris_access_ref }}) must be the
+          first administrator's
+
+    - name: Ask the API for its version
+      ansible.builtin.include_tasks: probe.yml
+      vars:
+        dfir_iris_probe_path: /api/versions
+        dfir_iris_probe_keyed: true
+    - name: The API reports the pinned version
+      ansible.builtin.assert:
+        that:
+          - dfir_iris_probe_code == '200'
+          - (dfir_iris_probe_body | from_json).data.iris_current == dfir_iris_app_tag
+        fail_msg: >-
+          case-management: /api/versions answered status {{ dfir_iris_probe_code }}; it must report
+          {{ dfir_iris_app_tag }}
+  tags: [health]

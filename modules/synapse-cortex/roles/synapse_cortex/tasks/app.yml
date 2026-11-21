@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). No environment
+# holds a secret: the root password and the accounts are set by the role through the service's own
+# API, with the values in the environment of that one command. The container runs as the image's
+# unprivileged account (synuser) with every capability dropped and no-new-privileges. The service's
+# backups are written (by the service itself) under /hnx-export/backups.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    synapse_cortex_app:
+      compose_app_name: synapse-cortex
+      compose_app_dir: "{{ synapse_cortex_dir }}"
+      compose_app_data_dir: "{{ synapse_cortex_data_root }}"
+      compose_app_export_dir: "{{ synapse_cortex_data_root }}/export"
+      compose_app_owner: "{{ synapse_cortex_owner }}"
+      compose_app_group: "{{ synapse_cortex_group }}"
+      compose_app_start: "{{ synapse_cortex_start }}"
+      compose_app_validate_with_docker: "{{ synapse_cortex_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          app:
+            image: "{{ synapse_cortex_repository }}"
+            tag: "{{ synapse_cortex_tag }}"
+            digest: "{{ synapse_cortex_digest }}"
+            user: "{{ synapse_cortex_uid | int }}:{{ synapse_cortex_gid | int }}"
+            environment: "{{ synapse_cortex_env }}"
+            ports: "{{ synapse_cortex_ports }}"
+            volumes:
+              - "{{ synapse_cortex_data_root }}/storage:{{ synapse_cortex_container_storage }}"
+              - "{{ synapse_cortex_data_root }}/export:{{ synapse_cortex_container_export }}"
+            mem_limit: "{{ synapse_cortex_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, "python -m synapse.tools.service.healthcheck -c cell://{{ synapse_cortex_container_storage }}/"]
+              interval: 30s
+              timeout: 20s
+              retries: 5
+              start_period: 300s
+  vars:
+    synapse_cortex_env: >-
+      {{ {'SYN_CORTEX_HTTPS': (synapse_cortex_https_port | int) | string,
+          'SYN_CORTEX_BACKUP_DIR': synapse_cortex_container_export ~ '/backups'}
+         | combine({'SYN_CORTEX_DMON_LISTEN': 'ssl://0.0.0.0:' ~ synapse_cortex_container_telepath_port ~ '?hostname=' ~ synapse_cortex_telepath_hostname}
+                   if (synapse_cortex_telepath_port | int) > 0 else {}) }}
+    synapse_cortex_ports: >-
+      {{ [synapse_cortex_bind ~ ':' ~ (synapse_cortex_https_port | int) ~ ':' ~ (synapse_cortex_https_port | int)]
+         + ([synapse_cortex_bind ~ ':' ~ (synapse_cortex_telepath_port | int) ~ ':' ~ synapse_cortex_container_telepath_port]
+            if (synapse_cortex_telepath_port | int) > 0 else []) }}
+  tags: [health, backup, restore, export, upgrade]

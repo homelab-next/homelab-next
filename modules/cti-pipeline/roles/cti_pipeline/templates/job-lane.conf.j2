@@ -10,6 +10,9 @@ User={{ cti_pipeline_lane_user[item.lane] }}
 ReadWritePaths={{ cti_pipeline_data_root }}/{{ item.lane }}
 {% if cti_pipeline_handoff_enabled %}
 # the lane's handoff directory: where the staged items are carried for the publishing module's group
+# the lane user chgrp's what it hands off to its OWN lane's out group, so the unit must hold that group
+# (SupplementaryGroups= accumulates with the unit file's); never the other lane's
+SupplementaryGroups={{ cti_pipeline_handoff_group[item.lane] }}
 ReadWritePaths={{ cti_pipeline_handoff_dir }}/{{ item.lane }}
 {% endif %}
 TimeoutStartSec={{ job.timeout_s | int }}

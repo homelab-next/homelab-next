@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# The graph-store provider on the Synapse Cortex (modules/synapse-cortex): one compose_app container,
+# the same version the old lab ran, its LMDB slabs on the data root. NOT the analyzer engine that
+# shares the name: that Cortex (TheHive's) was retired; this is the hypergraph server (a Vertex
+# Synapse service) the CTI graph lives in. The HTTPS API listens on the guest's own address and
+# nowhere else; the service's own self-signed certificate lives in the data, so a restored graph
+# keeps the certificate its consumers pinned.
+# Required, with no default (the site's): synapse_cortex_logical_id (the instance's registry id).
+synapse_cortex_image: "docker.io/vertexproject/synapse-cortex:v2.247.0@sha256:8fffe67bfb88dcaece63f175e4d254ca685eb3749e301aabaf725349f4d22bd8"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# hypervisor's per-VM firewall admits only the named consumers on these ports
+synapse_cortex_bind: "{{ ansible_host }}"
+synapse_cortex_https_port: 4443
+# the telepath listener (the service's native protocol, TLS only): 0 = none (the HTTPS API alone, which
+# is what the lab's consumers use today). A port needs synapse_cortex_telepath_hostname, the name the
+# clients dial, which the service certifies for itself.
+synapse_cortex_telepath_port: 0
+synapse_cortex_telepath_hostname: ""
+synapse_cortex_dir: /opt/compose/synapse-cortex
+synapse_cortex_owner: root
+synapse_cortex_group: root
+# the module's data root (docs/modules/data.md): storage/ (the service directory: the LMDB slabs, the
+# auth database, the certificate; the container's, mounted at /vertex/storage) and export/ (the
+# backups, written by the service's own backup machinery)
+synapse_cortex_data_root: /var/lib/hnx-modules/synapse-cortex
+# the image's own unprivileged account (synuser); it owns storage/ and export/
+synapse_cortex_uid: 999
+synapse_cortex_gid: 999
+# the root account's password: a secret by reference. The service starts without one (a root that
+# cannot sign in over the network) and the role sets it; nothing secret is in the compose file.
+synapse_cortex_root_login_ref: secret:synapse-cortex/root-password
+# the roles: a list of {name, rules}. rules are permission strings of the service's own grammar, dot
+# separated, a leading "!" for a deny (e.g. "node.add", "!node.del"). The role makes a role hold
+# exactly these rules; it never deletes a role the site did not name.
+synapse_cortex_roles: []
+# the accounts besides root: a list of {name_ref, password_ref, admin (default false), roles (default
+# [], role names)}. The NAME and the password are secrets by reference, never values: an account is
+# created when missing, its password set when the one it has does not sign in, its admin flag and
+# roles made equal to these, an unchanged account is no change. An account the site did not name is
+# left alone (a restored graph keeps the accounts it had).
+synapse_cortex_users: []
+# health fails when the graph holds fewer nodes than this (0 = nothing is asserted about the count)
+synapse_cortex_expected_min_nodes: 0
+synapse_cortex_mem_limit: 6g
+synapse_cortex_start: true
+synapse_cortex_validate_with_docker: true
+synapse_cortex_health_timeout: 15
+# seconds main waits for the service to answer after a start (opening a large graph takes minutes)
+synapse_cortex_ready_timeout: 900
+# the export: live (the running service's own consistent backup, no stop) or offline (stop the
+# service, run the offline backup tool on the stopped directory, start it again). keep: the sealed
+# backups kept (the oldest beyond it are removed after a new one is sealed)
+synapse_cortex_export_mode: live
+synapse_cortex_export_keep: 2
+synapse_cortex_backup_timeout: 7200

@@ -58,8 +58,9 @@ def pem(kind: str, body: str = "x" * 20) -> str:
     return "-----BEGIN " + label + "-----\n" + body + "\n-----END " + label + "-----"
 
 
-def make_pki(directory: Path) -> tuple[str, str, str]:
-    """(chain, key, ca) as text: a CA and a server certificate for NAME, signed by it."""
+def make_pki(directory: Path, name: str = NAME) -> tuple[str, str, str]:
+    """(chain, key, ca) as text: a CA and a server certificate for ``name`` (NAME by default),
+    signed by it."""
     d = directory
     run = lambda *a: subprocess.run(a, check=True, capture_output=True, cwd=d)  # noqa: E731
     run("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=lab-ca",
@@ -72,14 +73,14 @@ def make_pki(directory: Path) -> tuple[str, str, str]:
         "rsa:2048",
         "-nodes",
         "-subj",
-        f"/CN={NAME}",
+        f"/CN={name}",
         "-keyout",
         "srv.key",
         "-out",
         "srv.csr",
     )
     (d / "ext").write_text(
-        f"subjectAltName=DNS:{NAME}\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n"
+        f"subjectAltName=DNS:{name}\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n"
     )
     run("openssl", "x509", "-req", "-in", "srv.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
         "-out", "srv.pem", "-days", "2", "-extfile", "ext")  # fmt: skip

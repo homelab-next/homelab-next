@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: Apache-2.0
+# The graph-store provider on Synapse Cortex (docs/modules.md; README.md beside this file): the
+# hypergraph server the CTI graph lives in (a Vertex Synapse service; NOT the analyzer engine that
+# shares the name and was retired), run as one compose_app container from a pinned image, the same
+# version the old lab ran. Its LMDB storage sits on the data root; the lab's consumers (the CTI
+# pipeline's graph sync and graph report) call its HTTPS API. Accounts and roles are made from
+# secrets by reference. The exit copy and the restore use the service's own backup machinery and
+# compare the node count of every form. No egress, no public route. Every real value (the guest, its
+# address, the secret values) is the site's: the overlay's lab/modules.yml, lab/services.yml and
+# secret store.
+manifest_version: "1.0"
+id: synapse-cortex
+kind: provider
+title: Graph store on Synapse Cortex
+description: Fills the graph-store slot with Synapse Cortex, one compose_app container with the
+  service's own storage on the data root, root's password and the site's roles and accounts set from
+  secrets, a health hook that proves the service refuses an anonymous call and every account signs in,
+  and an export and restore built on the service's own backup machinery that compare node counts by form.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: synapse-cortex
+  display: Synapse Cortex
+  version: 2.247.0
+licence:
+  kind: open-source
+  spdx: Apache-2.0
+credentials:
+  - secret: secret:synapse-cortex/root-password
+    identity: password
+    holder: provider
+    purpose: the root account's password; the role sets it through the service's API and the health hook signs in with it (other accounts' names and passwords are the site's references, see README)
+identifiers:
+  - {kind: secret-name, name: synapse-cortex, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the account names and passwords are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 2, memory_mb: 8192, disk_gb: 100}
+      guest:
+        baselines: [base]
+      roles: [role:synapse_cortex]
+      purpose: runs the Synapse Cortex container (docker_engine applied first, compose_app renders it); the graph's storage and its backups live on this guest's disk
+provides:
+  slots:
+    graph-store:
+      adapter: homelabnext.conform.adapters.graph_store:make
+      provisional: true
+      reason: graph-store has no contract yet; the obvious standard is the service answering as the active one and refusing a query that carries no session, which is what the role's health hook and a consumer's first call read
+      migration: {formats: [object-tree], export: role:synapse_cortex, import: role:synapse_cortex}
+egress: none
+contributes:
+  roles:
+    - file: roles/synapse_cortex
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:synapse_cortex, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: graph
+    kind: database
+    description: The whole service directory (every slab of the graph, its accounts and roles, its certificate) as a sealed backup made by the service's own backup machinery, beside a manifest of the node count of every form and a sha256 listing, taken without stopping the service.
+    export: {formats: [object-tree], via: role:synapse_cortex}
+    import: {formats: [object-tree], via: role:synapse_cortex}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest) of the same or a newer version: validated and recorded, the graph exported, then converged; the service migrates its own storage on first start and cannot be taken back"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

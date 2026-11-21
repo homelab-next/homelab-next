@@ -436,3 +436,24 @@ def test_health_judges_the_handoff_per_active_lane_and_names_the_clear_step():
     assert judge["failed_when"] is False
     check = tasks["No handoff conflict or refusal is outstanding"]
     assert "Remove the" in check["ansible.builtin.assert"]["fail_msg"]
+
+
+# ---------------------------------------------------------------- the unit holds its lane's out group
+
+
+def test_each_lanes_unit_joins_only_its_own_out_group(site):
+    ctx, inst = site
+    real = render("job-lane.conf.j2", ctx, inst["fresh-real"]).splitlines()
+    shadow = render("job-lane.conf.j2", ctx, inst["fresh-shadow"]).splitlines()
+    assert "SupplementaryGroups=hnx-intel-out-real" in real
+    assert "SupplementaryGroups=hnx-intel-out-shadow" not in real
+    assert "SupplementaryGroups=hnx-intel-out-shadow" in shadow
+    assert "SupplementaryGroups=hnx-intel-out-real" not in shadow
+    off = {**ctx, "cti_pipeline_handoff_enabled": False}
+    assert "out-" not in render("job-lane.conf.j2", off, inst["fresh-shadow"])
+
+
+def test_the_group_exists_before_the_dropin_that_names_it():
+    main = (ROLE / "tasks" / "main.yml").read_text()
+    assert main.index("dirs.yml") < main.index("config.yml")
+    assert "cti_pipeline_handoff_group[item]" in (ROLE / "tasks" / "dirs.yml").read_text()

@@ -45,6 +45,7 @@ slots:
   enrichment:          {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   feed-reader:         {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   threat-intel:        {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
+  graph-store:         {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   tts:                 {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   context:             {stage: null, contract: context.py, stateful: false}
   metrics:             {stage: null, contract: null, stateful: false}
@@ -53,4 +54,5 @@ slots:
   chat:                {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   dataflow:            {stage: null, contract: null, stateful: true, export_formats: [json]}
   forge:               {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
+  case-management:     {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   inference:           {stage: null, contract: inference.py, stateful: false, required_in_core: true}

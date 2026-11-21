@@ -111,6 +111,8 @@ capabilities:
   cap:media: [read]  # the media slot: a server that plays a library to its clients
   cap:media-automation: [exec]  # the media-automation slot: requests, downloads through a VPN and imports into the library change files and spend bandwidth
   cap:documents: [read]  # the documents slot: a library of filed documents read through its API
+  cap:graph-store: [read]  # the graph-store slot: a hypergraph of indicators and relationships queried over its API (an agent's query changes nothing unless it holds write rules, which are the site's)
+  cap:case-management: [record-write]  # the case-management slot: incident cases, alerts and their notes written through the product's API (the stage-6 `cases` slot keeps the alert-to-case contract; this is the product's own case store)
   cap:enrichment: [read]  # the enrichment slot: a service that looks an observable up in public sources and answers (it changes nothing the lab holds)
   cap:feed-reader: [read]  # the feed-reader slot: subscribed feeds and their entries read through the Fever and Google Reader APIs
   cap:threat-intel: [read]  # the threat-intel slot: events, attributes and feeds of a threat-intelligence platform read through its API with a per-user key
