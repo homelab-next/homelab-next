@@ -138,6 +138,27 @@ def default_ref(name: str) -> str:
     return yaml.safe_load((ROLE_DIR / "defaults" / "main.yml").read_text())[f"{P}_{name}"]
 
 
+# ----------------------------------------------------------------------------- jdbc drivers
+
+
+def _first_the_driver_directory_is_mounted_read_only_and_empty_by_default(tmp_path):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": vs(tmp_path), "env": secrets()}
+
+
+@first_run(_first_the_driver_directory_is_mounted_read_only_and_empty_by_default)
+def test_the_driver_directory_is_mounted_read_only_and_empty_by_default(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert any(
+        v.endswith("/drivers:" + ROLE_VARS[f"{P}_container_home"] + "/drivers:ro")
+        for v in compose(tmp_path)["volumes"]
+    )
+    assert not any(
+        (tmp_path / "data" / "drivers").iterdir()
+    )  # nothing is fetched unless a site lists a driver
+    assert default_ref("jdbc_drivers") == []
+
+
 # ----------------------------------------------------------------------------- main renders
 
 
@@ -305,6 +326,79 @@ BAD = [
         {},
     ),
     ({"restore_mode": "everything"}, {}),
+    (
+        {
+            "jdbc_drivers": [
+                {"name": "x.jar", "url": "http://driver.example.internal/x.jar", "sha256": "a" * 64}
+            ]
+        },
+        {},
+    ),  # not https
+    (
+        {
+            "jdbc_drivers": [
+                {
+                    "name": "x.jar",
+                    "url": "https://driver.example.internal/x.jar",
+                    "sha256": "A" * 64,
+                }
+            ]
+        },
+        {},
+    ),  # not lower-case hex
+    (
+        {
+            "jdbc_drivers": [
+                {
+                    "name": "x.jar",
+                    "url": "https://driver.example.internal/x.jar",
+                    "sha256": "a" * 63,
+                }
+            ]
+        },
+        {},
+    ),
+    (
+        {
+            "jdbc_drivers": [
+                {
+                    "name": "../x.jar",
+                    "url": "https://driver.example.internal/x.jar",
+                    "sha256": "a" * 64,
+                }
+            ]
+        },
+        {},
+    ),  # a path, not a name
+    (
+        {
+            "jdbc_drivers": [
+                {
+                    "name": "x.txt",
+                    "url": "https://driver.example.internal/x.jar",
+                    "sha256": "a" * 64,
+                }
+            ]
+        },
+        {},
+    ),
+    (
+        {"jdbc_drivers": [{"name": "x.jar", "url": "https://driver.example.internal/x.jar"}]},
+        {},
+    ),  # no digest: an unpinned file is never fetched
+    (
+        {
+            "jdbc_drivers": [
+                {
+                    "name": "x.jar",
+                    "url": "https://driver.example.internal/x.jar",
+                    "sha256": "a" * 64,
+                }
+            ]
+            * 2
+        },
+        {},
+    ),  # one name twice
     ({"provenance_max_age": "forever"}, {}),
     ({"smoke_max_age_minutes": 0}, {}),
     ({"s3_access_key_ref": ref("s3-secret-key")}, {}),  # two references the same

@@ -20,6 +20,7 @@
     - {path: "{{ nifi_data_root }}/database_repository", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
     - {path: "{{ nifi_data_root }}/provenance_repository", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
     - {path: "{{ nifi_data_root }}/logs", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
+    - {path: "{{ nifi_data_root }}/drivers", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
     - {path: "{{ nifi_data_root }}/smoke", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
   loop_control:
     label: "{{ item.path }}"

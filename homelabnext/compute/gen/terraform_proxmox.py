@@ -164,6 +164,10 @@ def _bridge(fleet: Fleet, g: Guest) -> tuple[str, str | None]:
         suffix = f"v{z.vlan_id}"
         expr = f'"${{var.default_bridge}}{suffix}"' if br == "default" else hq(f"{br}{suffix}")
         return expr, None
+    if g.network.get("vlan_tag_mode", "in_bridge") == "native":
+        # the zone's VLAN is the bridge's native one: the port is untagged (a tag on the native
+        # VLAN is what the switch port drops); validate() holds this to the node's declaration
+        return base, None
     return base, (str(z.vlan_id) if z.vlan_id is not None else None)
 
 

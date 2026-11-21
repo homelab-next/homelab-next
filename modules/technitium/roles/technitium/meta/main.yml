@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "Technitium DNS Server, the dns provider: one compose_app container, zones restored from an archived config or an export and verified by record counts."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the dns suite through the
+# Technitium adapter, which resolves the ADMIN API's address from HNX_ENDPOINT_DNS (never a URL
+# here: the zone contract is about records, and the API is how they are written, so this is
+# http://<host>:5380, not the port-53 service row) and signs in as `user` with the password the
+# variable named by password_env holds (secret:technitium/admin-password).
+#   HNX_ENDPOINT_DNS=http://<host>:5380 HNX_DNS_PASSWORD=<admin password> \
+#     hnx conform run dns --target modules/technitium/conformance/target.yml
+# The suite works in one scratch zone (svc.example.internal), which the target creates when the
+# server has none and removes again only when it created it. The lab reaches the API over plain
+# http inside its own network: the adapter refuses to send a password over http to a host that is
+# not loopback, so a run against the lab's instance sets allow_plaintext: true in a copy of this
+# file (a decision for that run, not a default here).
+name: technitium
+capabilities:
+  dns:
+    adapter: homelabnext.conform.adapters.dns_zone:make
+    config: {password_env: HNX_DNS_PASSWORD}

@@ -338,6 +338,11 @@ class Fleet:
         """Whether the node (hypervisor) itself enforces a firewall.  Unlisted = yes (safe default)."""
         return self.nodes.get(node, {}).get("firewall", "enabled") != "disabled"
 
+    def native_vlan(self, node: str, bridge: str) -> int | None:
+        """The VLAN id ``_nodes.yml`` declares as ``bridge``'s native (untagged) VLAN on ``node``
+        (``native_vlans``; the bridge is ``default`` for the site's default bridge), or None."""
+        return (self.nodes.get(node, {}).get("native_vlans") or {}).get(bridge)
+
     def sorted(self) -> list[Guest]:
         return sorted(self.guests, key=lambda g: g.id)
 
