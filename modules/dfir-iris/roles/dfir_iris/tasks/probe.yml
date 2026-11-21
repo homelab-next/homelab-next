@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# One call to the API over HTTPS, verified against the lab CA for the service's name (curl's
+# --resolve points the name at the guest's address, so the certificate is judged for the name and
+# not the address). With dfir_iris_probe_keyed the API key goes to curl on its standard input as a
+# config line, never in argv; the task runs under no_log. Sets dfir_iris_probe_code (0 when curl
+# could not connect or verify) and dfir_iris_probe_body. Never fails: the caller judges the answer.
+# With dfir_iris_probe_json (keyed only) the call is a POST of that JSON, sent from the same standard
+# input as the key, so a secret in it is in no argument either.
+# With dfir_iris_probe_wait it asks again every 5 seconds until a status in dfir_iris_probe_expect
+# (default 200) or dfir_iris_ready_timeout.
+- name: Ask the API
+  ansible.builtin.command:
+    argv: >-
+      {{ ['curl', '--silent', '--show-error', '--max-time', dfir_iris_health_timeout | string,
+          '--cacert', dfir_iris_data_root ~ '/tls/' ~ dfir_iris_ca_file,
+          '--resolve', dfir_iris_hostname ~ ':' ~ dfir_iris_port | string ~ ':' ~ dfir_iris_bind,
+          '--write-out', '\n%{http_code}']
+         + (['--config', '-'] if dfir_iris_probe_keyed | default(false) | bool else [])
+         + ['https://' ~ dfir_iris_hostname ~ ':' ~ dfir_iris_port | string ~ dfir_iris_probe_path] }}
+    stdin: >-
+      {{ ('header = "Authorization: Bearer ' ~ lookup('hnx_secret', dfir_iris_access_ref) ~ '"' ~ dfir_iris_nl
+          ~ ('request = "POST"' ~ dfir_iris_nl ~ 'header = "Content-Type: application/json"' ~ dfir_iris_nl ~ 'data = "'
+             ~ (dfir_iris_probe_json | replace(dfir_iris_bs, dfir_iris_bs ~ dfir_iris_bs) | replace('"', dfir_iris_bs ~ '"')) ~ '"' ~ dfir_iris_nl
+             if dfir_iris_probe_json | default('') | length > 0 else ''))
+         if dfir_iris_probe_keyed | default(false) | bool else omit }}
+  register: dfir_iris_probe_out
+  until: >-
+    not (dfir_iris_probe_wait | default(false) | bool)
+    or (dfir_iris_probe_out.rc | default(1) == 0 and (dfir_iris_probe_out.stdout | default('') | trim).splitlines() | last | default('0') in (dfir_iris_probe_expect | default(['200'])))
+  retries: "{{ ((dfir_iris_ready_timeout | int) / 5) | int if (dfir_iris_probe_wait | default(false) | bool) else 0 }}"
+  delay: 5
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Keep the status line and the body (never the request)
+  ansible.builtin.set_fact:
+    dfir_iris_probe_code: "{{ (dfir_iris_probe_out.stdout | default('') | trim).splitlines() | last | default('0') if (dfir_iris_probe_out.rc | default(1)) == 0 else '0' }}"
+    dfir_iris_probe_body: "{{ ((dfir_iris_probe_out.stdout | default('')).splitlines()[:-1] | join('\n')) if (dfir_iris_probe_out.rc | default(1)) == 0 else '' }}"
+    dfir_iris_probe_curl_rc: "{{ dfir_iris_probe_out.rc | default(1) }}"

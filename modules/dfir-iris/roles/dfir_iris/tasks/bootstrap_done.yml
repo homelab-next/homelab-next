@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# The first start: the administrator exists with a throwaway password and a log line that holds it.
+# Set the real password through the API, render the project again with no administrator password in
+# the app's environment, force-recreate the app container (a new container, so the old log is gone),
+# wait for the API, and only then write the marker.
+- name: Set the real password
+  ansible.builtin.include_tasks: password.yml
+
+- name: Render the project again without the administrator password
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ dfir_iris_app.compose_app_name }}"
+    compose_app_dir: "{{ dfir_iris_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ dfir_iris_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ dfir_iris_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ dfir_iris_app.compose_app_owner }}"
+    compose_app_group: "{{ dfir_iris_app.compose_app_group }}"
+    compose_app_start: "{{ dfir_iris_app.compose_app_start }}"
+    compose_app_validate_with_docker: false
+    compose_app_spec: "{{ dfir_iris_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ dfir_iris_secret_env | combine({'app': dfir_iris_secret_env.app | dict2items | rejectattr('key', 'equalto', 'IRIS_ADM_PASSWORD') | items2dict}) }}"
+    compose_app_bind_roots: ["{{ dfir_iris_dir }}", "{{ dfir_iris_data_root }}"]
+  no_log: true
+
+- name: Recreate the app container (the old one's log holds the throwaway password)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ dfir_iris_dir }}/docker-compose.yml", up, -d, --force-recreate, --no-deps, app]
+  changed_when: true
+
+- name: Wait for the API to answer with the key again
+  ansible.builtin.include_tasks: wait.yml
+
+- name: Record that the administrator is set up
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ dfir_iris_data_root }}/bootstrapped"
+    owner: "{{ dfir_iris_owner }}"
+    group: "{{ dfir_iris_group }}"
+    mode: "0600"
+    force: false

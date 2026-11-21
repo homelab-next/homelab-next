@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: Apache-2.0
+# The case-management provider (modules/dfir-iris): five compose_app containers in the module's
+# slice, the web app and its background worker (one pinned image, two commands), the database, the
+# message broker the worker takes its tasks from, and the TLS front. Only the front publishes a
+# port, on the guest's own address; the product speaks HTTPS only, with a certificate from the
+# lab's internal CA. Local accounts are the product's own (auth: own).
+# Required, with no default (the site's): dfir_iris_logical_id (the instance's registry id) and
+# dfir_iris_hostname (the internal name the certificate is issued for and the front answers to).
+# The three IRIS images are one release: the same tag (the product's version), each pinned by digest.
+dfir_iris_app_image: "ghcr.io/dfir-iris/iriswebapp_app:v2.4.29@sha256:d7d23026bdde593278075821d3abc8649fe28d618d5784cc9875bd7a3d05699b"
+dfir_iris_db_image: "ghcr.io/dfir-iris/iriswebapp_db:v2.4.29@sha256:081ad194332887ca584a9240e8e9dea94129a235e8b38ff42c1938358be432f5"
+dfir_iris_nginx_image: "ghcr.io/dfir-iris/iriswebapp_nginx:v2.4.29@sha256:887b1eb8ceae5b1e1483a4a7601d79a6b070e314db5772a617e0a9190c556644"
+dfir_iris_broker_image: "docker.io/library/rabbitmq:3.12.14@sha256:4dc5d5a5076f7c458b7f3468e2282f329a8911cc3c31c4ed4aefcedb27917da2"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# hypervisor's per-VM firewall admits the named consumers alone on this port
+dfir_iris_bind: "{{ ansible_host }}"
+dfir_iris_port: 8443
+dfir_iris_dir: /opt/compose/dfir-iris
+dfir_iris_owner: root
+dfir_iris_group: root
+# the module's data root (docs/modules/data.md): pgdata/ (the database's), broker/, files/ (the
+# product's datastore: uploaded evidence, templates, downloads, the app's), tls/ and export/
+dfir_iris_data_root: /var/lib/hnx-modules/dfir-iris
+# the app's user and group: the image runs as root by default and works as any user with the
+# data directories given to it, so it runs as this one (with every capability dropped)
+dfir_iris_app_uid: 61031
+dfir_iris_app_gid: 61031
+# the first administrator's login and email, created by the product on an EMPTY database (a
+# restored database brings its own accounts); the password and the API key are secrets
+dfir_iris_admin_user: administrator
+dfir_iris_admin_email: administrator@iris.example.internal
+dfir_iris_admin_login_ref: secret:dfir-iris/admin-password
+# the API key of the first administrator: the key the lab's consumers (the triage agents, the
+# health hook) call the API with; granted to them by name by the overlay. The role sets the
+# administrator's key in the database to this value once the app is up; it is in no container's
+# environment
+dfir_iris_access_ref: secret:dfir-iris/api-key
+dfir_iris_db_login_ref: secret:dfir-iris/db-password
+dfir_iris_db_admin_login_ref: secret:dfir-iris/db-admin-password
+# Flask's session key and the password-hash salt: after a migration they are the SOURCE's values,
+# or its users' password hashes and sessions no longer open
+dfir_iris_session_key_ref: secret:dfir-iris/session-key
+dfir_iris_salt_ref: secret:dfir-iris/password-salt
+dfir_iris_tls_cert_ref: secret:dfir-iris/tls-cert
+dfir_iris_tls_key_ref: secret:dfir-iris/tls-key
+dfir_iris_ca_ref: secret:dfir-iris/ca
+# the database's, the broker's and the front's users are the ones their images are built for
+# (postgres 70, rabbitmq 999, www-data 33): a site moves them only with the image (the
+# role's tests run as their own ids); the datastore's, the database's and the broker's directories
+# belong to them, the certificate directory to the front's group
+dfir_iris_db_uid: 70
+dfir_iris_db_gid: 70
+dfir_iris_broker_uid: 999
+dfir_iris_broker_gid: 999
+dfir_iris_front_uid: 33
+dfir_iris_front_gid: 33
+dfir_iris_app_mem_limit: 2g
+dfir_iris_worker_mem_limit: 2g
+dfir_iris_db_mem_limit: 1g
+dfir_iris_broker_mem_limit: 512m
+dfir_iris_nginx_mem_limit: 128m
+dfir_iris_start: true
+dfir_iris_validate_with_docker: true
+dfir_iris_health_timeout: 15
+# seconds main waits for the API to answer after a start (the first one creates the schema)
+dfir_iris_ready_timeout: 600

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# After a start: ask the API for its ping with the key until it answers 200 (the first start
+# creates the schema, which takes a minute or two) or dfir_iris_ready_timeout runs out. The failure
+# says the last status curl saw and whether curl itself failed (certificate, connection).
+- name: Ask the API until it answers
+  ansible.builtin.include_tasks: probe.yml
+  vars:
+    dfir_iris_probe_path: /api/ping
+    dfir_iris_probe_keyed: true
+    dfir_iris_probe_wait: true
+
+- name: Refuse a service that never answered
+  ansible.builtin.assert:
+    that: dfir_iris_probe_code | default('0') == '200'
+    fail_msg: >-
+      case-management: the API did not answer its ping with the key within {{ dfir_iris_ready_timeout }}
+      seconds (last status {{ dfir_iris_probe_code | default('0') }}, curl exit {{ dfir_iris_probe_curl_rc | default('?') }})

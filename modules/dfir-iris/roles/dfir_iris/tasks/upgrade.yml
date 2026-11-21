@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate and record an image bump (compose_app upgrade) for one image: the app
+# (dfir_iris_target_image, which the worker shares), the front (dfir_iris_target_nginx_image), the
+# database image (dfir_iris_target_db_image) or the broker (dfir_iris_target_broker_image, within
+# its major version). A product image must NOT be older than the one running: a newer IRIS migrates
+# its database forward as it starts, and an older one cannot open that database. The playbook
+# exports first, then converges with the new pin (set the image in the overlay).
+- block:
+    - name: Name the target
+      ansible.builtin.set_fact:
+        dfir_iris_up_app: "{{ dfir_iris_target_image | default('') }}"
+        dfir_iris_up_nginx: "{{ dfir_iris_target_nginx_image | default('') }}"
+        dfir_iris_up_db: "{{ dfir_iris_target_db_image | default('') }}"
+        dfir_iris_up_broker: "{{ dfir_iris_target_broker_image | default('') }}"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Refuse a target that is not pinned, is another repository or is older than the running image
+      ansible.builtin.assert:
+        that:
+          - >-
+            [dfir_iris_up_app, dfir_iris_up_nginx, dfir_iris_up_db, dfir_iris_up_broker] | select('ne', '') | list | length == 1
+          - >-
+            dfir_iris_up_app | length == 0 or (dfir_iris_up_app is match(dfir_iris_pinned_ref_pattern)
+            and dfir_iris_up_app.split('@')[0].rsplit(':', 1)[0] == dfir_iris_app_repository
+            and dfir_iris_up_app.split('@')[0].rsplit(':', 1)[1] is match('^v[0-9]+\.[0-9]+\.[0-9]+\Z')
+            and dfir_iris_up_app.split('@')[0].rsplit(':', 1)[1][1:] is version(dfir_iris_app_tag[1:], '>='))
+          - >-
+            dfir_iris_up_nginx | length == 0 or (dfir_iris_up_nginx is match(dfir_iris_pinned_ref_pattern)
+            and dfir_iris_up_nginx.split('@')[0].rsplit(':', 1)[0] == dfir_iris_nginx_repository
+            and dfir_iris_up_nginx.split('@')[0].rsplit(':', 1)[1] is match('^v[0-9]+\.[0-9]+\.[0-9]+\Z')
+            and dfir_iris_up_nginx.split('@')[0].rsplit(':', 1)[1][1:] is version(dfir_iris_nginx_tag[1:], '>='))
+          - >-
+            dfir_iris_up_db | length == 0 or (dfir_iris_up_db is match(dfir_iris_pinned_ref_pattern)
+            and dfir_iris_up_db.split('@')[0].rsplit(':', 1)[0] == dfir_iris_db_repository
+            and dfir_iris_up_db.split('@')[0].rsplit(':', 1)[1] is match('^v[0-9]+\.[0-9]+\.[0-9]+\Z')
+            and dfir_iris_up_db.split('@')[0].rsplit(':', 1)[1][1:] is version(dfir_iris_db_tag[1:], '>='))
+          - >-
+            dfir_iris_up_broker | length == 0 or (dfir_iris_up_broker is match(dfir_iris_pinned_ref_pattern)
+            and dfir_iris_up_broker.split('@')[0].rsplit(':', 1)[0] == dfir_iris_broker_repository
+            and dfir_iris_up_broker.split('@')[0].rsplit(':', 1)[1].split('.')[0] == dfir_iris_broker_tag.split('.')[0])
+        fail_msg: >-
+          case-management: name one target, {{ dfir_iris_app_repository }}:vX.Y.Z@sha256:<64 hex>
+          (not older than {{ dfir_iris_app_tag }}), the same for the front ({{ dfir_iris_nginx_repository }})
+          or the database image ({{ dfir_iris_db_repository }}), or {{ dfir_iris_broker_repository }}:<same
+          major>.<minor>.<patch>@sha256:<64 hex>
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        dfir_iris_target: "{{ dfir_iris_up_app | default('', true) or dfir_iris_up_nginx | default('', true) or dfir_iris_up_db | default('', true) or dfir_iris_up_broker }}"
+        compose_app_name: dfir-iris
+        compose_app_dir: "{{ dfir_iris_app.compose_app_dir }}"
+        compose_app_owner: "{{ dfir_iris_app.compose_app_owner }}"
+        compose_app_group: "{{ dfir_iris_app.compose_app_group }}"
+        compose_app_spec: "{{ dfir_iris_app.compose_app_spec }}"
+        compose_app_upgrade_service: >-
+          {{ 'app' if dfir_iris_up_app | length > 0 else ('nginx' if dfir_iris_up_nginx | length > 0
+             else ('db' if dfir_iris_up_db | length > 0 else 'broker')) }}
+        compose_app_upgrade_tag: "{{ dfir_iris_target.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ dfir_iris_target.split('@')[1] }}"
+  tags: [upgrade]
