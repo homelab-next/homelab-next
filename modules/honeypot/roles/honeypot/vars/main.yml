@@ -46,3 +46,4 @@ honeypot_script_env:
   HNX_HP_LAKE_CATALOG: "{{ honeypot_lake_catalog }}"
   HNX_HP_LAKE_SCHEMA: "{{ honeypot_lake_schema }}"
   HNX_HP_LAKE_TABLE: "{{ honeypot_lake_table }}"
+honeypot_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

@@ -13,9 +13,12 @@ User={{ honeypot_user }}
 Group={{ honeypot_group }}
 EnvironmentFile={{ honeypot_env_file }}
 EnvironmentFile={{ honeypot_lake_login_env_file }}
+# the timer's runs are reported to the shared last-run record (the writer runs privileged: +)
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ honeypot_last_run_dir }} --group {{ honeypot_last_run_group }} --job timer:honeypot/lake --unit %n --calendar "{{ honeypot_lake_oncalendar }}" --delay 0
 ExecStart=/usr/local/libexec/homelabnext/hnx-honeypot-lake land
 Environment=PYTHONSAFEPATH=1 PYTHONNOUSERSITE=1
 Nice=10
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ honeypot_last_run_dir }} --group {{ honeypot_last_run_group }} --job timer:honeypot/lake --unit %n --calendar "{{ honeypot_lake_oncalendar }}" --delay 0
 TimeoutStartSec=3600
 {% if hnx_module_slice | default('') %}
 Slice={{ hnx_module_slice }}

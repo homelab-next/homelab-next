@@ -90,7 +90,7 @@ argument_specs:
       honeypot_lake_oncalendar:
         type: str
         description: 'The lake writer timer''s OnCalendar (daily: every run is a lake commit per statement).'
-        default: '*-*-* 12:00:00'
+        default: '*-*-* 12:00:00 UTC'
       honeypot_batch_rows:
         type: int
         description: Rows read from the spool per batch before they are written.
@@ -176,6 +176,14 @@ argument_specs:
         type: int
         description: Dated report copies older than this many days are removed.
         default: 30
+      honeypot_last_run_dir:
+        type: path
+        description: The shared per-host directory of last-run records (role last_run).
+        default: /var/lib/homelabnext/last-run
+      honeypot_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
       honeypot_health_timeout:
         type: int
         description: Seconds a health probe may take.

@@ -43,7 +43,7 @@ honeypot_lake_schema: honeypot
 honeypot_lake_table: events
 # one statement is one lake commit: the writer runs daily (below), never every few minutes (that
 # once made thousands of snapshots a week) and its statements are as large as the service allows
-honeypot_lake_oncalendar: "*-*-* 12:00:00"
+honeypot_lake_oncalendar: "*-*-* 12:00:00 UTC"
 honeypot_batch_rows: 5000
 # create the schema and table (the contract's 26 columns) when absent: for a fresh lake only; an
 # imported table is checked, never altered
@@ -81,5 +81,9 @@ honeypot_cti_table: ""
 honeypot_report_keep_days: 30
 
 honeypot_health_timeout: 10
+# the shared last-run record directory (role last_run) and the group that may read it: each timer's
+# service reports its runs there
+honeypot_last_run_dir: /var/lib/homelabnext/last-run
+honeypot_last_run_group: root
 # restore: the directory a prior export wrote (state/ files)
 honeypot_restore_source: ""

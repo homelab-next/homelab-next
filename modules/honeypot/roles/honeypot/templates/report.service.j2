@@ -16,9 +16,12 @@ EnvironmentFile={{ honeypot_lake_login_env_file }}
 {% if honeypot_gateway_id != '' %}
 LoadCredential=gateway-key:{{ honeypot_gateway_key_file }}
 {% endif %}
+# the timer's runs are reported to the shared last-run record (the writer runs privileged: +)
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ honeypot_last_run_dir }} --group {{ honeypot_last_run_group }} --job timer:honeypot/report --unit %n --calendar "{{ honeypot_report_oncalendar }}" --delay 0
 ExecStart=/usr/local/libexec/homelabnext/hnx-honeypot-report
 Environment=PYTHONSAFEPATH=1 PYTHONNOUSERSITE=1
 Nice=10
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ honeypot_last_run_dir }} --group {{ honeypot_last_run_group }} --job timer:honeypot/report --unit %n --calendar "{{ honeypot_report_oncalendar }}" --delay 0
 # the brief retries a busy model tier: the attempts, their timeouts and the sleeps all fit
 TimeoutStartSec={{ ((honeypot_llm_attempts | int) * ((honeypot_llm_timeout_s | int) + (honeypot_llm_retry_sleep_s | int)) + 1800) }}
 {% if hnx_module_slice | default('') %}

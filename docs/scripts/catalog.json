@@ -1062,6 +1062,8 @@
         "timer:caddy/acme-renew",
         "timer:clamav/scan",
         "timer:context/reindex",
+        "timer:honeypot/lake",
+        "timer:honeypot/report",
         "timer:lynis/scan",
         "timer:media_automation/cleanup-downloads",
         "timer:media_automation/rename-cleanup",

@@ -69,6 +69,14 @@
   when: honeypot_lake_ca_ref != ''
   no_log: true
 
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ honeypot_last_run_dir }}"
+    last_run_group: "{{ honeypot_last_run_group }}"
+    last_run_writer: "{{ honeypot_last_run_writer }}"
+
 - name: Write the units
   ansible.builtin.template:
     src: "{{ item.src }}"
