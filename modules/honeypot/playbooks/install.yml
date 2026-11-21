@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the receiver, the lake writer and the report on the guest the site placed
+# the module's `receiver` role on. The apply path (docs/modules/apply.md) renders its own modules.yml
+# from the selection and does not import this file; it is the module's own entry point, for a lab
+# that runs one module by hand:
+#   ansible-playbook -i <inventory with --selection> modules/honeypot/playbooks/install.yml
+# The readiness hook refuses to go on without every secret or the lake's registry row.
+- name: Install the honeypot receiver, lake writer and intel report
+  hosts: mod_honeypot_receiver
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: honeypot
+        tasks_from: readiness
+      tags: [mod_honeypot]
+  roles:
+    - role: honeypot
+      tags: [mod_honeypot]
