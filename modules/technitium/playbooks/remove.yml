@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export every zone (export_first), stop and remove the container, and delete the env_file
+# that holds the admin password. The data root (with the export in it) and the rest of the compose
+# project are kept for the operator to archive or delete; the decommission audit
+# (module.yml lifecycle.remove.audit) checks nothing still names the service.
+- name: Remove Technitium
+  hosts: mod_technitium_server
+  become: true
+  tasks:
+    - name: Export the zones first
+      ansible.builtin.include_role:
+        name: technitium
+        tasks_from: export
+    - name: Stop and remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ technitium_dir | default('/opt/compose/technitium') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credential the container was given (the admin password)
+      ansible.builtin.file:
+        path: "{{ technitium_dir | default('/opt/compose/technitium') }}/secrets/technitium.env"
+        state: absent

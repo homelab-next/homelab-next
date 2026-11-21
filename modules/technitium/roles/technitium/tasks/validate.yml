@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - technitium_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - technitium_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - technitium_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - technitium_bind != '0.0.0.0'
+      - technitium_dns_port | int >= 1 and technitium_dns_port | int <= 65535
+      - technitium_api_port | int >= 1 and technitium_api_port | int <= 65535
+      - technitium_dns_port | int != technitium_api_port | int
+      - technitium_uid | int >= 1000 and technitium_gid | int >= 1000
+      - technitium_server_domain is match('^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?\Z')
+      - technitium_admin_user is match(technitium_username_pattern)
+      - technitium_admin_login_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - technitium_recursion in technitium_recursion_modes
+      - technitium_forwarders is sequence and technitium_forwarders is not string
+      - technitium_forwarders | reject('string') | list | length == 0
+      - technitium_block_list_urls is sequence and technitium_block_list_urls is not string
+      - technitium_block_list_urls | reject('match', '^https://[^\s,]+\Z') | list | length == 0
+      - technitium_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      # absolute, canonical paths (no //, no . or .. component, no trailing /)
+      - >-
+        [technitium_dir, technitium_data_root, technitium_ctl_dir, technitium_ctl_path]
+        | reject('match', technitium_path_pattern) | list | length == 0
+      - technitium_expected_zones is mapping
+      - technitium_expected_zones.keys() | reject('match', technitium_zone_pattern) | list | length == 0
+      - technitium_expected_zones.values() | reject('integer') | list | length == 0
+      - technitium_expected_zones.values() | select('lt', 1) | list | length == 0
+      - technitium_health_probes is sequence and technitium_health_probes is not string
+      - technitium_health_probes | reject('mapping') | list | length == 0
+      - technitium_health_probes | map(attribute='name', default='') | reject('match', technitium_zone_pattern) | list | length == 0
+      - technitium_health_probes | map(attribute='type', default='') | difference(['A', 'AAAA', 'CNAME', 'TXT', 'SOA', 'NS']) | list | length == 0
+      - technitium_restore_archive == '' or technitium_restore_archive is match(technitium_path_pattern)
+      - technitium_restore_source == '' or technitium_restore_source is match(technitium_path_pattern)
+    fail_msg: >-
+      technitium: a registry id, an image pinned by tag and digest, the guest's IPv4 address to
+      publish on (not all interfaces), two distinct ports, a container uid and gid of 1000 or
+      more, a server name, an account name, a secret: reference for the admin password, a
+      recursion mode ({{ technitium_recursion_modes }}), https block list URLs, a memory limit
+      like 512m, absolute canonical paths, expected zones as zone name to a positive record
+      count, and health probes of {name, type[, expect]}
+  tags: [health, backup, restore, restore_archive, export, upgrade]

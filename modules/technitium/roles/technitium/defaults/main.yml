@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+# Technitium DNS Server, the dns provider (modules/technitium): one container from a pinned image
+# that answers on the guest's own address (port 53, udp and tcp) with the admin API and console on
+# the same address (5380). The zones are the server's state: seeded from an archived config tar
+# (restore_archive) or an export (restore), then owned by the server.
+# technitium_logical_id (required): the instance's registry id, e.g. dns
+technitium_image: "docker.io/technitium/dns-server:15.4.0@sha256:df7d90ef0f7b6fff6916d291a7022cd902290cc31c3141d4158b6c375a641b41"
+# published on the guest's own address, never all interfaces: the guest keeps a stub resolver on
+# loopback port 53, and a second address is how a parallel run sits beside the old server
+technitium_bind: "{{ ansible_host }}"
+technitium_dns_port: 53
+technitium_api_port: 5380
+technitium_dir: /opt/compose/technitium
+# owner and group of the compose project and the data root; config/ and log/ are the container's
+technitium_owner: root
+technitium_group: "{{ technitium_gid }}"
+technitium_data_root: /var/lib/hnx-modules/technitium
+technitium_uid: 61000
+technitium_gid: 61000
+# the server's own name (NS and SOA records name it); the first start reads it, a restored
+# dns.config brings its own
+technitium_server_domain: "{{ technitium_logical_id }}"
+technitium_admin_user: admin
+technitium_admin_login_ref: secret:technitium/admin-password
+# who may recurse through the server: Deny, Allow, AllowOnlyForPrivateNetworks
+technitium_recursion: AllowOnlyForPrivateNetworks
+# forwarders (empty: full recursion from the root servers) and block list URLs, first start only;
+# a restored config brings its own
+technitium_forwarders: []
+technitium_block_list_urls: []
+technitium_mem_limit: 512m
+technitium_start: true
+technitium_validate_with_docker: true
+technitium_health_timeout: 10
+# zone -> record count (NS and SOA included, as the API lists them). Health, restore and
+# restore_archive check against it; a restore with none is refused (nothing would be verified)
+technitium_expected_zones: {}
+# extra health probes over DNS: [{name: host.example.internal, type: A, expect: [<the address>]}]
+technitium_health_probes: []
+# restore_archive: the archived config tar on the host, and whether it may replace zones that
+# are already in the config folder
+technitium_restore_archive: ""
+technitium_restore_archive_overwrite: false
+# restore: the export directory to import (root's, as export wrote it)
+technitium_restore_source: ""
+technitium_ctl_dir: /usr/local/libexec/homelabnext
+technitium_ctl_path: /usr/local/libexec/homelabnext/technitium-ctl
