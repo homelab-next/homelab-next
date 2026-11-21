@@ -408,6 +408,8 @@ def _role_policy(s: _Site, mod: str, role: str) -> tuple[list[Allow], bool]:
     for e in eg if isinstance(eg, list) else []:
         if not isinstance(e, dict) or e.get("host") != role:
             continue
+        if e.get("optional"):  # a per-site option: the policy is rendered from the manifest alone and cannot see the site's grants, so it opens nothing
+            continue
         for t in e.get("to", []):
             if t == "internet":
                 internet = True
