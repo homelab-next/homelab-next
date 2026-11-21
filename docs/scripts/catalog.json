@@ -1811,6 +1811,25 @@
     },
     {
       "exit": {
+        "0": "done",
+        "1": "the command refused or failed (the reason on stderr)",
+        "2": "usage error"
+      },
+      "id": "threat-intel-helper",
+      "inputs": "dump | verify | load | files, with the paths as JSON on standard input (the database's root password is in the environment of the docker client the helper starts, never read here)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line of JSON on stdout; a one-line reason on stderr (never a credential)",
+      "owner": "platform",
+      "path": "modules/misp/roles/misp/files/hnx_misp.py",
+      "purpose": "The threat-intel role's helper for what needs a pipe or an archive (dump the database through zstd, prove a dump whole, load a dump, extract the event directories of an old files tarball).",
+      "status": "active",
+      "trigger": [
+        "role:misp"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "verification is disabled somewhere",
         "2": "usage error or a missing dependency"

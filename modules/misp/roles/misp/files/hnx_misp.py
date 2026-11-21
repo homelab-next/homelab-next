@@ -1,4 +1,17 @@
+#!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: threat-intel-helper
+#   kind: tool
+#   purpose: The threat-intel role's helper for what needs a pipe or an archive (dump the database through zstd, prove a dump whole, load a dump, extract the event directories of an old files tarball).
+#   owner: platform
+#   trigger: [role:misp]
+#   inputs: "dump | verify | load | files, with the paths as JSON on standard input (the database's root password is in the environment of the docker client the helper starts, never read here)"
+#   outputs: one line of JSON on stdout; a one-line reason on stderr (never a credential)
+#   exit:
+#     "0": done
+#     "1": the command refused or failed (the reason on stderr)
+#     "2": usage error
 """The commands the misp role runs on the guest that need a pipe or an archive: ``dump``, ``verify``,
 ``load`` and ``files``. One JSON object on standard input names the paths; the database's root
 password travels in the environment (``MYSQL_PWD``) of the docker client and is never read here.
