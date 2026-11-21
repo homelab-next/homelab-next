@@ -58,3 +58,6 @@ dfir_iris_api_value_pattern: '^[A-Za-z0-9._~-]{32,128}\Z'
 dfir_iris_admin_value_pattern: '^[A-Za-z0-9._~-]{16,128}\Z'
 dfir_iris_pem_cert_pattern: '(?s)-----BEGIN CERTIFICATE-----.+-----END CERTIFICATE-----'
 dfir_iris_pem_key_pattern: '(?s)-----BEGIN (RSA |EC )?PRIVATE KEY-----.+-----END (RSA |EC )?PRIVATE KEY-----'
+# a real newline for the config lines curl reads from its standard input (a Jinja string literal keeps "\n" as two characters)
+dfir_iris_nl: "\n"
+dfir_iris_bs: "\\"

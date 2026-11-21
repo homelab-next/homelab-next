@@ -4,6 +4,8 @@
 # not the address). With dfir_iris_probe_keyed the API key goes to curl on its standard input as a
 # config line, never in argv; the task runs under no_log. Sets dfir_iris_probe_code (0 when curl
 # could not connect or verify) and dfir_iris_probe_body. Never fails: the caller judges the answer.
+# With dfir_iris_probe_json (keyed only) the call is a POST of that JSON, sent from the same standard
+# input as the key, so a secret in it is in no argument either.
 # With dfir_iris_probe_wait it asks again every 5 seconds until a status in dfir_iris_probe_expect
 # (default 200) or dfir_iris_ready_timeout.
 - name: Ask the API
@@ -16,7 +18,10 @@
          + (['--config', '-'] if dfir_iris_probe_keyed | default(false) | bool else [])
          + ['https://' ~ dfir_iris_hostname ~ ':' ~ dfir_iris_port | string ~ dfir_iris_probe_path] }}
     stdin: >-
-      {{ ('header = "Authorization: Bearer ' ~ lookup('hnx_secret', dfir_iris_access_ref) ~ '"\n')
+      {{ ('header = "Authorization: Bearer ' ~ lookup('hnx_secret', dfir_iris_access_ref) ~ '"' ~ dfir_iris_nl
+          ~ ('request = "POST"' ~ dfir_iris_nl ~ 'header = "Content-Type: application/json"' ~ dfir_iris_nl ~ 'data = "'
+             ~ (dfir_iris_probe_json | replace(dfir_iris_bs, dfir_iris_bs ~ dfir_iris_bs) | replace('"', dfir_iris_bs ~ '"')) ~ '"' ~ dfir_iris_nl
+             if dfir_iris_probe_json | default('') | length > 0 else ''))
          if dfir_iris_probe_keyed | default(false) | bool else omit }}
   register: dfir_iris_probe_out
   until: >-

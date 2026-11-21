@@ -23,3 +23,5 @@
 - Core additions: the `case-management` slot (`examples/modules/slots.yml`), its capability class
   (`record-write`), the shared read-only probe `homelabnext.conform.adapters.case_management`, pin
   freshness entries for the four images.
+- The first administrator's password never lands in the app's log: a throwaway on the first start, the real one set through the API, the app force-recreated without it, a marker in the data root.
+- Restore takes a safety export (`pre-restore-*`) over a populated database and refuses a source from a newer product version (`version.txt`, listed and hashed).

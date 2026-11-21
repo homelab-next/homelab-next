@@ -21,6 +21,7 @@ class Front:
         self.api_key, self.version = api_key, version
         self.open_api, self.refuse_key, self.ping_status = open_api, refuse_key, ping_status
         self.requests: list[tuple[str, str | None]] = []
+        self.posts: list[tuple[str, str]] = []  # (path, body) of the keyed POSTs
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -41,6 +42,8 @@ class Front:
                 keyed = auth == f"Bearer {outer.api_key}" and not outer.refuse_key
                 if not (keyed or outer.open_api):
                     return self._send(401, {"status": "error"})
+                if self.path.startswith("/manage/users/lookup/login/"):
+                    return self._send(200, {"status": "success", "data": {"user_id": 1}})
                 if self.path == "/api/ping":
                     return self._send(outer.ping_status, {"status": "success", "message": "pong"})
                 if self.path == "/api/versions":
@@ -48,6 +51,16 @@ class Front:
                     return self._send(200, {"status": "success", "data": data})
                 return self._send(404, {})
 
+        def do_POST(handler):
+            auth = handler.headers.get("Authorization")
+            body = handler.rfile.read(int(handler.headers.get("Content-Length", 0))).decode()
+            outer.requests.append((handler.path, auth))
+            if auth != f"Bearer {outer.api_key}":
+                return handler._send(401, {"status": "error"})
+            outer.posts.append((handler.path, body))
+            return handler._send(200, {"status": "success", "message": "User updated"})
+
+        H.do_POST = do_POST
         self.httpd = ThreadingHTTPServer((LOOPBACK, 0), H)
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2

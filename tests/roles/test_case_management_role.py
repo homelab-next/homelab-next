@@ -126,7 +126,9 @@ def test_main_renders_five_containers_with_the_credentials_only_in_the_env_files
     secrets = tmp_path / "app" / "secrets"
     envs = {n: (secrets / f"{n}.env").read_text() for n in ("app", "db", "worker")}
     assert f"POSTGRES_PASSWORD='{DB_LOGIN}'" in envs["db"] and "IRIS_" not in envs["db"]
-    assert f"IRIS_ADM_PASSWORD='{ADMIN_LOGIN}'" in envs["app"]
+    # the real administrator password is in no file: the first start gets a throwaway one
+    assert "IRIS_ADM_PASSWORD='" in envs["app"] and ADMIN_LOGIN not in envs["app"]
+    assert all(ADMIN_LOGIN not in text for text in envs.values())
     # the API key reaches no container: the role sets it in the database (see below)
     assert all(ACCESS not in text for text in envs.values())
     assert f"IRIS_SECRET_KEY='{SESSION_KEY}'" in envs["worker"]
@@ -279,6 +281,13 @@ def host(p):
     return os.path.join({str(export)!r}, os.path.basename(p))
 if "ps" in a:
     sys.stdout.write({rows!r})
+elif "up" in a and os.path.exists({str(tmp_path / "app" / "secrets" / "app.env")!r}):
+    open({str(tmp_path / "appenv.log")!r}, "a").write(
+        "--force-recreate " if "--force-recreate" in a else "")
+    open({str(tmp_path / "appenv.log")!r}, "a").write(
+        open({str(tmp_path / "app" / "secrets" / "app.env")!r}).read() + "----\\n")
+elif "psql" in a and "-c" in a:
+    sys.stdout.write("t\\n")
 elif "psql" in a:
     open({str(tmp_path / "psql.stdin.log")!r}, "a").write(sys.stdin.read())
     marker = {str(tmp_path / "key.set")!r}
@@ -330,7 +339,7 @@ def test_main_waits_for_the_api_and_a_second_run_changes_nothing(tmp_path, pki):
         r = run_role(tmp_path, ROLE, "main", v, env=env)
         assert r.returncode == 0, r.stdout + r.stderr
         calls = _calls(tmp_path)
-        assert len([c for c in calls if "--remove-orphans" in c]) == 1
+        assert len([c for c in calls if "--remove-orphans" in c]) == 2  # the start and the re-render
         assert ("/api/ping", f"Bearer {ACCESS}") in front.requests
         again = run_role(tmp_path, ROLE, "main", v, env=env)
         assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
@@ -356,6 +365,46 @@ def test_the_api_key_is_set_in_the_database_through_standard_input_only(tmp_path
         # the key is set once; the second run finds it already so and changes nothing
         again = run_role(tmp_path, ROLE, "main", v, env=env)
         assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+def test_the_real_administrator_password_never_reaches_the_app_or_its_log(tmp_path, pki):
+    with _front(tmp_path, pki) as front:
+        env = _env(pki, **_docker(tmp_path))
+        v = _live(tmp_path, front)
+        r = run_role(tmp_path, ROLE, "main", v, env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+        snaps = (tmp_path / "appenv.log").read_text().split("----\n")
+        snaps = [x for x in snaps if x.strip()]
+        # the first start carries a throwaway password, the later render none; the real one is in neither
+        assert "IRIS_ADM_PASSWORD=" in snaps[0] and ADMIN_LOGIN not in "".join(snaps)
+        assert "IRIS_ADM_PASSWORD" not in snaps[-1] and snaps[-1].startswith("--force-recreate ")
+        assert "IRIS_ADM_PASSWORD" not in (tmp_path / "app" / "secrets" / "app.env").read_text()
+        calls = _calls(tmp_path)
+        assert [c for c in calls if "--force-recreate --no-deps app" in c]
+        assert ADMIN_LOGIN not in " ".join(calls)
+        # the real password was set through the API, on curl's standard input
+        assert [p for p, _ in front.posts] == ["/manage/users/update/1"]
+        assert json.loads(front.posts[0][1]) == {"user_password": ADMIN_LOGIN}
+        assert ADMIN_LOGIN not in (tmp_path / "curl.log").read_text()
+        assert (tmp_path / "data" / "bootstrapped").exists()
+        # a second run does none of it
+        (tmp_path / "docker.log").write_text("")
+        again = run_role(tmp_path, ROLE, "main", v, env=env)
+        assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+        assert not [c for c in _calls(tmp_path) if "--force-recreate" in c]
+        assert len(front.posts) == 1
+
+
+def test_a_refused_password_stops_main_before_the_marker(tmp_path, pki):
+    with _front(tmp_path, pki) as front:
+        env = _env(pki, **_docker(tmp_path))
+        (tmp_path / "data").mkdir()
+        v = _live(tmp_path, front, ready_timeout=5)
+        # a front that refuses the update: nothing is recorded as set up
+        front.httpd.RequestHandlerClass.do_POST = lambda h: h._send(500, {"status": "error"})
+        r = run_role(tmp_path, ROLE, "main", v, env=env)
+        assert r.returncode != 0 and "refused the administrator's password" in r.stdout + r.stderr
+        assert not (tmp_path / "data" / "bootstrapped").exists()
 
 
 def test_a_service_that_never_answers_stops_main_naming_the_wait(tmp_path, pki):
@@ -445,7 +494,8 @@ def test_export_writes_an_object_tree_with_a_sha256_listing(tmp_path):
     assert (exp / "db" / "iris.dump").read_bytes() == b"PGDMP fake dump"
     assert (exp / "files.tar").stat().st_size > 0
     rows = [json.loads(line) for line in (exp / "listing.jsonl").read_text().splitlines()]
-    assert sorted(r["key"] for r in rows) == ["db/iris.dump", "files.tar"]
+    assert sorted(r["key"] for r in rows) == ["db/iris.dump", "files.tar", "version.txt"]
+    assert (exp / "version.txt").read_text().strip() == VERSION
     for r in rows:
         data = (exp / r["key"]).read_bytes()
         assert r["size"] == len(data) and r["sha256"] == hashlib.sha256(data).hexdigest()
@@ -498,13 +548,68 @@ def test_restore_stops_the_app_restores_and_starts_it_again_and_can_be_repeated(
             assert r.returncode == 0, r.stdout + r.stderr
             calls = _calls(tmp_path)
             order = [next(i for i, c in enumerate(calls) if k in c)
-                     for k in (" stop nginx worker app", "pg_restore", " up -d app worker nginx", " psql ")]  # fmt: skip
+                     for k in (" stop nginx worker app", "pg_restore", " up -d app worker nginx", "--file -")]  # fmt: skip
             assert order == sorted(order), calls
+            # a safety export of the populated database came first, beside the source
+            safety = next(i for i, c in enumerate(calls) if "pre-restore-iris.dump.tmp" in c)
+            assert safety < order[0]
+            assert (tmp_path / "data" / "export" / "pre-restore-listing.jsonl").is_file()
+            assert (tmp_path / "data" / "export" / "db" / "pre-restore-iris.dump").is_file()
+            assert (tmp_path / "data" / "export" / "pre-restore-version.txt").is_file()
             assert "--clean" in next(c for c in calls if "pg_restore" in c)
             assert "--single-transaction" in next(c for c in calls if "pg_restore" in c)
             assert not (tmp_path / "data" / "export" / "db" / ".restore.dump").exists()
             assert (tmp_path / "data" / "files" / "server_data" / "a.txt").read_text() == "evidence"
             assert not (tmp_path / "data" / "files" / "server_data" / "stale.txt").exists()
+
+
+def _relist(exp: Path) -> None:
+    """Rewrite the listing so it matches the files as they are now (a source made by hand)."""
+    rows = []
+    for key in ("db/iris.dump", "files.tar", "version.txt"):
+        data = (exp / key).read_bytes()
+        rows.append({"key": key, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+    (exp / "listing.jsonl").write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+
+
+@pytest.mark.parametrize(
+    "newer", ["v99.0.0", "v" + VERSION[1:].rsplit(".", 1)[0] + ".99", "latest"]
+)
+def test_restore_refuses_a_dump_from_a_newer_version_and_writes_nothing(tmp_path, newer):
+    env = {**SECRETS, **_docker(tmp_path)}
+    v = pv(tmp_path)
+    exp = _export(tmp_path, env, v)
+    (exp / "version.txt").write_text(newer + "\n")
+    _relist(exp)  # a listing that is intact: only the version is wrong
+    (tmp_path / "docker.log").unlink()
+    r = run_role(tmp_path, ROLE, "restore", {**v, P + "restore_source": str(exp)}, env=env)
+    assert r.returncode != 0 and "newer than" in r.stdout + r.stderr
+    assert not [
+        c for c in _calls(tmp_path) if "pg_restore" in c or " stop " in f" {c} " or "pg_dump" in c
+    ]
+
+
+def test_restore_accepts_an_older_version_and_a_fresh_database_takes_no_safety_export(
+    tmp_path, pki
+):
+    with _front(tmp_path, pki) as front:
+        env = _env(pki, **_docker(tmp_path))
+        v = _live(tmp_path, front)
+        assert run_role(tmp_path, ROLE, "main", v, env=env).returncode == 0
+        exp = _export(tmp_path, env, v)
+        (exp / "version.txt").write_text("v0.0.1\n")
+        _relist(exp)
+        # no schema yet: the database answers f to the schema question
+        docker = tmp_path / "bin" / "docker"
+        docker.write_text(
+            docker.read_text().replace('sys.stdout.write("t\\n")', 'sys.stdout.write("f\\n")')
+        )
+        shutil.rmtree(exp / "db" / "pre-restore-iris.dump", ignore_errors=True)
+        (tmp_path / "docker.log").write_text("")
+        r = run_role(tmp_path, ROLE, "restore", {**v, P + "restore_source": str(exp)}, env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert not [c for c in _calls(tmp_path) if "pre-restore" in c]
+        assert any("pg_restore" in c for c in _calls(tmp_path))
 
 
 # ----------------------------------------------------------------------------- upgrade

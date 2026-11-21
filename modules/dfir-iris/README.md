@@ -108,10 +108,15 @@ administrator's key to the secret's value, changing the row only when it differs
 therefore rotating the secret and running `main` again. Health proves the key is accepted; a database
 with no user of that login changes nothing and health says so.
 
-⚠ The product writes the first administrator's password into the app container's log once, at that
-first start (`You can now login with user ... and password >>> ... <<<`). The log is rotated
-(3 x 10 MB); anyone who can read `docker logs` on the guest can read it until then. Change the
-password in the product and update the secret if the guest's operators are not the administrator.
+**The password never reaches the app's log.** The product prints the first administrator's password
+into the app container's log when it creates the account. So the first start is given only a
+throwaway password (derived from the secrets, stable, useless once replaced); once the app answers and
+the API key is the secret's, `main` sets the real password through the API (`/manage/users/update`,
+the body on curl's standard input), renders the project again with **no** administrator password in
+the app's environment, force-recreates the app container (the old container's log, with the throwaway,
+goes with it) and writes `<data root>/bootstrapped`. From then on the app is never given a password
+and a re-run changes nothing. Checked against the real images: no password line in the new log, and
+the real password verifies against the stored hash.
 
 ## Backup, export, restore
 
@@ -121,7 +126,8 @@ password in the product and update the secret if the guest's operators are not t
 - `db/iris.dump`: `pg_dump -Fc --no-owner --no-acl`, written in the database's container as its own
   user;
 - `files.tar`: the datastore, the templates and the downloads;
-- `listing.jsonl`: key, size and sha256 of the two (an empty dump is refused).
+- `version.txt`: the product version the dump was taken from (the pinned image's tag);
+- `listing.jsonl`: key, size and sha256 of the three (an empty dump is refused).
 
 A snapshot: every run writes a new one. The database is dumped first, then the files, so a file a row
 names is in the tar. **For a cutover copy, freeze first** (`docker compose stop nginx worker app`),
@@ -131,8 +137,11 @@ export, and start again.
 the data root; the VM's backup job takes the data root whole.
 
 **Restore** (`tasks_from: restore`, `-e dfir_iris_restore_source=<export dir>`): the source is checked
-first and nothing is written unless `listing.jsonl` names exactly the two files with the sizes and
-sha256 they have. Then, with the front, worker and app stopped, the dump is staged as the
+first and nothing is written unless `listing.jsonl` names exactly the three files with the sizes and
+sha256 they have, **and `version.txt` is not newer than the pinned image** (a database a newer product has
+migrated cannot be opened by an older one; upgrade the pin first). Over a database that already has the
+product's schema, a **safety export** (`pre-restore-*` beside the source in `export/`, overwritten by the next restore's) is
+taken first. Then, with the front, worker and app stopped, the dump is staged as the
 database's user, hashed again, and restored with `pg_restore --clean --if-exists
 --single-transaction --exit-on-error`; the files directory is emptied (a delta replaces, it does not
 add) and the archive unpacked into it, owned by the app's user; the app is started (it migrates the
@@ -159,7 +168,8 @@ restored into this module's 2.4.29 database with `pg_restore --clean --if-exists
 forward and answered healthy. To do it for real:
 
 1. Put the dump at `<dir>/db/iris.dump`, make an empty archive (`tar -cf <dir>/files.tar -T /dev/null`;
-   only the database was archived) and the listing
+   only the database was archived), write the source's product version into `<dir>/version.txt`
+   (`v2.4.27` for the archived dump) and the listing for the three files
    (`sha256sum`, `stat -c %s`, one JSON object per file with `key`, `size`, `sha256`).
 2. Set the secrets `session-key` and `password-salt` to the old instance's values (its `.env`:
    `IRIS_SECRET_KEY`, `IRIS_SECURITY_PASSWORD_SALT`). The administrator's password is the restored

@@ -7,6 +7,9 @@
 # directory is emptied and the archive unpacked into it and given to the app's user; the staged copy
 # is removed and the app started again whatever happened (it brings the schema forward to the
 # running image as it starts). Run again with a newer export for the final delta after a freeze:
+# --clean replaces everything the first restore wrote. Over a database that already has the product's
+# schema a safety export (pre-restore-*, in export/) is taken first, and a source taken from a NEWER
+# product version than the pinned one is refused (its version.txt, listed and hashed with the rest).
 # --clean replaces everything the first restore wrote. The restored database brings its own
 # accounts and passwords; the administrator's API key is set to the secret's value (reconcile.yml).
 - block:
@@ -25,14 +28,14 @@
         path: "{{ dfir_iris_restore_source }}/{{ item }}"
         checksum_algorithm: sha256
         follow: false
-      loop: [db/iris.dump, files.tar]
+      loop: [db/iris.dump, files.tar, version.txt]
       register: dfir_iris_restore_stat
     - name: Refuse a source that is not exactly what its listing says (nothing is written)
       ansible.builtin.assert:
         that:
           - >-
             (dfir_iris_restore_listing.content | b64decode).splitlines() | reject('equalto', '')
-            | map('from_json') | map(attribute='key') | sort == ['db/iris.dump', 'files.tar']
+            | map('from_json') | map(attribute='key') | sort == ['db/iris.dump', 'files.tar', 'version.txt']
           - dfir_iris_restore_stat.results | rejectattr('stat.exists') | list | length == 0
           - dfir_iris_restore_stat.results | selectattr('stat.islnk', 'equalto', true) | list | length == 0
           - dfir_iris_restore_stat.results[0].stat.size | int > 0
@@ -45,6 +48,36 @@
             == (dfir_iris_restore_listing.content | b64decode).splitlines() | reject('equalto', '')
                | map('from_json') | map(attribute='size') | map('int') | sort
         fail_msg: "case-management: {{ dfir_iris_restore_source }} is not an intact export (listing, sizes or sha256 differ)"
+    - name: Read the version the source was taken from
+      ansible.builtin.slurp:
+        src: "{{ dfir_iris_restore_source }}/version.txt"
+      register: dfir_iris_restore_version
+    - name: Refuse a dump from a NEWER product version than the pinned one (nothing is written)
+      ansible.builtin.assert:
+        that:
+          - (dfir_iris_restore_version.content | b64decode | trim) is match('^v[0-9]+\.[0-9]+\.[0-9]+\Z')
+          - (dfir_iris_restore_version.content | b64decode | trim)[1:] is version(dfir_iris_app_tag[1:], '<=')
+        fail_msg: >-
+          case-management: the source was taken from {{ dfir_iris_restore_version.content | b64decode | trim | to_json }},
+          newer than (or not a version like) the pinned {{ dfir_iris_app_tag }}; a database a newer product
+          has migrated cannot be opened by an older one (upgrade the pin first)
+    - name: Is there a schema to protect (the database is populated)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ dfir_iris_dir }}/docker-compose.yml", up, -d, --wait, db, broker]
+      changed_when: false
+    - name: Ask the database whether the product's schema exists
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ dfir_iris_dir }}/docker-compose.yml", exec, -T, db,
+               psql, -U, "{{ dfir_iris_db_user }}", -d, "{{ dfir_iris_db_name }}", --no-psqlrc,
+               --tuples-only, --no-align, -c, "SELECT to_regclass('public.cases') IS NOT NULL"]
+      register: dfir_iris_has_schema
+      changed_when: false
+      check_mode: false
+    - name: Take a safety export first (pre-restore-*, beside the source, never over it)
+      ansible.builtin.include_tasks: dump.yml
+      vars:
+        dfir_iris_dump_prefix: pre-restore-
+      when: dfir_iris_has_schema.stdout | trim == 't'
     - name: Restore with the app, the worker and the front stopped
       block:
         - name: Make sure the database and the broker are up

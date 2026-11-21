@@ -19,6 +19,15 @@
 # afterwards, so rotating it is done in the product, not here (README). The API key does not reach a
 # container at all: it is set in the database once the app is up (reconcile.yml). A reference with
 # no value stops the run in credentials.yml, naming it, before any file is written.
+# The product writes the first administrator's password into the app's log when it creates the
+# account, so until the real one is set (password.yml) the app is given a throwaway one derived from
+# the secrets (stable, so a re-run changes nothing; it opens nothing once the real one is set), and
+# once the marker below exists the app gets no password at all.
+- name: Has the first administrator been set up
+  ansible.builtin.stat:
+    path: "{{ dfir_iris_data_root }}/bootstrapped"
+  register: dfir_iris_marker
+
 - name: Read the credentials
   ansible.builtin.set_fact:
     dfir_iris_secret_env:
@@ -30,12 +39,18 @@
         POSTGRES_ADMIN_PASSWORD: "{{ lookup('hnx_secret', dfir_iris_db_admin_login_ref) }}"
         IRIS_SECRET_KEY: "{{ lookup('hnx_secret', dfir_iris_session_key_ref) }}"
         IRIS_SECURITY_PASSWORD_SALT: "{{ lookup('hnx_secret', dfir_iris_salt_ref) }}"
-        IRIS_ADM_PASSWORD: "{{ lookup('hnx_secret', dfir_iris_admin_login_ref) }}"
+        IRIS_ADM_PASSWORD: "{{ ((lookup('hnx_secret', dfir_iris_admin_login_ref) ~ ':' ~ lookup('hnx_secret', dfir_iris_session_key_ref) ~ ':bootstrap') | hash('sha256'))[:32] ~ 'aA1-' }}"
       worker:
         POSTGRES_PASSWORD: "{{ lookup('hnx_secret', dfir_iris_db_login_ref) }}"
         POSTGRES_ADMIN_PASSWORD: "{{ lookup('hnx_secret', dfir_iris_db_admin_login_ref) }}"
         IRIS_SECRET_KEY: "{{ lookup('hnx_secret', dfir_iris_session_key_ref) }}"
         IRIS_SECURITY_PASSWORD_SALT: "{{ lookup('hnx_secret', dfir_iris_salt_ref) }}"
+  no_log: true
+
+- name: Once set up, the app is given no administrator password
+  ansible.builtin.set_fact:
+    dfir_iris_secret_env: "{{ dfir_iris_secret_env | combine({'app': dfir_iris_secret_env.app | dict2items | rejectattr('key', 'equalto', 'IRIS_ADM_PASSWORD') | items2dict}) }}"
+  when: dfir_iris_marker.stat.exists
   no_log: true
 
 - name: Render and start the service
@@ -78,3 +93,7 @@
 - name: Wait for the API to answer with the key
   ansible.builtin.include_tasks: wait.yml
   when: dfir_iris_start | bool
+
+- name: Set the real administrator password, drop the throwaway and discard the app's log
+  ansible.builtin.include_tasks: bootstrap_done.yml
+  when: dfir_iris_start | bool and not ansible_check_mode and not dfir_iris_marker.stat.exists
