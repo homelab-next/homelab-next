@@ -456,7 +456,7 @@ def cmd_archive_apply(args: argparse.Namespace) -> dict[str, Any]:
                 with open(tmp, "xb") as out:
                     out.write(src.read(MAX_MEMBER_BYTES + 1))
                 os.chown(tmp, args.uid, args.gid)
-                os.chmod(tmp, 0o640)
+                os.chmod(tmp, 0o600)
                 placed.append((tmp, rel))
         for tmp, rel in placed:
             dest = os.path.join(config, rel)
