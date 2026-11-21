@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# guest 1.9: a container on its bridge's native (untagged) VLAN
+id: guest:native-box
+kind: lxc
+provisioning: terraform
+placement: {node: hv-a, vmid: 251}
+resources:
+  cpu: {cores: 2}
+  memory: {size_mb: 2048}
+  disks: [{name: rootfs, size_gb: 16, pool: fast}]
+image: {logical: debian-12-lxc, kind: template-clone, os_type: linux-6}
+network: {zone: mgmt, ip: 192.0.2.40, vlan_tag_mode: native}
+capability: cap:inference
+owners: {primary: ml-team}

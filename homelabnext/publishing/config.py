@@ -18,6 +18,7 @@ from pathlib import Path
 
 from homelabnext import tlp
 from homelabnext.publishing import feed as fd
+from homelabnext.publishing import gate as gt
 from homelabnext.publishing.pages import PagesConfig
 
 MODES = ("stage", "dry-run", "live")
@@ -117,6 +118,14 @@ class Config:
     staging_min_age_s: float = 172800.0
     lane_sources: tuple[LaneSource, ...] = ()
     live_source: LiveSource | None = None
+    posture_rules_disabled: tuple[str, ...] = ()
+
+
+def _posture_disabled(names: object) -> tuple[str, ...]:
+    try:
+        return tuple(sorted(gt.check_posture_rules_disabled(names)))
+    except gt.GateError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def _abs(doc: dict, key: str) -> Path:
@@ -318,4 +327,5 @@ def load(path: Path, mode_override: str | None = None) -> Config:
         staging_min_age_s=float(doc.get("staging_min_age_s", 172800)),
         lane_sources=lanes,
         live_source=live,
+        posture_rules_disabled=_posture_disabled(doc.get("posture_rules_disabled", [])),
     )

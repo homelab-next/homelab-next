@@ -1,6 +1,6 @@
 ---
 summary: 'The compute model: one vendor-neutral file per guest, its validation, generators for IaC, cloud-init, inventory, firewall and baselines, and applying them.'
-summary_of: outline:sha256:4172cf09f0756737
+summary_of: outline:sha256:830392d4f8db595b
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compute (guest) model
@@ -10,7 +10,7 @@ render everything else from those files: infrastructure-as-code, hypervisor comm
 seeds, an Ansible inventory, registry hosts and backup jobs. Nothing here needs hardware: the
 whole chain is tested with golden files from a synthetic fleet.
 
-* Contract: `schemas/platform/guest.schema.json` (version 1.8, additive over 1.0 to 1.7; frozen copies in `schemas/_frozen/`).
+* Contract: `schemas/platform/guest.schema.json` (version 1.9, additive over 1.0 to 1.8; frozen copies in `schemas/_frozen/`).
 * Baseline set: `schemas/platform/baseline_set.schema.json` (version 1.2; `_baselines.yml` beside the guest files; [Baselines and defense layers](#baselines-and-defense-layers), ADR-0016).
 * Code: `homelabnext/compute/`. CLI: `hnx guests`.
 * Example fleet and goldens: `tests/compute/fleet/`, `tests/compute/golden/`.
@@ -144,6 +144,28 @@ placed on a node `_nodes.yml` does not list is refused, so a typo cannot escape 
 `media` is informational. (The guest schema's `status` note that generators do not read it still holds; validation does.) Pool sizes are what guests may allocate (after redundancy: a raidz2 of five 10 TB disks
 gives about 30 TB), so thin provisioning and snapshots are left out, deliberately: the check is
 for planning, not for what `zfs list` shows on the day.
+
+### Native (untagged) VLAN
+
+A bridge port can carry one VLAN untagged: the switch port's native VLAN. A guest on it must NOT
+tag it, and the guest file cannot see the switch port (LL-025: a guest tagged with the native VLAN
+had no connectivity while the same file worked on every other VLAN). `network.vlan_tag_mode`
+(`in_bridge` tags the zone's VLAN on the bridge; `per_vlan_bridge` attaches to `<bridge>v<vlan>`)
+has a third value, `native` (guest 1.9): the NIC attaches to the bridge with no `vlan_id`. The node
+states the fact the guest depends on:
+
+```yaml
+nodes:
+  hv-1:
+    native_vlans: {default: 10}   # bridge (default = the site's default bridge) -> its native VLAN
+```
+
+Validation refuses: a `native` NIC whose node declares no native VLAN for its bridge, or a different
+one than the zone's `vlan_id`; a `native` NIC in a zone with no VLAN; two `native` NICs of one node
+and bridge in zones of different VLANs (a bridge has one native VLAN); and the mirror image, a
+NIC that still tags (`in_bridge`) the VLAN the node declares native on its bridge. A node with no
+`native_vlans` asks nothing of the guests that tag. The libvirt target attaches a `native` NIC to
+the plain bridge, untagged.
 
 ### Node mirror
 
