@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Did the project exist before this run
+  ansible.builtin.stat:
+    path: "{{ intelowl_dir }}/docker-compose.yml"
+  register: intelowl_existing
+
+- name: Render the application server's settings and the front's configuration
+  ansible.builtin.include_tasks: config.yml
+
+# The passwords reach only the env_files (0600). POSTGRES_PASSWORD sets the role's password when the
+# cluster is first created and is ignored afterwards. A reference with no value stops the run in
+# credentials.yml, naming it, before any file is written.
+- name: Read the credentials
+  ansible.builtin.set_fact:
+    intelowl_secret_env:
+      postgres:
+        POSTGRES_PASSWORD: "{{ lookup('hnx_secret', intelowl_db_login_ref) }}"
+      uwsgi: &app_secrets
+        DB_PASSWORD: "{{ lookup('hnx_secret', intelowl_db_login_ref) }}"
+        DJANGO_SECRET: "{{ lookup('hnx_secret', intelowl_signing_ref) }}"
+      daphne: *app_secrets
+      beat: *app_secrets
+      worker: *app_secrets
+  no_log: true
+
+# Rendered first and not started: the application's first boot must find its log files owned by its
+# service user. Its entrypoint hands the log directory to that user BEFORE its management commands
+# run as root and create the log files, so on a fresh data root the server (which drops to the service
+# user) cannot open them, exits, and the dependent containers refuse to start; one run of a management
+# command first creates the files, and the entrypoint's own hand-over then covers them.
+- name: Render the project (not started)
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ intelowl_app.compose_app_name }}"
+    compose_app_dir: "{{ intelowl_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ intelowl_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ intelowl_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ intelowl_app.compose_app_owner }}"
+    compose_app_group: "{{ intelowl_app.compose_app_group }}"
+    compose_app_start: false
+    compose_app_validate_with_docker: "{{ intelowl_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ intelowl_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ intelowl_secret_env }}"
+    compose_app_bind_roots: ["{{ intelowl_dir }}", "{{ intelowl_data_root }}"]
+  no_log: true
+
+- name: Create the application's log files before its first boot
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", run, --rm, -T, --no-deps,
+           uwsgi, sh, -c,
+           "mkdir -p /var/log/intel_owl/django /var/log/intel_owl/uwsgi /var/log/intel_owl/asgi && python3 manage.py check"]
+  changed_when: true
+  when: intelowl_start | bool and not intelowl_existing.stat.exists
+
+- name: Start the project
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ intelowl_app.compose_app_name }}"
+    compose_app_dir: "{{ intelowl_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ intelowl_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ intelowl_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ intelowl_app.compose_app_owner }}"
+    compose_app_group: "{{ intelowl_app.compose_app_group }}"
+    compose_app_start: "{{ intelowl_app.compose_app_start }}"
+    compose_app_validate_with_docker: false
+    compose_app_spec: "{{ intelowl_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ intelowl_secret_env }}"
+    compose_app_bind_roots: ["{{ intelowl_dir }}", "{{ intelowl_data_root }}"]
+  when: intelowl_start | bool
+  no_log: true
+
+# A changed setting file reaches the two containers that read it only by a restart
+- name: Restart the server and the front that read a changed setting file
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", restart, uwsgi, nginx]
+  changed_when: true
+  when: intelowl_start | bool and intelowl_config is changed and intelowl_existing.stat.exists
+
+- name: Wait for the application to answer behind the front (a refusal of an anonymous call is an answer)
+  ansible.builtin.uri:
+    url: "http://{{ intelowl_bind }}:{{ intelowl_port | int }}/api/analyzer"
+    status_code: [401, 403]
+    timeout: "{{ intelowl_health_timeout | int }}"
+  register: intelowl_up
+  until: intelowl_up.status | default(0) in [401, 403]
+  retries: "{{ ((intelowl_ready_timeout | int) / 5) | int }}"
+  delay: 5
+  changed_when: false
+  when: intelowl_start | bool
+
+- name: Create the first administrator on an empty database
+  ansible.builtin.include_tasks: exec.yml
+  vars:
+    intelowl_exec_label: ADMIN
+    intelowl_exec_code: "{{ intelowl_admin_code }}"
+    intelowl_exec_env:
+      HNX_ADMIN_USER: "{{ intelowl_admin_user }}"
+      HNX_ADMIN_EMAIL: "{{ intelowl_admin_email }}"
+      HNX_ADMIN_PASSWORD: "{{ lookup('hnx_secret', intelowl_admin_login_ref) }}"
+  when: intelowl_start | bool and intelowl_admin_bootstrap | bool
+
+- name: Seed the API token and its life
+  ansible.builtin.include_tasks: token.yml
+  when: intelowl_start | bool
+
+- name: Apply the optional OTX key
+  ansible.builtin.include_tasks: exec.yml
+  vars:
+    intelowl_exec_label: OTX
+    intelowl_exec_code: "{{ intelowl_otx_code }}"
+    intelowl_exec_env:
+      HNX_OTX_KEY: "{{ lookup('hnx_secret', intelowl_otx_key_ref) }}"
+  when: intelowl_start | bool and intelowl_otx_key_ref | length > 0

@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's
+# paths). The lake is the permanent copy of every landed event: what a backup adds is the spool's
+# unlanded tail, the writer's offset and the rendered reports. The configuration directory is not
+# listed: it holds the credentials and is re-rendered by the install from the secret store. The
+# export runs first, so the backup holds a consistent copy of the state.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Export the state and the reports
+      ansible.builtin.include_tasks: export.yml
+    - name: Write the backup manifest
+      ansible.builtin.copy:
+        dest: "{{ honeypot_data_root }}/backup-manifest.json"
+        content: "{{ {'service': honeypot_logical_id,
+                      'paths': [honeypot_data_root],
+                      'restore_from': honeypot_export_dir,
+                      'note': 'the configuration directory is not listed: it holds the credentials and is re-rendered by the install; the lake holds every landed event; export/ holds a copy of the writer offset (state/) and the rendered reports'} | to_nice_json }}\n"
+        owner: "{{ honeypot_owner }}"
+        group: "{{ honeypot_group }}"
+        mode: "0640"
+  tags: [backup]

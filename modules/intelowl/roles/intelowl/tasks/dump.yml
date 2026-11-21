@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# The export (object-tree): db/intel_owl.dump (pg_dump's custom format, written in the database's
+# container as its own user, so the file is the database's and never root's) and listing.jsonl (key,
+# size, sha256). A snapshot: every run writes a new one. Every job, analyzer configuration, playbook,
+# account and token is in the database; analyzer downloads and logs are recreated and not exported.
+- name: Dump the database (pg_dump, custom format, in its container)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", exec, -T, postgres,
+           pg_dump, -U, "{{ intelowl_db_user }}", -d, "{{ intelowl_db_name }}", -Fc, --no-owner, --no-acl,
+           -f, "{{ intelowl_container_export }}/.intel_owl.dump.tmp"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Put the dump in place
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ intelowl_dir }}/docker-compose.yml", exec, -T, postgres,
+           mv, -f, "{{ intelowl_container_export }}/.intel_owl.dump.tmp",
+           "{{ intelowl_container_export }}/intel_owl.dump"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Read the dump (size, sha256)
+  ansible.builtin.stat:
+    path: "{{ intelowl_data_root }}/export/db/intel_owl.dump"
+    checksum_algorithm: sha256
+  register: intelowl_export_stat
+  tags: [backup, export]
+
+- name: Refuse an empty dump
+  ansible.builtin.assert:
+    that:
+      - intelowl_export_stat.stat.exists
+      - intelowl_export_stat.stat.size | int > 0
+    fail_msg: "intelowl: the dump is missing or empty"
+  tags: [backup, export]
+
+- name: Write the listing
+  ansible.builtin.copy:
+    content: "{{ {'key': 'db/intel_owl.dump', 'size': intelowl_export_stat.stat.size, 'sha256': intelowl_export_stat.stat.checksum} | to_json(sort_keys=true) }}\n"
+    dest: "{{ intelowl_data_root }}/export/listing.jsonl"
+    owner: "{{ intelowl_owner }}"
+    group: "{{ intelowl_group }}"
+    mode: "0600"
+  tags: [backup, export]

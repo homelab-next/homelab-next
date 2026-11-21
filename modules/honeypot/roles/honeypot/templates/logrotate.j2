@@ -1,0 +1,18 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ honeypot_marker }}, instance {{ honeypot_logical_id }}); local changes are overwritten.
+# The spool grows without bound otherwise (a real one reached 22 GiB). The receiver holds the file
+# open for append on a long-lived connection, so a rename would keep being written to: copytruncate
+# only. The prerotate lands the unlanded tail first (the lake is the permanent copy; the writer
+# resets its offset when the file shrinks), with no `|| true`: if landing fails, logrotate aborts
+# instead of truncating an unlanded tail.
+{{ honeypot_spool_file }} {
+    daily
+    rotate {{ honeypot_logrotate_keep | int }}
+    compress
+    copytruncate
+    missingok
+    notifempty
+    prerotate
+        {{ honeypot_systemctl_cli }} start {{ honeypot_lake_unit }}
+    endscript
+}

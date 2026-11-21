@@ -1,0 +1,224 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the honeypot receiver, the daily lake writer and the daily intel report.
+    options: &opts
+      honeypot_logical_id:
+        type: str
+        description: The instance's id (the unit set's name), e.g. honeypot.
+        required: true
+      honeypot_config_dir:
+        type: path
+        description: Where the environment file, the credentials directory and the lake CA are written.
+        default: /etc/hnx/{{ honeypot_logical_id }}
+      honeypot_data_root:
+        type: path
+        description: 'The module''s data root on the host: spool/, state/, reports/, export/.'
+        default: /var/lib/hnx-modules/{{ honeypot_logical_id }}
+      honeypot_owner:
+        type: str
+        description: Owner of the install and config directories and the credential files.
+        default: root
+      honeypot_user:
+        type: str
+        description: The unprivileged account the receiver and the jobs run as.
+        default: hnx-{{ honeypot_logical_id }}
+      honeypot_group:
+        type: str
+        description: The group of that account; it owns the data root's working directories.
+        default: hnx-{{ honeypot_logical_id }}
+      honeypot_manage_accounts:
+        type: bool
+        description: 'Create the user and group (false: the site provides them).'
+        default: true
+      honeypot_bind:
+        type: str
+        description: 'The guest address the receiver listens on (the interface the honeypot pushes arrive on). Required; all interfaces is refused unless honeypot_allow_any_bind.'
+        required: true
+      honeypot_allow_any_bind:
+        type: bool
+        description: 'Allow honeypot_bind to be all interfaces (0.0.0.0 or ::). Leave false: the receiver has no authentication and relies on the firewall.'
+        default: false
+      honeypot_idle_timeout_s:
+        type: int
+        description: A connection idle this many seconds is closed.
+        default: 120
+      honeypot_max_connections:
+        type: int
+        description: Concurrent connections allowed; more are closed at once.
+        default: 32
+      honeypot_port:
+        type: int
+        description: The TCP port the receiver listens on.
+        default: 9000
+      honeypot_max_line_bytes:
+        type: int
+        description: A received line longer than this is dropped and counted, never written in part.
+        default: 1000000
+      honeypot_spool_max_bytes:
+        type: int
+        description: The spool stops accepting (and counts the drops) at this size.
+        default: 8589934592
+      honeypot_logrotate_keep:
+        type: int
+        description: Rotated spool files kept (the lake writer lands the unlanded tail before each rotation).
+        default: 7
+      honeypot_spool_max_age_h:
+        type: int
+        description: Health fails when nothing was received for this many hours; 0 does not judge.
+        default: 24
+      honeypot_lake_query_id:
+        type: str
+        description: The registry id of the lake query service; its URL is resolved at run time.
+        default: lake-query
+      honeypot_lake_url:
+        type: str
+        description: 'The query service''s https URL, when the registry is not used; empty: from the registry.'
+        default: ''
+      honeypot_lake_user:
+        type: str
+        description: The query-service account the writer and the report sign in as.
+        default: honeypot-writer
+      honeypot_lake_login_ref:
+        type: str
+        description: secret:<name> of that account's password.
+        default: secret:honeypot/lake-password
+      honeypot_lake_ca_ref:
+        type: str
+        description: 'secret:<name> holding the lab CA (PEM) the query service is verified with; empty: the system roots.'
+        default: ''
+      honeypot_lake_catalog:
+        type: str
+        description: The query service's catalog the events table lives in.
+        required: true
+      honeypot_lake_schema:
+        type: str
+        description: The schema of the events table.
+        default: honeypot
+      honeypot_lake_table:
+        type: str
+        description: The events table's name.
+        default: events
+      honeypot_lake_oncalendar:
+        type: str
+        description: 'The lake writer timer''s OnCalendar (daily: every run is a lake commit per statement).'
+        default: '*-*-* 12:00:00 UTC'
+      honeypot_batch_rows:
+        type: int
+        description: Rows read from the spool per batch before they are written.
+        default: 5000
+      honeypot_ensure_table:
+        type: bool
+        description: Create the schema and table (the contract's columns) when absent; an existing table is only checked.
+        default: false
+      honeypot_freshness_max_age_h:
+        type: int
+        description: Health fails when the table's newest event is older than this or the table is empty; 0 does not judge.
+        default: 36
+      honeypot_landing_max_age_h:
+        type: int
+        description: Health fails when the last successful landing is older than this; 0 does not judge.
+        default: 36
+      honeypot_report_enabled:
+        type: bool
+        description: Install the daily report job and its timer.
+        default: true
+      honeypot_report_oncalendar:
+        type: str
+        description: The report timer's OnCalendar.
+        default: '*-*-* 07:15:00 UTC'
+      honeypot_gateway_id:
+        type: str
+        description: 'The registry id of the model tier (an OpenAI-compatible gateway); empty: the brief is skipped.'
+        default: ''
+      honeypot_gateway_path:
+        type: str
+        description: The chat-completions path on the gateway.
+        default: /v1/chat/completions
+      honeypot_gateway_key_ref:
+        type: str
+        description: secret:<name> of the gateway key (used when the gateway id is set).
+        default: secret:honeypot/gateway-key
+      honeypot_gateway_model:
+        type: str
+        description: The model alias the brief asks for (required when the gateway id is set).
+        default: ''
+      honeypot_llm_max_tokens:
+        type: int
+        description: The brief's output-token budget; large, because a reasoning model spends it thinking first.
+        default: 4000
+      honeypot_llm_timeout_s:
+        type: int
+        description: The per-attempt timeout of the brief's request.
+        default: 240
+      honeypot_llm_attempts:
+        type: int
+        description: Attempts at the brief before it reports the model tier unavailable.
+        default: 3
+      honeypot_llm_retry_sleep_s:
+        type: int
+        description: Seconds between attempts.
+        default: 20
+      honeypot_llm_temperature:
+        type: float
+        description: The brief's sampling temperature.
+        default: 0.2
+      honeypot_allow_plain_http:
+        type: bool
+        description: Accept an http:// gateway URL (the key would travel in clear).
+        default: false
+      honeypot_enrich:
+        type: bool
+        description: Enrich attacker IPs from public sources (needs the internet egress grant).
+        default: true
+      honeypot_site_label:
+        type: str
+        description: One line saying what the decoy imitates; shown in the report header and the model prompt.
+        default: decoy service
+      honeypot_friendly_ips:
+        type: list
+        description: 'The site''s own egress addresses: probes from them are excluded from the attacker ranking.'
+        elements: str
+        default: []
+      honeypot_cti_table:
+        type: str
+        description: 'catalog.schema.table of a threat-intelligence table with an iocs array column to cross-reference; empty: none.'
+        default: ''
+      honeypot_report_keep_days:
+        type: int
+        description: Dated report copies older than this many days are removed.
+        default: 30
+      honeypot_last_run_dir:
+        type: path
+        description: The shared per-host directory of last-run records (role last_run).
+        default: /var/lib/homelabnext/last-run
+      honeypot_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      honeypot_health_timeout:
+        type: int
+        description: Seconds a health probe may take.
+        default: 10
+      honeypot_restore_source:
+        type: str
+        description: The directory a previous export wrote, for the restore hook.
+        default: ''
+  health:
+    short_description: Fail unless the receiver, the timers, the credentials and the lake are healthy now.
+    options: *opts
+  readiness:
+    short_description: Fail unless every dependency is reachable before anything is written.
+    options: *opts
+  backup:
+    short_description: Declare what a backup must capture.
+    options: *opts
+  restore:
+    short_description: Restore the writer's state from an export.
+    options: *opts
+  upgrade:
+    short_description: Validate the module's own re-converge (no pinned artefact).
+    options: *opts
+  export:
+    short_description: Write the open-format exit copy of the state and the reports.
+    options: *opts

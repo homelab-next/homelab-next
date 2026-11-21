@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate and record an image bump (compose_app upgrade) for the application and its front together
+# (intelowl_target_image and intelowl_target_nginx_image: one release, both of the same version tag),
+# the database (intelowl_target_postgres_image, a minor version only: a major one is a dump and a
+# restore into a new cluster) or the broker (intelowl_target_redis_image). The playbook exports first,
+# then converges; the application migrates its database on first start.
+- block:
+    - name: Name the target
+      ansible.builtin.set_fact:
+        intelowl_up_app: "{{ intelowl_target_image | default('') }}"
+        intelowl_up_front: "{{ intelowl_target_nginx_image | default('') }}"
+        intelowl_up_db: "{{ intelowl_target_postgres_image | default('') }}"
+        intelowl_up_redis: "{{ intelowl_target_redis_image | default('') }}"
+    - name: Refuse a target that is not pinned by tag and digest, or is another repository
+      ansible.builtin.assert:
+        that:
+          # the application and its front move together or not at all; otherwise one target
+          - >-
+            (intelowl_up_app | length > 0 and intelowl_up_front | length > 0
+             and [intelowl_up_db, intelowl_up_redis] | select('ne', '') | list | length == 0)
+            or (intelowl_up_app | length == 0 and intelowl_up_front | length == 0
+                and [intelowl_up_db, intelowl_up_redis] | select('ne', '') | list | length == 1)
+          - >-
+            intelowl_up_app | length == 0 or (intelowl_up_app is match(intelowl_pinned_ref_pattern)
+            and intelowl_up_app.split('@')[0].rsplit(':', 1)[0] == intelowl_repository
+            and intelowl_up_app.split('@')[0].rsplit(':', 1)[1] is match(intelowl_version_tag_pattern))
+          - >-
+            intelowl_up_front | length == 0 or (intelowl_up_front is match(intelowl_pinned_ref_pattern)
+            and intelowl_up_front.split('@')[0].rsplit(':', 1)[0] == intelowl_front_repository
+            and intelowl_up_front.split('@')[0].rsplit(':', 1)[1] == intelowl_up_app.split('@')[0].rsplit(':', 1)[1])
+          - >-
+            intelowl_up_redis | length == 0 or (intelowl_up_redis is match(intelowl_pinned_ref_pattern)
+            and intelowl_up_redis.split('@')[0].rsplit(':', 1)[0] == intelowl_broker_repository)
+          - >-
+            intelowl_up_db | length == 0 or
+            (intelowl_up_db is match(intelowl_pinned_ref_pattern)
+             and intelowl_up_db.split('@')[0].rsplit(':', 1)[0] == intelowl_db_repository
+             and intelowl_up_db.split('@')[0].rsplit(':', 1)[1].split('.')[0]
+                 == intelowl_db_tag.split('.')[0])
+        fail_msg: >-
+          intelowl: name the application and its front together ({{ intelowl_repository }}:vX.Y.Z@sha256:<64 hex>
+          and {{ intelowl_front_repository }}:vX.Y.Z@sha256:<64 hex>, the same tag), or one of
+          {{ intelowl_db_repository }}:<same major>.<minor>@sha256:<64 hex> or
+          {{ intelowl_broker_repository }}:<tag>@sha256:<64 hex>
+    - name: Refuse an application release older than the one running
+      ansible.builtin.assert:
+        that:
+          - >-
+            intelowl_up_app | length == 0 or
+            (intelowl_up_app.split('@')[0].rsplit(':', 1)[1][1:] | split('.') | map('int') | list)
+            >= (intelowl_tag[1:] | split('.') | map('int') | list)
+        fail_msg: "intelowl: the application migrates its database forward on first start and cannot go back; {{ intelowl_up_app }} is older than {{ intelowl_tag }}"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade), the application first
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        intelowl_target: "{{ intelowl_up_app | default('', true) or intelowl_up_db | default('', true) or intelowl_up_redis }}"
+        compose_app_name: intelowl
+        compose_app_dir: "{{ intelowl_app.compose_app_dir }}"
+        compose_app_owner: "{{ intelowl_app.compose_app_owner }}"
+        compose_app_group: "{{ intelowl_app.compose_app_group }}"
+        compose_app_spec: "{{ intelowl_app.compose_app_spec }}"
+        compose_app_upgrade_service: "{{ 'uwsgi' if intelowl_up_app | length > 0 else ('postgres' if intelowl_up_db | length > 0 else 'redis') }}"
+        compose_app_upgrade_tag: "{{ intelowl_target.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ intelowl_target.split('@')[1] }}"
+  tags: [upgrade]

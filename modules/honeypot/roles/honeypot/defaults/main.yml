@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+# The honeypot receiver, lake writer and daily intel report as one module role (modules/honeypot):
+# an always-on ingest-only socket receiver that spools the honeypot's pushed JSON events, a daily
+# lake-writer job that lands them in the lake's honeypot events table through the query service, and
+# a daily report job (enrichment, a model-written brief, one HTML page). Nothing here is a lab value:
+# the lake and gateway are registry ids, every secret a `secret:` reference, every address the
+# overlay's.
+# honeypot_logical_id (required): the instance id, e.g. honeypot
+# honeypot_lake_catalog (required): the query service's catalog name for the lake (the lake fixes it:
+#   the writers say <catalog>.<schema>.<table>)
+
+honeypot_config_dir: "/etc/hnx/{{ honeypot_logical_id }}"
+# the module's data root (docs/modules/data.md): spool/ (the receiver's file), state/ (the lake
+# writer's offset and last-run record), reports/ (the rendered pages)
+honeypot_data_root: "/var/lib/hnx-modules/{{ honeypot_logical_id }}"
+honeypot_owner: root
+honeypot_user: "hnx-{{ honeypot_logical_id }}"
+honeypot_group: "hnx-{{ honeypot_logical_id }}"
+honeypot_manage_accounts: true
+
+# --- the receiver ---------------------------------------------------------------------------------
+# the address and port the honeypot's shipper pushes to. Bind the interface the pushes arrive on
+# (the overlay's tunnel address); the guest firewall admits only the sender's address.
+# honeypot_bind (required): the guest address the pushes arrive on; no default (all interfaces is refused)
+honeypot_allow_any_bind: false
+# a connection idle this long is closed; connections past the cap are refused
+honeypot_idle_timeout_s: 120
+honeypot_max_connections: 32
+honeypot_port: 9000
+honeypot_max_line_bytes: 1000000
+# the spool stops accepting (and counts the drops) at this size: a flood cannot fill the guest
+honeypot_spool_max_bytes: 8589934592
+# rotation of the spool: the lake writer lands the unlanded tail first (a prerotate hook)
+honeypot_logrotate_keep: 7
+# health: fail when nothing was received for this many hours (0: do not judge)
+honeypot_spool_max_age_h: 24
+
+# --- the lake writer --------------------------------------------------------------------------------
+# the lake query service (a registry id); its URL is resolved at run time unless honeypot_lake_url is set
+honeypot_lake_query_id: lake-query
+honeypot_lake_url: ""
+honeypot_lake_user: honeypot-writer
+honeypot_lake_login_ref: secret:honeypot/lake-password
+# the lab CA (a secret holding PEM) the query service is verified with; empty: the system roots
+honeypot_lake_ca_ref: ""
+honeypot_lake_schema: honeypot
+honeypot_lake_table: events
+# one statement is one lake commit: the writer runs daily (below), never every few minutes (that
+# once made thousands of snapshots a week) and its statements are as large as the service allows
+honeypot_lake_oncalendar: "*-*-* 12:00:00 UTC"
+honeypot_batch_rows: 5000
+# create the schema and table (the contract's 26 columns) when absent: for a fresh lake only; an
+# imported table is checked, never altered
+honeypot_ensure_table: false
+# health: fail when the table's newest event is older than this many hours or the table is empty
+# (0: do not judge); the sender being silent is a finding, the writer being broken is a finding
+honeypot_freshness_max_age_h: 36
+# health: fail when the last successful landing is older than this many hours (0: do not judge)
+honeypot_landing_max_age_h: 36
+
+# --- the daily report -------------------------------------------------------------------------------
+honeypot_report_enabled: true
+honeypot_report_oncalendar: "*-*-* 07:15:00 UTC"
+# the model tier (a registry id) and the alias the brief asks for; empty id: the brief says the model
+# tier did not answer, and the data below it is complete
+honeypot_gateway_id: ""
+honeypot_gateway_path: /v1/chat/completions
+honeypot_gateway_key_ref: secret:honeypot/gateway-key
+honeypot_gateway_model: ""
+# a reasoning model spends its output budget thinking: keep the budget large and the timeout long
+honeypot_llm_max_tokens: 4000
+honeypot_llm_timeout_s: 240
+honeypot_llm_attempts: 3
+honeypot_llm_retry_sleep_s: 20
+honeypot_llm_temperature: 0.2
+honeypot_allow_plain_http: false
+# attacker-IP enrichment (geo/ASN, a scanner classification, the Tor exit list) needs the internet
+honeypot_enrich: true
+# the report's one-line label of what the decoy imitates, shown in its header and the model prompt
+honeypot_site_label: "decoy service"
+# your own egress addresses: probes from them are not catch (comma-free list of IPv4 strings)
+honeypot_friendly_ips: []
+# optional: catalog.schema.table of a threat-intelligence table with an `iocs` array column
+honeypot_cti_table: ""
+honeypot_report_keep_days: 30
+
+honeypot_health_timeout: 10
+# the shared last-run record directory (role last_run) and the group that may read it: each timer's
+# service reports its runs there
+honeypot_last_run_dir: /var/lib/homelabnext/last-run
+honeypot_last_run_group: root
+# restore: the directory a prior export wrote (state/ files)
+honeypot_restore_source: ""
