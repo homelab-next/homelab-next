@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Each JDBC driver jar is downloaded by the role (on the guest, not by the container) and accepted only when its sha256 is
+# the pinned one: a mismatch fails the task and leaves no file under the final name. The directory is mounted read-only.
+- name: Fetch each JDBC driver, verified by its sha256
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "{{ nifi_data_root }}/drivers/{{ item.name }}"
+    checksum: "sha256:{{ item.sha256 }}"
+    owner: "{{ nifi_uid | int }}"
+    group: "{{ nifi_gid | int }}"
+    mode: "0400"
+  loop: "{{ nifi_jdbc_drivers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [upgrade]

@@ -680,3 +680,14 @@ def test_each_placed_container_role_is_warned_about_and_no_other(tmp_path):
     # rendered and installed by hand, like every role's; docs/modules/apply.md)
     (dirs["example-lake"] / "roles/lake/tasks/main.yml").write_text("- debug: {msg: x}\n")
     assert eg.unenforced(site, sel, dirs, load) == []
+
+
+def test_an_optional_internet_entry_opens_nothing_in_the_generated_policy():
+    """`optional: true` is a per-site option the policy cannot see grants for: it renders as if absent."""
+    site = SITES["full"]
+    host = site["features"]["publishing"]["placement"]["publisher"]
+    mods = copy.deepcopy(MODULES)
+    for e in mods["publishing"]["egress"]:
+        e["optional"] = True
+    nft = render(site, mods)[f"{host}/hnx-egress.nft"]
+    assert "ip daddr != @not_internet4 accept" not in chain(nft, "publishing", "publisher")

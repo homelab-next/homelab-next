@@ -106,7 +106,7 @@ requires:  {capabilities, model_roles, interfaces, hosts, scope}   # hard
 prefers:   {capabilities, interfaces}                         # soft, each with a fallback
 interfaces: [{id, version, kind, schema|schema_id, description}]  # interfaces this module OWNS
 provides:  {slots: {<slot>: {...}}, interfaces: [{interface, version, via}]}
-egress:    none | [{host, to: [svc:...|internet], purpose}]
+egress:    none | [{host, to: [svc:...|internet], purpose, optional?}]
 contributes: {roles, services, status_sources, notify_pairs, scheduler_jobs, lake_tables,
               preflight, mcp_servers, agents, invariants, entry_points, detections,
               workflow_packs, docs, shared_config}

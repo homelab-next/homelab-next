@@ -40,6 +40,13 @@
       - nifi_extra_parameters.values() | reject('match', nifi_ref_pattern) | list | length == 0
       - nifi_extra_parameters.keys() | intersect(nifi_fixed_parameter_names) | length == 0
       - (nifi_extra_parameters.values() | list + [nifi_s3_access_key_ref, nifi_s3_signing_ref, nifi_events_auth_ref, nifi_store_pw_ref]) | unique | length == (nifi_extra_parameters | length) + 4
+      # JDBC drivers: a list of {name, url, sha256}; https only, a pinned digest, distinct names
+      - nifi_jdbc_drivers is sequence and nifi_jdbc_drivers is not string and nifi_jdbc_drivers is not mapping
+      - nifi_jdbc_drivers | reject('mapping') | list | length == 0
+      - nifi_jdbc_drivers | map(attribute='name', default='') | reject('match', nifi_driver_name_pattern) | list | length == 0
+      - nifi_jdbc_drivers | map(attribute='url', default='') | reject('match', '^https://[^\\s]+\\Z') | list | length == 0
+      - nifi_jdbc_drivers | map(attribute='sha256', default='') | reject('match', '^[0-9a-f]{64}\\Z') | list | length == 0
+      - nifi_jdbc_drivers | map(attribute='name', default='') | unique | list | length == nifi_jdbc_drivers | length
       - nifi_parameter_provider is match(nifi_name_pattern)
       - nifi_parameter_group is match(nifi_name_pattern)
       - nifi_parameter_context is match(nifi_name_pattern)
