@@ -339,7 +339,9 @@ def test_main_waits_for_the_api_and_a_second_run_changes_nothing(tmp_path, pki):
         r = run_role(tmp_path, ROLE, "main", v, env=env)
         assert r.returncode == 0, r.stdout + r.stderr
         calls = _calls(tmp_path)
-        assert len([c for c in calls if "--remove-orphans" in c]) == 2  # the start and the re-render
+        assert (
+            len([c for c in calls if "--remove-orphans" in c]) == 2
+        )  # the start and the re-render
         assert ("/api/ping", f"Bearer {ACCESS}") in front.requests
         again = run_role(tmp_path, ROLE, "main", v, env=env)
         assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
