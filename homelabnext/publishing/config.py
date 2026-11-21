@@ -76,7 +76,9 @@ class LaneSource:
     dir: Path
 
 
-_LIVE_KEYS = {"lane", "dir"}
+_LIVE_KEYS = {"lane", "dir", "root"}
+# the lanes that may be live: a positive list (a name deny-list is evaded by `shadows`, `shdw`, ...)
+LIVE_LANES = ("real",)
 _SHADOW_RE = re.compile(r"(^|[-_.])shadow($|[-_.])", re.IGNORECASE)
 
 
@@ -173,10 +175,36 @@ def _lanes(items: object, others: list[Path]) -> tuple[LaneSource, ...]:
     return tuple(out)
 
 
-def _live(item: object, others: list[Path]) -> LiveSource:
-    """``{lane, dir}``: the single live source (see :class:`LiveSource`)."""
+def _same_inode(a: str, b: str) -> bool:
+    """True when two paths are one directory on disk (a bind mount has another path, the same
+    ``(st_dev, st_ino)``, which realpath cannot see).  A path that does not exist is nobody's."""
+    try:
+        x, y = os.stat(a), os.stat(b)
+    except OSError:
+        return False
+    return (x.st_dev, x.st_ino) == (y.st_dev, y.st_ino)
+
+
+def _not_lane_writable(path: str) -> None:
+    """A live source's root and its parent are the producer's trust anchor: a lane user who could
+    write either could swap what the parents resolve to after validation.  Owned by root (or this
+    user) and not group- or world-writable; an absent one is not yet installed and is skipped."""
+    for p in (path, os.path.dirname(path)):
+        try:
+            st = os.stat(p)
+        except OSError:
+            continue
+        if st.st_uid not in (0, os.geteuid()) or st.st_mode & 0o022:
+            raise ConfigError(
+                f"the live source's root {path!r} and its parent must be owned by root and not "
+                "writable by group or others (a lane user must not be able to repoint them)"
+            )
+
+
+def _live(item: object, others: list[Path], lanes: tuple[LaneSource, ...]) -> LiveSource:
+    """``{lane, dir, root}``: the single live source (see :class:`LiveSource`)."""
     if not isinstance(item, dict) or set(item) != _LIVE_KEYS:
-        raise ConfigError("live_source is {lane, dir} and nothing else")
+        raise ConfigError("live_source is {lane, dir, root} and nothing else")
     lane = item["lane"]
     if not isinstance(lane, str) or not LANE_RE.match(lane) or len(lane) > 32:
         raise ConfigError("the live source's lane is a short slug")
@@ -190,6 +218,21 @@ def _live(item: object, others: list[Path]) -> LiveSource:
         _SHADOW_RE.search(part) for part in d.parts[1:]
     ):
         raise ConfigError("the live source's dir is under a shadow path: refused")
+    # POSITIVE check: the live dir is exactly <root>/<lane> (by real path) for an allowed lane that
+    # is no stage-only lane, and is not the same directory on disk (st_dev, st_ino) as any lane source
+    if lane not in LIVE_LANES:
+        raise ConfigError(f"the live source's lane is one of {', '.join(LIVE_LANES)}")
+    root = _abs(item, "root")
+    if real != os.path.realpath(root / lane):
+        raise ConfigError("the live source's dir is not exactly <root>/<lane> (by real path)")
+    if any(x.lane == lane for x in lanes):
+        raise ConfigError(f"lane {lane!r} is a stage-only lane source: it cannot also be live")
+    for x in lanes:
+        if _same_inode(str(d), str(x.dir)):
+            raise ConfigError("the live source's dir is the same directory as a lane source's")
+    if _same_inode(str(d), str(root / "shadow")):
+        raise ConfigError("the live source's dir is the shadow lane's directory")
+    _not_lane_writable(os.path.realpath(root))
     if any(_nested(real, os.path.realpath(o)) for o in others):
         raise ConfigError(
             "the live source's dir is its own: not nested with a lane source, staging_dir, "
@@ -247,7 +290,7 @@ def load(path: Path, mode_override: str | None = None) -> Config:
     lanes = _lanes(doc.get("lane_sources", []), [publishable, staging, state, creds])
     live = None
     if doc.get("live_source") is not None:
-        live = _live(doc["live_source"], [*(x.dir for x in lanes), staging, state, creds])
+        live = _live(doc["live_source"], [*(x.dir for x in lanes), staging, state, creds], lanes)
         if _nested(os.path.realpath(live.dir), os.path.realpath(publishable)) and os.path.realpath(
             live.dir
         ) != os.path.realpath(publishable):

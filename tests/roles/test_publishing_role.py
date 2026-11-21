@@ -480,7 +480,11 @@ def test_live_with_a_destination_and_credentials_but_no_provider_is_refused(tmp_
 
 # ---- the live source ({lane, dir}) ----------------------------------------------------------------
 
-LIVE = {"lane": "real", "dir": "/var/lib/hnx-handoff/pipeline/real"}
+LIVE = {
+    "lane": "real",
+    "dir": "/var/lib/hnx-handoff/pipeline/real",
+    "root": "/var/lib/hnx-handoff/pipeline",
+}
 
 
 def test_the_configuration_names_the_live_source_and_a_lab_without_one_has_none(tmp_path):
@@ -501,16 +505,21 @@ def test_the_configuration_names_the_live_source_and_a_lab_without_one_has_none(
     "live",
     [
         "real",
-        {"lane": "real"},
+        {"lane": "real", "dir": LIVE["dir"]},
         {**LIVE, "extra": 1},
-        {"lane": "Real", "dir": LIVE["dir"]},
-        {"lane": "real", "dir": "relative/real"},
-        {"lane": "real", "dir": "/var/lib/../real"},
-        {"lane": "shadow", "dir": LIVE["dir"]},
-        {"lane": "real-shadow", "dir": LIVE["dir"]},
-        {"lane": "real", "dir": "/var/lib/hnx-handoff/pipeline/shadow"},
-        {"lane": "real", "dir": "/var/lib/hnx-handoff/pipeline/shadow/site"},
-        {"lane": "real", "dir": "/var/lib/hnx-handoff/pipeline/out-shadow"},
+        {**LIVE, "lane": "Real"},
+        {**LIVE, "dir": "relative/real"},
+        {**LIVE, "dir": "/var/lib/../real"},
+        {**LIVE, "lane": "shadow"},
+        {**LIVE, "lane": "real-shadow"},
+        {**LIVE, "dir": "/var/lib/hnx-handoff/pipeline/shadow"},
+        {**LIVE, "dir": "/var/lib/hnx-handoff/pipeline/shadow/site"},
+        # a positive list: any other lane or any dir that is not <root>/<lane> is refused
+        {**LIVE, "lane": "shadows", "dir": "/var/lib/hnx-handoff/pipeline/shadows"},
+        {**LIVE, "lane": "shdw", "dir": "/var/lib/hnx-handoff/pipeline/shdw"},
+        {**LIVE, "lane": "shadow2", "dir": "/var/lib/hnx-handoff/pipeline/shadow2"},
+        {**LIVE, "dir": "/var/lib/hnx-handoff/pipeline/other"},
+        {**LIVE, "dir": "/var/lib/hnx-handoff/pipeline/real/site"},
     ],
 )
 def test_validate_refuses_a_malformed_or_shadow_live_source(tmp_path, live):
@@ -538,4 +547,43 @@ def test_validate_accepts_the_real_lane_live_beside_a_shadow_lane_source(tmp_pat
         "publishing_gate_extra_groups": ["hnx-pipeline-out-real", "hnx-pipeline-out-shadow"],
     }
     r = run_role(tmp_path, ROLE, "validate", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_validate_refuses_a_live_source_lane_that_is_also_a_lane_source(tmp_path):
+    v = {**good(tmp_path), "publishing_gate_live_source": LIVE}
+    both = [{"lane": "real", "dir": "/var/lib/hnx-handoff/other/real"}]
+    r = run_role(tmp_path, ROLE, "validate", {**v, "publishing_gate_lane_sources": both})
+    assert r.returncode != 0, r.stdout
+
+
+def _live_root(tmp_path, root_mode, parent_mode):
+    parent = tmp_path / "ho"
+    root = parent / "set"
+    root.mkdir(parents=True)
+    os.chmod(root, root_mode)
+    os.chmod(parent, parent_mode)
+    return {
+        "lane": "real",
+        "dir": str(root / "real"),
+        "root": str(root),
+    }
+
+
+@pytest.mark.parametrize("root_mode, parent_mode", [(0o775, 0o755), (0o755, 0o777), (0o757, 0o755)])
+def test_validate_refuses_a_live_root_or_parent_a_lane_user_could_write(
+    tmp_path, root_mode, parent_mode
+):
+    live = _live_root(tmp_path, root_mode, parent_mode)
+    r = run_role(
+        tmp_path, ROLE, "validate", {**good(tmp_path), "publishing_gate_live_source": live}
+    )
+    assert r.returncode != 0, r.stdout
+
+
+def test_validate_accepts_a_live_root_and_parent_only_the_owner_writes(tmp_path):
+    live = _live_root(tmp_path, 0o711, 0o755)
+    r = run_role(
+        tmp_path, ROLE, "validate", {**good(tmp_path), "publishing_gate_live_source": live}
+    )
     assert r.returncode == 0, r.stdout + r.stderr

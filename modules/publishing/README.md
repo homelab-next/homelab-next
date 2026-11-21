@@ -168,17 +168,27 @@ never become the live source; the cutover of the real lane is the **live source*
 
 By default the live source is `publishable/` under the module's root (the producers' own write area). A site
 whose producer hands off per lane (the cti-pipeline module's `/var/lib/hnx-handoff/<set>/<lane>/`) names the
-real lane's directory instead, with `publishing_gate_live_source: {lane: real, dir: <the real lane's directory>}`
+real lane's directory instead, with `publishing_gate_live_source: {lane: real, dir: <root>/real, root: <the producer's handoff set directory>}`
 (rendered as `live_source` in the config):
 
 * **Exactly one.** It is a single mapping `{lane, dir}` and nothing else; it **replaces** `publishable/` as what
   the run gates, stages, deploys and uploads (the default area is no longer read). The published manifest, the
   snapshots (`state/snapshots/`) and staging (`staging/`) stay the live source's own, so ids already published
   keep their history across the switch. Items are reported by their plain id (no lane prefix), as before.
-* **The shadow lane can never be it.** Refused at validate and again at load: a lane name that contains the
-  word `shadow` as a whole word of the slug, and a `dir` any of whose components does (`shadow`, `out-shadow`);
-  the check is made on the path as written **and on its real path**, so a link that points into a shadow
-  handoff directory is refused too. A `lane_sources` entry can never be, link to or nest with it, and it may not
+* **A positive check, not a deny-list.** `lane` must be one of an allowed list (`real` only), `dir` must be
+  exactly `<root>/<lane>` (compared by real path), the lane may not also be a `lane_sources` lane, and the live
+  directory may not be the same directory on disk, by `(st_dev, st_ino)`, as any `lane_sources` dir or
+  `<root>/shadow` (a bind mount has another path and the same inode, which a real path cannot see). The role
+  checks the same shape at validate.
+* **The shadow lane can never be it.** As defence in depth the shadow-name refusal stays: a lane name that
+  contains the word `shadow` as a whole word of the slug, and a `dir` any of whose components does
+  (`shadow`, `out-shadow`), on the path as written **and on its real path**.
+* **The parents must not be writable by any lane user.** The check above is made at load; the run then opens
+  each item through a descriptor chain from the live directory, but the directory's own parents resolve
+  normally. So `root` and its parent must be owned by root and not group- or world-writable (cti-pipeline's
+  `0711` handoff set directory under a `0755` root is); the role asserts it at validate (when they exist) and
+  the load refuses otherwise. A lane user able to write either could repoint the live source to another
+  lane's directory after validation. A `lane_sources` entry can never be, link to or nest with it, and it may not
   be or nest with `staging_dir`, `state_dir`, `credentials_dir` or the default `publishable_dir`.
 * **Same safety as `publishable/`**: items are read by descriptor chain from the live directory with
   `O_NOFOLLOW` (a kind directory swapped for a link is refused), leaf files with `O_NONBLOCK` (a FIFO is refused,
@@ -198,7 +208,7 @@ and `real` is in `cti_pipeline_lanes`; nothing needs changing there. The overlay
 ```yaml
 publishing_gate_mode: live
 publishing_gate_hosting_provider: <the static-hosting provider's logical id>
-publishing_gate_live_source: {lane: real, dir: /var/lib/hnx-handoff/cti/real}
+publishing_gate_live_source: {lane: real, dir: /var/lib/hnx-handoff/cti/real, root: /var/lib/hnx-handoff/cti}
 publishing_gate_lane_sources:
   - {lane: shadow, dir: /var/lib/hnx-handoff/cti/shadow}   # optional: keep staging the shadow lane
 publishing_gate_extra_groups: [hnx-cti-out-real, hnx-cti-out-shadow]   # the shadow one only if it is a lane source
