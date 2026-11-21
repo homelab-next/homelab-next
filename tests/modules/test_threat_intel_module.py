@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import copy
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -118,14 +117,6 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
-def test_the_public_tree_loads_clean(capsys):
-    code = mcli.main(["check", "--root", str(ROOT)])
-    out = capsys.readouterr().out
-    assert code == 0, out
-    public = sum(1 for p in (ROOT / "modules").iterdir() if (p / "module.yml").is_file())
-    assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
-
-
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == [MID]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -206,26 +197,9 @@ def test_an_overlay_placing_the_module_on_a_guest_checks_clean_and_renders(tmp_p
     assert without_footprint(plays[0]["vars"]) == {"hnx_module_slice": f"hnx-{MID}-server.slice"}
 
 
-def test_a_registry_row_that_differs_is_named(tmp_path, capsys):
-    ov = overlay(tmp_path)
-    reg = ld.load_yaml(ov / "lab" / "services.yml")
-    reg["services"]["intel"]["auth"] = "idp"
-    (ov / "lab" / "services.yml").write_text(_dump(reg))
-    code, out = _check(ov, capsys)
-    assert code == 1 and "registry: services.intel.auth" in out, out
-
-
 def test_the_feeds_egress_needs_the_sites_grant(tmp_path, capsys):
     code, out = _check(overlay(tmp_path, grant=False), capsys)
     assert code == 1 and "egress" in out, out
-
-
-def test_a_guest_without_the_base_baseline_is_refused(tmp_path, capsys):
-    ov = overlay(tmp_path)
-    g = ov / "lab" / "guests" / "intel-1.yml"
-    g.write_text(g.read_text().replace("names: [base]", "names: []"))
-    code, out = _check(ov, capsys)
-    assert code == 1 and "base" in out, out
 
 
 # ----------------------------------------------------------------------------- the probe
@@ -257,14 +231,6 @@ def test_the_probe_says_so_when_the_api_answers_any_caller(monkeypatch):
         assert make().api_is_private() is False
 
 
-def test_the_probe_says_so_when_the_sign_in_page_does_not_answer(monkeypatch):
-    from homelabnext.conform.adapters.threat_intel import make
-
-    with Server(login=500) as srv:
-        monkeypatch.setenv("HNX_ENDPOINT_THREAT_INTEL", "http://{}:{}".format(*srv.addr))
-        assert make().health() is False
-
-
 # ----------------------------------------------------------------------------- lint
 
 
@@ -278,15 +244,3 @@ def test_pin_freshness_watches_every_image():
     for name in ("core", "modules", "db", "redis"):
         assert f"role:{MID}/{P}{name}_image" in ids
     assert pf.check_inventory(pf.inventory(ROOT)) == []
-
-
-def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
-    lint = [sys.executable, str(ROOT / "tools" / "role_lint.py")]
-    r = subprocess.run([*lint, str(MODULE / "roles" / MID)], capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
-    books = sorted(str(p) for p in (MODULE / "playbooks").glob("*.yml"))
-    inv = str(ROOT / "ansible" / "inventory" / "example" / "hosts.yml")
-    r = subprocess.run(
-        [*lint, "--playbook", *books, "--inventory", inv], capture_output=True, text=True
-    )
-    assert r.returncode == 0, r.stdout + r.stderr

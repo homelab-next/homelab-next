@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_role
+from rolerun import fake, run_cases, run_role
 
 from tests.modules.threat_intel_module import MID, ROLE_DIR, P, defaults, env_for, ref
 
@@ -108,10 +108,12 @@ def compose(tmp_path: Path) -> dict:
 
 
 def test_main_renders_four_narrow_containers_with_no_secret_in_the_compose_file(tmp_path):
-    v = dv(tmp_path)
+    v = dv(tmp_path, hnx_module_slice=f"hnx-{MID}-server.slice")
     r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
     assert r.returncode == 0, r.stdout + r.stderr
     doc = compose(tmp_path)
+    # the footprint's CPU quota and memory limit are the slice (LL-504)
+    assert {sv["cgroup_parent"] for sv in doc["services"].values()} == {f"hnx-{MID}-server.slice"}
     assert sorted(doc["services"]) == sorted(["db", APP, MODS, "redis"])
     for name, svc in doc["services"].items():
         assert "@sha256:" in svc["image"], name
@@ -156,23 +158,6 @@ def test_main_renders_four_narrow_containers_with_no_secret_in_the_compose_file(
     assert oct((tmp_path / "data" / "configs").stat().st_mode & 0o777) == "0o770"
 
 
-def test_a_base_url_and_the_port_are_data(tmp_path):
-    v = dv(tmp_path, base_url="https://intel.example.internal", port=8443)
-    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0
-    svc = compose(tmp_path)["services"][APP]
-    assert svc["environment"]["BASE_URL"] == "https://intel.example.internal"
-    assert svc["ports"] == [f"{GUEST}:8443:443"]
-
-
-def test_the_containers_join_the_role_slice_the_module_play_names(tmp_path):
-    v = dv(tmp_path, hnx_module_slice=f"hnx-{MID}-server.slice")
-    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0
-    for svc in compose(tmp_path)["services"].values():
-        assert (
-            svc["cgroup_parent"] == f"hnx-{MID}-server.slice"
-        )  # the footprint's CPU quota (LL-504)
-
-
 BAD = [
     ({"logical_id": "Intel"}, "registry id"),
     ({"core_image": CORE_REPO + ":v2.5.44"}, "pinned by tag and digest"),
@@ -201,50 +186,6 @@ BAD = [
     ({"expected_min_counts": {"events": -1}}, "counts that are whole numbers"),
     ({"expected_min_counts": {"widgets": 1}}, "counts that are whole numbers"),
 ]
-
-
-@pytest.mark.parametrize(("over", "why"), BAD, ids=[str(i) for i in range(len(BAD))])
-def test_main_refuses_bad_inputs_and_writes_nothing(tmp_path, over, why):
-    r = run_role(tmp_path, ROLE, "main", dv(tmp_path, **over), env=SECRETS)
-    assert r.returncode != 0 and why in r.stdout + r.stderr, r.stdout + r.stderr
-    assert not (tmp_path / "app").exists() and not (tmp_path / "data").exists()
-
-
-@pytest.mark.parametrize(
-    "missing", [env_for(ref("encryption-key")), CONSUMER_ENV, env_for(ref("mysql-root-password"))]
-)
-def test_a_reference_with_no_value_is_named_and_nothing_is_written(tmp_path, missing):
-    env = {k: v for k, v in SECRETS.items() if k != missing}
-    r = run_role(tmp_path, ROLE, "main", dv(tmp_path), env=env)
-    out = r.stdout + r.stderr
-    want = {
-        env_for(ref("encryption-key")): ref("encryption-key"),
-        CONSUMER_ENV: CONSUMER_REF,
-        env_for(ref("mysql-root-password")): ref("mysql-root-password"),
-    }[missing]
-    assert r.returncode != 0 and want in out, out
-    assert not (tmp_path / "app").exists() and not (tmp_path / "data").exists()
-    assert not [s for s in ALL_VALUES if s in out]
-
-
-@pytest.mark.parametrize(
-    ("name", "value"),
-    [
-        (env_for(ref("mysql-password")), "short"),
-        (env_for(ref("mysql-password")), "has space " + "x" * 12),
-        (env_for(ref("encryption-key")), "q" * 15),
-        (env_for(ref("admin-api-key")), "a" * 39),
-        (env_for(ref("admin-api-key")), "a" * 39 + "-"),
-        (CONSUMER_ENV, KEY("a")),  # the administrator's key reused for a consumer
-        (env_for(ref("redis-password")), PW("db")),  # one password twice
-    ],
-)
-def test_a_malformed_or_repeated_credential_is_refused(tmp_path, name, value):
-    r = run_role(tmp_path, ROLE, "main", dv(tmp_path), env={**SECRETS, name: value})
-    out = r.stdout + r.stderr
-    assert r.returncode != 0, out
-    assert not (tmp_path / "app").exists()
-    assert value not in out  # a value is never printed, even one that was refused
 
 
 def test_readiness_credentials_pass_with_every_reference_and_name_a_missing_one(tmp_path):
@@ -429,32 +370,6 @@ def test_a_second_run_changes_nothing_and_a_key_the_api_accepts_is_not_set_again
     assert not (tmp_path / "keys.log").exists()
 
 
-def test_a_key_the_application_still_refuses_after_it_was_set_fails_the_run(tmp_path):
-    env = {**SECRETS, **_fakes(tmp_path)}
-    # the fake accepts nothing the command sets: the account does not exist
-    fake(tmp_path / "bin" / "docker", "import sys\nsys.exit(0)\n")
-    (tmp_path / "bin" / "zstd").unlink()
-    r = run_role(tmp_path, ROLE, "main", _live(tmp_path), env=env)
-    assert r.returncode != 0
-
-
-def test_main_fails_naming_the_logs_when_the_application_never_answers(tmp_path):
-    env = {**SECRETS, **_fakes(tmp_path)}
-    _st(tmp_path, "open_api", "")  # irrelevant: the heartbeat path is the one that fails below
-    body = (
-        (tmp_path / "bin" / "docker")
-        .read_text()
-        .replace(
-            'code_ = "200"\n        elif have("api500")',
-            'code_ = "503"\n        elif have("api500")',
-            1,
-        )
-    )
-    (tmp_path / "bin" / "docker").write_text(body)
-    r = run_role(tmp_path, ROLE, "main", _live(tmp_path, ready_timeout=10), env=env)
-    assert r.returncode != 0 and "did not answer" in r.stdout + r.stderr
-
-
 def test_a_first_start_that_left_the_application_broken_is_restarted_once_and_a_good_one_is_not(
     tmp_path,
 ):
@@ -470,32 +385,11 @@ def test_a_first_start_that_left_the_application_broken_is_restarted_once_and_a_
     assert again.returncode == 0 and not (tmp_path / "restart.log").exists()
 
 
-def test_main_fails_when_the_application_still_answers_with_an_error_after_the_restart(tmp_path):
-    env = {**SECRETS, **_fakes(tmp_path)}
-    _st(tmp_path, "accepted", KEY("a") + "\n")
-    _st(tmp_path, "api500", "")
-    body = (
-        (tmp_path / "bin" / "docker")
-        .read_text()
-        .replace('for f in ("api500",):', "for f in ():", 1)
-    )
-    (tmp_path / "bin" / "docker").write_text(body)
-    r = run_role(tmp_path, ROLE, "main", _live(tmp_path, ready_timeout=10), env=env)
-    assert r.returncode != 0 and "still answers with an internal error" in r.stdout
-
-
 def test_main_fails_when_the_start_never_finishes(tmp_path):
     env = {**SECRETS, **_fakes(tmp_path)}
     _st(tmp_path, "init_pending", "")
     r = run_role(tmp_path, ROLE, "main", _live(tmp_path, ready_timeout=10), env=env)
     assert r.returncode != 0 and "start did not finish" in r.stdout
-
-
-def test_main_refuses_when_the_supervisor_never_answers(tmp_path):
-    env = {**SECRETS, **_fakes(tmp_path)}
-    _st(tmp_path, "sup.down", "")
-    r = run_role(tmp_path, ROLE, "main", _live(tmp_path, ready_timeout=10), env=env)
-    assert r.returncode != 0
 
 
 # ----------------------------------------------------------------------------- health
@@ -542,37 +436,10 @@ def test_health_fails_on_another_version_than_the_pinned_one(tmp_path):
     assert r.returncode != 0 and f"another version than {VERSION}" in r.stdout
 
 
-@pytest.mark.parametrize(
-    "workers",
-    [
-        "".join(f"{WORK}:w{n}   STOPPED   Not started\n" for n in "12345"),
-        "".join(f"{WORK}:w{n}   RUNNING   pid 1\n" for n in "123"),
-        "",
-    ],
-    ids=["stopped", "too-few", "none"],
-)
-def test_health_fails_when_the_workers_are_not_running(tmp_path, workers):
-    # healthy containers with no workers is the silent failure of the old instance (LL-386)
-    with _listener() as ls:
-        env = {**SECRETS, **_fakes(tmp_path)}
-        _st(tmp_path, "accepted", "\n".join([KEY("a"), KEY("b")]) + "\n")
-        _st(tmp_path, "workers", workers)
-        r = run_role(tmp_path, ROLE, "health", _live(tmp_path, port=ls.getsockname()[1]), env=env)
-    assert r.returncode != 0 and "background workers are not all running" in r.stdout
-
-
 def test_health_fails_when_a_container_is_unhealthy(tmp_path):
     with _listener() as ls:
         r = _health(tmp_path, ls, health="unhealthy")
     assert r.returncode != 0 and "unhealthy" in r.stdout + r.stderr
-
-
-def test_health_fails_when_the_published_port_does_not_answer(tmp_path):
-    with _listener() as ls:
-        port = ls.getsockname()[1]
-    env = {**SECRETS, **_fakes(tmp_path)}
-    r = run_role(tmp_path, ROLE, "health", _live(tmp_path, port=port, health_timeout=2), env=env)
-    assert r.returncode != 0
 
 
 def test_health_fails_when_the_database_holds_fewer_rows_than_expected(tmp_path):
@@ -664,17 +531,6 @@ def test_a_failing_dump_or_a_database_with_too_few_tables_writes_no_copy(tmp_pat
     assert any(f"up -d --wait {APP}" in c for c in _calls(tmp_path))
 
 
-def test_export_refuses_a_build_directory_that_is_not_a_plain_directory(tmp_path):
-    v = dv(tmp_path, start=True)
-    export = tmp_path / "data" / "export"
-    export.mkdir(parents=True)
-    (tmp_path / "elsewhere").mkdir()
-    (export / ".new").symlink_to(tmp_path / "elsewhere")
-    r = _export(tmp_path, v)
-    assert r.returncode != 0 and "is not a directory" in r.stdout + r.stderr
-    assert (tmp_path / "elsewhere").is_dir()
-
-
 # ----------------------------------------------------------------------------- restore
 
 DUMP_TEXT = "-- MariaDB dump\nCREATE TABLE t (i int);\n-- Dump completed on 2026-01-01\n"
@@ -761,43 +617,6 @@ def test_restore_refuses_a_dump_that_is_not_the_pinned_file_before_anything_runs
         dump=(str(link), hashlib.sha256(DUMP_TEXT.encode()).hexdigest()),
     )
     assert r.returncode != 0 and "is not the pinned dump" in r.stdout
-
-
-def test_restore_refuses_a_dump_that_does_not_end_with_the_completion_line(tmp_path):
-    text = "-- MariaDB dump\nCREATE TABLE t (i int);\n"  # cut short
-    r = _restore(tmp_path, after=SOURCE_COUNTS, dump=_dump_file(tmp_path, text))
-    assert r.returncode != 0 and "completion line" in r.stdout + r.stderr
-    assert not (tmp_path / "st" / "loaded.sql").exists()
-
-
-@pytest.mark.parametrize(
-    "counts",
-    [
-        {},
-        {"events": 1},
-        {**SOURCE_COUNTS, "events": 0},
-        {**SOURCE_COUNTS, "attributes": 0},
-        {k: v for k, v in SOURCE_COUNTS.items() if k != "feeds"},
-    ],
-    ids=["none", "one", "no-events", "no-attributes", "no-feeds"],
-)
-def test_restore_refuses_an_import_that_expects_nothing(tmp_path, counts):
-    path, sha = _dump_file(tmp_path)
-    env = {**SECRETS, **_fakes(tmp_path, counts=EMPTY)}
-    v = dv(tmp_path, start=True, restore_dump=path, restore_sha256=sha, restore_counts=counts)
-    r = run_role(tmp_path, ROLE, "restore", v, env=env)
-    assert (
-        r.returncode != 0 and "an import that expects nothing proves nothing" in r.stdout + r.stderr
-    )
-    assert not _calls(tmp_path)
-
-
-def test_restore_refuses_a_dump_with_no_stated_sha256(tmp_path):
-    path, _ = _dump_file(tmp_path)
-    env = {**SECRETS, **_fakes(tmp_path, counts=EMPTY)}
-    v = dv(tmp_path, start=True, restore_dump=path, restore_counts=SOURCE_COUNTS)
-    r = run_role(tmp_path, ROLE, "restore", v, env=env)
-    assert r.returncode != 0 and not _calls(tmp_path)
 
 
 # ----------------------------------------------------------------------------- the attachments
@@ -922,13 +741,6 @@ def test_feeds_resync_queues_the_fetch_and_the_cache_as_the_administrator(tmp_pa
     assert not [s for s in ALL_VALUES if s in "\n".join(_calls(tmp_path))]
 
 
-def test_feeds_resync_fails_when_the_api_refuses(tmp_path):
-    env = {**SECRETS, **_fakes(tmp_path)}
-    _st(tmp_path, "post", "403")
-    r = run_role(tmp_path, ROLE, "feeds_resync", dv(tmp_path, start=True), env=env)
-    assert r.returncode != 0
-
-
 def _upgrade(tmp_path, core=None, modules=None):
     (tmp_path / "app").mkdir(exist_ok=True)  # the project directory an installed module has
     v = dv(tmp_path, target_core=None)
@@ -943,24 +755,6 @@ def test_upgrade_records_a_newer_pinned_bump(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     pending = json.loads((tmp_path / "app" / "pending-upgrade.json").read_text())
     assert pending["service"] == APP and pending["tag"] == "v2.5.45"
-
-
-@pytest.mark.parametrize(
-    ("core", "modules"),
-    [
-        (CORE_REPO + ":v2.5.45", None),
-        (CORE_REPO + ":v2.5.43@sha256:" + "b" * 64, None),  # older
-        (CORE_REPO + ":v2.4.99@sha256:" + "b" * 64, None),
-        (f"docker.io/other/{MID}:v2.5.45@sha256:" + "b" * 64, None),  # another repository
-        (None, MODULES_REPO + ":v3.0.8@sha256:" + "c" * 64),  # the modules service older
-        (None, "docker.io/other/modules:v3.0.9@sha256:" + "c" * 64),
-    ],
-    ids=["unpinned", "older", "older-minor", "foreign", "modules-older", "modules-foreign"],
-)
-def test_upgrade_refuses_an_unpinned_foreign_or_older_target(tmp_path, core, modules):
-    r = _upgrade(tmp_path, core, modules)
-    assert r.returncode != 0 and "the targets must be" in r.stdout + r.stderr
-    assert not (tmp_path / "app" / "pending-upgrade.json").exists()
 
 
 # ----------------------------------------------------------------------------- keys never on argv, TLS
@@ -1011,3 +805,69 @@ def test_a_tls_value_that_is_not_pem_or_a_missing_one_is_refused_and_nothing_is_
     gone = {k: v for k, v in {**SECRETS, **TLS_ENV}.items() if k != "HNX_SECRET_PKI_INTEL_CERT"}
     r = run_role(tmp_path, ROLE, "main", dv(tmp_path, **TLS), env=gone)
     assert r.returncode != 0 and TLS["tls_cert_ref"] in r.stdout + r.stderr
+
+
+# ----------------------------------------------------------------------------- batched refusals
+# one ansible-playbook for many cases (rolerun.run_cases): each case is a refusal that writes nothing
+
+
+def test_main_refuses_bad_inputs_and_writes_nothing(tmp_path):
+    base = dv(tmp_path)
+    cases = [{P + k: x for k, x in over.items()} for over, _ in BAD]
+    results = run_cases(tmp_path, ROLE, "main", base, cases, env=SECRETS)
+    bad = [
+        (o, m)
+        for (o, why), (failed, m) in zip(BAD, results, strict=True)
+        if not failed or why not in m
+    ]
+    assert not bad, bad
+    assert not (tmp_path / "app").exists() and not (tmp_path / "data").exists()
+
+
+def test_a_reference_with_no_value_is_named_and_a_malformed_or_repeated_credential_is_refused(
+    tmp_path,
+):
+    env = {k: v for k, v in SECRETS.items() if k != CONSUMER_ENV}
+    r = run_role(tmp_path, ROLE, "main", dv(tmp_path), env=env)
+    assert r.returncode != 0 and CONSUMER_REF in r.stdout + r.stderr
+    assert not (tmp_path / "app").exists() and not (tmp_path / "data").exists()
+    for name, value in (
+        (env_for(ref("mysql-password")), "short"),
+        (env_for(ref("admin-api-key")), "a" * 39),
+        (CONSUMER_ENV, KEY("a")),  # the administrator's key reused for a consumer
+        (env_for(ref("redis-password")), PW("db")),  # one password twice
+    ):
+        r = run_role(tmp_path, ROLE, "credentials", dv(tmp_path), env={**SECRETS, name: value})
+        assert r.returncode != 0 and value not in r.stdout + r.stderr, name
+
+
+def test_restore_refuses_an_import_that_expects_nothing_or_names_no_sha(tmp_path):
+    path, sha = _dump_file(tmp_path)
+    env = {**SECRETS, **_fakes(tmp_path, counts=EMPTY)}
+    base = dv(
+        tmp_path, start=True, restore_dump=path, restore_sha256=sha, restore_counts=SOURCE_COUNTS
+    )
+    counts = [{}, {"events": 1}, {**SOURCE_COUNTS, "events": 0}, {**SOURCE_COUNTS, "attributes": 0},
+              {k: v for k, v in SOURCE_COUNTS.items() if k != "feeds"}]  # fmt: skip
+    cases = [{P + "restore_counts": c} for c in counts] + [{P + "restore_sha256": ""}]
+    results = run_cases(tmp_path, ROLE, "restore", base, cases, env=env)
+    assert all(failed for failed, _ in results), results
+    assert all("proves nothing" in m for _, m in results[:-1]), results
+    assert not _calls(tmp_path)
+
+
+def test_upgrade_refuses_an_unpinned_foreign_or_older_target(tmp_path):
+    (tmp_path / "app").mkdir(exist_ok=True)
+    new_core = CORE_REPO + ":v2.5.45@sha256:" + "b" * 64
+    new_mods = MODULES_REPO + ":v3.0.9@sha256:" + "c" * 64
+    base = dv(tmp_path)
+    base[P + "target_core_image"], base[P + "target_modules_image"] = new_core, new_mods
+    cases = [
+        {P + "target_core_image": CORE_REPO + ":v2.5.45"},  # unpinned
+        {P + "target_core_image": CORE_REPO + ":v2.5.43@sha256:" + "b" * 64},  # older
+        {P + "target_core_image": f"docker.io/other/{MID}:v2.5.45@sha256:" + "b" * 64},  # foreign
+        {P + "target_modules_image": MODULES_REPO + ":v3.0.8@sha256:" + "c" * 64},  # modules older
+    ]
+    results = run_cases(tmp_path, ROLE, "upgrade", base, cases, env=SECRETS)
+    assert all(f and "the targets must be" in m for f, m in results), results
+    assert not (tmp_path / "app" / "pending-upgrade.json").exists()

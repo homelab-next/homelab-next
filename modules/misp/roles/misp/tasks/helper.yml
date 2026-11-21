@@ -18,7 +18,7 @@
   check_mode: false
   no_log: true
   async: "{{ misp_helper_async | default(omit) }}"
-  poll: "{{ 30 if (misp_helper_async | default(0) | int) > 0 else omit }}"
+  poll: "{{ 3 if (misp_helper_async | default(0) | int) > 0 else omit }}"
 
 - name: The helper succeeded
   ansible.builtin.assert:
