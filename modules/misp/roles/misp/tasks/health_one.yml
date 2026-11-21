@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# One account (misp_acct): its key is accepted and the version the platform reports is the pinned
+# one.
+- name: Ask the platform its version with the account's key
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, HNX_KEY, -e, HNX_PATH, misp-core, sh, -c, "{{ misp_api_body_script }}"]
+    expand_argument_vars: false
+  environment:
+    HNX_KEY: "{{ lookup('hnx_secret', misp_acct.key_ref) }}"
+    HNX_PATH: /servers/getVersion
+  register: misp_version
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  no_log: true
+
+- name: The account is accepted and the version is the pinned one
+  ansible.builtin.assert:
+    that:
+      - misp_version.rc == 0
+      - (misp_version.stdout | from_json).version | default('') == misp_core_tag[1:]
+    fail_msg: "misp: account {{ misp_i }}'s key is refused, or the platform reports another version than {{ misp_core_tag[1:] }} (the key in the secret store is not the one the application holds)"

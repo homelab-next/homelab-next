@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the database first (export_first), then stop and remove the containers. The data
+# root (with the export in it) and the compose project are kept for the operator to archive or
+# delete. The decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the
+# service.
+- name: Remove the threat-intel provider
+  hosts: mod_misp_server
+  become: true
+  tasks:
+    - name: Export the database first
+      ansible.builtin.include_role:
+        name: misp
+        tasks_from: export
+    - name: Stop and remove the containers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ misp_dir | default('/opt/compose/misp') }}/docker-compose.yml", down]
+      changed_when: true

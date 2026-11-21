@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# The threat-intel provider (modules/misp): one compose_app project of four containers: the
+# application (nginx, PHP and the supervisor that runs its background workers), its modules service,
+# MariaDB and a Valkey cache. The pins are the versions the old instance runs (application v2.5.44,
+# modules v3.0.9, MariaDB 10.11.19, Valkey 7.2.14), so a database dump from it loads into the same
+# engine. Required, with no default (the site's): misp_logical_id (the instance's registry id),
+# misp_admin_email and misp_admin_org (the first account's address and the organisation; on an
+# import they must be the dump's own).
+misp_core_image: "ghcr.io/misp/misp-docker/misp-core:v2.5.44@sha256:0eaa4e423d5cd965b7b76aa5665e81d5c05a35bc46a4ffec2ca52e0cfe627e86"
+misp_modules_image: "ghcr.io/misp/misp-docker/misp-modules:v3.0.9@sha256:99572d207973f804e153861bfa9d7b0da0c69c8687babc8e5534a360e1156613"
+misp_db_image: "docker.io/library/mariadb:10.11.19@sha256:e5fe75b2b9de0eb9f6f9a4d9c97272fb3a7480e389ccd487a786bab2a12cc0d7"
+misp_redis_image: "docker.io/valkey/valkey:7.2.14@sha256:ef0f9fb533b1f06fb7aba6478d758ca1c077d49e2bcb2b4365a4ea7f50b6d42e"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# hypervisor's per-VM firewall admits only the named consumers on this port
+misp_bind: "{{ ansible_host }}"
+misp_port: 443
+misp_dir: /opt/compose/misp
+misp_owner: root
+misp_group: root
+# the module's data root (docs/modules/data.md): mysql/ (the database), cache/, configs/, logs/,
+# files/ (attachments, taxonomies and galaxies), gnupg/, ssl/ and export/
+misp_data_root: /var/lib/hnx-modules/misp
+misp_timezone: Etc/UTC
+# the name the people and agents use for the platform (an https URL; empty: the guest's own address
+# and port); it becomes the application's base URL
+misp_base_url: ""
+misp_admin_login_ref: secret:misp/admin-password
+misp_admin_key_ref: secret:misp/admin-api-key
+misp_db_login_ref: secret:misp/mysql-password
+misp_db_root_login_ref: secret:misp/mysql-root-password
+misp_cache_login_ref: secret:misp/redis-password
+misp_encryption_key_ref: secret:misp/encryption-key
+misp_gpg_passphrase_ref: secret:misp/gpg-passphrase
+# the other accounts that read the platform through its API: a list of {email, key_ref}. The account
+# must exist (it is in the imported database, or created in the UI); the role sets the key from the
+# secret on every run (a key the application stores only as a hash), so a consumer's key is the
+# site's, never a value read back. Every key is distinct and none is the administrator's.
+misp_consumers: []
+# the database engine's buffer pool (the one setting that decides whether a 40 million row attribute
+# table is read from memory) and the containers' memory limits; the sum stays below the footprint
+misp_innodb_buffer_pool_size: 10G
+misp_db_mem_limit: 16g
+misp_core_mem_limit: 6g
+misp_modules_mem_limit: 2g
+misp_redis_mem_limit: 1g
+# the minimum row counts health and export hold the database to (a mapping of events, attributes,
+# objects, galaxy_clusters, feeds, users to a count; empty: not checked). After an import set it to
+# the source's, so a platform that lost its data is never "healthy" empty.
+misp_expected_min_counts: {}
+misp_start: true
+misp_validate_with_docker: true
+misp_health_timeout: 15
+# seconds main waits for the application to answer after a start (the first one builds the schema)
+misp_ready_timeout: 1800
+# seconds an import may take (a 15 GB logical dump loads for hours)
+misp_import_timeout: 28800
+# the import (hook restore): the dump on the guest (zstd mysqldump), its sha256 and the source's counts
+misp_restore_dump: ""
+misp_restore_sha256: ""
+misp_restore_counts: {}
+# optional: the old instance's files tarball and its sha256; only the numeric event directories
+# (the attachments and malware samples) are extracted, never configuration
+misp_restore_files_tar: ""
+misp_restore_files_sha256: ""

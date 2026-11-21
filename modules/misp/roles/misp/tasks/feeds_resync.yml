@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Queue a fetch and a cache of every enabled feed through the application's own API, as the
+# administrator (README, "Importing the old instance", step feeds). The jobs run on the background
+# workers; this hook only queues them and checks the API accepted both. Every feed is untrusted
+# input: the platform fetches, the role trusts nothing it brings.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Queue the fetch and the cache of every enabled feed
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, HNX_KEY, -e, HNX_PATH, misp-core, sh, -c, "{{ misp_api_post_script }}"]
+        expand_argument_vars: false
+      environment:
+        HNX_KEY: "{{ lookup('hnx_secret', misp_admin_key_ref) }}"
+        HNX_PATH: "{{ item }}"
+      loop: [/feeds/fetchFromAllFeeds, /feeds/cacheFeeds/all]
+      register: misp_resync
+      changed_when: true
+      failed_when: misp_resync.rc | default(0) != 0 or (misp_resync.stdout | default('') | trim) != '200'
+      no_log: true
+  tags: [feeds_resync]

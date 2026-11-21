@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate and record a bump of the application and its modules service (compose_app upgrade). Only
+# the same or a NEWER version of the same repository: the application migrates its schema forward on
+# first start and cannot be taken back, so an older tag is refused. The playbook exports first, then
+# converges. compose_app records one service's pin, the application's; the modules service's pin
+# is checked above and set by the converge. The database and cache images are bumped by their own pins in the overlay; this hook
+# does not touch them (a database engine upgrade is a migration of its own).
+- block:
+    - name: Refuse a target that is not pinned by tag and digest, is another repository or is older
+      ansible.builtin.assert:
+        that:
+          - misp_target_core_image is match(misp_pinned_ref_pattern)
+          - misp_target_modules_image is match(misp_pinned_ref_pattern)
+          - misp_target_core_image.split('@')[0].rsplit(':', 1)[0] == misp_core_repository
+          - misp_target_modules_image.split('@')[0].rsplit(':', 1)[0] == misp_modules_repository
+          - misp_target_core_image.split('@')[0].rsplit(':', 1)[1] is match(misp_v_version_pattern)
+          - misp_target_modules_image.split('@')[0].rsplit(':', 1)[1] is match(misp_v_version_pattern)
+          - >-
+            misp_target_core_image.split('@')[0].rsplit(':', 1)[1][1:].split('.') | map('int') | list
+            >= misp_core_tag[1:].split('.') | map('int') | list
+          - >-
+            misp_target_modules_image.split('@')[0].rsplit(':', 1)[1][1:].split('.') | map('int') | list
+            >= misp_modules_tag[1:].split('.') | map('int') | list
+        fail_msg: >-
+          misp: the targets must be {{ misp_core_repository }}:v<version>@sha256:<64 hex> and
+          {{ misp_modules_repository }}:v<version>@sha256:<64 hex>, versions equal to or newer than
+          {{ misp_core_tag }} and {{ misp_modules_tag }} (the schema is migrated forward on first start
+          and cannot go back)
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump of the application (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: misp
+        compose_app_dir: "{{ misp_app.compose_app_dir }}"
+        compose_app_owner: "{{ misp_app.compose_app_owner }}"
+        compose_app_group: "{{ misp_app.compose_app_group }}"
+        compose_app_spec: "{{ misp_app.compose_app_spec }}"
+        compose_app_upgrade_service: misp-core
+        compose_app_upgrade_tag: "{{ misp_target_core_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ misp_target_core_image.split('@')[1] }}"
+  tags: [upgrade]
