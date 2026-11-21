@@ -680,3 +680,29 @@ def test_each_placed_container_role_is_warned_about_and_no_other(tmp_path):
     # rendered and installed by hand, like every role's; docs/modules/apply.md)
     (dirs["example-lake"] / "roles/lake/tasks/main.yml").write_text("- debug: {msg: x}\n")
     assert eg.unenforced(site, sel, dirs, load) == []
+
+
+def _publisher_nft(optional: bool, granted: bool) -> str:
+    site = copy.deepcopy(SITES["full"])
+    host = site["features"]["publishing"]["placement"]["publisher"]
+    mods = copy.deepcopy(MODULES)
+    for e in mods["publishing"]["egress"]:
+        e["optional"] = optional
+    if granted:
+        site["grants"] = {"egress": {"publishing": {"publisher": ["internet"]}}}
+    else:
+        (site.get("grants") or {}).get("egress", {}).pop("publishing", None)
+    return render(site, mods)[f"{host}/hnx-egress.nft"]
+
+
+def test_an_optional_entry_opens_only_what_the_site_grants_and_then_acts_like_a_mandatory_one():
+    internet = "ip daddr != @not_internet4 accept"
+    assert internet in chain(
+        _publisher_nft(False, True), "publishing", "publisher"
+    )  # mandatory: always
+    assert internet not in chain(
+        _publisher_nft(True, False), "publishing", "publisher"
+    )  # optional, not granted
+    granted = _publisher_nft(True, True)
+    assert internet in chain(granted, "publishing", "publisher")  # optional, granted
+    assert granted == _publisher_nft(False, True)  # identical to the mandatory rendering
