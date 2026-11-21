@@ -28,7 +28,6 @@ Findings (what the product does differently from the contract, handled here):
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import urllib.error
 import urllib.parse
@@ -36,25 +35,27 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-from conformance.protocols.dns import CnameLoop, ConflictingRecord, DnsError, NoSuchName, Record
+from conformance.protocols.dns import (
+    TYPES,
+    ConflictingRecord,
+    DnsError,
+    Record,
+    check_record,
+    follow,
+    norm,
+)
 from homelabnext._http import DEFAULT_MAX_BYTES, check_plaintext, read_bounded, safe_urlopen
 
 from ._env import env_secret, resolve
 
 __all__ = ["ApiZone", "make"]
 
-TYPES = ("A", "AAAA", "CNAME", "TXT")
-MAX_HOPS = 8
 _RDATA = {"A": "ipAddress", "AAAA": "ipAddress", "CNAME": "cname", "TXT": "text"}
 _ARG = {"A": "ipAddress", "AAAA": "ipAddress", "CNAME": "cname", "TXT": "text"}
 
 
 class ApiError(DnsError):
     """The server answered ``status: error`` (its own message, never a credential)."""
-
-
-def _norm(name: str) -> str:
-    return name.rstrip(".").lower()
 
 
 class ApiZone:
@@ -79,7 +80,7 @@ class ApiZone:
         self._base = base_url.rstrip("/")
         self._user = user
         self._password = password
-        self.zone = _norm(zone)
+        self.zone = norm(zone)
         self.timeout = timeout
         self.max_bytes = max_bytes
         self._token: str | None = None
@@ -131,7 +132,7 @@ class ApiZone:
 
     def _ensure_zone(self) -> None:
         zones = self._call("zones/list")["response"]["zones"]
-        if any(_norm(z["name"]) == self.zone for z in zones):
+        if any(norm(z["name"]) == self.zone for z in zones):
             return
         self._call("zones/create", zone=self.zone, type="Primary")
         self._created = True
@@ -154,33 +155,23 @@ class ApiZone:
         out = []
         for r in doc["response"].get("records", []):
             rtype = r.get("type")
-            if rtype not in TYPES or _norm(r.get("name", "")) != _norm(name):
+            if rtype not in TYPES or norm(r.get("name", "")) != norm(name):
                 continue
             value = str(r["rData"][_RDATA[rtype]])
             out.append(
                 Record(
-                    _norm(name),
+                    norm(name),
                     rtype,
-                    value if rtype == "TXT" else _norm(value),
+                    value if rtype == "TXT" else norm(value),
                     int(r["ttl"]),
                 )
             )
         return out
 
     def add(self, name: str, rtype: str, value: str, ttl: int = 300) -> Record:
-        rtype = rtype.upper()
-        if rtype not in TYPES:
-            raise ValueError(f"unsupported type {rtype!r}")
-        if not isinstance(ttl, int) or isinstance(ttl, bool) or not 1 <= ttl <= 2_147_483_647:
-            raise ValueError("ttl must be a positive integer")
-        if rtype == "A":
-            ipaddress.IPv4Address(value)
-        elif rtype == "AAAA":
-            ipaddress.IPv6Address(value)
-        elif not value:
-            raise ValueError("value is required")
-        key = _norm(name)
-        want = Record(key, rtype, value if rtype == "TXT" else _norm(value), ttl)
+        rtype = check_record(rtype, value, ttl)
+        key = norm(name)
+        want = Record(key, rtype, value if rtype == "TXT" else norm(value), ttl)
         args = {
             "domain": name,
             "zone": self.zone,
@@ -206,24 +197,7 @@ class ApiZone:
         return want
 
     def lookup(self, name: str, rtype: str) -> list[Record]:
-        rtype = rtype.upper()
-        key = _norm(name)
-        seen: list[str] = []
-        for _ in range(MAX_HOPS + 1):
-            have = self._stored(key)
-            if not have:
-                raise NoSuchName(key)
-            direct = sorted((r for r in have if r.rtype == rtype), key=lambda r: r.value)
-            if direct:
-                return direct
-            cname = next((r for r in have if r.rtype == "CNAME"), None)
-            if cname is None or rtype == "CNAME":
-                return []
-            if cname.value in seen or cname.value == key:
-                raise CnameLoop(" -> ".join([*seen, key, cname.value]))
-            seen.append(key)
-            key = cname.value
-        raise CnameLoop(f"more than {MAX_HOPS} CNAME hops from {name}")
+        return follow(self._stored, name, rtype)
 
     def remove(self, name: str, rtype: str, value: str | None = None) -> int:
         rtype = rtype.upper()
