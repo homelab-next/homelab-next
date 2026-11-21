@@ -20,9 +20,9 @@ transcode node, and the VPN client every download client routes through.
 
 Slot `media-automation` (provisional: no contract yet), role `role:media_automation`, host role
 `server` (6 CPU, 12 GiB, 60 GB: Tdarr transcodes and the managers' databases are the load). Every web
-interface is **internal only**: no public route. An edge route for the request app is a later change to
-the registry row (`public_hostname`, with the overlay's `grants.public_routes`), deliberately not made
-here. Every interface has its own login (the migration carries the old accounts).
+interface but Seerr's is **internal only**. The request app's row declares `public_hostname` (the site's value; `auth: own`, so
+the edge adds no forward-auth: Seerr signs in with the media server's accounts) and is public only where the overlay grants
+`public_routes` for it; without the grant it is internal. Every interface has its own login (the migration carries the old accounts).
 
 ## The VPN is the only way out for the download clients
 
@@ -198,7 +198,7 @@ mounted target, an unrelated non-empty target, a leftover `.partial`; it follows
 
 * `lab/modules.yml`: the slot `media-automation`, provider `media-automation`, an instance name that is not
   the module's id (the row is renamed to it), placement `server` on the media guest;
-  `grants.egress.media-automation.server: [internet]`; **no** `public_routes` (internal only).
+  `grants.egress.media-automation.server: [internet]`; `public_routes` only if the request app is to be published (the row's `public_hostname` is the site's value).
 * The registry row bound as the module declares it (host = the guest, `version` = `product.version`), plus
   the lab's own standing/backup/scope.
 * Guest: >= 6 CPU, 12 GiB, 60 GB, the `base` baseline, **docker_engine**, the library as a **virtiofs share

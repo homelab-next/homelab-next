@@ -4,8 +4,8 @@
 # the library managers (TV, films, music), the indexer manager and its challenge solver, the torrent
 # and usenet clients, the request app, the transcode node, and the VPN client every download client
 # routes through. The download clients have no network of their own (network_mode service: the VPN
-# client): with the tunnel down they fail closed. Every web interface is internal only; the request
-# app's edge route is a later change to the registry row. The library is WRITABLE (the managers
+# client): with the tunnel down they fail closed. Every web interface is internal only except the request
+# app, whose row declares a public_hostname (the site's) and is published only where the overlay grants it. The library is WRITABLE (the managers
 # import into it, the clients write under its downloads directory); its real source, the VPN
 # account, the uid the old files are owned by and every address are the site's.
 manifest_version: "1.0"
