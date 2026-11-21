@@ -5,7 +5,7 @@
 #   purpose: Seal, check, stage and prune the synapse_cortex role's backups (a backup made by Synapse's own backup machinery), refusing a copy that is not exactly what its listing says.
 #   owner: platform
 #   trigger: [role:synapse_cortex]
-#   inputs: "seal BACKUP_DIR (manifest JSON on stdin) | check BACKUP_DIR | stage SOURCE DEST | prune BACKUPS_DIR KEEP"
+#   inputs: "seal BACKUP_DIR (manifest JSON on stdin) | check BACKUP_DIR | stage SOURCE DEST | prune BACKUPS_DIR KEEP | discard BACKUPS_DIR NAME"
 #   outputs: the manifest (check, stage) or the names removed (prune) as JSON on stdout; seal writes hnx-manifest.json and hnx-listing.jsonl (0600) into BACKUP_DIR; stage writes DEST (0700, files 0600)
 #   exit:
 #     "0": sealed, checked, staged or pruned
@@ -28,7 +28,7 @@ changing is not a proof of anything) and not empty (zero nodes where nodes are e
 error, never a pass), and a ``cell.guid`` and at least one ``data.mdb`` present.  ``stage`` checks
 the source, then copies the listed files (not the manifest or the listing) into DEST, which must
 not exist, hashing what it writes, and re-reads DEST against the listing before it reports; it
-never deletes anything.  ``prune`` removes the oldest sealed backups beyond KEEP and nothing else.
+never deletes anything.  ``discard`` removes one unsealed (or failing) ``hnx-`` directory and refuses a passing sealed one.  ``prune`` removes the oldest sealed backups beyond KEEP and nothing else.
 """
 
 from __future__ import annotations
@@ -257,6 +257,25 @@ def prune(backups: str, keep: int) -> list[str]:
     return removed
 
 
+def discard(backups: str, name: str) -> bool:
+    """Remove ``name`` under ``backups`` when it is one of this tool's directories and is NOT a backup that
+    passes the check (an unsealed or inconsistent one).  A sealed, passing backup is never removed."""
+    backups = safe_dir(backups, "the backups directory")
+    if not NAME.match(name):
+        fail(f"{name!r} is not one of this tool's backup names")
+    path = os.path.join(backups, name)
+    if not os.path.lexists(path):
+        return False
+    if os.path.islink(path) or not os.path.isdir(path) or os.path.realpath(path) != path:
+        fail(f"{path} is not a plain directory directly under {backups}")
+    try:
+        check(path)
+    except SystemExit:
+        shutil.rmtree(path)
+        return True
+    fail(f"{path} is a sealed backup that passes the check; it is not discarded")
+
+
 def main(argv: list[str]) -> int:
     try:
         if len(argv) == 3 and argv[1] == "seal":
@@ -265,6 +284,8 @@ def main(argv: list[str]) -> int:
             print(json.dumps(check(argv[2]), sort_keys=True))
         elif len(argv) == 4 and argv[1] == "stage":
             print(json.dumps(stage(argv[2], argv[3]), sort_keys=True))
+        elif len(argv) == 4 and argv[1] == "discard":
+            print(json.dumps(discard(argv[2], argv[3])))
         elif len(argv) == 4 and argv[1] == "prune":
             print(json.dumps(prune(argv[2], int(argv[3]))))
         else:

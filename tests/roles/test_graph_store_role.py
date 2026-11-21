@@ -433,9 +433,9 @@ def test_export_refuses_a_backup_taken_while_the_graph_was_changing(tmp_path):
         tmp_path, str(ROLE_DIR), "export", _live(tmp_path), env={**SECRETS, **_docker(tmp_path)}
     )
     assert r.returncode != 0 and "changed while the backup was taken" in r.stdout + r.stderr
-    # the directory was made by the service but is not a sealed backup: restore refuses it
-    (b,) = _backups(tmp_path)
-    assert _tool("check", str(b)).returncode == 1
+    assert (
+        _backups(tmp_path) == []
+    )  # the unsealed directory was discarded, nothing is left to fill the disk
 
 
 def test_export_refuses_an_empty_graph(tmp_path):
@@ -453,7 +453,9 @@ def test_a_failed_backup_leaves_the_previous_sealed_one_alone(tmp_path):
     (tmp_path / "livebackup.fails").write_text("")
     bad = run_role(tmp_path, str(ROLE_DIR), "export", _live(tmp_path), env=env)
     assert bad.returncode != 0
-    assert _backups(tmp_path) == [first] and _tool("check", str(first)).returncode == 0
+    assert (
+        _backups(tmp_path) == [first] and _tool("check", str(first)).returncode == 0
+    )  # and no partial one beside it
 
 
 def test_export_offline_stops_runs_the_offline_tool_and_starts_the_service_again_even_on_failure(

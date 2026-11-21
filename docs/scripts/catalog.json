@@ -1816,7 +1816,7 @@
         "2": "usage error"
       },
       "id": "synapse-cortex-backup",
-      "inputs": "seal BACKUP_DIR (manifest JSON on stdin) | check BACKUP_DIR | stage SOURCE DEST | prune BACKUPS_DIR KEEP",
+      "inputs": "seal BACKUP_DIR (manifest JSON on stdin) | check BACKUP_DIR | stage SOURCE DEST | prune BACKUPS_DIR KEEP | discard BACKUPS_DIR NAME",
       "kind": "tool",
       "language": "python",
       "outputs": "the manifest (check, stage) or the names removed (prune) as JSON on stdout; seal writes hnx-manifest.json and hnx-listing.jsonl (0600) into BACKUP_DIR; stage writes DEST (0700, files 0600)",

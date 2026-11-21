@@ -32,24 +32,36 @@
     - name: Remember them
       ansible.builtin.set_fact:
         synapse_cortex_counts_before: "{{ synapse_cortex_counts }}"
-    - name: Take the backup
-      ansible.builtin.include_tasks: "backup_{{ synapse_cortex_export_mode }}.yml"
-    - name: Count the nodes by form after
-      ansible.builtin.include_tasks: count.yml
-    - name: Seal the backup (refused unless the counts are equal and not empty)
-      ansible.builtin.command:
-        argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', synapse_cortex_scripts ~ '/synapse_cortex_backup.py') }}",
-               seal, "{{ synapse_cortex_data_root }}/export/backups/{{ synapse_cortex_backup_name }}"]
-        stdin: "{{ manifest | to_json }}"
-      vars:
-        manifest:
-          mode: "{{ synapse_cortex_export_mode }}"
-          name: "{{ synapse_cortex_backup_name }}"
-          version: "{{ synapse_cortex_tag }}"
-          image: "{{ synapse_cortex_image }}"
-          counts_before: "{{ synapse_cortex_counts_before }}"
-          counts_after: "{{ synapse_cortex_counts }}"
-      changed_when: true
+    - name: Take, count and seal (a backup that is not sealed is discarded, so failures cannot fill the disk)
+      block:
+        - name: Take the backup
+          ansible.builtin.include_tasks: "backup_{{ synapse_cortex_export_mode }}.yml"
+        - name: Count the nodes by form after
+          ansible.builtin.include_tasks: count.yml
+        - name: Seal the backup (refused unless the counts are equal and not empty)
+          ansible.builtin.command:
+            argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', synapse_cortex_scripts ~ '/synapse_cortex_backup.py') }}",
+                   seal, "{{ synapse_cortex_data_root }}/export/backups/{{ synapse_cortex_backup_name }}"]
+            stdin: "{{ manifest | to_json }}"
+          vars:
+            manifest:
+              mode: "{{ synapse_cortex_export_mode }}"
+              name: "{{ synapse_cortex_backup_name }}"
+              version: "{{ synapse_cortex_tag }}"
+              image: "{{ synapse_cortex_image }}"
+              counts_before: "{{ synapse_cortex_counts_before }}"
+              counts_after: "{{ synapse_cortex_counts }}"
+          changed_when: true
+      rescue:
+        - name: Discard the unsealed backup (the tool removes only its own unsealed hnx- directory)
+          ansible.builtin.command:
+            argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', synapse_cortex_scripts ~ '/synapse_cortex_backup.py') }}",
+                   discard, "{{ synapse_cortex_data_root }}/export/backups", "{{ synapse_cortex_backup_name }}"]
+          changed_when: true
+          failed_when: false
+        - name: The export failed (the previous sealed backups are untouched)
+          ansible.builtin.fail:
+            msg: "synapse-cortex: the export failed and its unsealed backup was discarded; see the failed task above"
     - name: Remove the oldest sealed backups beyond the keep (the tool refuses anything but its own names)
       ansible.builtin.command:
         argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', synapse_cortex_scripts ~ '/synapse_cortex_backup.py') }}",

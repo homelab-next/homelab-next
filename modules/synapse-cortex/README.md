@@ -105,6 +105,16 @@ writers, or use `offline`, and take it again). The oldest sealed backups beyond
 `synapse_cortex_export_keep` (default 2) are then removed, by name pattern, from the backups
 directory only; an unsealed (interrupted) directory is never touched.
 
+A failed export (the service's backup fails, or the seal is refused) **discards its unsealed
+directory** (`discard`: only an `hnx-` directory that does not pass the check, never a sealed one), so
+repeated failures cannot fill the disk; the previous sealed backups are untouched.
+
+**Live export needs the writers frozen.** The seal refuses a backup if any form's count moved during
+it, so before a `live` export pause every writer: the CTI pipeline's graph sync (`cti-graph-sync`
+daily 05:00) and graph report (read-only, may stay), the MISP indicator ingest (`misp-cortex-ingest`
+daily) and any other account with write rules. Resume them after. Or use `offline` mode, which needs no
+freezing because the service itself is stopped.
+
 **Restore** (`restore` hook with `synapse_cortex_restore_source=<...>/export/backups/hnx-<stamp>`):
 
 1. Deploy with `synapse_cortex_start: false` (the compose file and the directories, nothing running).

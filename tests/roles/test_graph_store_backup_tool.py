@@ -224,3 +224,30 @@ def test_a_symlinked_backup_name_is_not_followed_by_prune(tmp_path):
 
 def test_the_command_line_usage_error_is_two(tmp_path):
     assert tool.main(["tool"]) == 2
+
+
+def test_discard_removes_an_unsealed_or_inconsistent_directory_and_never_a_sealed_one(tmp_path):
+    base = tmp_path / "var" / "lib" / "backups"
+    unsealed = make_backup(base, "hnx-20261121T000001Z")
+    assert tool.discard(str(base), unsealed.name) is True and not unsealed.exists()
+    moved = make_backup(base, "hnx-20261121T000002Z")
+    refused(seal, moved, COUNTS, {**COUNTS, "inet:ipv4": 6})  # sealed but inconsistent
+    assert tool.discard(str(base), moved.name) is True and not moved.exists()
+    good = make_backup(base, "hnx-20261121T000003Z")
+    seal(good)
+    assert "sealed backup" in refused(tool.discard, str(base), good.name)
+    assert good.exists()
+    assert tool.discard(str(base), "hnx-20261121T000009Z") is False  # nothing there
+
+
+def test_discard_refuses_foreign_names_and_links(tmp_path):
+    base = tmp_path / "var" / "lib" / "backups"
+    base.mkdir(parents=True)
+    keep = base / "operators-notes"
+    keep.mkdir()
+    refused(tool.discard, str(base), "operators-notes")
+    refused(tool.discard, str(base), "../x")
+    victim = make_backup(tmp_path / "var" / "lib", "victim")
+    (base / "hnx-20261121T000004Z").symlink_to(victim)
+    refused(tool.discard, str(base), "hnx-20261121T000004Z")
+    assert keep.exists() and (victim / "cell.guid").exists()
