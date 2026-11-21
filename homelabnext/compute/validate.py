@@ -89,6 +89,77 @@ def _check_network(g: Guest, fleet: Fleet) -> list[Problem]:
     return out
 
 
+def _check_native_vlan(g: Guest, fleet: Fleet) -> list[Problem]:
+    """``vlan_tag_mode: native`` and the node's ``native_vlans`` (LL-025: tagging the native VLAN
+    leaves a guest with no connectivity, and the guest file cannot see the switch port).
+
+    * a native NIC needs a zone VLAN to be the native one of, and the node must declare that VLAN
+      as the bridge's native VLAN (``_nodes.yml`` ``native_vlans``), equal to the zone's;
+    * on a bridge whose native VLAN the node declares, a NIC that TAGS that VLAN is refused:
+      it is the untagged one."""
+    if g.kind not in ("vm", "lxc"):
+        return []
+    z = fleet.zones.zone(g.zone)
+    if z is None:  # _check_network reports it
+        return []
+    mode = g.network.get("vlan_tag_mode", "in_bridge")
+    bridge = g.network.get("bridge", "default")
+    declared = fleet.native_vlan(g.node, bridge)
+    if mode == "native":
+        if z.vlan_id is None:
+            return [Problem(g.id, "vlan_tag_mode native needs a zone with a vlan_id")]
+        if declared is None:
+            return [
+                Problem(
+                    g.id,
+                    f"vlan_tag_mode native: node {g.node!r} declares no native VLAN for bridge "
+                    f"{bridge!r} (_nodes.yml native_vlans: {{{bridge}: {z.vlan_id}}})",
+                )
+            ]
+        if declared != z.vlan_id:
+            return [
+                Problem(
+                    g.id,
+                    f"vlan_tag_mode native: zone {z.id} is VLAN {z.vlan_id} but node {g.node!r} "
+                    f"declares VLAN {declared} native on bridge {bridge!r}",
+                )
+            ]
+    elif mode == "in_bridge" and declared is not None and z.vlan_id == declared:
+        return [
+            Problem(
+                g.id,
+                f"zone {z.id} is VLAN {declared}, the native VLAN of bridge {bridge!r} on node "
+                f"{g.node!r}: a tag on it is dropped; set network.vlan_tag_mode: native",
+            )
+        ]
+    return []
+
+
+def _native_vlan_conflicts(fleet: Fleet) -> list[Problem]:
+    """A bridge has ONE native VLAN: native NICs of one node and bridge may not sit in zones of
+    different VLANs."""
+    out: list[Problem] = []
+    seen: dict[tuple[str, str], tuple[int | None, str]] = {}
+    for g in fleet.sorted():
+        if g.kind not in ("vm", "lxc") or g.network.get("vlan_tag_mode") != "native":
+            continue
+        z = fleet.zones.zone(g.zone)
+        if z is None:
+            continue
+        key = (g.node, g.network.get("bridge", "default"))
+        first = seen.setdefault(key, (z.vlan_id, g.id))
+        if first[0] != z.vlan_id:
+            out.append(
+                Problem(
+                    g.id,
+                    f"vlan_tag_mode native: bridge {key[1]!r} on node {g.node!r} has one native "
+                    f"VLAN, but {first[1]} is native in VLAN {first[0]} and this guest in "
+                    f"VLAN {z.vlan_id}",
+                )
+            )
+    return out
+
+
 def _check_firewall(g: Guest, fleet: Fleet) -> list[Problem]:
     """Firewall on by default: a NIC with the flag off needs a documented exemption.
 
@@ -363,6 +434,7 @@ def _check_extra_addresses(
 
 def _check_guest(g: Guest, fleet: Fleet) -> list[Problem]:
     out = _check_network(g, fleet)
+    out += _check_native_vlan(g, fleet)
     if g.kind == "host" and g.provisioning != "host-only":
         out.append(Problem(g.id, "kind host must have provisioning host-only"))
     if g.kind != "host" and g.provisioning == "host-only":
@@ -771,6 +843,7 @@ def validate(fleet: Fleet, *, require_baselines: bool = True) -> list[Problem]:
         out += _model_runtime_problems(g, fleet)
         out += _filtered_by_problems(g, fleet)
         out += _metadata_allows(g, fleet)
+    out += _native_vlan_conflicts(fleet)
     out += _power(fleet)
     out += _capacity(fleet)
     out += _host_firewall(fleet)
