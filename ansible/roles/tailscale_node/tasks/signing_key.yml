@@ -2,7 +2,11 @@
 # The repository root is configurable (a lab mirror may stand in for the vendor), so the key it
 # serves is not trusted for coming from it: it is fetched to a staging file and installed for apt
 # only when every primary key in it is one of the pinned vendor fingerprints.
+# Under --check nothing is fetched (get_url writes no staging file, tempfile makes no scratch
+# home), so the listing that reads them cannot run: the whole fetch, check and install waits for a
+# real run, which is the only one that can say whether the served key is the pinned one.
 - name: Fetch, check and install the vendor signing key
+  when: not ansible_check_mode
   block:
     - name: Ensure the apt keyring directory exists
       ansible.builtin.file:
