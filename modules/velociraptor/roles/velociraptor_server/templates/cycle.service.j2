@@ -1,0 +1,21 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role velociraptor_server); local changes are overwritten.
+[Unit]
+Description=homelabnext endpoint-forensics cycle (fleet status, baseline hunt, results for the log pipeline)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# runs as root: it reaches the server through docker, and writes the status file and the results
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ velociraptor_server_last_run_dir }} --group {{ velociraptor_server_last_run_group }} --job timer:velociraptor_server/cycle --unit %n --calendar "{{ velociraptor_server_schedule }}" --delay 0
+# the script and its configuration are named literally: a scheduled exec the script catalog resolves
+ExecStart=/usr/local/libexec/homelabnext/hnx-velociraptor --config /etc/homelabnext/velociraptor.json cycle
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ velociraptor_server_last_run_dir }} --group {{ velociraptor_server_last_run_group }} --job timer:velociraptor_server/cycle --unit %n --calendar "{{ velociraptor_server_schedule }}" --delay 0
+Nice=10
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ velociraptor_server_data_root }}/status {{ velociraptor_server_data_root }}/state {{ velociraptor_server_data_root }}/results {{ velociraptor_server_last_run_dir }}
+PrivateTmp=true
+TimeoutStartSec=600

@@ -1116,7 +1116,8 @@
         "timer:prometheus/alerts",
         "timer:rkhunter/scan",
         "timer:trino/lake-maintenance",
-        "timer:trivy/scan"
+        "timer:trivy/scan",
+        "timer:velociraptor_server/cycle"
       ]
     },
     {
@@ -1991,6 +1992,48 @@
       "trigger": [
         "timer:trivy/scan",
         "role:trivy"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the property holds",
+        "1": "the property does not hold",
+        "100": "could not measure (no status file, an unknown schema, or one older than its own bound: the cycle that writes it has stopped)",
+        "2": "usage error (an unknown criterion)"
+      },
+      "id": "velociraptor-check",
+      "inputs": "the status file written by the module's hunt cycle (the criterion's name and, optionally, a path)",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-velociraptor-check",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line of evidence",
+      "owner": "platform",
+      "path": "modules/velociraptor/roles/velociraptor_server/files/hnx_velociraptor_check.py",
+      "purpose": "Decide whether the endpoint-forensics server is up, has clients enrolled and has heard from one recently, from the status file the hunt cycle writes.",
+      "status": "active",
+      "trigger": [
+        "role:velociraptor_server"
+      ]
+    },
+    {
+      "exit": {
+        "0": "done",
+        "1": "the server could not be reached or refused, a catalog or definition was refused, or a tree check failed (the reason on stderr and in the status file)",
+        "2": "usage error"
+      },
+      "id": "velociraptor-forensics",
+      "inputs": "the module's config file, the allow-list catalog, the forensics server's API (as the module's own hunt principal, through the server container) and the status and state directories",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-velociraptor",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the status file, the hunt state, one JSONL file per finished hunt under the results directory, and listed exports",
+      "owner": "platform",
+      "path": "modules/velociraptor/roles/velociraptor_server/files/hnx_velociraptor.py",
+      "purpose": "Run the endpoint-forensics module's baseline hunt cycle (start one hunt over the allow-listed artifacts, collect it once into JSONL for the log pipeline, record the fleet's state), check its allow-list and hunt principal, and export or import its server state.",
+      "status": "active",
+      "trigger": [
+        "timer:velociraptor_server/cycle",
+        "role:velociraptor_server"
       ]
     },
     {

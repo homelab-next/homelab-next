@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Custom.Linux.Persistence.ConfigHunt
+author: homelabnext
+description: |
+  Covers the classic Linux persistence spots that have no built-in artifact: SSH authorized_keys,
+  systemd unit files (ExecStart), sudoers, PAM, ld.so.preload, the rc script, init.d and motd scripts,
+  and the loaded kernel modules.
+
+  It only reads files. It starts no process (the kernel modules come from /proc/modules, not from
+  a command), so it declares no permission and the module's hunt principal may collect it. Runtime
+  and memory-forensics techniques (ptrace injection, fileless exec) need continuous monitoring,
+  which the host agent does.
+
+precondition:
+  SELECT OS From info() where OS = 'linux'
+
+sources:
+  - name: SSHAuthorizedKeys
+    query: |
+      SELECT OSPath, Mtime,
+             read_file(filename=OSPath, length=100000) AS Content
+      FROM glob(globs=["/root/.ssh/authorized_keys", "/home/*/.ssh/authorized_keys"])
+
+  - name: SystemdUnitFiles
+    query: |
+      LET files = SELECT OSPath, Mtime,
+             read_file(filename=OSPath, length=100000) AS Content
+      FROM glob(globs=[
+        "/etc/systemd/system/**/*.service",
+        "/usr/lib/systemd/system/**/*.service",
+        "/lib/systemd/system/**/*.service",
+        "/home/*/.config/systemd/user/**/*.service",
+        "/root/.config/systemd/user/**/*.service"
+      ])
+
+      SELECT OSPath, Mtime, hash(path=OSPath).SHA256 AS SHA256,
+             parse_string_with_regex(
+                string=Content,
+                regex="(?m)^ExecStart=(?P<ExecStart>.*)$").ExecStart AS ExecStart
+      FROM files
+
+  - name: Sudoers
+    query: |
+      SELECT OSPath, Mtime,
+             read_file(filename=OSPath, length=100000) AS Content
+      FROM glob(globs=["/etc/sudoers", "/etc/sudoers.d/*"])
+      WHERE NOT OSPath =~ "README$"
+
+  - name: PAMConfig
+    query: |
+      SELECT OSPath, Mtime, hash(path=OSPath).SHA256 AS SHA256
+      FROM glob(globs=[
+        "/etc/pam.d/*",
+        "/lib/*/security/pam_unix.so",
+        "/usr/lib/*/security/pam_unix.so"
+      ])
+
+  - name: LdSoPreload
+    query: |
+      SELECT OSPath, Mtime,
+             read_file(filename=OSPath, length=10000) AS Content
+      FROM glob(globs="/etc/ld.so.preload")
+
+  - name: RcLocalInitdMotd
+    query: |
+      SELECT OSPath, Mtime, hash(path=OSPath).SHA256 AS SHA256,
+             read_file(filename=OSPath, length=20000) AS Content
+      FROM glob(globs=[
+        "/etc/rc.loc*",
+        "/etc/init.d/*",
+        "/etc/update-motd.d/*"
+      ])
+
+  - name: KernelModules
+    query: |
+      SELECT Line FROM parse_lines(accessor="data",
+                                   filename=read_file(filename="/proc/modules", length=200000))
+      WHERE Line =~ "^\\S+\\s+\\d"

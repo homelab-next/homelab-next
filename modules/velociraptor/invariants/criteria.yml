@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# The module's capture-health criteria (ADR-0049 decision 8), in the invariant register's shape:
+# ids are velociraptor/<slug>. Each runs the check script the server role installs, which reads the
+# status file the hunt cycle writes; the runner must therefore run on the server's guest (or be
+# given a copy of the status file by the path argument). Exit 100 (the cycle stopped, so the file
+# is older than three missed runs) is "could not measure", never a pass.
+criteria:
+  - id: velociraptor/service-up
+    statement: The endpoint-forensics server answers its API and every listed artifact is within the hunt principal's rights on the running server.
+    observable: /usr/local/libexec/homelabnext/hnx-velociraptor-check service-up
+    expected: exit 0 while the last cycle reached the server and found no listed artifact that needs more than collect rights
+    evidence: auto
+    remediation: >-
+      Read the last cycle's problems in the status file (status/fleet.json under the data root) and
+      the server's logs (docker compose logs velociraptor). Do NOT restart the container by habit:
+      the start guard keeps the certificate authority, but a changed authority is the failure that
+      darkens every endpoint (LL-087); run the role's health hook, which compares it with the
+      recorded one.
+  - id: velociraptor/clients-enrolled
+    statement: At least the configured number of endpoints are enrolled with the endpoint-forensics server.
+    observable: /usr/local/libexec/homelabnext/hnx-velociraptor-check clients-enrolled
+    expected: exit 0 while the server lists at least velociraptor_server_min_clients clients
+    evidence: auto
+    remediation: >-
+      An empty client list on a server that ran before means its state was lost or its configuration
+      regenerated: check the recorded authority before touching a client. On a new install,
+      enrol the first client with the endpoint role and the client configuration the server wrote.
+  - id: velociraptor/clients-fresh
+    statement: The endpoint-forensics server has heard from an enrolled endpoint within the freshness bound.
+    observable: /usr/local/libexec/homelabnext/hnx-velociraptor-check clients-fresh
+    expected: exit 0 while the newest client was heard within velociraptor_server_stale_after_minutes
+    evidence: auto
+    remediation: >-
+      The client list keeps the last-known state of a client that stopped answering, so a server whose
+      authority changed still looks populated: when no client is fresh, run the server role's health hook
+      first (the authority), then a client's (journalctl -u velociraptor-client on an endpoint).

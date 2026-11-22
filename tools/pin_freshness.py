@@ -142,6 +142,8 @@ SOURCES: dict[str, tuple[str, str]] = {
         "PostgreSQL release page by hand, within the pinned major version",
     ),
     "role:media/media_image": ("github", "jellyfin/jellyfin"),
+    "role:velociraptor_server/velociraptor_server_image": ("github", "Velocidex/velociraptor"),
+    "role:velociraptor_client/velociraptor_client_version": ("github", "Velocidex/velociraptor"),
     "role:misp/misp_core_image": ("github", "MISP/MISP"),
     "role:misp/misp_modules_image": ("github", "MISP/misp-modules"),
     "role:misp/misp_db_image": (
@@ -377,6 +379,19 @@ NOTES: dict[str, str] = {
     "role:misp/misp_redis_image": (
         "an image (modules/misp): the tag and its digest together, within the pinned 7.2 series; the "
         "cache holds queued jobs and sessions only, nothing to migrate"
+    ),
+    "role:velociraptor_server/velociraptor_server_image": (
+        "an image (modules/velociraptor): bump the tag and its digest together, with product.version in "
+        "modules/velociraptor/module.yml, the lab registry's version AND the endpoint role's "
+        "velociraptor_client_version and its pinned sha256 in velociraptor_client_checksums (the server "
+        "and its clients must be the same release); the same or a newer version only. The start guard "
+        "keeps the configuration and its certificate authority, so a bump cannot rotate it (LL-087); "
+        "export the server state first (the upgrade playbook does)"
+    ),
+    "role:velociraptor_client/velociraptor_client_version": (
+        "a release (modules/velociraptor): bump it together with the server image "
+        "(role:velociraptor_server/velociraptor_server_image) and add the linux amd64 binary's sha256 to "
+        "velociraptor_client_checksums in the same change; the server and its clients must be the same release"
     ),
     "role:synapse_cortex/synapse_cortex_image": (
         "an image (modules/synapse-cortex): bump the tag and its digest together, with product.version in "

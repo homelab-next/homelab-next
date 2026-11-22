@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# The client's dependencies: its configuration resolves and is the real thing, and the pinned
+# release is known. The server it dials is another module's; enrolment is checked by health.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The client configuration resolves and is the server's generated one
+      ansible.builtin.include_tasks: config.yml
+  tags: [readiness]

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes, keyed by the slot and renamed to
+# the instance the site selects; version is product.version, host is the module's host role. The lab
+# registry must carry it exactly as bound (hnx modules check, docs/modules/registry-rows.md).
+# The row is the GUI: the product's own sign-in (auth: own), HTTPS with a certificate from the
+# server's own authority (tls: internal), so a site that fronts it with its edge proxy adds a
+# public_hostname and the grant itself. The clients' port (the row's frontend: default 8000) is
+# NOT a row and is never proxied: the clients speak their own mutual-TLS protocol on it, straight
+# to the server's address (README.md, "Ports").
+services:
+  endpoint-forensics:
+    capability: endpoint-forensics
+    impl: velociraptor
+    host: server
+    protocol: https
+    port: 8889
+    health: {kind: tcp}
+    owner: operator
+    tls: internal
+    auth: own
+    tags: [dfir, endpoint]
+    description: The endpoint-forensics GUI with its own accounts. The clients' port 8000 is not proxied. No public route.

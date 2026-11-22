@@ -1,0 +1,331 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: "Run the endpoint-forensics server as a compose_app, keep its configuration and authority, make a collect-only hunt principal and install the hunt cycle."
+    options:
+      velociraptor_server_logical_id: &logical
+        type: str
+        description: "The instance's registry id (the service row the site binds, e.g. endpoint-forensics)."
+        required: true
+      velociraptor_server_frontend_hostname: &fhost
+        type: str
+        description: "The host name or address the clients dial; baked into every client configuration at the server's first start."
+        required: true
+      velociraptor_server_image: &image
+        type: str
+        description: "repository:tag@sha256:<digest> of the server image (the release must equal the clients' binary)."
+        default: ghcr.io/velocidex/velociraptor-server:0.77.1@sha256:1935d0a77e3f4f644732d6917688f9a490df44e02d4e3034e53aa7188fe92ae0
+      velociraptor_server_bind: &bind
+        type: str
+        description: "The guest's own IPv4 address both ports are published on (never all interfaces)."
+        default: '{{ ansible_host }}'
+      velociraptor_server_frontend_port: &frontend_port
+        type: int
+        description: "Host port of the clients' mutual-TLS port (the registry's frontend row; never proxied)."
+        default: 8000
+      velociraptor_server_gui_port: &gui_port
+        type: int
+        description: "Host port of the GUI (its own sign-in; the registry's gui row)."
+        default: 8889
+      velociraptor_server_dir: &dir
+        type: path
+        description: 'The compose project directory.'
+        default: /opt/compose/velociraptor
+      velociraptor_server_owner: &owner
+        type: str
+        description: 'Owner of the compose project and the data root.'
+        default: root
+      velociraptor_server_group: &group
+        type: str
+        description: 'Group of the compose project and the data root.'
+        default: root
+      velociraptor_server_data_root: &data_root
+        type: path
+        description: "The module's data root on the host: etc/ (server configuration, certificate authority, principal credential), datastore/, custom_artifacts/, client/, results/hunts/, status/, state/ and export/."
+        default: /var/lib/hnx-modules/velociraptor
+      velociraptor_server_uid: &uid
+        type: int
+        description: "The container's user id (no account on the host has it); owns etc/ and datastore/."
+        default: 61100
+      velociraptor_server_gid: &gid
+        type: int
+        description: "The container's group id."
+        default: 61100
+      velociraptor_server_admin_login_ref: &admin_login_ref
+        type: str
+        description: "secret:<name> of the administrator's password (read at the first start only)."
+        default: secret:velociraptor/admin-password
+      velociraptor_server_hunt_principal: &hunt_principal
+        type: str
+        description: "The module's API account name; it holds only the allow-list catalog's permissions."
+        default: hnx-hunt
+      velociraptor_server_client_config_group: &client_config_group
+        type: str
+        description: 'Group that may read client/client.config.yaml.'
+        default: root
+      velociraptor_server_results_group: &results_group
+        type: str
+        description: "Group that may read results/hunts (the log pipeline's agent)."
+        default: root
+      velociraptor_server_mem_limit: &mem_limit
+        type: str
+        description: 'Container memory limit.'
+        default: 2g
+      velociraptor_server_start: &start
+        type: bool
+        description: 'Run docker compose up after rendering (false: render and validate only).'
+        default: true
+      velociraptor_server_validate_with_docker: &validate_with_docker
+        type: bool
+        description: 'Run docker compose config on the rendered file.'
+        default: true
+      velociraptor_server_ready_timeout: &ready_timeout
+        type: int
+        description: 'Seconds to wait for the first start to write the configuration and listen.'
+        default: 180
+      velociraptor_server_accept_new_ca: &accept_new_ca
+        type: bool
+        description: 'Accept a certificate authority that differs from the recorded one (a restore or a migration, on purpose).'
+        default: false
+      velociraptor_server_schedule: &schedule
+        type: str
+        description: "The cycle's timer, an OnCalendar ending in UTC: every 2, 5, 10 or 15 minutes."
+        default: '*-*-* *:0/5:00 UTC'
+      velociraptor_server_hunt_interval_hours: &hunt_interval_hours
+        type: int
+        description: 'Hours between baseline hunts.'
+        default: 24
+      velociraptor_server_collect_after_minutes: &collect_after_minutes
+        type: int
+        description: 'Minutes after a hunt starts before its results are collected.'
+        default: 60
+      velociraptor_server_stale_after_minutes: &stale_after_minutes
+        type: int
+        description: "A client counts as fresh when heard within this many minutes (at least twice the cycle's interval)."
+        default: 15
+      velociraptor_server_min_clients: &min_clients
+        type: int
+        description: 'Enrolled clients the criteria want (at least 1).'
+        default: 1
+      velociraptor_server_systemctl_cli: &systemctl_cli
+        type: str
+        description: 'The systemctl command.'
+        default: systemctl
+      velociraptor_server_unit_dir: &unit_dir
+        type: path
+        description: "Where the cycle's units are written."
+        default: /etc/systemd/system
+      velociraptor_server_last_run_dir: &last_run_dir
+        type: path
+        description: 'The shared per-host directory of last-run records (role last_run).'
+        default: /var/lib/homelabnext/last-run
+      velociraptor_server_last_run_group: &last_run_group
+        type: str
+        description: 'The group that may read the last-run records.'
+        default: root
+  health:
+    short_description: "Fail unless the container is healthy, both ports answer as they should, the authority is the recorded one and the hunt principal holds only collect rights."
+    options:
+      velociraptor_server_logical_id: *logical
+      velociraptor_server_frontend_hostname: *fhost
+      velociraptor_server_image: *image
+      velociraptor_server_bind: *bind
+      velociraptor_server_frontend_port: *frontend_port
+      velociraptor_server_gui_port: *gui_port
+      velociraptor_server_dir: *dir
+      velociraptor_server_owner: *owner
+      velociraptor_server_group: *group
+      velociraptor_server_data_root: *data_root
+      velociraptor_server_uid: *uid
+      velociraptor_server_gid: *gid
+      velociraptor_server_admin_login_ref: *admin_login_ref
+      velociraptor_server_hunt_principal: *hunt_principal
+      velociraptor_server_client_config_group: *client_config_group
+      velociraptor_server_results_group: *results_group
+      velociraptor_server_mem_limit: *mem_limit
+      velociraptor_server_start: *start
+      velociraptor_server_validate_with_docker: *validate_with_docker
+      velociraptor_server_ready_timeout: *ready_timeout
+      velociraptor_server_accept_new_ca: *accept_new_ca
+      velociraptor_server_schedule: *schedule
+      velociraptor_server_hunt_interval_hours: *hunt_interval_hours
+      velociraptor_server_collect_after_minutes: *collect_after_minutes
+      velociraptor_server_stale_after_minutes: *stale_after_minutes
+      velociraptor_server_min_clients: *min_clients
+      velociraptor_server_systemctl_cli: *systemctl_cli
+      velociraptor_server_unit_dir: *unit_dir
+      velociraptor_server_last_run_dir: *last_run_dir
+      velociraptor_server_last_run_group: *last_run_group
+  readiness:
+    short_description: "Fail unless the container engine is ready, the inputs and the allow-list are valid and the administrator's password resolves in its form."
+    options:
+      velociraptor_server_logical_id: *logical
+      velociraptor_server_frontend_hostname: *fhost
+      velociraptor_server_image: *image
+      velociraptor_server_bind: *bind
+      velociraptor_server_frontend_port: *frontend_port
+      velociraptor_server_gui_port: *gui_port
+      velociraptor_server_dir: *dir
+      velociraptor_server_owner: *owner
+      velociraptor_server_group: *group
+      velociraptor_server_data_root: *data_root
+      velociraptor_server_uid: *uid
+      velociraptor_server_gid: *gid
+      velociraptor_server_admin_login_ref: *admin_login_ref
+      velociraptor_server_hunt_principal: *hunt_principal
+      velociraptor_server_client_config_group: *client_config_group
+      velociraptor_server_results_group: *results_group
+      velociraptor_server_mem_limit: *mem_limit
+      velociraptor_server_start: *start
+      velociraptor_server_validate_with_docker: *validate_with_docker
+      velociraptor_server_ready_timeout: *ready_timeout
+      velociraptor_server_accept_new_ca: *accept_new_ca
+      velociraptor_server_schedule: *schedule
+      velociraptor_server_hunt_interval_hours: *hunt_interval_hours
+      velociraptor_server_collect_after_minutes: *collect_after_minutes
+      velociraptor_server_stale_after_minutes: *stale_after_minutes
+      velociraptor_server_min_clients: *min_clients
+      velociraptor_server_systemctl_cli: *systemctl_cli
+      velociraptor_server_unit_dir: *unit_dir
+      velociraptor_server_last_run_dir: *last_run_dir
+      velociraptor_server_last_run_group: *last_run_group
+  backup:
+    short_description: "Copy the server state (configuration and authority, datastore) as a listed export, then name the data root for the backup."
+    options:
+      velociraptor_server_logical_id: *logical
+      velociraptor_server_frontend_hostname: *fhost
+      velociraptor_server_image: *image
+      velociraptor_server_bind: *bind
+      velociraptor_server_frontend_port: *frontend_port
+      velociraptor_server_gui_port: *gui_port
+      velociraptor_server_dir: *dir
+      velociraptor_server_owner: *owner
+      velociraptor_server_group: *group
+      velociraptor_server_data_root: *data_root
+      velociraptor_server_uid: *uid
+      velociraptor_server_gid: *gid
+      velociraptor_server_admin_login_ref: *admin_login_ref
+      velociraptor_server_hunt_principal: *hunt_principal
+      velociraptor_server_client_config_group: *client_config_group
+      velociraptor_server_results_group: *results_group
+      velociraptor_server_mem_limit: *mem_limit
+      velociraptor_server_start: *start
+      velociraptor_server_validate_with_docker: *validate_with_docker
+      velociraptor_server_ready_timeout: *ready_timeout
+      velociraptor_server_accept_new_ca: *accept_new_ca
+      velociraptor_server_schedule: *schedule
+      velociraptor_server_hunt_interval_hours: *hunt_interval_hours
+      velociraptor_server_collect_after_minutes: *collect_after_minutes
+      velociraptor_server_stale_after_minutes: *stale_after_minutes
+      velociraptor_server_min_clients: *min_clients
+      velociraptor_server_systemctl_cli: *systemctl_cli
+      velociraptor_server_unit_dir: *unit_dir
+      velociraptor_server_last_run_dir: *last_run_dir
+      velociraptor_server_last_run_group: *last_run_group
+  restore:
+    short_description: "Check an export (listing, sizes, sha256, no link) and restore the configuration and datastore from it, the server stopped meanwhile; a populated target is moved aside."
+    options:
+      velociraptor_server_logical_id: *logical
+      velociraptor_server_frontend_hostname: *fhost
+      velociraptor_server_image: *image
+      velociraptor_server_bind: *bind
+      velociraptor_server_frontend_port: *frontend_port
+      velociraptor_server_gui_port: *gui_port
+      velociraptor_server_dir: *dir
+      velociraptor_server_owner: *owner
+      velociraptor_server_group: *group
+      velociraptor_server_data_root: *data_root
+      velociraptor_server_uid: *uid
+      velociraptor_server_gid: *gid
+      velociraptor_server_admin_login_ref: *admin_login_ref
+      velociraptor_server_hunt_principal: *hunt_principal
+      velociraptor_server_client_config_group: *client_config_group
+      velociraptor_server_results_group: *results_group
+      velociraptor_server_mem_limit: *mem_limit
+      velociraptor_server_start: *start
+      velociraptor_server_validate_with_docker: *validate_with_docker
+      velociraptor_server_ready_timeout: *ready_timeout
+      velociraptor_server_accept_new_ca: *accept_new_ca
+      velociraptor_server_schedule: *schedule
+      velociraptor_server_hunt_interval_hours: *hunt_interval_hours
+      velociraptor_server_collect_after_minutes: *collect_after_minutes
+      velociraptor_server_stale_after_minutes: *stale_after_minutes
+      velociraptor_server_min_clients: *min_clients
+      velociraptor_server_systemctl_cli: *systemctl_cli
+      velociraptor_server_unit_dir: *unit_dir
+      velociraptor_server_last_run_dir: *last_run_dir
+      velociraptor_server_last_run_group: *last_run_group
+      velociraptor_server_restore_source:
+        type: path
+        description: Directory holding an export (etc/, datastore/ and listing.jsonl).
+        required: true
+  upgrade:
+    short_description: "Validate an image bump (tag and digest) and record it as pending."
+    options:
+      velociraptor_server_logical_id: *logical
+      velociraptor_server_frontend_hostname: *fhost
+      velociraptor_server_image: *image
+      velociraptor_server_bind: *bind
+      velociraptor_server_frontend_port: *frontend_port
+      velociraptor_server_gui_port: *gui_port
+      velociraptor_server_dir: *dir
+      velociraptor_server_owner: *owner
+      velociraptor_server_group: *group
+      velociraptor_server_data_root: *data_root
+      velociraptor_server_uid: *uid
+      velociraptor_server_gid: *gid
+      velociraptor_server_admin_login_ref: *admin_login_ref
+      velociraptor_server_hunt_principal: *hunt_principal
+      velociraptor_server_client_config_group: *client_config_group
+      velociraptor_server_results_group: *results_group
+      velociraptor_server_mem_limit: *mem_limit
+      velociraptor_server_start: *start
+      velociraptor_server_validate_with_docker: *validate_with_docker
+      velociraptor_server_ready_timeout: *ready_timeout
+      velociraptor_server_accept_new_ca: *accept_new_ca
+      velociraptor_server_schedule: *schedule
+      velociraptor_server_hunt_interval_hours: *hunt_interval_hours
+      velociraptor_server_collect_after_minutes: *collect_after_minutes
+      velociraptor_server_stale_after_minutes: *stale_after_minutes
+      velociraptor_server_min_clients: *min_clients
+      velociraptor_server_systemctl_cli: *systemctl_cli
+      velociraptor_server_unit_dir: *unit_dir
+      velociraptor_server_last_run_dir: *last_run_dir
+      velociraptor_server_last_run_group: *last_run_group
+      velociraptor_server_target_image:
+        type: str
+        description: "repository:tag@sha256:<digest> to move to."
+        required: true
+  export:
+    short_description: "Write the open-format exit copy (object-tree) of the server state to <data root>/export/<stamp>."
+    options:
+      velociraptor_server_logical_id: *logical
+      velociraptor_server_frontend_hostname: *fhost
+      velociraptor_server_image: *image
+      velociraptor_server_bind: *bind
+      velociraptor_server_frontend_port: *frontend_port
+      velociraptor_server_gui_port: *gui_port
+      velociraptor_server_dir: *dir
+      velociraptor_server_owner: *owner
+      velociraptor_server_group: *group
+      velociraptor_server_data_root: *data_root
+      velociraptor_server_uid: *uid
+      velociraptor_server_gid: *gid
+      velociraptor_server_admin_login_ref: *admin_login_ref
+      velociraptor_server_hunt_principal: *hunt_principal
+      velociraptor_server_client_config_group: *client_config_group
+      velociraptor_server_results_group: *results_group
+      velociraptor_server_mem_limit: *mem_limit
+      velociraptor_server_start: *start
+      velociraptor_server_validate_with_docker: *validate_with_docker
+      velociraptor_server_ready_timeout: *ready_timeout
+      velociraptor_server_accept_new_ca: *accept_new_ca
+      velociraptor_server_schedule: *schedule
+      velociraptor_server_hunt_interval_hours: *hunt_interval_hours
+      velociraptor_server_collect_after_minutes: *collect_after_minutes
+      velociraptor_server_stale_after_minutes: *stale_after_minutes
+      velociraptor_server_min_clients: *min_clients
+      velociraptor_server_systemctl_cli: *systemctl_cli
+      velociraptor_server_unit_dir: *unit_dir
+      velociraptor_server_last_run_dir: *last_run_dir
+      velociraptor_server_last_run_group: *last_run_group
