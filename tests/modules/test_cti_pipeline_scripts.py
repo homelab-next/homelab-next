@@ -948,20 +948,30 @@ def test_freshness_judges_the_last_finished_run_while_one_is_in_progress(tmp_pat
     done = {"ok": True, "exit": 0, "finished_at": "2026-11-19T10:00:00Z", "run_id": "r0"}
     running = {"state": "running", "ok": False, "exit": None, "finished_at": None}
     (runs / "carried.json").write_text(json.dumps({**running, "last_finished": done}))
-    (runs / "first.json").write_text(json.dumps(running))
+    (runs / "first.json").write_text(json.dumps({**running, "started_at": "2026-11-19T10:30:00Z"}))
+    (runs / "overdue.json").write_text(
+        json.dumps({**running, "started_at": "2026-11-19T01:00:00Z"})
+    )
     (runs / "failed-before.json").write_text(
         json.dumps({**running, "last_finished": {**done, "ok": False, "exit": 1}})
     )
     (runs / "stale.json").write_text(json.dumps({**running, "last_finished": done}))
     now = 1_795_086_000  # 2026-11-19T11:00:00Z
     out = state.freshness(
-        str(runs), {"carried": 7200, "first": 7200, "failed-before": 7200, "stale": 60}, now
+        str(runs),
+        {"carried": 7200, "first": 7200, "overdue": 7200, "failed-before": 7200, "stale": 60},
+        now,
     )["jobs"]
     # in progress: the verdict is the last finished run's, never "did not succeed"
     assert out["carried"]["fresh"] and out["carried"]["in_progress"]
     assert out["carried"]["run_id"] == "r0"
-    # no finished run yet: not fresh, and the reason says why
-    assert not out["first"]["fresh"] and "in progress" in out["first"]["why"]
+    # no finished run yet: judged by the run's own age, never as a failure while it is young
+    assert (
+        out["first"]["fresh"]
+        and out["first"]["in_progress"]
+        and "in progress" in out["first"]["why"]
+    )
+    assert not out["overdue"]["fresh"] and "with no finished run" in out["overdue"]["why"]
     # a failure before the in-progress run still counts; staleness still counts
     assert not out["failed-before"]["fresh"] and "did not succeed" in out["failed-before"]["why"]
     assert not out["stale"]["fresh"] and "over 60 s" in out["stale"]["why"]

@@ -569,9 +569,28 @@ def freshness(runs_dir: str, jobs: dict[str, int], now: float) -> dict:
         if isinstance(rec, dict) and rec.get("state") == "running":
             # an in-progress run is judged by the last FINISHED run it carries, never as a failure
             running = True
+            run_rec = rec
             rec = rec.get("last_finished")
             if not isinstance(rec, dict):
-                out[job] = {"fresh": False, "why": "in progress, no finished run on record yet"}
+                # no finished run on record (a first run, or a record from before the wrapper kept
+                # one): nothing shows a failure, so it is stale only once the run itself is overdue
+                try:
+                    began = calendar.timegm(
+                        time.strptime(run_rec.get("started_at"), "%Y-%m-%dT%H:%M:%SZ")
+                    )
+                except (TypeError, ValueError):
+                    out[job] = {
+                        "fresh": False,
+                        "why": "in progress, no finished run and no start time",
+                    }
+                    continue
+                age = int(now - began)
+                out[job] = {"fresh": age <= max_age, "in_progress": True, "age_s": age, "max_age_s": max_age,
+                            "why": "in progress, no finished run on record yet"}  # fmt: skip
+                if age > max_age:
+                    out[job]["why"] = (
+                        f"in progress for {age} s with no finished run, over {max_age} s"
+                    )
                 continue
         if not isinstance(rec, dict):
             out[job] = {"fresh": False, "why": "unreadable run record"}
