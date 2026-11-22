@@ -51,6 +51,20 @@ names a real host, address, VM id or secret value; those live only in the privat
 
   The rules are proved with the product's own `promtool test rules` against series that should
   and should not fire them (`tests/roles/test_prometheus_role.py`).
+- **HTTP(S) up/down probes (opt-in, `prometheus_probes_enabled: true`)**: the function an uptime
+  monitor serves. A **blackbox exporter** (a second container of the same compose project, pinned by
+  digest, no published port) is probed through by a `probe` job. The target list is generated from
+  the registry (`hnx registry generate --only prometheus --probe-targets`): every service row that
+  is published at the edge (`public_hostname`) or declares an `http` health endpoint, less
+  `prometheus_probe_exclude`. A routed row is probed by its **edge name** (what a user types: name,
+  certificate, edge and backend), any other by the name it answers by. An edge answer of 2xx, 3xx,
+  401 or 403 is up (a sign-in redirect is the edge working); a 5xx, a refused connection, a bad
+  certificate or no answer inside `prometheus_probe_timeout` is down. The `ProbeDown` rule
+  (`probe_success == 0`, `for: 5m` = `prometheus_alert_probe_down_for`, critical) goes through the
+  same state-diffed forwarder as every other alert, so a probe going red posts once, and its
+  recovery posts once. Limit: a row behind the edge's forward auth answers with the sign-in redirect
+  whether or not its backend is up, so for those the probe proves the name, certificate and edge;
+  the row's own health check is the backend's proof.
 - **The alert path reuses the one the lab's alerting controls already use**: a timer
   (`hnx-prometheus-alerts.timer`, every 60 s) runs `prometheus-alert-notify`, which asks the local
   service which alerts fire and posts to the notify service by logical id (`prometheus_notify_id`),
@@ -212,7 +226,7 @@ own; the overlay decides.
 | Hook | What it checks or does |
 |---|---|
 | `readiness` (also the module's preflight) | `docker_engine` readiness, the settings, the targets render from the registry, every secret reference exists in the store and has its form |
-| `health` | every container running and healthy; `/-/ready`; the running configuration is the one on disk (the last reload succeeded), with the configured retention; the four default rules are loaded and healthy; the host job has targets; the forwarder's last send (or `--test`) reached the notify service. A target that is down is an alert, not a failure of the service. |
+| `health` | every container running and healthy; `/-/ready`; the running configuration is the one on disk (the last reload succeeded), with the configured retention; the default rules (and ProbeDown, when probes are on) are loaded and healthy; the host job (and the probe job, when on) has targets; the forwarder's last send (or `--test`) reached the notify service. A target that is down is an alert, not a failure of the service. |
 | `backup` | `compose_app`'s manifest naming the data root (the window and the scrape credentials ride along, so a backup of this host holds them) |
 | `export`, `restore` | nothing: the samples are a rolling window the targets produce again |
 | `upgrade` | refuses a target not pinned by tag and digest or from another repository, then records the bump (`compose_app` upgrade). A kept 2.x data directory opens in 3.x, but can then be downgraded only to 2.55. |

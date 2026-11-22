@@ -51,6 +51,7 @@
           - prometheus_rule_names | difference(prometheus_loaded_rules) | length == 0
           - prometheus_loaded_rule_health | length == 0
           - "'node' in prometheus_active_jobs"
+          - not (prometheus_probes_enabled | bool) or 'probe' in prometheus_active_jobs
         fail_msg: >-
           prometheus: the running service does not match its configuration (last reload ok:
           {{ prometheus_runtime.reloadConfigSuccess }}; retention {{ prometheus_runtime.storageRetention | default('?') }},
