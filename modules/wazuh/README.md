@@ -62,6 +62,18 @@ one else to this port.
 
 ### The alert webhook
 
+**Target: the alert-intake module** (`POST /v1/alerts` on its port, 8480 by default; its README is the
+other half of this contract). Set `wazuh_alert_forward_url` to `http://<intake host>:8480/v1/alerts`
+(the overlay's value). The intake authenticates the caller with `Authorization: Bearer <webhook
+token>`: this module's `secret:wazuh/alert-forwarder-auth` must hold exactly `Bearer ` followed by the
+value of the intake's webhook-token secret (the overlay seeds both from one value). The intake pins the
+`source` per sender: `wazuh_alert_source` (default `svc:<instance id>`, `svc:siem`) must equal the
+intake's `alert_intake_allowed_source`, or every post is answered 403 (permanent: the integration drops
+it and logs it). Answers: 202 handled (the intake dedups on detection plus entities and is idempotent
+per event id); 400/403/409 permanent; 401 or 5xx (502: the case store or notifier failed) are held in the
+outbox and the same event id is retried.
+
+
 With `wazuh_alert_forward_url` set, the manager's integration `custom-hnx-alert` posts each alert at
 or above `wazuh_alert_forward_level` (default 12) to that URL as **one CloudEvents event, type
 `homelabnext.alert.created` 1.2** (ADR-0009; `schemas/events/alert.created.schema.json`):
