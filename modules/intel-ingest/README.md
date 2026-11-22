@@ -41,6 +41,8 @@ guest). There is no pin and no unverified path: the script refuses to connect wi
 
 ## Variables
 
+`intel_ingest_hosts` (optional, `[{name, address}]`) writes one marked block to the guest's hosts file, for a service whose certificate carries only a name nothing resolves (the graph store's own self-signed certificate names one fixed name: use it as the URL's host and resolve it here).
+
 Required: `intel_ingest_logical_id`, `intel_ingest_threat_intel_url`, `intel_ingest_graph_url`.
 Everything else has a default in `defaults/main.yml`; the graph store's account (name and password
 reference) is the site's, ideally with only the permissions to add nodes and run queries.

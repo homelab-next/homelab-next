@@ -34,6 +34,18 @@
   no_log: true
   register: intel_ingest_ca_copy
 
+- name: Resolve the services' names on this guest (one marked block)
+  ansible.builtin.blockinfile:
+    path: "{{ intel_ingest_hosts_file }}"
+    marker: "# {mark} intel-ingest {{ intel_ingest_logical_id }}"
+    block: |
+      {% for h in intel_ingest_hosts %}
+      {{ h.address }} {{ h.name }}
+      {% endfor %}
+    create: true
+    mode: "0644"
+  when: intel_ingest_hosts | length > 0
+
 - name: Write the environment (no secret in it)
   ansible.builtin.template:
     src: intel-ingest.env.j2

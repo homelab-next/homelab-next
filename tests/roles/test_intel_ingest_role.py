@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from forge_front import LOOPBACK
 from rolerun import fake, first_run, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -289,3 +290,26 @@ def test_the_defaults_hold_no_address_and_no_secret_value():
     assert all(str(v).startswith("secret:") for k, v in d.items() if k.endswith("_ref") and v)
     text = (Path(ROLE) / "defaults" / "main.yml").read_text()
     assert "192.168" not in text and "gluck" not in text and sys.version_info >= (3, 9)
+
+
+def test_names_are_resolved_in_one_marked_block_and_a_second_run_changes_nothing(tmp_path):
+    (tmp_path / "units").mkdir()
+    hosts = tmp_path / "hosts"
+    hosts.write_text(f"{LOOPBACK} localhost\n")
+    entries = [{"name": "graph", "address": LOOPBACK}]
+    v = pv(tmp_path, hosts=entries, hosts_file=str(hosts))
+    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0
+    text = hosts.read_text()
+    assert f"{LOOPBACK} localhost" in text and f"{LOOPBACK} graph" in text
+    assert text.count("BEGIN intel-ingest ingest") == 1
+    again = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+def test_a_bad_hosts_entry_is_refused(tmp_path):
+    (tmp_path / "units").mkdir()
+    v = pv(
+        tmp_path, hosts=[{"name": "bad name", "address": "x"}], hosts_file=str(tmp_path / "hosts")
+    )
+    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode != 0
+    assert not (tmp_path / "hosts").exists()

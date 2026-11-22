@@ -53,3 +53,8 @@ intel_ingest_health_timeout: 10
 intel_ingest_last_run_dir: /var/lib/homelabnext/last-run
 intel_ingest_last_run_group: root
 intel_ingest_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
+# names this guest must resolve to an address for the two services: [{name, address}], written as one marked block in
+# intel_ingest_hosts_file. Needed when a service's certificate carries only a name nothing resolves (the graph store's own
+# self-signed certificate names `cortex`): the URL's host is that name and it is resolved here, on this guest only.
+intel_ingest_hosts: []
+intel_ingest_hosts_file: /etc/hosts

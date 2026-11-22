@@ -107,6 +107,15 @@ argument_specs:
         type: path
         description: Where the shared last-run writer is installed.
         default: /usr/local/libexec/homelabnext/hnx-last-run
+      intel_ingest_hosts:
+        type: list
+        elements: dict
+        description: Names this guest resolves to an address for the two services, [{name, address}], written as one marked block in the hosts file.
+        default: []
+      intel_ingest_hosts_file:
+        type: path
+        description: The hosts file the block is written to.
+        default: /etc/hosts
       intel_ingest_systemctl_cli:
         type: str
         description: The systemctl command the hooks use.
