@@ -93,7 +93,13 @@ def test_main_installs_the_job_with_no_secret_in_any_world_readable_file(first):
     assert oct(logins.stat().st_mode & 0o777) == "0o600"
     assert f"INGEST_SOURCE_KEY={KEY}" in logins.read_text()
     assert f"INGEST_GRAPH_PASSWORD={LOGIN}" in logins.read_text()
-    assert (tmp_path / "etc" / "ca-bundle.pem").read_text().count("BEGIN CERTIFICATE") == 2
+    bundle = (tmp_path / "etc" / "ca-bundle.pem").read_text()
+    assert bundle.count("BEGIN CERTIFICATE") == 2
+    # each certificate on its own lines: no literal backslash-n, a real line break between the two blocks
+    assert "\\n" not in bundle
+    assert "-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----" in bundle and bundle.endswith(
+        "-----\n"
+    )
     script = tmp_path / "bin" / "hnx-intel-ingest"
     assert oct(script.stat().st_mode & 0o777) == "0o755"
     service = (tmp_path / "units" / "hnx-ingest.service").read_text()

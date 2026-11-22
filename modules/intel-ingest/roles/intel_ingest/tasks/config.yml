@@ -24,9 +24,8 @@
 
 - name: Write the CA bundle the two services are verified with (certificates, no key)
   ansible.builtin.copy:
-    content: >-
-      {{ (lookup('hnx_secret', intel_ingest_threat_intel_ca_ref) | trim ~ '\n')
-         ~ (lookup('hnx_secret', intel_ingest_graph_ca_ref) | trim ~ '\n') }}
+    # a double-quoted scalar, so \n is a real line break (in a folded block it stays two characters and the bundle is not PEM)
+    content: "{{ lookup('hnx_secret', intel_ingest_threat_intel_ca_ref) | trim ~ '\n' ~ lookup('hnx_secret', intel_ingest_graph_ca_ref) | trim ~ '\n' }}"
     dest: "{{ intel_ingest_ca_bundle_file }}"
     owner: "{{ intel_ingest_owner }}"
     group: "{{ intel_ingest_owner_group }}"
