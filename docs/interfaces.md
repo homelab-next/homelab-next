@@ -37,6 +37,7 @@ hardware that is not part of the first drop: document the interface and ship a f
 | `homelabnext/codemode/{runner,journal,mcp_tools}.py conformance/{protocols,suites}/codemode_runner.py conformance/fakes/codemode_runner.py conformance/codemode-runner/ examples/mcp/hnx-codemode.yml` | codemode | ADR-0031 decisions 3, 7 and 10; docs/codemode.md CM-5b |
 | `homelabnext/projects/ conformance/{protocols,suites}/projects.py conformance/fakes/{project_store,openproject_api}.py docs/projects.md tests/projects/ examples/projects/` | projects | `hnx projects`; ADR-0020 |
 | `homelabnext/novelty/ schemas/platform/novelty_spec.schema.json schemas/ocsf/novelty_finding.v1.json docs/novelty.md tests/novelty/ examples/novelty/` | novelty | `hnx novelty`; ADR-0036 |
+| `homelabnext/{lake/census.py,lake/cli.py,logbursts.py} modules/source-census/ tests/{lake/test_census*.py,logbursts/} tests/modules/test_source_census_module.py tests/roles/test_source_census_role.py` | source-census | `hnx lake`, `hnx logbursts`; ADR-0049 decisions 8 and 9 |
 
 Rules that apply to every task: Python >= 3.11, standard library first; an SPDX header on every
 source file; no network in tests; clocks and randomness injected; no real identifiers (see
@@ -170,7 +171,7 @@ imports its package lazily). Current names, in that order: `registry`, `new`, `g
 `golden`,
 `site`, `guests`, `schema-check`, `secrets`, `swap`, `conform`, `decommission`, `docs`, `agent`, `workflows`,
 `scripts`, `events`, `status`, `publishing`, `graph`, `mcp`, `broker`, `codemode`, `modules`, `custom`,
-`ssh-ca`, `novelty`.
+`ssh-ca`, `lake`, `logbursts`, `novelty`.
 `parity` is a library only (the swap runner calls it; no sub-command).
 Exit codes everywhere: `0` ok, `1` a check failed, `2` misconfiguration or bad input, `>=100` the
 check itself could not measure.

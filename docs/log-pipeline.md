@@ -201,3 +201,24 @@ The runtime label:
 - The example provider's adapter (`hnx_modules.example_log_pipeline.log_pipeline:make`) is part
   of the fictional product. The reference behaviour is the fake in
   `conformance/fakes/log_pipeline.py`, which applies the library rule.
+
+## Is it flowing? The source census and the burst clusterer
+
+A pipeline that stops delivering does not announce it. Two checks watch the end of it, both owned
+by the [`source-census`](../modules/source-census/README.md) module (ADR-0049 decisions 8 and 9):
+
+- **`source-census/sources-flowing`** groups the raw-archive table (`soc.raw_archive` by default:
+  a time column and the source columns `source` and `decoder`) by source and UTC hour over a window
+  (8 days), learns each source's own cadence from when it arrived, and flags a source silent past a
+  multiple of that cadence. A source with less history than the window is `learning`: it passes and
+  the criterion reads `warn`, but one that arrived three times and is then silent past 24 hours
+  fails, so the cutover period is not blind. `source-census/all-classes-dark` (no row in any
+  configured table in its window) never learns. Both run through `hnx lake source-census` and page
+  through the `notify` slot on a newly flagged set only.
+- **`hnx logbursts`** clusters error lines of a manager log in time into bursts, collapses each to
+  its distinct message shapes and says `ONGOING` (needs attention; also a shape that recurs on
+  three days) or `RECOVERED` (no action). A burst that stopped hours ago is not a fault to wake
+  anyone for; a reconnection storm (many agents, one shape, seconds apart) is one event.
+
+Both read counts and times only. The label machinery above is not involved: they do not move or
+copy an event, so they add no egress.
