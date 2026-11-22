@@ -386,3 +386,9 @@ def test_the_password_is_only_read_from_the_environment_and_sent_as_basic_auth(
 @pytest.mark.parametrize("bad", ["relative", "/tmp", "/a/../b/c"])
 def test_an_unsafe_export_directory_is_refused(bad, indexer):
     assert index.main(["export", "--url", indexer, "--dir", bad]) == 2
+
+
+def test_the_webhook_script_runs_on_the_products_python_3_10():
+    # the manager's own interpreter is 3.10: no datetime.UTC (a formatter's "modernise" breaks it)
+    source = (FILES / "custom-hnx-alert.py").read_text()
+    assert "import UTC" not in source and "datetime.UTC" not in source

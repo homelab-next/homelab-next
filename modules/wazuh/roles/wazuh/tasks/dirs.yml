@@ -13,7 +13,7 @@
     group: "{{ item.group }}"
     mode: "{{ item.mode }}"
   loop:
-    - {path: "{{ wazuh_data_root }}", owner: "{{ wazuh_owner }}", group: "{{ wazuh_group }}", mode: "0755"}
+    - {path: "{{ wazuh_data_root }}", owner: "{{ wazuh_owner }}", group: "{{ wazuh_group }}", mode: "0750"}
     - {path: "{{ wazuh_data_root }}/indexer", owner: "{{ wazuh_indexer_uid | int }}", group: "{{ wazuh_indexer_gid | int }}", mode: "0750"}
     - {path: "{{ wazuh_data_root }}/certs", owner: "{{ wazuh_owner }}", group: "{{ wazuh_indexer_gid | int }}", mode: "{{ wazuh_cert_dir_mode }}"}
     - {path: "{{ wazuh_data_root }}/config", owner: "{{ wazuh_owner }}", group: "{{ wazuh_indexer_gid | int }}", mode: "0750"}

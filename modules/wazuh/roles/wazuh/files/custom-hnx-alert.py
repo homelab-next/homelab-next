@@ -31,8 +31,9 @@ import re
 import sys
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
+from datetime import datetime, timedelta, timezone
 
+_UTC = timezone(timedelta(0))  # the product's own Python is 3.10: no datetime.UTC
 TYPE = "homelabnext.alert.created"
 SCHEMA = "https://schemas.example.internal/homelabnext/events/alert.created/1.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -83,7 +84,7 @@ def _timestamp(value: str | None) -> str:
         r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})", value
     ):
         return value
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(_UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _dig(obj: dict, path: tuple[str, ...]):
@@ -128,7 +129,7 @@ def build(alert: dict, cfg: dict) -> dict:
         "id": derive_id(source, alert_id),
         "source": source,
         "type": TYPE,
-        "time": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "time": datetime.now(_UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "severity": sev,
         "datacontenttype": "application/json",
         "dataschema": SCHEMA,

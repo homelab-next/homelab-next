@@ -83,7 +83,7 @@
               - "{{ wazuh_data_root }}/config/authd.pass:/wazuh-config-mount/etc/authd.pass:ro"
             mem_limit: "{{ wazuh_manager_mem_limit }}"
             healthcheck:
-              test: [CMD, bash, -c, "for d in analysisd remoted authd db modulesd monitord; do pgrep -x wazuh-$d >/dev/null || exit 1; done; pgrep -f 'wazuh-apid[.]py' >/dev/null"]
+              test: [CMD, bash, -c, "for d in analysisd remoted authd db modulesd monitord; do pgrep -x wazuh-$d >/dev/null || exit 1; done; pgrep -f 'wazuh_apid[.]py' >/dev/null"]
               interval: 30s
               timeout: 10s
               retries: 5

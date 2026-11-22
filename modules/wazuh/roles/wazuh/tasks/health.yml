@@ -22,16 +22,15 @@
     - name: Every manager daemon is a live process
       ansible.builtin.command:
         argv: [docker, compose, -f, "{{ wazuh_dir }}/docker-compose.yml", exec, -T, manager,
-               pgrep, "{{ '-f' if item == 'wazuh-apid[.]py' else '-x' }}", "{{ item }}"]
-      loop: [wazuh-analysisd, wazuh-remoted, wazuh-authd, wazuh-db, wazuh-modulesd, wazuh-monitord, "wazuh-apid[.]py"]
+               pgrep, "{{ '-f' if item == 'wazuh_apid[.]py' else '-x' }}", "{{ item }}"]
+      loop: [wazuh-analysisd, wazuh-remoted, wazuh-authd, wazuh-db, wazuh-modulesd, wazuh-monitord, "wazuh_apid[.]py"]
       changed_when: false
       check_mode: false
 
     - name: Ask the enrolment service with a wrong password
       ansible.builtin.command:
-        argv: [docker, compose, -f, "{{ wazuh_dir }}/docker-compose.yml", exec, -T, manager,
-               /var/ossec/bin/agent-auth, -m, localhost, -p, "{{ wazuh_container_enrollment_port }}",
-               -P, hnx-health-wrong-password, -A, hnx-health-probe]
+        argv: [docker, compose, -f, "{{ wazuh_dir }}/docker-compose.yml", exec, -T, manager, bash, -c,
+               "printf \"OSSEC PASS: hnx-health-wrong-password OSSEC A:'hnx-health-probe'\\n\" | timeout 10 openssl s_client -connect localhost:{{ wazuh_container_enrollment_port }} -quiet 2>&1"]
       register: wazuh_enroll_probe
       changed_when: false
       failed_when: false
@@ -39,7 +38,6 @@
     - name: The enrolment service refuses it
       ansible.builtin.assert:
         that:
-          - wazuh_enroll_probe.rc != 0
           - (wazuh_enroll_probe.stdout ~ wazuh_enroll_probe.stderr) is search('Invalid password')
         fail_msg: >-
           siem: the enrolment service did not refuse a wrong password (exit {{ wazuh_enroll_probe.rc }});
