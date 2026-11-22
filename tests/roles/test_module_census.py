@@ -402,12 +402,15 @@ def test_the_record_reader_refuses_a_directory_its_group_or_others_may_write(mon
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     for mode, refused in ((0o40700, False), (0o40755, False), (0o40775, True), (0o40757, True)):
-        monkeypatch.setattr(mod.os, "fstat", lambda fd, m=mode: types.SimpleNamespace(st_mode=m))
-        if refused:
-            with pytest.raises(mod.Refused, match="is writable by its group or others"):
+        # mod.os is the real os module: undo the stand-in before the test returns, so no
+        # fixture teardown (pytest 9.2 stats files on the way out) sees a fake fstat
+        with monkeypatch.context() as m:
+            m.setattr(mod.os, "fstat", lambda fd, mm=mode: types.SimpleNamespace(st_mode=mm))
+            if refused:
+                with pytest.raises(mod.Refused, match="is writable by its group or others"):
+                    mod.guarded(3, "/x")
+            else:
                 mod.guarded(3, "/x")
-        else:
-            mod.guarded(3, "/x")
 
 
 def _socket_module(monkeypatch):
