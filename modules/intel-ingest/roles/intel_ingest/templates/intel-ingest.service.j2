@@ -12,7 +12,7 @@ User={{ intel_ingest_user }}
 Group={{ intel_ingest_group }}
 EnvironmentFile={{ intel_ingest_env_file }}
 EnvironmentFile={{ intel_ingest_login_env_file }}
-ExecStart=/usr/bin/python3 {{ intel_ingest_script }}
+ExecStart=/usr/local/libexec/homelabnext/hnx-intel-ingest
 # the script saves its checkpoint on SIGTERM and exits cleanly; give it time to finish the current page
 KillSignal=SIGTERM
 TimeoutStopSec=5min

@@ -1,5 +1,18 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: intel-ingest
+#   kind: job
+#   purpose: Pull the threat-intel platform's actionable indicators per type and write them as graph nodes, resuming from an atomically saved per-page checkpoint.
+#   owner: operator
+#   trigger: [timer:intel_ingest/intel-ingest, role:intel_ingest]
+#   inputs: the platform's attribute search and the graph store's query API over HTTPS (credentials and URLs from the environment), the state file
+#   outputs: graph nodes, the state file, and journal lines
+#   installs_to: /usr/local/libexec/homelabnext/hnx-intel-ingest
+#   exit:
+#     "0": walked every type to the end
+#     "1": a type failed (its checkpoint is saved; the next run resumes)
+#     "2": paused at the wall-clock cap or on a signal (progress, not failure)
 """Pulls actionable MISP indicators (attributes with to_ids=1) and ingests
 them into Synapse Cortex (the graph store of the module's site) as real Storm graph nodes, tagged #rep.misp -- the first leg
 of making Cortex an actual CTI system of record instead of an empty graph.

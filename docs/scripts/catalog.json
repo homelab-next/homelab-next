@@ -790,6 +790,27 @@
     },
     {
       "exit": {
+        "0": "walked every type to the end",
+        "1": "a type failed (its checkpoint is saved; the next run resumes)",
+        "2": "paused at the wall-clock cap or on a signal (progress, not failure)"
+      },
+      "id": "intel-ingest",
+      "inputs": "the platform's attribute search and the graph store's query API over HTTPS (credentials and URLs from the environment), the state file",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-intel-ingest",
+      "kind": "job",
+      "language": "python",
+      "outputs": "graph nodes, the state file, and journal lines",
+      "owner": "operator",
+      "path": "modules/intel-ingest/roles/intel_ingest/files/hnx_intel_ingest.py",
+      "purpose": "Pull the threat-intel platform's actionable indicators per type and write them as graph nodes, resuming from an atomically saved per-page checkpoint.",
+      "status": "active",
+      "trigger": [
+        "timer:intel_ingest/intel-ingest",
+        "role:intel_ingest"
+      ]
+    },
+    {
+      "exit": {
         "0": "the mode did its work (health reports its findings in problems)",
         "1": "refused input, an error from the IdP, or flow drift sync will not touch (the reason on stderr)",
         "2": "usage error"
