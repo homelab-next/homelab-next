@@ -1,0 +1,963 @@
+{
+ "agent-stream": [
+  [
+   {
+    "row": {
+     "agent_id": "001",
+     "agent_name": "infer-core",
+     "decoder_name": "sshd",
+     "full_log": "Failed password for root from 203.0.113.9 port 4022",
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "amber"
+     },
+     "location": "/var/log/auth.log",
+     "raw": "{\"agent\":{\"id\":\"001\",\"ip\":\"198.51.100.130\",\"name\":\"infer-core\"},\"data\":{\"dstuser\":\"root\",\"srcip\":\"203.0.113.9\"},\"decoder\":{\"name\":\"sshd\"},\"full_log\":\"Failed password for root from 203.0.113.9 port 4022\",\"location\":\"/var/log/auth.log\",\"rule\":{\"description\":\"Multiple failed logins\",\"groups\":[\"syslog\",\"sshd\",\"authentication_failed\"],\"id\":\"5712\",\"level\":12,\"mitre\":{\"id\":[\"T1110\"]}},\"timestamp\":\"2026-11-22T10:00:00.000+0000\"}",
+     "route": "vector/siem-alerts",
+     "rule_id": "5712",
+     "source_kind": "siem",
+     "time": "2026-11-22T10:00:00.000000Z",
+     "uid": "d5cc2cfd4ef11042f4750a7346b0baa1b97e77ff"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "attack_techniques": [
+      "T1110"
+     ],
+     "category_uid": 2,
+     "class_uid": 2004,
+     "detection_id": "det:ssh-auth-failure-burst",
+     "finding_title": "Multiple failed logins",
+     "finding_uid": "5712",
+     "host_name": "infer-core",
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "amber"
+     },
+     "message": "Multiple failed logins",
+     "metadata": {
+      "log_source": "infer-core",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "risk_score": 80,
+     "severity_id": 4,
+     "status_id": 1,
+     "time": "2026-11-22T10:00:00.000000Z",
+     "type_uid": 200401,
+     "uid": "42ff00fe5d6477a7bbed7f7f18e91234a6bb5ed5"
+    },
+    "table": "detection_finding"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "auth_protocol": "sshd",
+     "category_uid": 3,
+     "class_uid": 3002,
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "amber"
+     },
+     "message": "Multiple failed logins",
+     "metadata": {
+      "log_source": "infer-core",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "severity_id": 2,
+     "src_endpoint": {
+      "ip": "203.0.113.9"
+     },
+     "status_id": 2,
+     "time": "2026-11-22T10:00:00.000000Z",
+     "type_uid": 300201,
+     "uid": "5ed1bffa5953c3a99393c687468dd4a9b1891d70",
+     "user_name": "root"
+    },
+    "table": "authentication"
+   }
+  ],
+  [
+   {
+    "row": {
+     "agent_id": "002",
+     "agent_name": "lake-core",
+     "decoder_name": "json",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "amber"
+     },
+     "location": "vulnerability-detector",
+     "raw": "{\"agent\":{\"id\":\"002\",\"ip\":\"198.51.100.40\",\"name\":\"lake-core\"},\"data\":{\"vulnerability\":{\"cve\":\"CVE-2026-0001\",\"cvss\":{\"cvss3\":{\"base_score\":7.5}},\"package\":{\"name\":\"libexample\",\"version\":\"1.2.3\"},\"severity\":\"High\",\"title\":\"Example flaw\"}},\"decoder\":{\"name\":\"json\"},\"location\":\"vulnerability-detector\",\"rule\":{\"description\":\"Package vulnerable\",\"groups\":[\"vulnerability-detector\"],\"id\":\"23504\",\"level\":7},\"timestamp\":\"2026-11-22T10:01:00.000+0000\"}",
+     "route": "vector/siem-alerts",
+     "rule_id": "23504",
+     "source_kind": "siem",
+     "time": "2026-11-22T10:01:00.000000Z",
+     "uid": "b40daffbe0dbc462d4982eb1436642be5b57a99c"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "category_uid": 2,
+     "class_uid": 2004,
+     "detection_id": "det:siem-unmapped",
+     "finding_title": "Package vulnerable",
+     "finding_uid": "23504",
+     "host_name": "lake-core",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "amber"
+     },
+     "message": "Package vulnerable",
+     "metadata": {
+      "log_source": "lake-core",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "risk_score": 60,
+     "severity_id": 3,
+     "status_id": 1,
+     "time": "2026-11-22T10:01:00.000000Z",
+     "type_uid": 200401,
+     "uid": "22148b10749205fcfa801fdabc6de12fb9d6e419"
+    },
+    "table": "detection_finding"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "category_uid": 2,
+     "class_uid": 2002,
+     "cve_uid": "CVE-2026-0001",
+     "cvss_score": 7.5,
+     "finding_uid": "CVE-2026-0001",
+     "host_name": "lake-core",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "amber"
+     },
+     "message": "Example flaw",
+     "metadata": {
+      "log_source": "lake-core",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "package_name": "libexample",
+     "package_version": "1.2.3",
+     "severity_id": 4,
+     "status_id": 1,
+     "time": "2026-11-22T10:01:00.000000Z",
+     "type_uid": 200201,
+     "uid": "d8cddc005bed25bb5a408caca1249cfa02cdbbed"
+    },
+    "table": "vulnerability_finding"
+   }
+  ],
+  [
+   {
+    "row": {
+     "agent_id": "002",
+     "agent_name": "lake-core",
+     "decoder_name": "sca",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "amber"
+     },
+     "location": "sca",
+     "raw": "{\"agent\":{\"id\":\"002\",\"ip\":\"198.51.100.40\",\"name\":\"lake-core\"},\"data\":{\"sca\":{\"check\":{\"id\":\"1001\",\"result\":\"failed\",\"title\":\"Ensure example is set\"},\"policy\":\"Example hardening\"}},\"decoder\":{\"name\":\"sca\"},\"location\":\"sca\",\"rule\":{\"description\":\"Policy check failed\",\"groups\":[\"sca\"],\"id\":\"19007\",\"level\":3},\"timestamp\":\"2026-11-22T10:02:00.000+0000\"}",
+     "route": "vector/siem-alerts",
+     "rule_id": "19007",
+     "source_kind": "siem",
+     "time": "2026-11-22T10:02:00.000000Z",
+     "uid": "173202c95b57700d421496d473ba1a0ed92b1ed8"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "category_uid": 2,
+     "class_uid": 2004,
+     "detection_id": "det:siem-unmapped",
+     "finding_title": "Policy check failed",
+     "finding_uid": "19007",
+     "host_name": "lake-core",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "amber"
+     },
+     "message": "Policy check failed",
+     "metadata": {
+      "log_source": "lake-core",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "risk_score": 20,
+     "severity_id": 1,
+     "status_id": 1,
+     "time": "2026-11-22T10:02:00.000000Z",
+     "type_uid": 200401,
+     "uid": "f15ea1025f8b7ab02c1823dabb0612c425fc97b3"
+    },
+    "table": "detection_finding"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "category_uid": 2,
+     "class_uid": 2003,
+     "compliance_status": "failed",
+     "finding_title": "Ensure example is set",
+     "finding_uid": "1001",
+     "host_name": "lake-core",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "amber"
+     },
+     "message": "Ensure example is set",
+     "metadata": {
+      "log_source": "lake-core",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "severity_id": 2,
+     "standard": "Example hardening",
+     "status_id": 2,
+     "time": "2026-11-22T10:02:00.000000Z",
+     "type_uid": 200301,
+     "uid": "51dcedde3f9bb33debef47b3e47edd8e7752429b"
+    },
+    "table": "compliance_finding"
+   }
+  ],
+  [
+   {
+    "row": {
+     "agent_id": "002",
+     "agent_name": "lake-core",
+     "decoder_name": "syscheck_integrity_changed",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "amber"
+     },
+     "location": "syscheck",
+     "raw": "{\"agent\":{\"id\":\"002\",\"ip\":\"198.51.100.40\",\"name\":\"lake-core\"},\"decoder\":{\"name\":\"syscheck_integrity_changed\"},\"location\":\"syscheck\",\"rule\":{\"description\":\"Integrity checksum changed\",\"groups\":[\"syscheck\",\"syscheck_entry_modified\"],\"id\":\"550\",\"level\":7},\"syscheck\":{\"event\":\"modified\",\"path\":\"/etc/pam.d/example\",\"sha256_after\":\"0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f\",\"uname_after\":\"root\"},\"timestamp\":\"2026-11-22T10:03:00.000+0000\"}",
+     "route": "vector/siem-alerts",
+     "rule_id": "550",
+     "source_kind": "siem",
+     "time": "2026-11-22T10:03:00.000000Z",
+     "uid": "47de7f995be9ebc00eccc0b3510a12dc21d7f13e"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "category_uid": 2,
+     "class_uid": 2004,
+     "detection_id": "det:siem-unmapped",
+     "finding_title": "Integrity checksum changed",
+     "finding_uid": "550",
+     "host_name": "lake-core",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "amber"
+     },
+     "message": "Integrity checksum changed",
+     "metadata": {
+      "log_source": "lake-core",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "risk_score": 60,
+     "severity_id": 3,
+     "status_id": 1,
+     "time": "2026-11-22T10:03:00.000000Z",
+     "type_uid": 200401,
+     "uid": "98c782bb217819db127fee71e15561f28c8af348"
+    },
+    "table": "detection_finding"
+   },
+   {
+    "row": {
+     "activity_id": 3,
+     "category_uid": 1,
+     "class_uid": 1001,
+     "file_hash_sha256": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+     "file_path": "/etc/pam.d/example",
+     "host_name": "lake-core",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "amber"
+     },
+     "message": "Integrity checksum changed",
+     "metadata": {
+      "log_source": "lake-core",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "severity_id": 3,
+     "status_id": 1,
+     "time": "2026-11-22T10:03:00.000000Z",
+     "type_uid": 100103,
+     "uid": "935218249ca040d1b5af396eacd89afec377b935",
+     "user_name": "root"
+    },
+    "table": "file_activity"
+   }
+  ],
+  [
+   {
+    "row": {
+     "agent_id": "002",
+     "agent_name": "lake-core",
+     "decoder_name": "auditd",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "amber"
+     },
+     "location": "/var/log/audit/audit.log",
+     "raw": "{\"agent\":{\"id\":\"002\",\"ip\":\"198.51.100.40\",\"name\":\"lake-core\"},\"data\":{\"audit\":{\"auid\":\"1000\",\"exe\":\"/usr/bin/curl\",\"execve\":{\"a0\":\"curl\",\"a1\":\"-s\",\"a2\":\"http://example.invalid/\",\"argc\":\"3\"},\"pid\":\"4242\"}},\"decoder\":{\"name\":\"auditd\"},\"location\":\"/var/log/audit/audit.log\",\"rule\":{\"description\":\"Audit: command executed\",\"groups\":[\"audit\"],\"id\":\"80792\",\"level\":3},\"timestamp\":\"2026-11-22T10:04:00.000+0000\"}",
+     "route": "vector/siem-alerts",
+     "rule_id": "80792",
+     "source_kind": "siem",
+     "time": "2026-11-22T10:04:00.000000Z",
+     "uid": "d04db942a61fc6781815d15937c0c08a9366dec1"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "category_uid": 2,
+     "class_uid": 2004,
+     "detection_id": "det:siem-unmapped",
+     "finding_title": "Audit: command executed",
+     "finding_uid": "80792",
+     "host_name": "lake-core",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "amber"
+     },
+     "message": "Audit: command executed",
+     "metadata": {
+      "log_source": "lake-core",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "risk_score": 20,
+     "severity_id": 1,
+     "status_id": 1,
+     "time": "2026-11-22T10:04:00.000000Z",
+     "type_uid": 200401,
+     "uid": "1459badf6b4893ea1e3d862255506e5627fb3187"
+    },
+    "table": "detection_finding"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "category_uid": 1,
+     "class_uid": 1007,
+     "host_name": "lake-core",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "amber"
+     },
+     "message": "Audit: command executed",
+     "metadata": {
+      "log_source": "lake-core",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "process_cmd_line": "curl -s http://example.invalid/",
+     "process_name": "curl",
+     "process_path": "/usr/bin/curl",
+     "process_pid": 4242,
+     "severity_id": 1,
+     "status_id": 1,
+     "time": "2026-11-22T10:04:00.000000Z",
+     "type_uid": 100701,
+     "uid": "c349809ce5c0a8939feaf5b406143991362b1c0c",
+     "user_name": "1000"
+    },
+    "table": "process_activity"
+   }
+  ],
+  [
+   {
+    "row": {
+     "agent_id": "001",
+     "agent_name": "infer-core",
+     "decoder_name": "sshd",
+     "full_log": "Accepted publickey for alice from 203.0.113.9 port 4023",
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "green"
+     },
+     "location": "/var/log/auth.log",
+     "raw": "{\"agent\":{\"id\":\"001\",\"ip\":\"198.51.100.130\",\"name\":\"infer-core\"},\"data\":{\"dstuser\":\"alice\",\"srcip\":\"203.0.113.9\"},\"decoder\":{\"name\":\"sshd\"},\"full_log\":\"Accepted publickey for alice from 203.0.113.9 port 4023\",\"location\":\"/var/log/auth.log\",\"timestamp\":\"2026-11-22T10:05:00.000+0000\"}",
+     "route": "vector/siem-archives",
+     "source_kind": "siem",
+     "time": "2026-11-22T10:05:00.000000Z",
+     "uid": "662d314bf63073736a87e79c8e8774860b1d4267"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "auth_protocol": "sshd",
+     "category_uid": 3,
+     "class_uid": 3002,
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "green"
+     },
+     "message": "Accepted publickey for alice from 203.0.113.9 port 4023",
+     "metadata": {
+      "log_source": "infer-core",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "severity_id": 1,
+     "src_endpoint": {
+      "ip": "203.0.113.9"
+     },
+     "status_id": 1,
+     "time": "2026-11-22T10:05:00.000000Z",
+     "type_uid": 300201,
+     "uid": "c948f165454c70aa559ad9061986fa09a995fca2",
+     "user_name": "alice"
+    },
+    "table": "authentication"
+   }
+  ],
+  [
+   {
+    "row": {
+     "agent_id": "009",
+     "agent_name": "unlisted",
+     "decoder_name": "json",
+     "labels": {
+      "hnx_tlp": "amber"
+     },
+     "location": "x",
+     "raw": "{\"agent\":{\"id\":\"009\",\"ip\":\"198.51.100.250\",\"name\":\"unlisted\"},\"data\":{},\"decoder\":{\"name\":\"json\"},\"location\":\"x\",\"rule\":{\"description\":\"Critical thing\",\"groups\":[\"local\"],\"id\":\"5901\",\"level\":15},\"timestamp\":\"2026-11-22T10:06:00.000+0000\"}",
+     "route": "vector/siem-alerts",
+     "rule_id": "5901",
+     "source_kind": "siem",
+     "time": "2026-11-22T10:06:00.000000Z",
+     "uid": "0e8125121459a6b35997054591621e799a129df1"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "category_uid": 2,
+     "class_uid": 2004,
+     "detection_id": "det:siem-unmapped",
+     "finding_title": "Critical thing",
+     "finding_uid": "5901",
+     "host_name": "unlisted",
+     "labels": {
+      "hnx_tlp": "amber"
+     },
+     "message": "Critical thing",
+     "metadata": {
+      "log_source": "unlisted",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "risk_score": 100,
+     "severity_id": 5,
+     "status_id": 1,
+     "time": "2026-11-22T10:06:00.000000Z",
+     "type_uid": 200401,
+     "uid": "4b1287a40eae563f8932929853d87f03f2c5ea0f"
+    },
+    "table": "detection_finding"
+   }
+  ],
+  [
+   {
+    "row": {
+     "agent_id": "001",
+     "agent_name": "infer-core",
+     "decoder_name": "json",
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "amber"
+     },
+     "location": "x",
+     "raw": "{\"agent\":{\"id\":\"001\",\"ip\":\"198.51.100.130\",\"name\":\"infer-core\"},\"data\":{},\"decoder\":{\"name\":\"json\"},\"location\":\"x\",\"rule\":{\"description\":\"Self-labelled\",\"groups\":[\"local\"],\"id\":\"5902\",\"level\":2},\"timestamp\":\"2026-11-22T10:07:00.000+0000\",\"tlp\":\"clear\"}",
+     "route": "vector/siem-alerts",
+     "rule_id": "5902",
+     "source_kind": "siem",
+     "time": "2026-11-22T10:07:00.000000Z",
+     "uid": "1b5ec6183d3ada1ef3b8384b99ed58b81d5a634a"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "category_uid": 2,
+     "class_uid": 2004,
+     "detection_id": "det:siem-unmapped",
+     "finding_title": "Self-labelled",
+     "finding_uid": "5902",
+     "host_name": "infer-core",
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "amber"
+     },
+     "message": "Self-labelled",
+     "metadata": {
+      "log_source": "infer-core",
+      "product": "siem",
+      "version": "1.3.0"
+     },
+     "risk_score": 20,
+     "severity_id": 1,
+     "status_id": 1,
+     "time": "2026-11-22T10:07:00.000000Z",
+     "type_uid": 200401,
+     "uid": "0b1d66c1f973967ca77a11c197d22d1d5f02889e"
+    },
+    "table": "detection_finding"
+   }
+  ]
+ ],
+ "router-cef": [
+  [
+   {
+    "row": {
+     "decoder_name": "syslog",
+     "full_log": "<14>Nov 22 10:10:00 router-a CEF:0|Example Router Co|Router OS|8.0|400|Firewall Drop|5|src=198.51.100.130 dst=203.0.113.5 spt=40000 dpt=443 proto=TCP in=120 out=4096 rt=1795389000000 flowDirection=outbound",
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "red"
+     },
+     "location": "syslog:192.0.2.1",
+     "raw": "{\"decoder\":{\"name\":\"syslog\"},\"full_log\":\"<14>Nov 22 10:10:00 router-a CEF:0|Example Router Co|Router OS|8.0|400|Firewall Drop|5|src=198.51.100.130 dst=203.0.113.5 spt=40000 dpt=443 proto=TCP in=120 out=4096 rt=1795389000000 flowDirection=outbound\",\"location\":\"syslog:192.0.2.1\",\"timestamp\":\"2026-11-22T12:00:00.000000Z\"}",
+     "route": "vector/syslog-udp",
+     "source_kind": "syslog",
+     "time": "2026-11-22T23:10:00.000000Z",
+     "uid": "91e1ccda746abf00209e4ffa0ad66d5a661575e2"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 6,
+     "bytes_in": 120,
+     "bytes_out": 4096,
+     "category_uid": 4,
+     "class_uid": 4001,
+     "direction_id": 0,
+     "dst_endpoint": {
+      "ip": "203.0.113.5",
+      "port": 443
+     },
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "red"
+     },
+     "message": "Firewall Drop",
+     "metadata": {
+      "log_source": "Router OS",
+      "product": "Example Router Co Router OS",
+      "version": "1.3.0"
+     },
+     "protocol_name": "TCP",
+     "severity_id": 3,
+     "src_endpoint": {
+      "ip": "198.51.100.130",
+      "port": 40000
+     },
+     "status_id": 1,
+     "time": "2026-11-22T23:10:00.000000Z",
+     "type_uid": 400106,
+     "uid": "49926fd29490b8ded6615fb4192b7768d2056d11"
+    },
+    "table": "network_activity"
+   }
+  ],
+  [
+   {
+    "row": {
+     "decoder_name": "syslog",
+     "full_log": "<14>Nov 22 10:10:01 router-a CEF:0|Example Router Co|Router OS|8.0|401|Admin login|1|suser=admin src=192.0.2.77 rt=1795389001000",
+     "labels": {
+      "hnx_tlp": "red"
+     },
+     "location": "syslog:192.0.2.1",
+     "raw": "{\"decoder\":{\"name\":\"syslog\"},\"full_log\":\"<14>Nov 22 10:10:01 router-a CEF:0|Example Router Co|Router OS|8.0|401|Admin login|1|suser=admin src=192.0.2.77 rt=1795389001000\",\"location\":\"syslog:192.0.2.1\",\"timestamp\":\"2026-11-22T12:00:00.000000Z\"}",
+     "route": "vector/syslog-udp",
+     "source_kind": "syslog",
+     "time": "2026-11-22T23:10:01.000000Z",
+     "uid": "ecacd407689b293ef34340f221879b4e60ad9066"
+    },
+    "table": "raw_archive"
+   }
+  ],
+  [
+   {
+    "row": {
+     "decoder_name": "syslog",
+     "full_log": "<13>Nov 22 10:10:02 router-a dhcpd: lease granted",
+     "labels": {
+      "hnx_tlp": "red"
+     },
+     "location": "syslog:192.0.2.1",
+     "raw": "{\"decoder\":{\"name\":\"syslog\"},\"full_log\":\"<13>Nov 22 10:10:02 router-a dhcpd: lease granted\",\"location\":\"syslog:192.0.2.1\",\"timestamp\":\"2026-11-22T12:00:00.000000Z\"}",
+     "route": "vector/syslog-udp",
+     "source_kind": "syslog",
+     "time": "2026-11-22T12:00:00.000000Z",
+     "uid": "dc4c7a1550c0ad2ca61555b08e70d7f512e398a3"
+    },
+    "table": "raw_archive"
+   }
+  ]
+ ],
+ "router-cef-untrusted": [
+  [
+   {
+    "row": {
+     "decoder_name": "syslog",
+     "full_log": "<14>Nov 22 10:10:00 router-a CEF:0|Example Router Co|Router OS|8.0|400|Firewall Drop|5|src=198.51.100.130 dst=203.0.113.5 spt=40000 dpt=443 proto=TCP in=120 out=4096 rt=1795389000000 flowDirection=outbound",
+     "labels": {
+      "hnx_tlp": "red"
+     },
+     "location": "syslog:192.0.2.99",
+     "raw": "{\"decoder\":{\"name\":\"syslog\"},\"full_log\":\"<14>Nov 22 10:10:00 router-a CEF:0|Example Router Co|Router OS|8.0|400|Firewall Drop|5|src=198.51.100.130 dst=203.0.113.5 spt=40000 dpt=443 proto=TCP in=120 out=4096 rt=1795389000000 flowDirection=outbound\",\"location\":\"syslog:192.0.2.99\",\"timestamp\":\"2026-11-22T12:00:00.000000Z\"}",
+     "route": "vector/syslog-udp",
+     "source_kind": "syslog",
+     "time": "2026-11-22T23:10:00.000000Z",
+     "uid": "45bc804c7f364229d1d41e1b5297a79bdc15777e"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 6,
+     "bytes_in": 120,
+     "bytes_out": 4096,
+     "category_uid": 4,
+     "class_uid": 4001,
+     "direction_id": 0,
+     "dst_endpoint": {
+      "ip": "203.0.113.5",
+      "port": 443
+     },
+     "labels": {
+      "hnx_tlp": "red"
+     },
+     "message": "Firewall Drop",
+     "metadata": {
+      "log_source": "Router OS",
+      "product": "Example Router Co Router OS",
+      "version": "1.3.0"
+     },
+     "protocol_name": "TCP",
+     "severity_id": 3,
+     "src_endpoint": {
+      "ip": "198.51.100.130",
+      "port": 40000
+     },
+     "status_id": 1,
+     "time": "2026-11-22T23:10:00.000000Z",
+     "type_uid": 400106,
+     "uid": "4dc696406770c323d2f7143b5beadb8279b130b9"
+    },
+    "table": "network_activity"
+   }
+  ]
+ ],
+ "sensor-stream": [
+  [
+   {
+    "row": {
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "red"
+     },
+     "raw": "{\"alert\":{\"metadata\":{\"signature_severity\":[\"Informational\"]},\"severity\":1,\"signature\":\"EX policy cleartext pin\",\"signature_id\":2100001},\"dest_ip\":\"203.0.113.5\",\"dest_port\":443,\"event_type\":\"alert\",\"proto\":\"TCP\",\"src_ip\":\"198.51.100.130\",\"src_port\":40000,\"timestamp\":\"2026-11-22T10:20:00.123456+0000\"}",
+     "route": "vector/sensor-stream",
+     "source_kind": "sensor",
+     "time": "2026-11-22T10:20:00.123456Z",
+     "uid": "0fc8e3dcfe793fb99f9123aa016a48682fd5b4e2"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "category_uid": 2,
+     "class_uid": 2004,
+     "detection_id": "det:ids-signature",
+     "finding_title": "EX policy cleartext pin",
+     "finding_uid": "2100001",
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "red"
+     },
+     "message": "EX policy cleartext pin",
+     "metadata": {
+      "log_source": "ids-sensor",
+      "product": "ids-sensor",
+      "version": "1.3.0"
+     },
+     "severity_id": 2,
+     "status_id": 1,
+     "time": "2026-11-22T10:20:00.123456Z",
+     "type_uid": 200401,
+     "uid": "c42c2aaf46711ab39dafa234963c55f5e3ecd914"
+    },
+    "table": "detection_finding"
+   }
+  ],
+  [
+   {
+    "row": {
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "red"
+     },
+     "raw": "{\"alert\":{\"metadata\":{\"signature_severity\":[\"Major\"]},\"severity\":3,\"signature\":\"EX exploit attempt\",\"signature_id\":2100002},\"dest_ip\":\"203.0.113.6\",\"dest_port\":80,\"event_type\":\"alert\",\"proto\":\"TCP\",\"src_ip\":\"198.51.100.40\",\"src_port\":41000,\"timestamp\":\"2026-11-22T10:20:01.000000+0000\"}",
+     "route": "vector/sensor-stream",
+     "source_kind": "sensor",
+     "time": "2026-11-22T10:20:01.000000Z",
+     "uid": "1e995f092808a7296b8824f05625242314d35db5"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "category_uid": 2,
+     "class_uid": 2004,
+     "detection_id": "det:ids-signature",
+     "finding_title": "EX exploit attempt",
+     "finding_uid": "2100002",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "red"
+     },
+     "message": "EX exploit attempt",
+     "metadata": {
+      "log_source": "ids-sensor",
+      "product": "ids-sensor",
+      "version": "1.3.0"
+     },
+     "severity_id": 4,
+     "status_id": 1,
+     "time": "2026-11-22T10:20:01.000000Z",
+     "type_uid": 200401,
+     "uid": "ab885707b8fcd67ba685c51d4f0f24d48e627b04"
+    },
+    "table": "detection_finding"
+   }
+  ],
+  [
+   {
+    "row": {
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "red"
+     },
+     "raw": "{\"alert\":{\"severity\":2,\"signature\":\"EX scan\",\"signature_id\":2100003},\"dest_ip\":\"203.0.113.6\",\"event_type\":\"alert\",\"src_ip\":\"198.51.100.40\",\"timestamp\":\"2026-11-22T10:20:02.000000+0000\"}",
+     "route": "vector/sensor-stream",
+     "source_kind": "sensor",
+     "time": "2026-11-22T10:20:02.000000Z",
+     "uid": "4839c2c419775286ee989a15fc6c827ae109c805"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "category_uid": 2,
+     "class_uid": 2004,
+     "detection_id": "det:ids-signature",
+     "finding_title": "EX scan",
+     "finding_uid": "2100003",
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "red"
+     },
+     "message": "EX scan",
+     "metadata": {
+      "log_source": "ids-sensor",
+      "product": "ids-sensor",
+      "version": "1.3.0"
+     },
+     "severity_id": 3,
+     "status_id": 1,
+     "time": "2026-11-22T10:20:02.000000Z",
+     "type_uid": 200401,
+     "uid": "26c164c09b7dfe8dc0628467e25db5f3ccca3105"
+    },
+    "table": "detection_finding"
+   }
+  ],
+  [
+   {
+    "row": {
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "red"
+     },
+     "raw": "{\"answers\":[\"203.0.113.80\"],\"id.orig_h\":\"198.51.100.130\",\"id.orig_p\":53211,\"id.resp_h\":\"203.0.113.53\",\"id.resp_p\":53,\"proto\":\"udp\",\"qtype_name\":\"A\",\"query\":\"example.invalid\",\"rcode\":0,\"ts\":1795390802.5,\"uid\":\"Cabc123\"}",
+     "route": "vector/sensor-stream",
+     "source_kind": "sensor",
+     "time": "2026-11-22T23:40:02.500000Z",
+     "uid": "a7d5d408f2ce61f018cad7e7ab1f96f36a0b9c3d"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 1,
+     "answers": [
+      "203.0.113.80"
+     ],
+     "category_uid": 4,
+     "class_uid": 4003,
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "red"
+     },
+     "metadata": {
+      "log_source": "network-monitor",
+      "product": "network-monitor",
+      "version": "1.3.0"
+     },
+     "query_hostname": "example.invalid",
+     "query_type": "A",
+     "rcode_id": 0,
+     "severity_id": 1,
+     "src_endpoint": {
+      "ip": "198.51.100.130",
+      "port": 53211
+     },
+     "status_id": 1,
+     "time": "2026-11-22T23:40:02.500000Z",
+     "type_uid": 400301,
+     "uid": "aa11331e540e68e4212d64c0666f403becd73a54"
+    },
+    "table": "dns_activity"
+   }
+  ],
+  [
+   {
+    "row": {
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "red"
+     },
+     "raw": "{\"conn_state\":\"SF\",\"duration\":1.5,\"id.orig_h\":\"198.51.100.130\",\"id.orig_p\":53212,\"id.resp_h\":\"203.0.113.80\",\"id.resp_p\":443,\"orig_bytes\":512,\"proto\":\"tcp\",\"resp_bytes\":2048,\"ts\":1795390803.0,\"uid\":\"Cdef456\"}",
+     "route": "vector/sensor-stream",
+     "source_kind": "sensor",
+     "time": "2026-11-22T23:40:03.000000Z",
+     "uid": "6bec81da9253e3d92ebf1247de32319c7caa0af8"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 6,
+     "bytes_in": 2048,
+     "bytes_out": 512,
+     "category_uid": 4,
+     "class_uid": 4001,
+     "connection_uid": "Cdef456",
+     "direction_id": 0,
+     "dst_endpoint": {
+      "ip": "203.0.113.80",
+      "port": 443
+     },
+     "labels": {
+      "hnx_runtime": "model",
+      "hnx_tlp": "red"
+     },
+     "metadata": {
+      "log_source": "network-monitor",
+      "product": "network-monitor",
+      "version": "1.3.0"
+     },
+     "protocol_name": "tcp",
+     "severity_id": 1,
+     "src_endpoint": {
+      "ip": "198.51.100.130",
+      "port": 53212
+     },
+     "status_id": 1,
+     "time": "2026-11-22T23:40:03.000000Z",
+     "type_uid": 400106,
+     "uid": "c3b71a694757d674a39d102a3a723f8ece6b2c8b"
+    },
+    "table": "network_activity"
+   }
+  ],
+  [
+   {
+    "row": {
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "red"
+     },
+     "raw": "{\"host\":\"example.invalid\",\"id.orig_h\":\"198.51.100.40\",\"id.orig_p\":53213,\"id.resp_h\":\"203.0.113.81\",\"id.resp_p\":80,\"method\":\"GET\",\"status_code\":200,\"ts\":1795390804.0,\"uid\":\"Cghi789\",\"uri\":\"/index\",\"user_agent\":\"example-agent\"}",
+     "route": "vector/sensor-stream",
+     "source_kind": "sensor",
+     "time": "2026-11-22T23:40:04.000000Z",
+     "uid": "d64258d3a678e0fe9b9023d04072bac2aa96258f"
+    },
+    "table": "raw_archive"
+   },
+   {
+    "row": {
+     "activity_id": 0,
+     "category_uid": 4,
+     "class_uid": 4002,
+     "dst_endpoint": {
+      "ip": "203.0.113.81",
+      "port": 80
+     },
+     "host_name": "example.invalid",
+     "http_method": "GET",
+     "http_status": 200,
+     "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "red"
+     },
+     "metadata": {
+      "log_source": "network-monitor",
+      "product": "network-monitor",
+      "version": "1.3.0"
+     },
+     "severity_id": 1,
+     "src_endpoint": {
+      "ip": "198.51.100.40",
+      "port": 53213
+     },
+     "status_id": 0,
+     "time": "2026-11-22T23:40:04.000000Z",
+     "type_uid": 400200,
+     "uid": "3091b1f2cfab0c301a8190f828ecfe2994caae7b",
+     "url": "/index",
+     "user_agent": "example-agent"
+    },
+    "table": "http_activity"
+   }
+  ]
+ ]
+}
