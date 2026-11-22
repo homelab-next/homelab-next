@@ -79,7 +79,7 @@ def _hand(body, now=NOW):
 # ---------------------------------------------------------------------------------- the wrapper
 
 
-def test_handed_off_dirs_keep_setgid_and_the_lane_out_group(tmp_path):
+def test_handed_off_dirs_are_the_lane_out_group_at_0750_with_no_setgid_bit(tmp_path):
     _p, body, root, dest = _with_handoff(tmp_path)
     others = [g for g in os.getgroups() if g != os.getgid()]
     out_gid = others[0] if others else os.getgid()  # a group the test user may chown to
@@ -94,9 +94,33 @@ def test_handed_off_dirs_keep_setgid_and_the_lane_out_group(tmp_path):
     for d in (dest / "site", got, got / "assets"):
         st = d.stat()
         assert st.st_gid == out_gid
-        assert oct(st.st_mode & 0o7777) == "0o2750"
+        assert oct(st.st_mode & 0o7777) == "0o750"  # no setgid: the unit's RestrictSUIDSGID forbids it
     for f in (got / "index.html", got / "assets" / "a.css", got / "sidecar.json"):
         assert f.stat().st_gid == out_gid and oct(f.stat().st_mode & 0o777) == "0o640"
+
+
+def test_handoff_survives_a_sandbox_that_refuses_any_setgid_chmod(tmp_path, monkeypatch):
+    """The job unit runs with RestrictSUIDSGID=yes: a chmod that sets S_ISGID fails with EPERM.
+    The handoff must not ask for it, and must still hand off every entry with its group."""
+    import errno
+    import stat as stat_mod
+
+    real_chmod = os.chmod
+
+    def sandboxed_chmod(path, mode, *a, **kw):
+        if mode & stat_mod.S_ISGID:
+            raise PermissionError(errno.EPERM, "setgid refused by RestrictSUIDSGID", str(path))
+        return real_chmod(path, mode, *a, **kw)
+
+    _p, body, root, dest = _with_handoff(tmp_path)
+    _item(root, "site", "b1", {"index.html": "<p>x</p>", "assets/a.css": "p{}"})
+    monkeypatch.setattr(run.os, "chmod", sandboxed_chmod)
+    counts = _hand(body)
+    assert counts["copied"] == 1 and counts["refused"] == 0
+    got = dest / "site" / "b1"
+    for d in (dest / "site", got, got / "assets"):
+        assert oct(d.stat().st_mode & 0o7777) == "0o750"
+    assert (got / "assets" / "a.css").read_text() == "p{}"
 
 
 def test_new_items_are_copied_whole_with_group_readable_modes_whatever_the_umask(tmp_path):

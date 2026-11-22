@@ -582,17 +582,18 @@ def _same_item(src: str, files: dict, dest: str) -> bool:
 
 
 def _set_dir(path: str, gid: int) -> None:
-    """A handed-off directory: the lane's out group, setgid (so entries inherit it), 02750.  chown
-    first: a chmod on a directory of another group would drop the setgid bit."""
+    """A handed-off directory: the lane's out group, 0750.  No setgid bit: the unit runs under
+    RestrictSUIDSGID=yes, which makes a chmod that sets it fail with EPERM, and nothing needs it -
+    every entry is chgrp'd explicitly here or in _copy_item, never left to inherit the group."""
     os.chown(path, -1, gid)
-    os.chmod(path, 0o2750)
+    os.chmod(path, 0o750)
 
 
 def _copy_item(src: str, files: dict, dest_kind_dir: str, name: str, gid: int) -> None:
     """Build the item beside its place (``.tmp-<hex>``, group-readable) and rename it in: a reader
     sees all of an item or none of it, never half.  Every directory is the lane's out group ``gid``
-    with the setgid bit (02750) and every file 0640 in that group, set explicitly: the publishing
-    module reads through that group alone."""
+    at 0750 and every file 0640 in that group, each set explicitly (no reliance on setgid
+    inheritance): the publishing module reads through that group alone."""
     tmp = os.path.join(dest_kind_dir, ".tmp-" + os.urandom(6).hex())
     os.mkdir(tmp, 0o750)
     try:
@@ -661,11 +662,12 @@ def handoff(spec: dict, now_s: float | None = None, ids: dict | None = None) -> 
     Per item (``<source>/<kind>/<id>/``, a ``sidecar.json`` beside the files): an item already there
     with the same bytes is left alone; a changed item under a name already handed off is a conflict
     (a published id never changes: refused, never overwritten); a new one is copied, with mode 0640 and
-    0750 (directories 02750, setgid, group the lane's out group) whatever the unit's umask, into a ``.tmp-`` directory and renamed in.  Links, devices and
-    hard-linked files, or a missing sidecar, refuse the item (``refused``); entries that are not item
-    directories are ``skipped``.  Returns the counters (copied, unchanged, conflicts, refused, skipped,
-    pruned), or None without a handoff block; raises :class:`HandoffError` for what it cannot judge.  ``ids``, when given, is filled with the
-    ``conflicts`` and ``refused`` item names (never content)."""
+    0750 (directories group the lane's out group, no setgid bit) whatever the unit's umask, into a
+    ``.tmp-`` directory and renamed in.  Links, devices and hard-linked files, or a missing sidecar,
+    refuse the item (``refused``); entries that are not item directories are ``skipped``.  Returns
+    the counters (copied, unchanged, conflicts, refused, skipped, pruned), or None without a handoff
+    block; raises :class:`HandoffError` for what it cannot judge.  ``ids``, when given, is filled
+    with the ``conflicts`` and ``refused`` item names (never content)."""
     h = spec.get("handoff")
     if h is None:
         return None
