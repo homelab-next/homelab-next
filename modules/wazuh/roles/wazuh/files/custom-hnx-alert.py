@@ -33,7 +33,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-_UTC = timezone(timedelta(0))  # the product's own Python is 3.10: no datetime.UTC
+_UTC = timezone(timedelta(0))  # the product's own Python is 3.10: no UTC alias
 TYPE = "homelabnext.alert.created"
 SCHEMA = "https://schemas.example.internal/homelabnext/events/alert.created/1.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
