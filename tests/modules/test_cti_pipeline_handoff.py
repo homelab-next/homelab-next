@@ -482,3 +482,39 @@ def test_the_group_exists_before_the_dropin_that_names_it():
     main = (ROLE / "tasks" / "main.yml").read_text()
     assert main.index("dirs.yml") < main.index("config.yml")
     assert "cti_pipeline_handoff_group[item]" in (ROLE / "tasks" / "dirs.yml").read_text()
+
+
+def test_handoff_dirs_get_their_mode_at_creation_never_via_a_directory_chmod(tmp_path, monkeypatch):
+    """No directory is ever chmod'd: the 0750 is given at creation (umask cleared for the call), so a
+    narrow or a wide process umask both yield exactly 0750."""
+    real_chmod = os.chmod
+
+    def no_dir_chmod(path, mode, *a, **kw):
+        assert not os.path.isdir(path), f"a directory chmod: {path}"
+        return real_chmod(path, mode, *a, **kw)
+
+    for umask in (0o077, 0o000):
+        sub = tmp_path / f"u{umask:o}"
+        sub.mkdir()
+        _p, body, root, dest = _with_handoff(sub)
+        _item(root, "site", "b1", {"index.html": "<p>x</p>", "assets/deep/a.css": "p{}"})
+        old = os.umask(umask)
+        try:
+            with monkeypatch.context() as m:
+                m.setattr(run.os, "chmod", no_dir_chmod)
+                _hand(body)
+        finally:
+            os.umask(old)
+        got = dest / "site" / "b1"
+        for d in (dest / "site", got, got / "assets", got / "assets" / "deep"):
+            assert oct(d.stat().st_mode & 0o7777) == "0o750"
+
+
+def test_an_existing_handoff_dir_with_another_mode_fails_loudly_and_is_not_rechmodded(tmp_path):
+    _p, body, root, dest = _with_handoff(tmp_path)
+    _item(root, "site", "b1", {"index.html": "<p>x</p>"})
+    (dest / "site").mkdir(mode=0o755)
+    os.chmod(dest / "site", 0o755)
+    with pytest.raises(run.HandoffError):
+        _hand(body)
+    assert oct((dest / "site").stat().st_mode & 0o7777) == "0o755"
