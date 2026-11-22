@@ -32,7 +32,11 @@ intelowl_email_pattern: '^[A-Za-z0-9._+-]+@[a-z0-9.-]+\.[a-z]{2,}\Z'
 # env_file, the application's signing secret (any env_file-safe string of 32 or more, because the
 # source's is carried over), the admin password and the API token (the framework's own 40-character form)
 intelowl_db_value_pattern: '^[A-Za-z0-9._~-]{24,128}\Z'
-intelowl_django_value_pattern: '^[A-Za-z0-9._~+/=-]{32,256}\Z'
+# the signing secret is any printable ASCII string of 32 or more except whitespace and the two
+# quotes: the framework's own generator draws from letters, digits and !@#$%^&*(-_=+) (and a
+# carried-over source value holds them), and the env_file holds it single-quoted so none of them is
+# special there; a quote, a space or a line break would break that file, so they stay refused
+intelowl_django_value_pattern: '^[\x21\x23-\x26\x28-\x7E]{32,256}\Z'
 intelowl_admin_value_pattern: '^[A-Za-z0-9._~-]{16,128}\Z'
 intelowl_api_value_pattern: '^[A-Za-z0-9]{40}\Z'
 intelowl_otx_value_pattern: '^[A-Za-z0-9]{32,128}\Z'
