@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy, in an open format: the per-event state (JSON) under <data root>/export/<stamp>/. Built
+# beside its final name and renamed into place, so a half-written export is never mistaken for a finished
+# one. The alerts themselves are the case store's, exported there.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Name this export
+      ansible.builtin.set_fact:
+        alert_intake_export_stamp: "{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}"
+    - name: Read the state
+      ansible.builtin.slurp:
+        src: "{{ alert_intake_state_file }}"
+      register: alert_intake_export_state
+      failed_when: false
+    - name: The state is this module's form (an export of a bad state is refused)
+      ansible.builtin.include_tasks: state_check.yml
+      vars:
+        alert_intake_state_text: "{{ alert_intake_export_state.content | b64decode }}"
+      when: alert_intake_export_state.content is defined
+    - name: Build the export beside its final name
+      ansible.builtin.file:
+        path: "{{ alert_intake_export_dir }}/.{{ alert_intake_export_stamp }}.incoming"
+        state: directory
+        owner: "{{ alert_intake_owner }}"
+        group: "{{ alert_intake_owner_group }}"
+        mode: "0700"
+    - name: Copy the state into it
+      ansible.builtin.copy:
+        src: "{{ alert_intake_state_file }}"
+        dest: "{{ alert_intake_export_dir }}/.{{ alert_intake_export_stamp }}.incoming/state.json"
+        remote_src: true
+        owner: "{{ alert_intake_owner }}"
+        group: "{{ alert_intake_owner_group }}"
+        mode: "0600"
+      when: alert_intake_export_state.content is defined
+    - name: Rename it into place
+      ansible.builtin.command:
+        argv: [mv, -T, "{{ alert_intake_export_dir }}/.{{ alert_intake_export_stamp }}.incoming", "{{ alert_intake_export_dir }}/{{ alert_intake_export_stamp }}"]
+      changed_when: true
+  tags: [export]

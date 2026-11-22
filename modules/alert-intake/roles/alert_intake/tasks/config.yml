@@ -1,0 +1,139 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Create the script, library, configuration and credentials directories (root's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ alert_intake_owner }}"
+    group: "{{ alert_intake_owner_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ alert_intake_bin_dir }}", mode: "0755"}
+    - {path: "{{ alert_intake_config_dir }}", mode: "0755"}
+    - {path: "{{ alert_intake_auth_dir }}", mode: "0700"}
+    - {path: "{{ alert_intake_lib_dir }}", mode: "0755"}
+    - {path: "{{ alert_intake_adapter_dir }}", mode: "0755"}
+    - {path: "{{ alert_intake_shared_dir }}", mode: "0755"}
+    - {path: "{{ alert_intake_shared_dir }}/homelabnext", mode: "0755"}
+    - {path: "{{ alert_intake_shared_dir }}/homelabnext/notify", mode: "0755"}
+    - {path: "{{ alert_intake_shared_dir }}/homelabnext/state", mode: "0755"}
+    - {path: "{{ alert_intake_adapter_dir }}/conformance", mode: "0755"}
+    - {path: "{{ alert_intake_adapter_dir }}/conformance/protocols", mode: "0755"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the script
+  ansible.builtin.copy:
+    src: hnx_alert_intake.py
+    dest: "{{ alert_intake_script }}"
+    owner: "{{ alert_intake_owner }}"
+    group: "{{ alert_intake_owner_group }}"
+    mode: "0755"
+  register: alert_intake_script_copy
+
+# the cases contract's types and errors (conformance/protocols/cases.py, vendored; a test keeps the copy equal)
+- name: Install the contract file the adapter imports
+  ansible.builtin.copy:
+    src: cases_contract.txt
+    dest: "{{ alert_intake_adapter_dir }}/conformance/protocols/cases.py"
+    owner: "{{ alert_intake_owner }}"
+    group: "{{ alert_intake_owner_group }}"
+    mode: "0644"
+  register: alert_intake_contract_copy
+
+- name: Make the contract's directories packages
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ alert_intake_adapter_dir }}/conformance{{ item }}/__init__.py"
+    owner: "{{ alert_intake_owner }}"
+    group: "{{ alert_intake_owner_group }}"
+    mode: "0644"
+  loop: ["", /protocols]
+
+# the shared libraries the script imports (notify, state and their helpers), copied from the control host's homelabnext
+- name: Install the shared libraries
+  ansible.builtin.copy:
+    src: "{{ alert_intake_homelabnext_dir }}/{{ item }}"
+    dest: "{{ alert_intake_shared_dir }}/homelabnext/{{ item }}"
+    owner: "{{ alert_intake_owner }}"
+    group: "{{ alert_intake_owner_group }}"
+    mode: "0644"
+  loop: "{{ alert_intake_shared_files }}"
+  register: alert_intake_shared_copy
+
+# the site's adapter (one stdlib source file), copied from the control host
+- name: Install the cases adapter
+  ansible.builtin.copy:
+    src: "{{ alert_intake_adapter_file }}"
+    dest: "{{ alert_intake_adapter_dir }}/{{ alert_intake_adapter_file | basename }}"
+    owner: "{{ alert_intake_owner }}"
+    group: "{{ alert_intake_owner_group }}"
+    mode: "0644"
+  register: alert_intake_adapter_copy
+
+- name: Write the CA bundles (certificates, no key)
+  ansible.builtin.copy:
+    content: "{{ item.value | trim }}\n"
+    dest: "{{ item.dest }}"
+    owner: "{{ alert_intake_owner }}"
+    group: "{{ alert_intake_owner_group }}"
+    mode: "0644"
+  loop: >-
+    {{ [{'dest': alert_intake_cases_ca_file, 'value': lookup('hnx_secret', alert_intake_cases_ca_ref)}]
+       + ([{'dest': alert_intake_notify_ca_file, 'value': lookup('hnx_secret', alert_intake_notify_ca_ref)}]
+          if alert_intake_notify_ca_ref != '' else []) }}
+  loop_control:
+    label: "{{ item.dest }}"
+  no_log: true
+  register: alert_intake_ca_copy
+
+- name: Write the adapter settings (the credential by reference, no secret in it)
+  ansible.builtin.copy:
+    content: "{{ (alert_intake_cases_settings | combine({'base_url': alert_intake_cases_url, 'credential': alert_intake_cases_key_ref, 'ca_file': alert_intake_cases_ca_file})) | to_nice_json }}\n"
+    dest: "{{ alert_intake_cases_config_file }}"
+    owner: "{{ alert_intake_owner }}"
+    group: "{{ alert_intake_owner_group }}"
+    mode: "0644"
+  register: alert_intake_cases_json
+
+- name: Write the environment (no secret in it)
+  ansible.builtin.template:
+    src: alert-intake.env.j2
+    dest: "{{ alert_intake_env_file }}"
+    owner: "{{ alert_intake_owner }}"
+    group: "{{ alert_intake_owner_group }}"
+    mode: "0644"
+  register: alert_intake_env
+
+- name: Write the secrets for the unit (an environment file, root-only; systemd reads it as root)
+  ansible.builtin.copy:
+    content: |
+      ALERT_INTAKE_TOKEN={{ lookup('hnx_secret', alert_intake_webhook_login_ref) }}
+      ALERT_INTAKE_NOTIFY_TOKEN={{ lookup('hnx_secret', alert_intake_notify_login_ref) }}
+      {{ alert_intake_cases_env_name }}={{ lookup('hnx_secret', alert_intake_cases_key_ref) }}
+    dest: "{{ alert_intake_logins_env_file }}"
+    owner: "{{ alert_intake_owner }}"
+    group: "{{ alert_intake_owner_group }}"
+    mode: "0600"
+  no_log: true
+  register: alert_intake_logins_copy
+
+- name: Write the unit
+  ansible.builtin.template:
+    src: alert-intake.service.j2
+    dest: "{{ alert_intake_unit_dir }}/{{ alert_intake_unit }}"
+    owner: "{{ alert_intake_owner }}"
+    group: "{{ alert_intake_owner_group }}"
+    mode: "0644"
+  register: alert_intake_unit_file
+
+- name: Reload systemd after the unit changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: alert_intake_unit_file.changed | bool and not ansible_check_mode and alert_intake_start | bool
+
+- name: Enable the service (restarted only when something it reads changed)
+  ansible.builtin.systemd_service:
+    name: "{{ alert_intake_unit }}"
+    enabled: true
+    state: "{{ 'restarted' if (alert_intake_script_copy.changed or alert_intake_contract_copy.changed or alert_intake_shared_copy.changed or alert_intake_adapter_copy.changed or alert_intake_ca_copy.changed or alert_intake_cases_json.changed or alert_intake_env.changed or alert_intake_logins_copy.changed or alert_intake_unit_file.changed) else 'started' }}"
+  when: not ansible_check_mode and alert_intake_start | bool
