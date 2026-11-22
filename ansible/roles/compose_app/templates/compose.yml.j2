@@ -67,14 +67,26 @@ services:
       - {{ q(p) }}
 {% endfor %}
 {% endif %}
-{% if svc.volumes | default([]) | length > 0 or svc.tmpfs | default([]) | length > 0 %}
+{# a tmpfs with an owner (uid, gid) or exec cannot be written in the long syntax (compose's long form
+   has only size and mode), so those entries are rendered in the service-level short form below;
+   every other tmpfs stays a long-syntax volume entry, byte-identical to before #}
+{% set tmpfs_plain = [] %}
+{% set tmpfs_owned = [] %}
+{% for t in svc.tmpfs | default([]) %}
+{%   if t.uid is defined or t.gid is defined or (t.exec | default(false) | bool) %}
+{%     set _ = tmpfs_owned.append(t) %}
+{%   else %}
+{%     set _ = tmpfs_plain.append(t) %}
+{%   endif %}
+{% endfor %}
+{% if svc.volumes | default([]) | length > 0 or tmpfs_plain | length > 0 %}
     volumes:
 {% for v in svc.volumes | default([]) %}
       - {{ q(v) }}
 {% endfor %}
 {# a tmpfs mount is the long syntax: compose reads `mode` as a number, so an octal mode is written
    with a leading 0 (01777), which is validated to be octal digits only and so cannot add YAML #}
-{% for t in svc.tmpfs | default([]) %}
+{% for t in tmpfs_plain %}
       - type: "tmpfs"
         target: {{ q(t.target) }}
         tmpfs:
@@ -82,6 +94,19 @@ services:
 {% if t.mode is defined %}
           mode: 0{{ t.mode }}
 {% endif %}
+{% endfor %}
+{% endif %}
+{% if tmpfs_owned | length > 0 %}
+    tmpfs:
+{% for t in tmpfs_owned %}
+{# target, size, mode, uid and gid are validated (digits and a canonical path), so the joined option
+   string holds no comma or space of its own #}
+{%   set opts = (['exec'] if t.exec | default(false) | bool else [])
+       + (['uid=' ~ (t.uid | int)] if t.uid is defined else [])
+       + (['gid=' ~ (t.gid | int)] if t.gid is defined else [])
+       + (['mode=0' ~ (t.mode | regex_replace('^0', ''))] if t.mode is defined else [])
+       + ['size=' ~ (t.size_bytes | int)] %}
+      - {{ q(t.target ~ ':' ~ opts | join(',')) }}
 {% endfor %}
 {% endif %}
 {% if svc.depends_on | default([]) | length > 0 %}
