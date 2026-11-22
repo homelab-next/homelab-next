@@ -29,7 +29,10 @@ def vars_for(tmp_path, prefs=None, routes=ROUTES, forward="1", **kw):
     (tmp_path / "forward").write_text(forward + "\n")
     return {
         "subnet_router_cli": client(tmp_path, prefs or {}),
-        "subnet_router_sysctl_cli": fake(tmp_path / "sysctl", f"open({str(tmp_path / 'sysctl.log')!r}, 'a').write(' '.join(__import__('sys').argv[1:]) + '\\n')\n"),
+        "subnet_router_sysctl_cli": fake(
+            tmp_path / "sysctl",
+            f"open({str(tmp_path / 'sysctl.log')!r}, 'a').write(' '.join(__import__('sys').argv[1:]) + '\\n')\n",
+        ),
         "subnet_router_forward_file": str(tmp_path / "forward"),
         "subnet_router_advertise_routes": routes,
         "subnet_router_sysctl_file": str(tmp_path / "sysctl.conf"),
@@ -66,9 +69,23 @@ def test_main_sets_routes_only_when_they_differ(first, prefs, expect_set):
 
 @pytest.mark.parametrize(
     "routes",
-    [[], [DEFAULT_ROUTE], [NET_HOST + "/33"], [NET_HOST], ["2001:db8::/64"], [NET_A + "," + NET_B], [" " + NET_A]],
+    [
+        [],
+        [DEFAULT_ROUTE],
+        [NET_HOST + "/33"],
+        [NET_HOST],
+        ["2001:db8::/64"],
+        [NET_A + "," + NET_B],
+        [" " + NET_A],
+    ],
 )
-@first_run(lambda tmp, routes: {"role": "subnet_router", "tasks_from": "main", "extra_vars": vars_for(tmp, routes=routes)})
+@first_run(
+    lambda tmp, routes: {
+        "role": "subnet_router",
+        "tasks_from": "main",
+        "extra_vars": vars_for(tmp, routes=routes),
+    }
+)
 def test_main_refuses_bad_networks_before_changing_anything(first, routes):
     r, tmp = first
     assert r.returncode != 0, routes
@@ -79,7 +96,13 @@ def test_main_refuses_bad_networks_before_changing_anything(first, routes):
 
 @pytest.mark.parametrize(
     ("advertised", "forward", "ok"),
-    [(ROUTES, "1", True), (ROUTES[::-1], "1", True), ([NET_A], "1", False), (None, "1", False), (ROUTES, "0", False)],
+    [
+        (ROUTES, "1", True),
+        (ROUTES[::-1], "1", True),
+        ([NET_A], "1", False),
+        (None, "1", False),
+        (ROUTES, "0", False),
+    ],
 )
 @first_run(
     lambda tmp, advertised, forward, ok: {
@@ -93,7 +116,9 @@ def test_health_checks_the_advertised_networks_and_forwarding(first, advertised,
     assert (r.returncode == 0) is ok, r.stdout
 
 
-@first_run(lambda tmp: {"role": "subnet_router", "tasks_from": "readiness", "extra_vars": vars_for(tmp)})
+@first_run(
+    lambda tmp: {"role": "subnet_router", "tasks_from": "readiness", "extra_vars": vars_for(tmp)}
+)
 def test_readiness_asks_the_client(first):
     r, tmp = first
     assert r.returncode == 0, r.stdout
