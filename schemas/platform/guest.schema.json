@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.9",
+  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.10",
   "title": "Guest (compute) descriptor",
   "description": "One VM, container or physical host, described in vendor-neutral values. Zones are referenced by id (a site model owns them); capabilities by cap: id. Generators render Terraform, libvirt, cloud-init, an Ansible inventory, registry hosts and backup jobs from a directory of these files.",
   "type": "object",
@@ -126,6 +126,11 @@
         "packages": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9+.:_-]*$"}},
         "timezone": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)*$", "default": "UTC"},
         "storage_pool": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+        "instance_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "description": "(1.10) The cloud-init instance-id the VM's meta-data carries. Unset: <name>-<vmid>, right for a guest not yet booted. For a guest that already runs, set what it booted with (/var/lib/cloud/data/instance-id): any other value is a new instance to cloud-init, which re-runs per-instance modules and regenerates the SSH host keys."
+        },
         "sudo": {
           "enum": ["none", "password", "nopasswd"],
           "default": "none",

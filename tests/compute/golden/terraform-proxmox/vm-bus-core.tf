@@ -49,6 +49,7 @@ resource "proxmox_virtual_environment_vm" "bus_core" {
       }
     }
     user_data_file_id = var.cloudinit_user_data["bus-core"]
+    meta_data_file_id = lookup(var.cloudinit_meta_data, "bus-core", null)
   }
 
   lifecycle {

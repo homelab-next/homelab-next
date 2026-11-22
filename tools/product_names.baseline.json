@@ -86,7 +86,7 @@
    "tailscale": 12
   },
   "ansible/roles/tailscale_node/tasks/main.yml": {
-   "tailscale": 19
+   "tailscale": 12
   },
   "ansible/roles/tailscale_node/tasks/platform.yml": {
    "tailscale": 6
@@ -1682,7 +1682,7 @@
   },
   "tests/roles/test_product_roles.py": {
    "suricata": 44,
-   "tailscale": 43,
+   "tailscale": 40,
    "wazuh": 39
   },
   "tests/roles/test_role_lint.py": {

@@ -84,8 +84,16 @@ def user_data(fleet: Fleet, g: Guest) -> str:
     return "\n".join(L) + "\n"
 
 
+def instance_id(g: Guest) -> str:
+    """The cloud-init instance-id: the guest file's ``cloudinit.instance_id`` (what a running VM
+    already has), else ``<name>-<vmid>`` for a guest not yet booted.  It must never change for a
+    guest that exists: a new id is a new instance, so cloud-init re-runs and regenerates the SSH
+    host keys (LL-570)."""
+    return g.cloudinit.get("instance_id") or f"{g.name}-{g.vmid}"
+
+
 def meta_data(fleet: Fleet, g: Guest) -> str:
-    return f"# {HEADER}\ninstance-id: {q(f'{g.name}-{g.vmid}')}\nlocal-hostname: {q(g.name)}\n"
+    return f"# {HEADER}\ninstance-id: {q(instance_id(g))}\nlocal-hostname: {q(g.name)}\n"
 
 
 def network_config(fleet: Fleet, g: Guest) -> str:

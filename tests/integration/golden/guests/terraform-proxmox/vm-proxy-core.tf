@@ -49,5 +49,6 @@ resource "proxmox_virtual_environment_vm" "proxy_core" {
       }
     }
     user_data_file_id = var.cloudinit_user_data["proxy-core"]
+    meta_data_file_id = lookup(var.cloudinit_meta_data, "proxy-core", null)
   }
 }

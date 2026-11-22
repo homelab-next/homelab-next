@@ -10,7 +10,7 @@ render everything else from those files: infrastructure-as-code, hypervisor comm
 seeds, an Ansible inventory, registry hosts and backup jobs. Nothing here needs hardware: the
 whole chain is tested with golden files from a synthetic fleet.
 
-* Contract: `schemas/platform/guest.schema.json` (version 1.9, additive over 1.0 to 1.8; frozen copies in `schemas/_frozen/`).
+* Contract: `schemas/platform/guest.schema.json` (version 1.10, additive over 1.0 to 1.9; frozen copies in `schemas/_frozen/`).
 * Baseline set: `schemas/platform/baseline_set.schema.json` (version 1.2; `_baselines.yml` beside the guest files; [Baselines and defense layers](#baselines-and-defense-layers), ADR-0016).
 * Code: `homelabnext/compute/`. CLI: `hnx guests`.
 * Example fleet and goldens: `tests/compute/fleet/`, `tests/compute/golden/`.
@@ -487,7 +487,12 @@ the plan, by name), `USER_DATA.md` lists them with their node, vmid and the sha2
 `--keys`, not from `var.ssh_keys`**: the snippet creates the user, keys included, and replaces
 the `user_account` block, so a key rotated only in `terraform.tfvars` does not reach those VMs;
 re-render the cloudinit target and re-upload the snippet. A changed snippet does not replace a
-running VM by itself.
+running VM by itself. **Instance-id (LL-570):** without a `meta-data` snippet the hypervisor derives
+the cloud-init instance-id from the generated config, so a changed user-data is a new instance and
+regenerates the VM's SSH host keys. A VM may name its `<name>/meta-data` snippet in the optional
+`cloudinit_meta_data` variable; its instance-id is `cloudinit.instance_id` (guest 1.10), else
+`<name>-<vmid>`. For a VM that already runs, set `instance_id` to the value in its
+`/var/lib/cloud/data/instance-id` first; any other value is the same failure, once.
 
 ### cloud-init and sudo
 

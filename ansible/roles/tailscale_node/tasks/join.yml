@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# Called from main.yml with: node_cli, node_tags, node_key_ref ("" = none declared),
+# node_key_file, node_hostname.
+- name: Read the node state
+  ansible.builtin.command:
+    argv: ["{{ node_cli }}", status, --json]
+  register: node_state
+  changed_when: false
+  failed_when: false
+
+# A node already Running that carries every declared tag is joined as far as this role is
+# concerned: no auth key is needed and nothing changes (an interactively joined node converges
+# with changed=0). Running without the tags, or not running, needs the key.
+- name: Work out whether the node is already joined with the declared tags
+  ansible.builtin.set_fact:
+    node_joined: >-
+      {{ node_state.rc == 0
+         and (node_state.stdout | from_json).BackendState == 'Running'
+         and (node_tags | difference((node_state.stdout | from_json).Self.Tags | default([], true))) | length == 0 }}
+
+- name: Refuse a node that must be joined or re-tagged when no auth key is declared
+  ansible.builtin.assert:
+    that: node_key_ref | length > 0
+    fail_msg: >-
+      join: the node is not running with {{ node_tags | join(', ') }} and no
+      key reference is set; declare it, or join the node by hand with those tags
+  when: not (node_joined | bool)
+
+- name: Join the tailnet with the zone tags (only when not joined yet)
+  when: >-
+    node_state.rc != 0
+    or (node_state.stdout | from_json).BackendState != 'Running'
+  block:
+    - name: Write the auth key to a transient file only root can read
+      ansible.builtin.copy:
+        dest: "{{ node_key_file }}"
+        content: "{{ lookup('hnx_secret', node_key_ref) }}"
+        mode: "0600"
+      no_log: true
+    - name: Bring the node up (no exit node, no subnet routes)
+      ansible.builtin.command:
+        argv: >-
+          {{ [node_cli, 'up', '--auth-key=file:' ~ node_key_file,
+              '--advertise-tags=' ~ (node_tags | join(','))]
+             + (['--hostname=' ~ node_hostname] if node_hostname else []) }}
+      changed_when: true
+  always:
+    - name: Remove the transient auth key file
+      ansible.builtin.file:
+        path: "{{ node_key_file }}"
+        state: absent

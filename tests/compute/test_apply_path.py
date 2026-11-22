@@ -15,6 +15,7 @@ the terraform target's provider, then the baseline playbook) found missing from 
 
 from __future__ import annotations
 
+import dataclasses
 import shutil
 from pathlib import Path
 
@@ -264,3 +265,35 @@ def test_every_baseline_play_escalates(good):
     plays = yaml.safe_load(render(good, "baseline-playbook")["baseline.yml"])
     bound = [p for p in plays if p["hosts"] != "localhost"]
     assert bound and all(p.get("become") is True for p in bound)
+
+
+def test_snippet_guests_may_take_a_fixed_instance_id_so_a_config_change_keeps_host_keys(good):
+    """LL-570: left to the hypervisor the instance-id is derived from the generated cloud-init
+    config, so a changed user-data snippet on an existing guest re-ran cloud-init and regenerated
+    the SSH host keys. A VM may take the cloudinit target's meta-data (a fixed instance-id); the
+    entry is optional, so a guest with no snippet keeps today's behaviour and no plan is blocked."""
+    tf, ci = render(good, TF), render(good, "cloudinit")
+    need = sorted(n[len("vm-") : -len(".tf")] for n, t in tf.items() if "user_data_file_id" in t)
+    assert need
+    for name in need:
+        want = f'meta_data_file_id = lookup(var.cloudinit_meta_data, "{name}", null)'
+        assert want in tf[f"vm-{name}.tf"], name
+    assert "meta_data_file_id" not in tf["vm-infer-core.tf"]  # no snippet, no meta snippet
+    variables = tf["variables.tf"]
+    assert 'variable "cloudinit_meta_data"' in variables
+    assert "keys(var.cloudinit_meta_data)" not in variables  # optional: never blocks a plan
+    assert "cloudinit_meta_data = {" in tf["USER_DATA.md"]
+    g = next(g for g in good.guests if g.name == "edge-core")
+    assert f'instance-id: "edge-core-{g.vmid}"' in ci["edge-core/meta-data"]  # unset: name-vmid
+
+
+def test_an_instance_id_override_is_honoured(good):
+    """An existing guest's recorded id is what its meta-data carries, whatever else changes."""
+    from homelabnext.compute.gen import cloudinit
+
+    g = next(g for g in good.guests if g.name == "edge-core")
+    pinned = dataclasses.replace(
+        g, raw={**g.raw, "cloudinit": {**g.raw["cloudinit"], "instance_id": "0a1b-pinned"}}
+    )
+    assert 'instance-id: "0a1b-pinned"' in cloudinit.meta_data(good, pinned)
+    assert cloudinit.instance_id(pinned) == "0a1b-pinned"

@@ -11,6 +11,7 @@ on a good one."""
 
 import ipaddress
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -266,6 +267,19 @@ def test_the_signing_key_is_installed_only_when_it_is_the_pinned_one(first, role
     assert list(ring.parent.iterdir()) == []  # refused: not installed, staging file removed
 
 
+@pytest.mark.requires_tool("gpg")
+@pytest.mark.parametrize("role", sorted(KEY_CASES))
+@first_run(_first)
+def test_a_second_signing_key_run_changes_nothing(first, role):
+    """The staging file and scratch GnuPG home are removed on every run; removing them is not a
+    change to the host, so the second run (key already installed) ends changed=0."""
+    ok, tmp_path = first
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    again = run_role(tmp_path, role, "signing_key", first.setup["v"])
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert re.search(r"localhost\s*:\s*ok=\d+\s+changed=0\s", again.stdout), again.stdout
+
+
 def _first(tmp_path, role):
     v, ring, _ = key_setup(tmp_path, role, extra_key=True)
     return {"role": role, "tasks_from": "signing_key", "extra_vars": v, "setup": {"ring": ring}}
@@ -294,6 +308,9 @@ def test_the_pinned_fingerprints_are_the_vendor_keys():
 
 
 # ---------------------------------------------------------------- tailscale_node
+TS_ROLE = "tailscale_node"
+
+
 def ts_vars(tmp_path, **kw):
     d = {"tailscale_node_auth_key_ref": "secret:remote-access/authkey-secret", "hnx_zone": "edge"}
     d.update(kw)
@@ -302,7 +319,7 @@ def ts_vars(tmp_path, **kw):
 
 def _first(tmp_path):
     v = ts_vars(tmp_path, hnx_zone="mgmt", tailscale_node_extra_tags=["tag:dns"])
-    return {"role": "tailscale_node", "tasks_from": "validate", "extra_vars": v, "verbose": True}
+    return {"role": TS_ROLE, "tasks_from": "validate", "extra_vars": v, "verbose": True}
 
 
 @first_run(_first)
@@ -332,7 +349,7 @@ def test_the_role_and_the_policy_agree_on_the_zone_tag():
         {"tailscale_node_repository": "http://mirror.example.internal/debian"},
     ],
 )
-@first_run(lambda tmp, over: {"role": "tailscale_node", "tasks_from": "validate",
+@first_run(lambda tmp, over: {"role": TS_ROLE, "tasks_from": "validate",
                                "extra_vars": ts_vars(tmp, **over)})  # fmt: skip
 def test_tailscale_node_refuses_bad_inputs(first, over):
     r, _ = first
@@ -347,7 +364,7 @@ def test_tailscale_node_refuses_bad_inputs(first, over):
 )  # fmt: skip
 @first_run(
     lambda tmp, distribution, release, ok: {
-        "role": "tailscale_node",
+        "role": TS_ROLE,
         "tasks_from": "platform",
         "extra_vars": ts_vars(
             tmp, tailscale_node_distribution=distribution, tailscale_node_release=release
@@ -367,7 +384,7 @@ def _first(tmp_path):
                 tailscale_node_key_fingerprints=[fpr], tailscale_node_distribution="Ubuntu",
                 tailscale_node_release="noble")  # fmt: skip
     return {
-        "role": "tailscale_node",
+        "role": TS_ROLE,
         "tasks_from": "signing_key",
         "extra_vars": v,
         "setup": {"repo": repo, "ring": ring},
@@ -396,6 +413,51 @@ def test_tailscale_node_reads_the_ubuntu_repository_on_ubuntu(first):
     )
 
 
+JOINED = {"BackendState": "Running", "Self": {"Online": True, "Tags": ["tag:zone-edge", "tag:x"]}}
+KEY = "secret:remote-access/authkey-secret"
+
+
+@pytest.mark.parametrize(
+    ("doc", "key", "ok"),
+    [
+        (JOINED, "", True),  # joined by hand with the declared tags: no key, no change
+        (JOINED, KEY, True),  # key given, still left alone
+        (
+            {"BackendState": "Running", "Self": {"Tags": ["tag:zone-mgmt"]}},
+            "",
+            False,
+        ),  # wrong tags, no key
+        ({"BackendState": "NeedsLogin"}, "", False),  # not joined, no key
+    ],
+)
+@first_run(
+    lambda tmp, doc, key, ok: {
+        "role": TS_ROLE,
+        "tasks_from": "join",
+        "extra_vars": {
+            "node_cli": status_cli(tmp, doc),
+            "node_tags": ["tag:zone-edge"],
+            "node_key_ref": key,
+            "node_key_file": str(tmp / "authkey"),
+            "node_hostname": "",
+        },
+    }
+)
+def test_an_already_joined_node_needs_no_key(first, doc, key, ok):
+    r, _ = first
+    assert (r.returncode == 0) is ok, r.stdout + r.stderr
+    if ok:
+        assert re.search(r"localhost\s*:\s*ok=\d+\s+changed=0\s", r.stdout), r.stdout
+    else:
+        assert "key reference is set" in " ".join(r.stdout.split())
+
+
+@first_run(lambda tmp: {"role": TS_ROLE, "tasks_from": "validate", "extra_vars": ts_vars(tmp, tailscale_node_auth_key_ref="")})  # fmt: skip
+def test_no_key_declared_validates(first):
+    r, _ = first
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def status_cli(tmp_path, doc):
     out = tmp_path / "status.json"
     out.write_text(json.dumps(doc))
@@ -413,7 +475,7 @@ def status_cli(tmp_path, doc):
 )
 @first_run(
     lambda tmp, doc, ok: {
-        "role": "tailscale_node",
+        "role": TS_ROLE,
         "tasks_from": "health",
         "extra_vars": ts_vars(tmp, tailscale_node_cli=status_cli(tmp, doc)),
     }
