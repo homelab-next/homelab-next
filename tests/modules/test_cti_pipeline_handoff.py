@@ -94,7 +94,8 @@ def test_handed_off_dirs_are_the_lane_out_group_at_0750_with_no_setgid_bit(tmp_p
     for d in (dest / "site", got, got / "assets"):
         st = d.stat()
         assert st.st_gid == out_gid
-        assert oct(st.st_mode & 0o7777) == "0o750"  # no setgid: the unit's RestrictSUIDSGID forbids it
+        # no setgid: the unit's RestrictSUIDSGID forbids setting it
+        assert oct(st.st_mode & 0o7777) == "0o750"
     for f in (got / "index.html", got / "assets" / "a.css", got / "sidecar.json"):
         assert f.stat().st_gid == out_gid and oct(f.stat().st_mode & 0o777) == "0o640"
 
