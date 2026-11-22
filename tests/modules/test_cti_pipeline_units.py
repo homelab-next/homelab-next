@@ -259,7 +259,7 @@ def test_synapse_ca_placeholder_is_only_named_when_the_ref_is_set(site):
     assert "synapse_ca" not in off["placeholders"]
     on_ctx = {**ctx, "cti_pipeline_synapse_ca_ref": "secret:cti-pipeline/synapse-ca"}
     on = json.loads(render("job-spec.json.j2", on_ctx, inst["fresh-real"]))
-    assert on["placeholders"]["synapse_ca"] == f'{ctx["cti_pipeline_config_dir"]}/synapse-ca.pem'
+    assert on["placeholders"]["synapse_ca"] == f"{ctx['cti_pipeline_config_dir']}/synapse-ca.pem"
     assert "lake_ca" not in on["placeholders"]  # independent of the lake CA ref
 
 
