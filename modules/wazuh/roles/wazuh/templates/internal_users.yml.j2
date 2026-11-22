@@ -1,0 +1,20 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role wazuh); local changes are overwritten.
+# The two accounts the stack uses; the product's demo accounts (with published passwords) are not
+# carried. The hashes are the indexer's own (bcrypt), made by the role from the secrets.
+---
+_meta:
+  type: "internalusers"
+  config_version: 2
+
+{{ wazuh_indexer_user }}:
+  hash: "{{ wazuh_hash_admin }}"
+  reserved: true
+  backend_roles:
+    - "admin"
+  description: "administrator"
+
+{{ wazuh_dashboard_user }}:
+  hash: "{{ wazuh_hash_dashboard }}"
+  reserved: true
+  description: "dashboard service account"
