@@ -88,3 +88,6 @@ status_hub_notify_ceiling: red
 status_hub_registers_dir: ""
 # the lab's own views (a file on the controller replacing the built-in two-entry menu)
 status_hub_views_file: ""
+# capability -> url of an endpoint the collector reaches by another name than the registry alias (the
+# alias is not in that product's certificate): HNX_ENDPOINT_<CAPABILITY> in the collector's environment
+status_hub_endpoints: {}

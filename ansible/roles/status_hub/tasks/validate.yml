@@ -108,6 +108,9 @@
       - status_hub_logins_oncalendar is match('^[A-Za-z0-9*:/,. -]{1,80}\Z')
       - status_hub_extra_ca_refs | select('match', '^secret:[a-z0-9][a-z0-9/_.-]*\Z') | list | length == status_hub_extra_ca_refs | length
       - status_hub_extra_ca_refs | length == 0 or status_hub_tls | bool
+      - status_hub_endpoints is mapping
+      - status_hub_endpoints.keys() | select('match', '^[a-z][a-z0-9-]{0,62}\\Z') | list | length == status_hub_endpoints | length
+      - status_hub_endpoints.values() | select('match', '^https?://[a-z0-9][a-z0-9.-]{0,252}:[0-9]{1,5}\\Z') | list | length == status_hub_endpoints | length
       - status_hub_notify_topic is match('^[A-Za-z0-9_-]{0,64}\Z')
       - status_hub_notify_ceiling in ['clear', 'green', 'amber', 'amber+strict', 'red']
       - status_hub_registers_dir == '' or status_hub_registers_dir is match('^/[A-Za-z0-9._/-]+\Z')

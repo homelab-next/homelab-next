@@ -1660,6 +1660,7 @@ HUB_COLLECT = {
         "username": "reader", "password_ref": "secret:flow/reader-password",
     }],
     "status_hub_registers_dir": "/var/lib/hnx-hub/registers",
+    "status_hub_endpoints": {"backup": "https://backup-01.example.internal:8007"},
 }  # fmt: skip
 
 
@@ -1674,13 +1675,16 @@ def test_status_hub_collector_renders_a_calendar_timer_and_a_hardened_oneshot(tm
     assert argv[argv.index("--root") + 1] == "/var/lib/hnx-hub/files"
     assert argv[argv.index("--secrets-dir") + 1] == "/etc/hnx-hub/issued"
     assert svc["Type"] == ["oneshot"] and svc["User"] == ["hnx-hub"]
-    assert svc["Environment"] == ["SSL_CERT_FILE=/etc/hnx-hub/tls/ca-bundle.crt"]
     assert svc["ReadWritePaths"] == ["/var/lib/hnx-hub"] and svc["NoNewPrivileges"] == ["yes"]
     timer = _directives(files["hnx-hub-collect.timer"])
     assert timer["OnCalendar"] == ["*-*-* *:*:00"]
     assert not {"OnBootSec", "OnUnitActiveSec"} & set(timer)  # LL-041
     assert "--registers" in hub_argv  # the register pages are served from the delivered directory
     assert "--notify-topic" not in argv  # no paging unless a topic is set
+    assert svc["Environment"] == [
+        "HNX_ENDPOINT_BACKUP=https://backup-01.example.internal:8007",
+        "SSL_CERT_FILE=/etc/hnx-hub/tls/ca-bundle.crt",
+    ]  # the alias a product's certificate does not carry is overridden by a name it does
 
 
 def test_status_hub_collector_pages_through_the_notify_channel_when_asked(tmp_path):
@@ -1708,6 +1712,9 @@ def test_status_hub_collector_inputs_are_checked(tmp_path):
         {"status_hub_notify_ceiling": "orange"},
         {"status_hub_extra_ca_refs": ["-----BEGIN CERTIFICATE-----"]},
         {"status_hub_registers_dir": "../registers"},
+        {"status_hub_endpoints": {"backup": "https://192.0.2.9"}},  # no explicit port
+        {"status_hub_endpoints": {"Backup Up": "https://backup-01.example.internal:8007"}},
+        {"status_hub_endpoints": ["backup"]},
         # a login's password is a file for the root helper, never also an environment value
         {"status_hub_secret_refs": [*HUB_COLLECT["status_hub_secret_refs"],
                                     "secret:flow/reader-password"]},

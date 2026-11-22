@@ -91,6 +91,10 @@ argument_specs:
         type: path
         description: "Where the token helper is installed."
         default: /usr/local/libexec/hnx-hub
+      status_hub_endpoints:
+        type: dict
+        description: "Capability -> scheme://host:port the collector uses instead of the registry alias (HNX_ENDPOINT_<CAPABILITY>), for a product whose certificate does not carry the alias name. The name must still verify against the CA bundle."
+        default: {}
       status_hub_notify_topic:
         type: str
         description: "Page transitions of fail/stale through the registry's notify service on this topic (empty: no paging)."

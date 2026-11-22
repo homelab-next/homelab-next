@@ -13,6 +13,9 @@ Group={{ status_hub_group }}
 WorkingDirectory={{ status_hub_state_dir }}
 ExecStart={{ status_hub_hnx_bin }} status collect --registry {{ status_hub_config_dir }}/services.yml --state {{ status_hub_state_dir }}/state.json --root {{ status_hub_root_dir }} --secrets-dir {{ status_hub_issued_dir }}{% if status_hub_notify_topic | length > 0 %} --notify-topic {{ status_hub_notify_topic }} --notify-ceiling {{ status_hub_notify_ceiling }}{% endif %}
 
+{% for cap, url in status_hub_endpoints | dictsort %}
+Environment=HNX_ENDPOINT_{{ cap | upper | replace('-', '_') }}={{ url }}
+{% endfor %}
 {% if status_hub_ca_bundle | bool %}
 Environment=SSL_CERT_FILE={{ status_hub_ca_bundle_path }}
 {% endif %}
