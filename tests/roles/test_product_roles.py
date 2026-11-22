@@ -929,3 +929,22 @@ def test_greenbone_target_health(first):
     state = first.setup["state"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads(state.read_text())["calls"] == ["<get_version/>"]
+
+
+# ------------------------------------------- the vendor signing key under --check
+def _check_mode_first(tmp_path):
+    v, ring, _ = key_setup(tmp_path, TS_ROLE)
+    return {"role": TS_ROLE, "tasks_from": "signing_key", "extra_vars": v, "check": True,
+            "setup": {"ring": ring}}  # fmt: skip
+
+
+@pytest.mark.requires_tool("gpg")
+@first_run(_check_mode_first)
+def test_the_key_listing_waits_for_a_real_run_under_check(first):
+    """Under --check the staging file and scratch GnuPG home are never made, so the key listing
+    that reads them cannot run (it failed on the scratch home's missing path); it waits for a
+    real run and nothing is installed or left behind."""
+    r, _ = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not first.setup["ring"].exists()
+    assert not first.setup["ring"].parent.exists()
