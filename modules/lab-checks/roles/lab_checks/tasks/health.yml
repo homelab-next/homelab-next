@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the scripts, the register, the pager's configuration and the token are in place, the timer
+# is armed, and the last results document is recent. Nothing is written. A RED criterion is not unhealthy: that
+# is the page's job; this hook says the checker itself is alive (a checker that stopped running is the
+# failure nobody is paged for).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Look for the files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: lab_checks_files
+      loop: "{{ [lab_checks_probe, lab_checks_notify_script, lab_checks_register_file, lab_checks_notify_config, lab_checks_publish_file] }}"
+    - name: They are all there
+      ansible.builtin.assert:
+        that: lab_checks_files.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: "lab-checks: missing {{ lab_checks_files.results | rejectattr('stat.exists') | map(attribute='item') | list }} (run the install)"
+    - name: Ask systemd about the timer
+      ansible.builtin.command:
+        argv: "{{ [lab_checks_systemctl_cli, 'is-active', lab_checks_timer] }}"
+      register: lab_checks_active
+      changed_when: false
+      failed_when: false
+    - name: The timer is armed
+      ansible.builtin.assert:
+        that: lab_checks_active.rc == 0
+        fail_msg: "lab-checks: the timer {{ lab_checks_timer }} is not active ({{ lab_checks_active.stdout }})"
+    - name: Look for a results document younger than the cap
+      ansible.builtin.find:
+        paths: "{{ lab_checks_results_dir }}"
+        patterns: "{{ lab_checks_results_file | basename }}"
+        age: "-{{ lab_checks_results_max_age_s | int }}s"
+        age_stamp: mtime
+      register: lab_checks_recent
+    - name: It is recent (the hourly run is running)
+      ansible.builtin.assert:
+        that: lab_checks_recent.matched | int == 1
+        fail_msg: "lab-checks: no results document younger than {{ lab_checks_results_max_age_s }} s at {{ lab_checks_results_file }}: the hourly run is not running"
+  tags: [health]

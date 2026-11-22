@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: the module pins no artefact or image (its scripts ship with the role), so an upgrade is a validated
+# re-converge. Run the health hook after.
+#   ansible-playbook -i <inventory> modules/lab-checks/playbooks/upgrade.yml
+- name: Upgrade the continuous lab checks
+  hosts: mod_lab_checks_runner
+  become: true
+  tasks:
+    - name: Validate the upgrade
+      ansible.builtin.include_role:
+        name: lab_checks
+        tasks_from: upgrade
+    - name: Converge on the new scripts
+      ansible.builtin.include_role:
+        name: lab_checks

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Derived, not configurable: the names every task and template shares.
+lab_checks_marker: "managed by homelab-next (modules/lab-checks)"
+# the hnx command-line tool another module installs on the guest (the unit names the same path literally)
+lab_checks_hnx_bin: /opt/hnx/bin/hnx
+lab_checks_probe: "{{ lab_checks_bin_dir }}/hnx-lab-probe"
+lab_checks_notify_script: "{{ lab_checks_bin_dir }}/hnx-lab-notify"
+lab_checks_register_file: "{{ lab_checks_config_dir }}/invariants.yml"
+lab_checks_notify_config: "{{ lab_checks_config_dir }}/notify.json"
+lab_checks_publish_file: "{{ lab_checks_config_dir }}/credentials/notify-token"
+lab_checks_auth_dir: "{{ lab_checks_config_dir }}/credentials"
+lab_checks_results_dir: "{{ lab_checks_data_root }}/results"
+lab_checks_state_dir: "{{ lab_checks_data_root }}/state"
+lab_checks_results_file: "{{ lab_checks_results_dir }}/{{ lab_checks_logical_id }}.hourly.json"
+lab_checks_state_file: "{{ lab_checks_state_dir }}/{{ lab_checks_logical_id }}.hourly.json"
+lab_checks_export_dir: "{{ lab_checks_data_root }}/export"
+lab_checks_unit: "hnx-{{ lab_checks_logical_id }}.service"
+lab_checks_timer: "hnx-{{ lab_checks_logical_id }}.timer"
+lab_checks_forms:
+  publisher: '^[A-Za-z0-9_-]{8,128}\Z'

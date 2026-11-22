@@ -1,0 +1,14 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ lab_checks_marker }}, instance {{ lab_checks_logical_id }}); local changes are overwritten.
+# On the calendar, never an interval (OnBootSec plus OnUnitActiveSec can stop firing for good after a
+# reboot at the wrong moment).
+[Unit]
+Description=lab-checks {{ lab_checks_logical_id }}: the lab's invariants, hourly
+
+[Timer]
+OnCalendar={{ lab_checks_oncalendar }}
+Persistent=true
+Unit={{ lab_checks_unit }}
+
+[Install]
+WantedBy=timers.target
