@@ -108,6 +108,17 @@ SOURCES: dict[str, tuple[str, str]] = {
         "Garage is released from git.deuxfleurs.fr (no GitHub release feed): compare its tags "
         "(docker.io/dxflrs/garage) with the project's release page by hand, within the pinned major version",
     ),
+    "role:vector/vector_image": (
+        "none",
+        "the aggregator's image is released from vectordotdev/vector with -debian tags the GitHub "
+        "release parse does not read: compare its tags with the project's release page by hand, "
+        "and move only to a release at least 14 days old (playbooks/upgrade.yml)",
+    ),
+    "role:vector/vector_sidecar_image": (
+        "none",
+        "the Docker official python image (docker.io/library/python), the same pin as the repository's "
+        "own container images: compare its tags with the release page by hand, within the pinned minor version",
+    ),
     "role:iceberg_rest/iceberg_rest_image": (
         "none",
         "a build of the Apache Iceberg main branch the project published only as :latest (pinned by "
@@ -394,6 +405,16 @@ NOTES: dict[str, str] = {
     "role:garage/garage_image": (
         "an image (modules/garage): bump the tag and its digest together, with product.version in "
         "modules/garage/module.yml and the lab registry's version; the same major version only"
+    ),
+    "role:vector/vector_image": (
+        "an image (modules/vector): bump the tag and its digest together, with product.version in "
+        "modules/vector/module.yml and the lab registry's version; read the release notes of every "
+        "version crossed (a changed socket, file or object-store sink option stops the aggregator "
+        "at start, and the role validates the configuration with the new image first)"
+    ),
+    "role:vector/vector_sidecar_image": (
+        "an image (modules/vector): the interpreter the sidecar runs on; bump the tag and its digest "
+        "together within the pinned minor version (the sidecar uses the standard library only)"
     ),
     "role:iceberg_rest/iceberg_rest_image": (
         "an image (modules/iceberg-rest): pinned by digest, the tag labels the build; bump the tag "

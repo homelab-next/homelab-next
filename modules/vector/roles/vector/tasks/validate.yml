@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - vector_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - vector_image is match(vector_pin_pattern)
+      - vector_sidecar_image is match(vector_pin_pattern)
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - vector_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - vector_bind != '0.0.0.0'
+      - >-
+        [vector_syslog_udp_port, vector_syslog_tls_port, vector_sensor_port]
+        | map('int') | select('ge', 1) | select('le', 65535) | list | length == 3
+      - vector_siem_syslog_port | int >= 1 and vector_siem_syslog_port | int <= 65535
+      # the router's 514 is the listener's: the manager's input is another port
+      - vector_siem_syslog_port | int != vector_syslog_udp_port | int
+      - vector_siem_syslog_protocol in ['udp', 'tcp']
+      - vector_uid | int >= 1000 and vector_gid | int >= 1000
+      - vector_siem_logs_gid | int >= 0
+      - vector_sensor_tls | bool or vector_sensor_ca_ref == ''
+      - vector_sensor_ca_ref == '' or vector_sensor_ca_ref is match(vector_ref_pattern)
+      - >-
+        [vector_dir, vector_data_root, vector_siem_logs_dir] | reject('match', vector_path_pattern) | list | length == 0
+      - vector_siem_alerts_file is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z')
+      - vector_siem_archives_file is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z')
+      - vector_siem_alerts_file != vector_siem_archives_file
+      - >-
+        [vector_route_syslog_udp, vector_route_syslog_tls, vector_route_sensors,
+        vector_route_siem_alerts, vector_route_siem_archives] | reject('match', vector_route_pattern) | list | length == 0
+      # each input feeds exactly one dataset: two inputs on one route would share a declaration
+      - >-
+        [vector_route_syslog_udp, vector_route_syslog_tls, vector_route_sensors,
+        vector_route_siem_alerts, vector_route_siem_archives] | unique | list | length == 5
+      - vector_trusted_recorders is sequence and vector_trusted_recorders is not string
+      - vector_trusted_recorders | reject('string') | list | length == 0
+      - vector_detection_ids is mapping
+      - vector_detection_ids.values() | reject('match', '^det:[a-z0-9][a-z0-9-]{0,62}\Z') | list | length == 0
+      - vector_s3_bucket is match(vector_bucket_pattern)
+      - vector_s3_prefix is match(vector_prefix_pattern)
+      - vector_s3_region is match('^[a-z0-9-]{2,32}\Z')
+      - vector_s3_url == '' or vector_s3_url is match('^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?\Z')
+      - vector_s3_access_key_ref is match(vector_ref_pattern)
+      - vector_s3_signing_ref is match(vector_ref_pattern)
+      - vector_tls_cert_ref is match(vector_ref_pattern)
+      - vector_tls_pem_ref is match(vector_ref_pattern)
+      - >-
+        [vector_s3_access_key_ref, vector_s3_signing_ref, vector_tls_cert_ref, vector_tls_pem_ref]
+        | unique | list | length == 4
+      - vector_batch_max_bytes | int >= 1048576 and vector_batch_max_bytes | int <= 1073741824
+      - vector_batch_timeout_secs | int >= 5 and vector_batch_timeout_secs | int <= 3600
+      - vector_buffer_max_bytes | int >= 268435488
+      - vector_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - vector_sidecar_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      vector: a registry id, two images pinned by tag and digest, the guest's IPv4 address to
+      publish on (not all interfaces), ports (the manager's syslog port is not the listener's 514),
+      a container uid and gid of 1000 or more, absolute canonical directories, five distinct routes
+      (<module>/<dataset>), a bucket and a prefix ending in /, four distinct secret: references,
+      detection ids of the form det:<slug>, and a batch size, age, buffer and memory limits in range
+  tags: [readiness, health, backup, restore, export, upgrade]

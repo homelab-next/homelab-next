@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0
+# The log-pipeline provider (modules/vector): a Vector aggregator and the enrichment sidecar, two
+# containers of one compose_app. Both images are pinned by tag and DIGEST.
+# vector_logical_id (required): the instance's registry id, e.g. log-pipeline
+vector_image: "docker.io/timberio/vector:0.46.1-debian@sha256:ccf9c8ffcd1ffbe59e4d62bf44926664908ea1cb6b492b91634d1afd01e3376f"
+# the sidecar runs the module's code and the core's label rules on the standard library alone: the
+# smallest interpreter image the repository already pins for its own containers
+vector_sidecar_image: "docker.io/library/python:3.11.17-slim-trixie@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377"
+# published on the guest's own address (the inventory's ansible_host), never on all interfaces;
+# the guest's firewall file admits each listener's senders and no one else
+vector_bind: "{{ ansible_host }}"
+# the router's UDP syslog (the UDR7 sends UDP only; the senders are held by the firewall and the
+# label by observed source, docs/log-pipeline.md "Limits"), syslog over TLS, the sensors' vector protocol
+vector_syslog_udp_port: 514
+vector_syslog_tls_port: 6514
+vector_sensor_port: 6000
+# TLS on the sensors' listener; with a CA reference, a sensor must present a certificate it signed
+vector_sensor_tls: true
+vector_sensor_ca_ref: ""
+vector_dir: /opt/compose/vector
+vector_data_root: /var/lib/hnx-modules/vector
+vector_export_dir: /var/backups/hnx-modules/vector/export
+vector_owner: root
+vector_group: "{{ vector_gid }}"
+# the containers' user and group: an id no account on the host has
+vector_uid: 61005
+vector_gid: 61005
+# the manager's alert and archive files (the SIEM module's stream directory on this guest, read-only; the site names it)
+# and the group that can read them inside the container
+vector_siem_logs_dir: ""
+vector_siem_logs_gid: 0
+vector_siem_alerts_file: alerts.json
+vector_siem_archives_file: archives.json
+# where the raw syslog goes on: the manager's syslog input (the module's address, never the 514 the
+# listener uses), over udp or tcp
+vector_siem_syslog_host: "{{ vector_bind }}"
+vector_siem_syslog_port: 5514
+vector_siem_syslog_protocol: udp
+# the rendered tables (controller files: hnx guests render --target runtime-labels, hnx modules
+# render): copied to the guest, and the sidecar reloads a changed file without a restart
+vector_runtime_labels_src: ""
+vector_tlp_sources_src: ""
+# addresses of the services trusted to record a client's address in what they log (the router): the
+# event's address is the one the router recorded, not the router's own
+vector_trusted_recorders: []
+# the routes (<module>/<dataset>): each input feeds exactly one dataset, and a change of route is a
+# change of declaration (docs/log-pipeline.md "Limits")
+vector_route_syslog_udp: vector/syslog-udp
+vector_route_syslog_tls: vector/syslog-tls
+vector_route_sensors: vector/sensor-stream
+vector_route_siem_alerts: vector/siem-alerts
+vector_route_siem_archives: vector/siem-archives
+# rule id (as the manager names it) -> logical detection id (det:...); an alert no entry names is det:siem-unmapped
+vector_detection_ids: {}
+# the staging bucket and prefix the lake writer reads (the object store's registry id; its url is
+# resolved from the registry unless vector_s3_url is set: scheme://host:port)
+vector_s3_bucket: hnx-soc-staging
+vector_s3_prefix: ocsf/
+vector_s3_region: ""
+vector_object_store_id: object-store
+vector_s3_url: ""
+vector_s3_access_key_ref: secret:vector/s3-access-key
+vector_s3_signing_ref: secret:vector/s3-secret-key
+vector_tls_cert_ref: secret:vector/tls-cert
+vector_tls_pem_ref: secret:vector/tls-key
+# a batch is written at this size or this age, whichever first; the disk buffer holds the events
+# Vector has not yet written (when full it blocks its sources, it never drops)
+vector_batch_max_bytes: 33554432
+vector_batch_timeout_secs: 60
+vector_buffer_max_bytes: 1073741824
+vector_mem_limit: 1g
+vector_sidecar_mem_limit: 256m
+# the sources of the code the sidecar runs: the module's own package and the core's label rules,
+# both copied verbatim from the checkout the role runs from
+vector_code_src: "{{ role_path }}/../../python/hnx_modules/vector"
+vector_lib_src: "{{ role_path }}/../../../../homelabnext"
+vector_start: true
+vector_validate_with_docker: true
+vector_health_timeout: 10
+vector_status_max_age: 60

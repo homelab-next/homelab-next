@@ -1,0 +1,11 @@
+{{ {
+  'schema': 'hnx-vector.enrich/v1',
+  'routes': {
+    vector_route_syslog_udp: {'kind': 'syslog', 'observe': 'recorded', 'trusted': vector_trusted_recorders},
+    vector_route_syslog_tls: {'kind': 'syslog', 'observe': 'recorded', 'trusted': vector_trusted_recorders},
+    vector_route_sensors: {'kind': 'sensor', 'observe': 'recorded'},
+    vector_route_siem_alerts: {'kind': 'siem', 'observe': 'agent'},
+    vector_route_siem_archives: {'kind': 'siem', 'observe': 'agent'}
+  },
+  'detection_ids': vector_detection_ids
+} | to_nice_json(sort_keys=True) }}

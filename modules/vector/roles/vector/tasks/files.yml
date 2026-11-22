@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: Apache-2.0
+# The code the sidecar runs. The core's label rules are copied BYTE FOR BYTE from the checkout the
+# role runs from (a port could drift from the rule the conformance suite proved; a copy cannot), and
+# the package marker of the stand-in `homelabnext` they live under is the only file written here
+# that the checkout does not have.
+- name: The label rules are the core's own files (verbatim copies)
+  ansible.builtin.copy:
+    src: "{{ vector_lib_src }}/{{ item }}"
+    dest: "{{ vector_data_root }}/lib/homelabnext/{{ item }}"
+    owner: "{{ vector_owner }}"
+    group: "{{ vector_group }}"
+    mode: "0644"
+  loop: "{{ vector_lib_files }}"
+  register: vector_sidecar_files
+
+- name: The stand-in package marker (the core's __init__ imports far more than the label rules need)
+  ansible.builtin.copy:
+    content: "# SPDX-License-Identifier: Apache-2.0\n# the label rules only: see modules/vector/roles/vector/tasks/files.yml\n"
+    dest: "{{ vector_data_root }}/lib/homelabnext/__init__.py"
+    owner: "{{ vector_owner }}"
+    group: "{{ vector_group }}"
+    mode: "0644"
+  register: vector_sidecar_files_1
+
+- name: The module's own sidecar and remap code
+  ansible.builtin.copy:
+    src: "{{ vector_code_src }}/{{ item }}"
+    dest: "{{ vector_data_root }}/code/hnx_modules/vector/{{ item }}"
+    owner: "{{ vector_owner }}"
+    group: "{{ vector_group }}"
+    mode: "0644"
+  loop: "{{ vector_code_files }}"
+  register: vector_sidecar_files_2
+
+- name: The rendered label tables (the sidecar reloads a changed file itself)
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ vector_data_root }}/tables/{{ item.name }}"
+    owner: "{{ vector_owner }}"
+    group: "{{ vector_group }}"
+    mode: "0640"
+  loop:
+    - {name: runtime-labels.json, src: "{{ vector_runtime_labels_src }}"}
+    - {name: tlp-sources.json, src: "{{ vector_tlp_sources_src }}"}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: The routes and the detection ids
+  ansible.builtin.template:
+    src: enrich.json.j2
+    dest: "{{ vector_data_root }}/tables/enrich.json"
+    owner: "{{ vector_owner }}"
+    group: "{{ vector_group }}"
+    mode: "0640"
+
+- name: The listener certificate and key (the key is never rendered into the compose project)
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', item.ref) }}\n"
+    dest: "{{ vector_data_root }}/tls/{{ item.file }}"
+    owner: "{{ vector_owner }}"
+    group: "{{ vector_group }}"
+    mode: "0640"
+  loop: "{{ vector_tls_files }}"
+  loop_control:
+    label: "{{ item.file }}"
+  no_log: true
+  register: vector_tls_written

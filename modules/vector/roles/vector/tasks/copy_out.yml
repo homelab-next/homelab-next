@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Find the file sources' checkpoints
+  ansible.builtin.find:
+    paths: "{{ vector_data_root }}/state"
+    patterns: ["checkpoints.json"]
+    recurse: true
+  register: vector_checkpoints
+  tags: [backup, export]
+
+- name: Create the export directory
+  ansible.builtin.file:
+    path: "{{ vector_export_dir }}/checkpoints"
+    state: directory
+    owner: "{{ vector_owner }}"
+    group: "{{ vector_group }}"
+    mode: "0700"
+  tags: [backup, export]
+
+- name: Copy each checkpoint file
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "{{ vector_export_dir }}/checkpoints/{{ item.path | dirname | basename }}.json"
+    remote_src: true
+    owner: "{{ vector_owner }}"
+    group: "{{ vector_group }}"
+    mode: "0600"
+  loop: "{{ vector_checkpoints.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export]
+
+- name: Hash the copies
+  ansible.builtin.stat:
+    path: "{{ vector_export_dir }}/checkpoints/{{ item.path | dirname | basename }}.json"
+    checksum_algorithm: sha256
+  loop: "{{ vector_checkpoints.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: vector_export_stats
+  tags: [backup, export]
+
+- name: Write the listing
+  ansible.builtin.copy:
+    content: |
+      {% for r in vector_export_stats.results | sort(attribute='stat.path') %}
+      {{ {'key': r.stat.path | basename, 'size': r.stat.size, 'sha256': r.stat.checksum} | to_json(sort_keys=True) }}
+      {% endfor %}
+    dest: "{{ vector_export_dir }}/listing.jsonl"
+    owner: "{{ vector_owner }}"
+    group: "{{ vector_group }}"
+    mode: "0600"
+  tags: [backup, export]

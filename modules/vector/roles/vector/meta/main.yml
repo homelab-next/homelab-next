@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The log-pipeline provider: a Vector aggregator and an enrichment sidecar (the core's runtime and TLP label rules, the OCSF remap), two compose_app containers, staging OCSF batches in the object store."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

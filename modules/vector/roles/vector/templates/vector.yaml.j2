@@ -1,0 +1,146 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role vector). Do not edit.
+# The Vector aggregator (modules/vector). Transport only: the listeners, the files it tails, the disk
+# buffers, the raw forward to the manager and the staging writes. The two label rules and the OCSF
+# remap run in the sidecar (modules/vector/python), which every event passes through. Each input's
+# `stamp` below writes only constants and fields its SOURCE component set (the socket's peer), never
+# a field of the event body: that is what the sidecar's observed-address policy reads.
+data_dir: /var/lib/vector
+api:
+  enabled: true
+  address: 0.0.0.0:8686
+
+sources:
+  syslog_udp:
+    type: socket
+    mode: udp
+    address: 0.0.0.0:{{ vector_container_syslog_udp_port }}
+    max_length: 65507
+    decoding: {codec: bytes}
+  syslog_tls:
+    type: socket
+    mode: tcp
+    address: 0.0.0.0:{{ vector_container_syslog_tls_port }}
+    decoding: {codec: bytes}
+    framing: {method: newline_delimited}
+    tls:
+      enabled: true
+      crt_file: {{ vector_container_tls_dir }}/cert.pem
+      key_file: {{ vector_container_tls_dir }}/key.pem
+  sensors:
+    type: vector
+    address: 0.0.0.0:{{ vector_container_sensor_port }}
+{% if vector_sensor_tls | bool %}
+    tls:
+      enabled: true
+      crt_file: {{ vector_container_tls_dir }}/cert.pem
+      key_file: {{ vector_container_tls_dir }}/key.pem
+{% if vector_sensor_ca_ref != '' %}
+      ca_file: {{ vector_container_tls_dir }}/sensor-ca.pem
+      verify_certificate: true
+{% endif %}
+{% endif %}
+  siem_alerts:
+    type: file
+    include: [{{ vector_siem_mount }}/{{ vector_siem_alerts_file }}]
+    read_from: beginning
+    max_line_bytes: 1048576
+  siem_archives:
+    type: file
+    include: [{{ vector_siem_mount }}/{{ vector_siem_archives_file }}]
+    read_from: beginning
+    max_line_bytes: 1048576
+  from_sidecar:
+    type: socket
+    mode: unix_stream
+    path: {{ vector_run_dir }}/out.sock
+    decoding: {codec: json}
+
+transforms:
+  stamp_syslog_udp:
+    type: remap
+    inputs: [syslog_udp]
+    source: |
+      . = {"route": {{ vector_route_syslog_udp | to_json }}, "peer": to_string(.host) ?? null, "line": to_string(.message) ?? null}
+  stamp_syslog_tls:
+    type: remap
+    inputs: [syslog_tls]
+    source: |
+      . = {"route": {{ vector_route_syslog_tls | to_json }}, "peer": to_string(.host) ?? null, "line": to_string(.message) ?? null}
+  stamp_sensors:
+    type: remap
+    inputs: [sensors]
+    source: |
+      msg = .message
+      . = if is_string(msg) {
+        {"route": {{ vector_route_sensors | to_json }}, "line": msg}
+      } else {
+        {"route": {{ vector_route_sensors | to_json }}, "event": .}
+      }
+  stamp_siem_alerts:
+    type: remap
+    inputs: [siem_alerts]
+    source: |
+      . = {"route": {{ vector_route_siem_alerts | to_json }}, "line": to_string(.message) ?? null}
+  stamp_siem_archives:
+    type: remap
+    inputs: [siem_archives]
+    source: |
+      . = {"route": {{ vector_route_siem_archives | to_json }}, "line": to_string(.message) ?? null}
+  raw_syslog:
+    type: remap
+    inputs: [syslog_udp, syslog_tls]
+    source: |
+      .message = replace(string!(.message), r'[\r\n]+\z', "")
+  unwrap:
+    type: remap
+    inputs: [from_sidecar]
+    source: |
+      table = string!(.table)
+      . = object!(.row)
+      ._hnx_table = table
+
+sinks:
+  to_sidecar:
+    type: socket
+    mode: unix
+    path: {{ vector_run_dir }}/in.sock
+    inputs: [stamp_syslog_udp, stamp_syslog_tls, stamp_sensors, stamp_siem_alerts, stamp_siem_archives]
+    encoding: {codec: json}
+    framing: {method: newline_delimited}
+    buffer:
+      type: disk
+      max_size: {{ vector_buffer_max_bytes | int }}
+      when_full: block
+  siem_syslog:
+    type: socket
+    mode: {{ vector_siem_syslog_protocol }}
+    address: {{ vector_siem_syslog_host }}:{{ vector_siem_syslog_port | int }}
+    inputs: [raw_syslog]
+    encoding: {codec: text}
+{% if vector_siem_syslog_protocol == 'tcp' %}
+    framing: {method: newline_delimited}
+{% endif %}
+  stage:
+    type: aws_s3
+    inputs: [unwrap]
+    bucket: {{ vector_s3_bucket }}
+    endpoint: {{ vector_s3_endpoint }}
+    region: {{ vector_s3_region }}
+    key_prefix: "{{ vector_s3_prefix }}{% raw %}{{ _hnx_table }}{% endraw %}/dt=%Y-%m-%d/hour=%H/"
+    compression: gzip
+    filename_extension: ndjson.gz
+    encoding:
+      codec: json
+      except_fields: [_hnx_table]
+    framing: {method: newline_delimited}
+    auth:
+      access_key_id: ${VECTOR_S3_ACCESS_KEY}
+      secret_access_key: ${VECTOR_S3_SECRET_KEY}
+    batch:
+      max_bytes: {{ vector_batch_max_bytes | int }}
+      timeout_secs: {{ vector_batch_timeout_secs | int }}
+    buffer:
+      type: disk
+      max_size: {{ vector_buffer_max_bytes | int }}
+      when_full: block

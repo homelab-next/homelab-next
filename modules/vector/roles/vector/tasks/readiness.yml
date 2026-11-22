@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# The pipeline's dependencies are the container engine (docker_engine, applied to the guest before
+# this module), its credentials in the secret store, the two rendered label tables, the manager's
+# stream directory and the object store it stages into.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: The rendered tables are named and read
+      ansible.builtin.include_tasks: tables_check.yml
+    - name: Resolve the object store's address
+      ansible.builtin.include_tasks: endpoint.yml
+    - name: The object store answers (200, or 403 to an unsigned request)
+      ansible.builtin.uri:
+        url: "{{ vector_s3_endpoint }}/"
+        status_code: [200, 403]
+        timeout: "{{ vector_health_timeout | int }}"
+      changed_when: false
+    - name: The manager's stream directory exists on this guest
+      ansible.builtin.stat:
+        path: "{{ vector_siem_logs_dir }}"
+      register: vector_logs_stat
+    - name: The stream directory is a directory
+      ansible.builtin.assert:
+        that: vector_logs_stat.stat.exists and vector_logs_stat.stat.isdir
+        fail_msg: "vector: {{ vector_siem_logs_dir }} (the manager's alert and archive files) is not on this guest"
+  tags: [readiness]
