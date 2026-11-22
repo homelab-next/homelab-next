@@ -44,6 +44,12 @@ USER = pwd.getpwuid(os.getuid()).pw_name
 GROUP = grp.getgrgid(os.getgid()).gr_name
 
 
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("localhost", 0))
+        return s.getsockname()[1]
+
+
 def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -84,8 +90,8 @@ def test_the_role_converges_on_the_real_image_and_the_start_guard_keeps_the_auth
         f"{SP}gid": os.getgid(),
         f"{SP}client_config_group": GROUP,
         f"{SP}results_group": GROUP,
-        f"{SP}frontend_port": 18000,
-        f"{SP}gui_port": 18889,
+        f"{SP}frontend_port": free_port(),
+        f"{SP}gui_port": free_port(),
         f"{SP}unit_dir": str(tmp_path / "units"),
         f"{SP}systemctl_cli": sc,
         f"{SP}last_run_dir": str(tmp_path / "last-run"),
