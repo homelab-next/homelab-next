@@ -7,7 +7,7 @@
       - tailscale_node_repository is match('^https://[A-Za-z0-9.-]+(?::[0-9]+)?(?:/[A-Za-z0-9._~-]+)*\Z')
       - tailscale_node_key_fingerprints | length > 0
       - tailscale_node_key_fingerprints | select('match', '^[0-9A-F]{40}\Z') | list | length == tailscale_node_key_fingerprints | length
-      - tailscale_node_auth_key_ref is match('^secret:[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*\Z')
+      - tailscale_node_auth_key_ref is match('^(?:secret:[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*)?\Z')
       - tailscale_node_zone is match('^[a-z][a-z0-9-]{0,40}\Z')
       - tailscale_node_extra_tags | select('match', '^tag:[a-z0-9][a-z0-9-]{0,62}\Z') | list | length == tailscale_node_extra_tags | length
       - tailscale_node_hostname == '' or tailscale_node_hostname is match('^[a-z0-9][a-z0-9-]{0,62}\Z')

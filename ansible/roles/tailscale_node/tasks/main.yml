@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Control remote-access (ADR-0016 decision 7): the client from the vendor's signed apt repository,
-# joined once with an auth key; who may reach the node is the tailnet policy the tailscale-acl
+# joined once with an auth key, or already joined by hand (join.yml); who may reach the node is the tailnet policy the tailscale-acl
 # target renders from the site model. A node already running is left as it is (re-tagging a running
 # node is a `tailscale set`, not done here yet).
 - name: Validate the inputs
@@ -45,33 +45,11 @@
     enabled: true
     state: started
 
-- name: Read the node state
-  ansible.builtin.command:
-    argv: ["{{ tailscale_node_cli }}", status, --json]
-  register: tailscale_node_status
-  changed_when: false
-  failed_when: false
-
-- name: Join the tailnet with the zone tags (only when not running yet)
-  when: >-
-    tailscale_node_status.rc != 0
-    or (tailscale_node_status.stdout | from_json).BackendState != 'Running'
-  block:
-    - name: Write the auth key to a transient file only root can read
-      ansible.builtin.copy:
-        dest: "{{ tailscale_node_auth_key_file }}"
-        content: "{{ lookup('hnx_secret', tailscale_node_auth_key_ref) }}"
-        mode: "0600"
-      no_log: true
-    - name: Bring the node up (no exit node, no subnet routes)
-      ansible.builtin.command:
-        argv: >-
-          {{ [tailscale_node_cli, 'up', '--auth-key=file:' ~ tailscale_node_auth_key_file,
-              '--advertise-tags=' ~ (tailscale_node_tags | join(','))]
-             + (['--hostname=' ~ tailscale_node_hostname] if tailscale_node_hostname else []) }}
-      changed_when: true
-  always:
-    - name: Remove the transient auth key file
-      ansible.builtin.file:
-        path: "{{ tailscale_node_auth_key_file }}"
-        state: absent
+- name: Join the tailnet, or accept a node that is already joined with the declared tags
+  ansible.builtin.include_tasks: join.yml
+  vars:
+    node_cli: "{{ tailscale_node_cli }}"
+    node_tags: "{{ tailscale_node_tags }}"
+    node_key_ref: "{{ tailscale_node_auth_key_ref }}"
+    node_key_file: "{{ tailscale_node_auth_key_file }}"
+    node_hostname: "{{ tailscale_node_hostname }}"

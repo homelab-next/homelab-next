@@ -57,3 +57,4 @@
         path: "{{ item }}"
         state: absent
       loop: "{{ [wazuh_agent_keyring ~ '.download'] + ([wazuh_agent_gnupg_home.path] if wazuh_agent_gnupg_home.path is defined else []) }}"
+      changed_when: false  # scratch files only: a second run must report no change

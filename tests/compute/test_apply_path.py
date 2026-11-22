@@ -264,3 +264,22 @@ def test_every_baseline_play_escalates(good):
     plays = yaml.safe_load(render(good, "baseline-playbook")["baseline.yml"])
     bound = [p for p in plays if p["hosts"] != "localhost"]
     assert bound and all(p.get("become") is True for p in bound)
+
+
+def test_snippet_guests_get_a_fixed_instance_id_so_a_config_change_keeps_host_keys(good):
+    """LL-570: left to the hypervisor the instance-id is derived from the generated cloud-init
+    config, so a changed user-data snippet on an existing guest re-ran cloud-init and regenerated
+    the SSH host keys. The VM takes the cloudinit target's meta-data (a stable instance-id)."""
+    tf, ci = render(good, TF), render(good, "cloudinit")
+    need = sorted(n[len("vm-") : -len(".tf")] for n, t in tf.items() if "user_data_file_id" in t)
+    assert need
+    for name in need:
+        assert f'meta_data_file_id = var.cloudinit_meta_data["{name}"]' in tf[f"vm-{name}.tf"], name
+    assert "meta_data_file_id" not in tf["vm-infer-core.tf"]  # no snippet, no meta snippet
+    variables = tf["variables.tf"]
+    assert 'variable "cloudinit_meta_data"' in variables
+    assert f"length(setsubtract({hqlist(need)}, keys(var.cloudinit_meta_data))) == 0" in variables
+    assert "cloudinit_meta_data = {" in tf["USER_DATA.md"]
+    # the meta-data names the guest (name-vmid), never its config: it cannot change with the user-data
+    g = next(g for g in good.guests if g.name == "edge-core")
+    assert f'instance-id: "edge-core-{g.vmid}"' in ci["edge-core/meta-data"]

@@ -49,5 +49,6 @@ resource "proxmox_virtual_environment_vm" "edge_core" {
       }
     }
     user_data_file_id = var.cloudinit_user_data["edge-core"]
+    meta_data_file_id = var.cloudinit_meta_data["edge-core"]
   }
 }

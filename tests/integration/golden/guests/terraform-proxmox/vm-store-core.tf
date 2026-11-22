@@ -49,5 +49,6 @@ resource "proxmox_virtual_environment_vm" "store_core" {
       }
     }
     user_data_file_id = var.cloudinit_user_data["store-core"]
+    meta_data_file_id = var.cloudinit_meta_data["store-core"]
   }
 }

@@ -57,3 +57,4 @@
         path: "{{ item }}"
         state: absent
       loop: "{{ [tailscale_node_keyring ~ '.download'] + ([tailscale_node_gnupg_home.path] if tailscale_node_gnupg_home.path is defined else []) }}"
+      changed_when: false  # scratch files only: a second run must report no change

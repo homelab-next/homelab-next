@@ -18,6 +18,20 @@ uploaded snippet with the digest below (`sha256sum` on the node) before `terrafo
 re-upload it whenever the cloudinit render changes, since a changed snippet replaces no
 VM by itself.
 
+Each of them also takes the `cloudinit` target's `<name>/meta-data` as a snippet, named in
+`cloudinit_meta_data` the same way. Its `instance-id` is fixed for the guest's life; without
+it the hypervisor derives the instance-id from the generated cloud-init config, so a change
+to that config (a new mount in the user-data) is a new instance to cloud-init, which
+regenerates the guest's SSH host keys at the next start.
+
+```hcl
+cloudinit_meta_data = {
+  "bus-core"  = "<datastore>:snippets/bus-core-meta-data.yaml"
+  "edge-core" = "<datastore>:snippets/edge-core-meta-data.yaml"
+  "lake-core" = "<datastore>:snippets/lake-core-meta-data.yaml"
+}
+```
+
 | guest | node | vmid | sha256 of `<name>/user-data` |
 |---|---|---|---|
 | `bus-core` | `hv-a` | 150 | `0e3b0493d538a255324f85c9c272f492d548af3a07b92a62d43124a3257494b4` |

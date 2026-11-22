@@ -58,6 +58,7 @@ resource "proxmox_virtual_environment_vm" "lake_core" {
       }
     }
     user_data_file_id = var.cloudinit_user_data["lake-core"]
+    meta_data_file_id = var.cloudinit_meta_data["lake-core"]
   }
 
   lifecycle {

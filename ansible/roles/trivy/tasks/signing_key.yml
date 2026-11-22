@@ -57,3 +57,4 @@
         path: "{{ item }}"
         state: absent
       loop: "{{ [trivy_keyring ~ '.download'] + ([trivy_gnupg_home.path] if trivy_gnupg_home.path is defined else []) }}"
+      changed_when: false  # scratch files only: a second run must report no change

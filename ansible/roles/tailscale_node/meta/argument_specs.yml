@@ -5,8 +5,8 @@ argument_specs:
     options:
       tailscale_node_auth_key_ref:
         type: str
-        description: Secret reference (secret:<name>) of a tailnet auth key allowed to apply the zone tags, resolved by the hnx_secret lookup.
-        required: true
+        description: Secret reference (secret:<name>) of a tailnet auth key allowed to apply the zone tags, resolved by the hnx_secret lookup. Empty only for a node already joined (running, with its declared tags), which needs no key.
+        default: ""
       tailscale_node_version: &version
         type: str
         description: Pinned client version (x.y.z).
