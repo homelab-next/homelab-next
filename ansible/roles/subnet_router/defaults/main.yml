@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Subnet routing (control subnet-routing, applied per guest that already runs the remote-access
+# client): IP forwarding on, the listed IPv4 networks advertised through the client, and the
+# client told to keep the host's own resolver. Approving the routes is the tailnet admin's; this
+# role only advertises, and never an exit node. The client's command is the site's to name
+# (it is the one product name this role does not carry).
+subnet_router_advertise_routes: []
+# A server never takes the gateway's DNS settings (it would rewrite its own resolver).
+subnet_router_accept_dns: false
+subnet_router_sysctl_file: /etc/sysctl.d/99-hnx-subnet-router.conf
+subnet_router_sysctl_cli: sysctl
+subnet_router_forward_file: /proc/sys/net/ipv4/ip_forward

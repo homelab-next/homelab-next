@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Converge a subnet router: forwarding persisted and on, then the client's advertised routes and
+# DNS choice set only when they differ (a changed list takes effect on a re-run). No exit node.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Persist IPv4 forwarding
+  ansible.builtin.copy:
+    dest: "{{ subnet_router_sysctl_file }}"
+    content: "net.ipv4.ip_forward = 1\n"
+    mode: "0644"
+  register: subnet_router_persisted
+
+- name: Apply IPv4 forwarding now
+  ansible.builtin.command:
+    argv: ["{{ subnet_router_sysctl_cli }}", -w, net.ipv4.ip_forward=1]
+  changed_when: subnet_router_persisted.changed
+
+- name: Read the client's preferences
+  ansible.builtin.command:
+    argv: ["{{ subnet_router_cli }}", debug, prefs]
+  register: subnet_router_prefs
+  changed_when: false
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Set the advertised routes and DNS choice when they differ
+  vars:
+    subnet_router_have: "{{ subnet_router_prefs.stdout | from_json }}"
+    subnet_router_want: "{{ subnet_router_advertise_routes | unique | sort }}"
+  when: >-
+    (subnet_router_have.AdvertiseRoutes | default([], true) | sort) != subnet_router_want
+    or (subnet_router_have.CorpDNS | default(false) | bool) != (subnet_router_accept_dns | bool)
+  ansible.builtin.command:
+    argv: >-
+      {{ [subnet_router_cli, 'set',
+          '--accept-dns=' ~ (subnet_router_accept_dns | bool | lower),
+          '--advertise-routes=' ~ (subnet_router_want | join(','))] }}
+  changed_when: true

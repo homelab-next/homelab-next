@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to upgrade (the role holds no data and pins no version; main re-applies the settings)
+  ansible.builtin.debug:
+    msg: subnet_router has nothing to upgrade
+  tags: [upgrade]

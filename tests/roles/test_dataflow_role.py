@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from dataflow_front import Controller, make_pki, smoke_definition
+from dataflow_front import Controller, flow_definition, make_pki, smoke_definition
 from rolerun import fake, first_run, run_role
 
 from homelabnext.registry.model import secret_env_name
@@ -727,8 +727,115 @@ def test_import_flows_adds_only_the_groups_the_service_lacks():
         items = [{"name": "hnx-smoke", "text": smoke_definition()},
                  {"name": "feed-one", "text": smoke_definition(2)}]  # fmt: skip
         out = run_script("import-flows", cfg_for(c, flows=items))
-        assert out == {"imported": ["feed-one"]}
+        assert out["imported"] == ["feed-one"] and out["started"] == []
         assert sorted(g["name"] for g in c.groups.values()) == ["feed-one", "hnx-smoke"]
+
+
+def _feed(c, **kw):
+    svcs = [{"name": "pool"}, {"name": "writer", "slow": True}]
+    return {"name": "feed-one", "text": flow_definition(services=svcs), **kw}
+
+
+def _states(c, name="feed-one"):
+    (g,) = [g for g in c.groups.values() if g["name"] == name]
+    return g, {p["state"] for p in g["processors"]}
+
+
+def test_import_flows_binds_the_context_enables_the_services_and_starts_a_declared_flow():
+    with Controller() as c:
+        cfg = cfg_for(c, flows=[_feed(c, run=True)])
+        run_script("converge", cfg)
+        out = run_script("import-flows", cfg)
+        assert out == {"imported": ["feed-one"], "bound": ["feed-one"],
+                       "enabled": ["feed-one"], "started": ["feed-one"]}  # fmt: skip
+        g, states = _states(c)
+        assert g["context"] == "ctx" and states == {"RUNNING"}
+        assert {sv["state"] for sv in g["services"]} == {"ENABLED"}  # the slow one waited for
+
+
+def test_import_flows_leaves_a_flow_stopped_unless_it_is_declared_to_run():
+    with Controller() as c:
+        cfg = cfg_for(c, flows=[_feed(c)])
+        run_script("converge", cfg)
+        out = run_script("import-flows", cfg)
+        assert out["bound"] == ["feed-one"] and out["started"] == []
+        g, states = _states(c)
+        assert g["context"] == "ctx" and states == {"STOPPED"}
+        assert {sv["state"] for sv in g["services"]} == {"ENABLED"}
+
+
+def test_a_second_import_changes_nothing_and_repairs_a_group_that_drifted():
+    with Controller() as c:
+        cfg = cfg_for(c, flows=[_feed(c, run=True)])
+        run_script("converge", cfg)
+        run_script("import-flows", cfg)
+        calls = len(c.calls)
+        again = run_script("import-flows", cfg)
+        assert again == {"imported": [], "bound": [], "enabled": [], "started": []}
+        assert not [
+            x
+            for x in c.calls[calls:]
+            if x[0] in ("PUT", "POST", "DELETE") and not x[1].endswith("/access/token")
+        ]  # reads only
+        g, _ = _states(c)  # an unbound, stopped group with disabled services is put right again
+        g["context"] = None
+        g["services"][0]["state"] = "DISABLED"
+        for p in g["processors"]:
+            p["state"] = "STOPPED"
+        fixed = run_script("import-flows", cfg)
+        assert fixed == {"imported": [], "bound": ["feed-one"], "enabled": ["feed-one"],
+                         "started": ["feed-one"]}  # fmt: skip
+        assert _states(c)[1] == {"RUNNING"}
+
+
+def test_a_running_group_is_stopped_to_change_its_context_and_started_again():
+    with Controller() as c:
+        cfg = cfg_for(c, flows=[_feed(c, run=True)])
+        run_script("converge", cfg)
+        run_script("import-flows", cfg)
+        g, _ = _states(c)
+        g["context"] = "other"
+        assert run_script("import-flows", cfg)["bound"] == ["feed-one"]
+        assert g["context"] == "ctx" and _states(c)[1] == {"RUNNING"}
+
+
+def test_import_flows_names_a_service_that_cannot_be_enabled_and_a_missing_context():
+    with Controller() as c:
+        bad = {
+            "name": "feed-one",
+            "text": flow_definition(services=[{"name": "pool", "invalid": True}]),
+            "run": True,
+        }
+        cfg = cfg_for(c, flows=[bad], service_wait_s=2)
+        run_script("converge", cfg)
+        r = run_script("import-flows", cfg, check=False)
+        assert r.returncode != 0 and "pool (DISABLED)" in r.stderr and "not ENABLED" in r.stderr
+    with Controller() as c:  # nothing converged: no context to bind to
+        r = run_script("import-flows", cfg_for(c, flows=[_feed(c)]), check=False)
+        assert r.returncode != 0 and "parameter context ctx is missing" in r.stderr
+
+
+def test_the_flows_restore_hands_the_run_choice_to_the_script_and_reports_a_change_once(tmp_path):
+    c = converged_controller(tmp_path)
+    try:
+        prepare(tmp_path, c)
+        seed_state(tmp_path)
+        env = hook_env(tmp_path)
+        assert run_role(tmp_path, ROLE, "export", hook_vars(tmp_path, c), env=env).returncode == 0
+        src = tmp_path / "export"
+        c.groups.clear()
+        v = hook_vars(tmp_path, c, restore_source=str(src), restore_mode="flows",
+                      flow_run={"hnx-smoke": True})  # fmt: skip
+        first = run_role(tmp_path, ROLE, "restore", v, env=env)
+        assert first.returncode == 0, first.stdout + first.stderr
+        g, states = _states(c, "hnx-smoke")
+        assert g["context"] == "hnx-lake" and states == {"RUNNING"}
+        second = run_role(tmp_path, ROLE, "restore", v, env=env)
+        assert second.returncode == 0, second.stdout + second.stderr
+        assert re.search(r"changed=0\s", second.stdout), second.stdout
+        assert not re.search(r"changed=0\s", first.stdout), first.stdout
+    finally:
+        c.__exit__()
 
 
 # ----------------------------------------------------------------------------- the hooks, end to end

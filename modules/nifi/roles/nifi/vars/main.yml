@@ -64,7 +64,9 @@ nifi_stores_script: |
 # the API script (run as python3 -I -c, the command as its first argument and its settings as JSON
 # on its standard input, so no credential is on a command line): wait for the API; converge (the
 # parameter provider and its context, the flow registry client, the smoke flow); health (the
-# authenticated checks); export (every top-level process group's definition); import-flows
+# authenticated checks); export (every top-level process group's definition); import-flows (the groups
+# the service lacks, then for every named group: bind the provider's parameter context, enable its
+# controller services and wait for ENABLED, start it only when its item says run)
 nifi_api_script: |
   import hashlib, json, os, re, ssl, sys, time, urllib.error, urllib.parse, urllib.request, uuid
 
@@ -318,11 +320,88 @@ nifi_api_script: |
       root = root_id()
       have = groups(root)
       done = []
-      for name, text in items:
+      for name, text, _run in items:
           if name not in have:
               upload(root, name, text)
               done.append(name)
       return done
+
+
+  def context_id(name):
+      _, d = call("GET", "/flow/parameter-contexts")
+      ids = [c["id"] for c in d["parameterContexts"] if c["component"]["name"] == name]
+      if len(ids) != 1:
+          fail("parameter context %s is missing (converge builds it)" % name)
+      return ids[0]
+
+
+  def bind_context(gid, name):
+      """Bind the group to the named context; True when it changed. A bound group is left alone (a
+      group's context may only change while it is stopped, so a changing one is stopped first)."""
+      _, ent = call("GET", "/process-groups/%s" % gid)
+      cur = (ent["component"].get("parameterContext") or {}).get("component", {}).get("name")
+      if cur == name:
+          return False
+      cid = context_id(name)
+      if any(x == "RUNNING" for x in group_states(gid)):
+          set_state(gid, "STOPPED")
+      call("PUT", "/process-groups/%s" % gid, body={"revision": ent["revision"], "component": {"id": gid, "parameterContext": {"id": cid}}})
+      return True
+
+
+  def group_services(gid):
+      _, d = call("GET", "/flow/process-groups/%s/controller-services?includeAncestorGroups=false&includeDescendantGroups=true" % gid)
+      return d["controllerServices"]
+
+
+  def enable_services(gid, wait_s):
+      """Enable every controller service of the group (and its child groups) and wait until each is
+      ENABLED; returns the names it had to enable. One that cannot (invalid) fails the run by name."""
+      todo = [s for s in group_services(gid) if s["component"]["state"] != "ENABLED"]
+      if not todo:
+          return []
+      call("PUT", "/flow/process-groups/%s/controller-services" % gid, body={"id": gid, "state": "ENABLED", "disconnectedNodeAcknowledged": False})
+      end = time.time() + wait_s
+      while True:
+          left = [s for s in group_services(gid) if s["component"]["state"] != "ENABLED"]
+          if not left:
+              return sorted(s["component"]["name"] for s in todo)
+          if time.time() > end:
+              fail("controller services not ENABLED in %ss: %s" % (int(wait_s), ", ".join("%s (%s)" % (s["component"]["name"], s["component"]["state"]) for s in left)))
+          time.sleep(1)
+
+
+  def start_group(gid, wait_s):
+      """Start the group unless every processor that can run already does; True when it was started."""
+      def pending():
+          return [x for x in group_states(gid) if x not in ("RUNNING", "DISABLED")]
+      if group_states(gid) and not pending():
+          return False
+      set_state(gid, "RUNNING")
+      end = time.time() + wait_s
+      while pending():
+          if time.time() > end:
+              fail("processors did not start in %ss: %s" % (int(wait_s), sorted(set(pending()))))
+          time.sleep(1)
+      return True
+
+
+  def flow_settle(items, provider):
+      """After the import, converge each named group: its parameter context, its controller services,
+      and (only when the flow is declared to run) its running state."""
+      have = groups(root_id())
+      out = {"bound": [], "enabled": [], "started": []}
+      for name, _text, run in items:
+          if name not in have:
+              fail("process group %s is not in the service after the import" % name)
+          gid = have[name]["id"]
+          if bind_context(gid, provider["context"]):
+              out["bound"].append(name)
+          if enable_services(gid, float(cfg.get("service_wait_s", 120))):
+              out["enabled"].append(name)
+          if run and start_group(gid, float(cfg.get("service_wait_s", 120))):
+              out["started"].append(name)
+      return out
 
 
   def main():
@@ -335,8 +414,10 @@ nifi_api_script: |
           login()
           items = []
           for row in cfg["flows"]:
-              items.append((row["name"], row["text"]))
-          print(json.dumps({"imported": flow_import(items)}))
+              items.append((row["name"], row["text"], bool(row.get("run", False))))
+          out = {"imported": flow_import(items)}
+          out.update(flow_settle(items, cfg["provider"]))
+          print(json.dumps(out))
           return
       wait_ready()
       st, _ = call("GET", "/flow/about", auth=False, ok=(401, 403, 200))
