@@ -78,7 +78,7 @@
     state: started
     daemon_reload: "{{ status_hub_login_units is changed }}"
   when: >-
-    status_hub_start | bool and (status_hub_login_script is changed or status_hub_login_config is changed
+    status_hub_start | bool and not ansible_check_mode and (status_hub_login_script is changed or status_hub_login_config is changed
     or status_hub_login_passwords is changed or status_hub_login_units is changed
     or (status_hub_login_files.results | rejectattr('stat.exists') | list | length > 0))
 
@@ -88,4 +88,4 @@
     enabled: true
     state: started
     daemon_reload: "{{ status_hub_login_units is changed }}"
-  when: status_hub_start | bool
+  when: status_hub_start | bool and not ansible_check_mode

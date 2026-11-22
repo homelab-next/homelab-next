@@ -48,4 +48,4 @@
     enabled: true
     state: "{{ 'restarted' if status_hub_collect_units is changed else 'started' }}"
     daemon_reload: "{{ status_hub_collect_units is changed }}"
-  when: status_hub_start | bool
+  when: status_hub_start | bool and not ansible_check_mode
