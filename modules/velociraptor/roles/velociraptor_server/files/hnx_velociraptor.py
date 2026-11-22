@@ -389,9 +389,8 @@ def _sha(path: Path) -> tuple[str, int]:
 
 
 def _write_listing(root: Path, rows: list[dict]) -> None:
-    lst = root / "listing.jsonl"
-    lst.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows), encoding="utf-8")
-    os.chmod(lst, 0o600)
+    text = "".join(json.dumps(r, sort_keys=True) + "\n" for r in rows)
+    atomic_write(root / "listing.jsonl", text, 0o600)
 
 
 def export_tree(sources: dict[str, Path], dest) -> list[dict]:
