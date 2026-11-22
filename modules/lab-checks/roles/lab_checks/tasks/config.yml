@@ -32,6 +32,16 @@
     mode: "0400"
   no_log: true
 
+- name: Write the CA the probes verify internal TLS with (a certificate, no key)
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', lab_checks_ca_ref) | trim }}\n"
+    dest: "{{ lab_checks_ca_file }}"
+    owner: "{{ lab_checks_owner }}"
+    group: "{{ lab_checks_owner_group }}"
+    mode: "0644"
+  no_log: true
+  when: lab_checks_ca_ref != ''
+
 - name: Write the pager's configuration (no secret in it)
   ansible.builtin.copy:
     content: "{{ {'url': lab_checks_notify_url, 'topic': lab_checks_notify_topic, 'token_file': lab_checks_publish_file} | to_nice_json }}\n"

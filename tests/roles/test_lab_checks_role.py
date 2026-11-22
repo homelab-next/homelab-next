@@ -184,3 +184,18 @@ def test_the_export_writes_the_documents_beside_and_renames_into_place(tmp_path)
     ).read_text().strip() == '{"N-01": "pass"}'
     bad = run_role(tmp_path, ROLE, "restore", {**v, P + "restore_source": ""}, env=SECRETS)
     assert bad.returncode != 0
+
+
+def test_the_ca_is_written_only_when_named_and_must_be_a_certificate(tmp_path):
+    cert = "-----BEGIN " + "CERTIFICATE-----\n" + "x" * 20 + "\n-----END " + "CERTIFICATE-----"
+    v = {**_env(tmp_path), P + "ca_ref": "secret:lab-checks/ca"}
+    r = run_role(tmp_path, ROLE, "main", v, env={**SECRETS, "HNX_SECRET_LAB_CHECKS_CA": cert})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (tmp_path / "etc" / "ca.pem").read_text().strip() == cert
+    assert oct((tmp_path / "etc" / "ca.pem").stat().st_mode & 0o777) == "0o644"
+    again = run_role(tmp_path, ROLE, "main", v, env={**SECRETS, "HNX_SECRET_LAB_CHECKS_CA": cert})
+    assert "changed=0" in again.stdout, again.stdout
+    bad = run_role(
+        tmp_path, ROLE, "main", v, env={**SECRETS, "HNX_SECRET_LAB_CHECKS_CA": "not a cert"}
+    )
+    assert bad.returncode != 0 and "not a PEM certificate" in bad.stdout + bad.stderr

@@ -19,6 +19,7 @@ module ships the mechanism and the read-only probes the criteria are written wit
 | `<bin dir>/hnx-lab-notify` | the pager (`--notify-cmd` of the runner): one POST to the notify topic with the token from an owner-only file |
 | `<config dir>/invariants.yml` | the register, validated on the host before it replaces the live one |
 | `<config dir>/credentials/notify-token` | the publish token, 0400 |
+| `<config dir>/ca.pem` | optional (`lab_checks_ca_ref`): the lab CA the probes pass as `--ca` to verify internal TLS services |
 | `hnx-<id>.service` / `.timer` | one run of the register, hourly on a calendar (`*-*-* *:07:00 UTC`), never an interval |
 | `<data root>/results/<id>.hourly.json`, `state/<id>.hourly.json` | the results document and the paging state (derived) |
 

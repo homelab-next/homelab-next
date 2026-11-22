@@ -9,6 +9,7 @@
       - lab_checks_notify_id is match('^[a-z][a-z0-9-]{0,62}\Z')
       - lab_checks_notify_topic is match('^[A-Za-z0-9_-]{1,64}\Z')
       - lab_checks_notify_publisher_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - lab_checks_ca_ref == '' or lab_checks_ca_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
       - lab_checks_notify_ceiling in ['clear', 'green', 'amber', 'red']
       - lab_checks_oncalendar is match('^[A-Za-z0-9 *:/,.-]{3,80} UTC\Z')
       - lab_checks_max_runtime_s | int >= 60

@@ -31,11 +31,13 @@ def test_the_manifest_is_a_feature_that_requires_notify_and_the_secret_store():
 
 def test_the_one_secret_default_is_a_reference_the_role_defaults_agree_with():
     m = _manifest()
-    (cfg,) = m["config"].values()
-    assert cfg["type"] == "secret" and cfg["default"].split("/")[0] == "secret:lab-checks"
+    cfgs = list(m["config"].values())
+    assert {c["type"] for c in cfgs} == {"secret"}
+    assert all(c["default"].split("/")[0] == "secret:lab-checks" for c in cfgs)
     defaults = yaml.safe_load((ROLE / "defaults" / "main.yml").read_text())
-    refs = {v for k, v in defaults.items() if k.endswith("_ref") and v}
-    assert refs == {cfg["default"]}
+    # the publish token's reference has a default; the CA's is empty (optional) and the manifest names its default
+    assert defaults["lab_checks_notify_publisher_ref"] == m["config"]["notify_token"]["default"]
+    assert defaults["lab_checks_ca_ref"] == "" and m["config"]["ca"]["overlay"] == "optional"
     # the unit names the hnx path literally (the scripts catalog resolves the exec); the role checks the same one
     unit = (ROLE / "templates" / "lab-checks.service.j2").read_text()
     path = yaml.safe_load((ROLE / "vars" / "main.yml").read_text())["lab_checks_hnx_bin"]

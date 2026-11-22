@@ -58,6 +58,11 @@ config:
     description: the notify provider's publisher token, copied under this module's own namespace (write-only; it is the only credential the module holds) (lab_checks_notify_publisher_ref)
     default: secret:lab-checks/notify-token
     overlay: required
+  ca:
+    type: secret
+    description: the lab CA certificate (PEM, public) the probes verify internal TLS services with, written to a world-readable file (lab_checks_ca_ref)
+    default: secret:lab-checks/ca
+    overlay: optional
 lifecycle:
   install: {playbook: playbooks/install.yml, note: "the register is validated on the host before it replaces the live one; the first run pages each criterion that is red then (state absent counts as not red before)"}
   upgrade: {playbook: playbooks/upgrade.yml, note: "no pinned artefact: a validated re-converge"}

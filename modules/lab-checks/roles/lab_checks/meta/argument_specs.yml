@@ -23,6 +23,10 @@ argument_specs:
         type: str
         description: '''secret:'' reference of the publish token (a copy of the notify provider''s publisher token under this module''s namespace).'
         default: secret:lab-checks/notify-token
+      lab_checks_ca_ref:
+        type: str
+        description: "Optional 'secret:' reference of a CA certificate (PEM) the probes verify internal TLS services with; empty for none."
+        default: ''
       lab_checks_notify_ceiling:
         type: str
         description: The page channel's TLP ceiling (a page above it is withheld); red only for a channel only the operators read.

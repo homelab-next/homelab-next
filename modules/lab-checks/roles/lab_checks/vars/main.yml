@@ -6,6 +6,7 @@ lab_checks_hnx_bin: /opt/hnx/bin/hnx
 lab_checks_probe: "{{ lab_checks_bin_dir }}/hnx-lab-probe"
 lab_checks_notify_script: "{{ lab_checks_bin_dir }}/hnx-lab-notify"
 lab_checks_register_file: "{{ lab_checks_config_dir }}/invariants.yml"
+lab_checks_ca_file: "{{ lab_checks_config_dir }}/ca.pem"
 lab_checks_notify_config: "{{ lab_checks_config_dir }}/notify.json"
 lab_checks_publish_file: "{{ lab_checks_config_dir }}/credentials/notify-token"
 lab_checks_auth_dir: "{{ lab_checks_config_dir }}/credentials"
