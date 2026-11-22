@@ -11,8 +11,7 @@ import threading
 
 import pytest
 import yaml
-from agent_helpers import AUTHORIZED, front_door, request
-from status_helpers import ROOT, T0, VIEWS
+from reg_helpers import AUTHORIZED, ROOT, T0, VIEWS, front_door, request
 
 from homelabnext.registry.model import load
 from homelabnext.status import build_status, load_views, views_problems
