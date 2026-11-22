@@ -12,7 +12,14 @@ import datetime as dt
 import json
 import sys
 
-from .model import check_ledger, load_ledger, plane_gate, render_json, render_markdown
+from .model import (
+    ahead_of_proof,
+    check_ledger,
+    load_ledger,
+    plane_gate,
+    render_json,
+    render_markdown,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -32,6 +39,9 @@ def _parser() -> argparse.ArgumentParser:
         "--archive-gate",
         action="store_true",
         help="gate: every row old-retired, none undecided, none soaking",
+    )
+    ap.add_argument(
+        "--strict", action="store_true", help="check: a state ahead of its proof also fails"
     )
     ap.add_argument("--today", help="YYYY-MM-DD (default: today)")
     return ap
@@ -67,9 +77,17 @@ def main(argv: list[str] | None = None) -> int:
                     problems.append(
                         f"[archive] {r.uid} {r.get('title')}: {r.state}, {r.disposition}"
                     )
+    warns = ahead_of_proof(ledger)
+    if args.strict:
+        problems += warns
+        warns = []
     for p in problems:
         print(p)
-    print(f"cutover {args.cmd}: {len(ledger.rows)} rows, {len(problems)} problems")
+    for w in warns:
+        print(f"WARN ahead of proof: {w}")
+    print(
+        f"cutover {args.cmd}: {len(ledger.rows)} rows, {len(problems)} problems, {len(warns)} warnings"
+    )
     return 1 if problems else 0
 
 

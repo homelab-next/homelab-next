@@ -215,26 +215,39 @@ def check_ledger(ledger: Ledger, today: dt.date | None = None) -> list[str]:
     out += [f"requires cycle: {c}" for c in _cycle(rows)]
     for r in rows.values():
         d = r.disposition
-        if d in ("carry", "replace") and r.state in ("new-primary", "old-retired"):
-            for name in ("data_verified", "consumers_repointed"):
-                if r.check_status(name) not in ("pass", "na"):
-                    out.append(f"{r.uid}: {r.state} but {name} is {r.check_status(name)}")
         if d == "undecided" and r.state != "old":
             out.append(f"{r.uid}: undecided but state is {r.state}")
         if (
             d in ("carry", "replace")
             and r.state == "old-retired"
             and r.history[-1:]
-            and (r.history[-1][1] == "old")
+            and r.history[-1][1] == "old"
         ):
             out.append(f"{r.uid}: closed from old: close is only for drop or retire rows")
-        if (
-            r.get("gate") == "none-yet"
-            and r.state in ("new-primary", "old-retired")
-            and d != "drop"
-        ):
-            out.append(f"{r.uid}: {r.state} with gate none-yet (no conformance suite)")
     return sorted(dict.fromkeys(out))
+
+
+def ahead_of_proof(ledger: Ledger) -> list[str]:
+    """Rows whose state is ahead of their proof: the lab did it, the ledger cannot yet show the gate.
+
+    Not a structural problem (the state is a fact: the old side is stopped, DNS is flipped), so
+    ``check`` reports it as a warning and ``--strict`` fails it; a plane gate always fails it.
+    """
+    out = []
+    for r in ledger.rows.values():
+        if r.state not in ("new-primary", "old-retired"):
+            continue
+        if r.disposition in ("carry", "replace"):
+            for name in ("data_verified", "consumers_repointed"):
+                if r.check_status(name) not in ("pass", "na"):
+                    out.append(
+                        f"{r.uid} {r.get('title')}: {r.state} but {name} is {r.check_status(name)}"
+                    )
+        if r.get("gate") == "none-yet" and r.disposition != "drop":
+            out.append(
+                f"{r.uid} {r.get('title')}: {r.state} with gate none-yet (no conformance suite)"
+            )
+    return sorted(out)
 
 
 def _group(rows: Iterable[Row]) -> dict[str, int]:

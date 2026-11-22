@@ -8,7 +8,7 @@ import yaml
 
 from homelabnext.cutover import check_ledger, load_ledger, render_json, render_markdown
 from homelabnext.cutover.cli import main
-from homelabnext.cutover.model import plane_gate
+from homelabnext.cutover.model import ahead_of_proof, plane_gate
 from homelabnext.registers import events as ev
 
 TODAY = dt.date(2026, 11, 22)
@@ -60,8 +60,11 @@ def test_state_is_derived_from_events(tmp_path):
     write(tmp_path, row(A), [("old", "new-shadow"), ("new-shadow", "new-primary")])
     led = load_ledger(tmp_path)
     assert led.rows[A].state == "new-primary"
-    # carry/replace in new-primary without its checks is a problem
-    assert any("data_verified is pending" in p for p in check_ledger(led, TODAY))
+    # carry/replace in new-primary without its checks is ahead of its proof: a warning, not a defect
+    assert check_ledger(led, TODAY) == []
+    assert any("data_verified is pending" in p for p in ahead_of_proof(led))
+    assert main(["check", str(tmp_path)]) == 0
+    assert main(["check", str(tmp_path), "--strict"]) == 1
 
 
 def test_clean_ledger(tmp_path):
@@ -112,7 +115,7 @@ def test_gate_none_yet_blocks_primary(tmp_path):
         row(A, gate="none-yet", checks=GOOD),
         [("old", "new-shadow"), ("new-shadow", "new-primary")],
     )
-    assert any("gate none-yet" in p for p in check_ledger(load_ledger(tmp_path), TODAY))
+    assert any("gate none-yet" in p for p in ahead_of_proof(load_ledger(tmp_path)))
 
 
 def test_plane_gate(tmp_path):
