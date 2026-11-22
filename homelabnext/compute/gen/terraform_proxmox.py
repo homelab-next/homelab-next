@@ -109,22 +109,13 @@ def _user_data_variable(names: list[str]) -> str:
         "  type        = map(string)",
         "  default     = {}",
         '  description = "Guest name -> snippet file id (datastore:snippets/file) holding the '
-        "cloudinit target's meta-data, whose instance-id is fixed for the guest's life: without it "
-        "the hypervisor derives the instance-id from the generated cloud-init config, so any "
-        "change to that config makes cloud-init treat the guest as a new instance and regenerate "
-        f'its SSH host keys ({USER_DATA_FILE})."',
+        "cloudinit target's meta-data, whose instance-id is fixed (cloudinit.instance_id). Optional "
+        "per guest: one not named here keeps the instance-id the hypervisor derives from its "
+        "generated cloud-init config, which changes with that config and makes cloud-init "
+        f'regenerate the SSH host keys ({USER_DATA_FILE})."',
+        "}",
     ]
-    if names:
-        L += [
-            "",
-            "  validation {",
-            f"    condition     = length(setsubtract({hqlist(names)}, "
-            "keys(var.cloudinit_meta_data))) == 0",
-            '    error_message = "cloudinit_meta_data needs a snippet file id for each of '
-            f'{", ".join(names)} ({USER_DATA_FILE})."',
-            "  }",
-        ]
-    return "\n".join([*L, "}", ""])
+    return "\n".join([*L, ""])
 
 
 def user_data_guests(fleet: Fleet) -> list[tuple[Guest, str | None]]:
@@ -167,11 +158,14 @@ def user_data_steps(fleet: Fleet) -> str:
         "re-upload it whenever the cloudinit render changes, since a changed snippet replaces no",
         "VM by itself.",
         "",
-        "Each of them also takes the `cloudinit` target's `<name>/meta-data` as a snippet, named in",
-        "`cloudinit_meta_data` the same way. Its `instance-id` is fixed for the guest's life; without",
-        "it the hypervisor derives the instance-id from the generated cloud-init config, so a change",
-        "to that config (a new mount in the user-data) is a new instance to cloud-init, which",
-        "regenerates the guest's SSH host keys at the next start.",
+        "A VM may also take the `cloudinit` target's `<name>/meta-data` as a snippet, named in",
+        "`cloudinit_meta_data` (optional per guest). Its `instance-id` is fixed: the guest file's",
+        "`cloudinit.instance_id` (for a VM that already runs, the value in its",
+        "`/var/lib/cloud/data/instance-id`), else `<name>-<vmid>` for a new guest. Without a snippet",
+        "the hypervisor derives the instance-id from the generated cloud-init config, so a change to",
+        "that config (a new mount in the user-data) is a new instance to cloud-init, which",
+        "regenerates the guest's SSH host keys at the next start. Never name a snippet for an",
+        "existing guest until its `instance_id` is set to the one it already has.",
         "",
         "```hcl",
         "cloudinit_meta_data = {",
@@ -309,7 +303,7 @@ def _vm(fleet: Fleet, g: Guest) -> str:
             # derived from the generated config, so re-uploading a changed user-data snippet to an
             # existing guest made cloud-init re-run per-instance modules and regenerate the SSH
             # host keys (LL-570).
-            L.append(f"    meta_data_file_id = var.cloudinit_meta_data[{hq(g.name)}]")
+            L.append(f"    meta_data_file_id = lookup(var.cloudinit_meta_data, {hq(g.name)}, null)")
         else:
             L += ["    user_account {", f"      username = {hq(ci['user'])}"]
             keys = ci.get("ssh_authorized_keys", [])

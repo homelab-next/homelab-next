@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# guest 1.10: a running VM whose cloud-init instance-id is pinned to the one it booted with
+id: guest:pinned-vm
+kind: vm
+provisioning: terraform
+placement: {node: hv-a, vmid: 252}
+resources:
+  cpu: {cores: 2}
+  memory: {size_mb: 2048}
+  disks: [{name: scsi0, size_gb: 16, pool: fast}]
+image: {logical: debian-12-cloud, kind: template-clone, os_type: linux-6}
+cloudinit: {user: ansible, instance_id: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"}
+network: {zone: mgmt, ip: 192.0.2.41}
+capability: cap:inference
+owners: {primary: ml-team}

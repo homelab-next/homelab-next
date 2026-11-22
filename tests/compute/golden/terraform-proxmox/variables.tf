@@ -51,10 +51,5 @@ variable "cloudinit_user_data" {
 variable "cloudinit_meta_data" {
   type        = map(string)
   default     = {}
-  description = "Guest name -> snippet file id (datastore:snippets/file) holding the cloudinit target's meta-data, whose instance-id is fixed for the guest's life: without it the hypervisor derives the instance-id from the generated cloud-init config, so any change to that config makes cloud-init treat the guest as a new instance and regenerate its SSH host keys (USER_DATA.md)."
-
-  validation {
-    condition     = length(setsubtract(["bus-core", "edge-core", "lake-core"], keys(var.cloudinit_meta_data))) == 0
-    error_message = "cloudinit_meta_data needs a snippet file id for each of bus-core, edge-core, lake-core (USER_DATA.md)."
-  }
+  description = "Guest name -> snippet file id (datastore:snippets/file) holding the cloudinit target's meta-data, whose instance-id is fixed (cloudinit.instance_id). Optional per guest: one not named here keeps the instance-id the hypervisor derives from its generated cloud-init config, which changes with that config and makes cloud-init regenerate the SSH host keys (USER_DATA.md)."
 }
