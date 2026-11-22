@@ -234,3 +234,10 @@ def test_documents_from_graph_skips_oversized_files(tmp_path, monkeypatch):
     g = Graph({"doc:big.md": Node("doc:big.md", "doc", "Big", "big.md")}, [])
     (doc,) = documents_from_graph(g, tmp_path)
     assert doc.content.startswith("Big\n")
+
+
+def test_role_reowns_the_checkout_tree_recursively():
+    """A foreign-owned file inside the checkouts breaks the service's own rmtree of the old
+    checkout (PermissionError on every reindex); the role must own the whole tree."""
+    text = (ROOT / "modules/context/roles/context/tasks/dirs.yml").read_text(encoding="utf-8")
+    assert "recurse: true" in text and 'context_data_root }}/sources"' in text
