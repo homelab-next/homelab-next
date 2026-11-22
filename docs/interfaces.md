@@ -572,6 +572,7 @@ change until its ADR is accepted):
 | `platform/slot` | 1.0 | `schemas/platform/slot.schema.json` | draft |
 | `platform/swap_record` | 1.1 | `schemas/platform/swap_record.schema.json` | stable |
 | `records/note` | 1.4 | `schemas/records/note.schema.json` | stable |
+| `registers/cutover_row` | 1.0 | `schemas/registers/cutover_row.schema.json` | draft |
 | `registers/decision_spec` | 1.3 | `schemas/registers/decision_spec.json` | stable |
 | `registers/invariant` | 1.0 | `schemas/registers/invariant.schema.json` | stable |
 | `registers/kanban_item` | 1.0 | `schemas/registers/kanban_item.schema.json` | stable |
