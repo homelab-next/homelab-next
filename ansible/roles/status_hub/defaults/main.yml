@@ -64,3 +64,27 @@ status_hub_systemd_dir: /etc/systemd/system
 status_hub_start: true
 status_hub_backup_dir: /var/backups/hnx-hub
 status_hub_export_dir: /var/backups/hnx-hub/export
+
+# --- collection (ADR-0013 stage 2: the hub collects what the registry's status_sources say) ---------
+# off by default: the serve-only hub of earlier stages is unchanged
+status_hub_collect: false
+# a calendar, one pass a minute; each source runs when its own interval_s is due (LL-041)
+status_hub_collect_oncalendar: "*-*-* *:*:00"
+status_hub_collect_timeout_s: 50
+# what poll-file sources are relative to: files delivered here by their producers (root writes, the hub reads)
+status_hub_root_dir: "{{ status_hub_state_dir }}/files"
+# file-form secrets (a name resolves to <dir>/<name>): login-issued tokens land here
+status_hub_issued_dir: "{{ status_hub_config_dir }}/issued"
+# secret references of certificates to trust besides the client CA (a product's own self-signed certificate)
+status_hub_extra_ca_refs: []
+# bearer tokens a product only issues for a login: [{name, service, path, username, password_ref}]
+status_hub_logins: []
+status_hub_logins_oncalendar: "*-*-* 00/4:15:00"
+status_hub_libexec_dir: /usr/local/libexec/hnx-hub
+# page transitions through the registry's notify service (empty: no paging)
+status_hub_notify_topic: ""
+status_hub_notify_ceiling: red
+# a directory of register files (kanban.yml, lessons.yml, runbooks.yml, invariants.yml) served as pages
+status_hub_registers_dir: ""
+# the lab's own views (a file on the controller replacing the built-in two-entry menu)
+status_hub_views_file: ""

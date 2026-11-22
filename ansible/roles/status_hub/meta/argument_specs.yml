@@ -53,6 +53,60 @@ argument_specs:
         elements: str
         description: "The registry hosts (names, or the addresses the registry gives them) the hub trusts for the identity headers (agents.yml private.trusted_proxies): replaces the hard-coded edge-proxy capability. At least one, no wildcard or range, each a host of status_hub_registry. Default: the hosts of the registry's edge-proxy rows."
         default: "{{ ((lookup('ansible.builtin.file', status_hub_registry) | from_yaml).services | default({}, true)).values() | selectattr('capability', 'defined') | selectattr('capability', 'equalto', 'edge-proxy') | map(attribute='host') | unique | sort }}"
+      status_hub_collect:
+        type: bool
+        description: "Run the collector: a timer that executes hnx status collect each minute (due sources only) so state.json exists and is fresh. Off: the hub only serves."
+        default: false
+      status_hub_collect_oncalendar:
+        type: str
+        description: "The collector timer's calendar (never a monotonic timer, LL-041)."
+        default: "*-*-* *:*:00"
+      status_hub_collect_timeout_s:
+        type: int
+        description: "The collection pass's hard time limit."
+        default: 50
+      status_hub_root_dir:
+        type: path
+        description: "What poll-file sources are relative to (hnx status collect --root): files their producers deliver, readable by the hub."
+        default: "{{ status_hub_state_dir }}/files"
+      status_hub_issued_dir:
+        type: path
+        description: "File-form secrets of the collector (hnx status collect --secrets-dir): login-issued tokens land here."
+        default: "{{ status_hub_config_dir }}/issued"
+      status_hub_extra_ca_refs:
+        type: list
+        elements: str
+        description: "secret: references of certificates the collector trusts besides the client CA (a product's own self-signed certificate). TLS only."
+        default: []
+      status_hub_logins:
+        type: list
+        elements: dict
+        description: "Bearer tokens a product issues only for a login: each {name, service (a registry row), path, username, password_ref}. A root-run timer posts the credentials to the row's url+path over verified https and writes the answer to <status_hub_issued_dir>/<name>; a source's auth.secret: secret:<name> reads it. password_ref is a file for the helper, not in status_hub_secret_refs."
+        default: []
+      status_hub_logins_oncalendar:
+        type: str
+        description: "The refresh timer's calendar (tokens last hours)."
+        default: "*-*-* 00/4:15:00"
+      status_hub_libexec_dir:
+        type: path
+        description: "Where the token helper is installed."
+        default: /usr/local/libexec/hnx-hub
+      status_hub_notify_topic:
+        type: str
+        description: "Page transitions of fail/stale through the registry's notify service on this topic (empty: no paging)."
+        default: ""
+      status_hub_notify_ceiling:
+        type: str
+        description: "The notify channel's TLP ceiling (ADR-0033), used with a topic."
+        default: red
+      status_hub_registers_dir:
+        type: path
+        description: "A directory of register files (kanban.yml, lessons.yml, runbooks.yml, invariants.yml) the hub serves as pages (hnx status serve --registers); empty: none."
+        default: ""
+      status_hub_views_file:
+        type: path
+        description: "The lab's own views file on the controller, replacing the built-in two-entry menu; checked with hnx status views check."
+        default: ""
       status_hub_tls_cert_ref: &tlscert
         type: str
         description: "secret:<name> of the hub's server certificate (PEM, the chain after the leaf). With status_hub_tls_key_ref and status_hub_client_ca_ref: serve TLS and require a client certificate."

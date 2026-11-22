@@ -1,0 +1,27 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role status_hub); local changes are overwritten.
+# Refreshes the login-issued bearer tokens the collector sends (docs/status.md, "Login-issued tokens").
+[Unit]
+Description=homelab-next status hub: refresh login-issued tokens ({{ status_hub_logical_id }})
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I {{ status_hub_libexec_dir }}/hnx-hub-login-token --config {{ status_hub_config_dir }}/login-tokens.json
+TimeoutStartSec=120
+UMask=0027
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{ status_hub_issued_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

@@ -1647,3 +1647,75 @@ def test_status_hub_hooks_report_changed_0_even_with_the_probe_directory(tmp_pat
     assert r.returncode == 0, r.stdout + r.stderr
     assert len([line for line in log if " probe-tls " in line]) == 2, log  # the directory was made
     assert "changed=0" in r.stdout, r.stdout
+
+
+# ---------------------------------------------------------------- the collector (ADR-0013)
+HUB_COLLECT = {
+    **HUB_TLS,
+    "status_hub_collect": True,
+    "status_hub_secret_refs": [*HUB["status_hub_secret_refs"], "secret:metrics/probe-reader"],
+    "status_hub_extra_ca_refs": ["secret:backup/tls-cert"],
+    "status_hub_logins": [{
+        "name": "flow-reader", "service": "dataflow", "path": "/api/access/token",
+        "username": "reader", "password_ref": "secret:flow/reader-password",
+    }],
+    "status_hub_registers_dir": "/var/lib/hnx-hub/registers",
+}  # fmt: skip
+
+
+def test_status_hub_collector_renders_a_calendar_timer_and_a_hardened_oneshot(tmp_path):
+    files = _render(tmp_path, "status_hub", HUB_COLLECT)
+    svc = _directives(files["hnx-hub-collect.service"])
+    argv = svc["ExecStart"][0].split()
+    assert argv[1:3] == ["status", "collect"]
+    state = argv[argv.index("--state") + 1]
+    hub_argv = _directives(files["hnx-hub.service"])["ExecStart"][0].split()
+    assert state == hub_argv[hub_argv.index("--state") + 1]  # the file the hub reads
+    assert argv[argv.index("--root") + 1] == "/var/lib/hnx-hub/files"
+    assert argv[argv.index("--secrets-dir") + 1] == "/etc/hnx-hub/issued"
+    assert svc["Type"] == ["oneshot"] and svc["User"] == ["hnx-hub"]
+    assert svc["Environment"] == ["SSL_CERT_FILE=/etc/hnx-hub/tls/ca-bundle.crt"]
+    assert svc["ReadWritePaths"] == ["/var/lib/hnx-hub"] and svc["NoNewPrivileges"] == ["yes"]
+    timer = _directives(files["hnx-hub-collect.timer"])
+    assert timer["OnCalendar"] == ["*-*-* *:*:00"]
+    assert not {"OnBootSec", "OnUnitActiveSec"} & set(timer)  # LL-041
+    assert "--registers" in hub_argv  # the register pages are served from the delivered directory
+    assert "--notify-topic" not in argv  # no paging unless a topic is set
+
+
+def test_status_hub_collector_pages_through_the_notify_channel_when_asked(tmp_path):
+    extra = {**HUB_COLLECT, "status_hub_notify_topic": "hub-alerts"}
+    argv = _directives(_render(tmp_path, "status_hub", extra)["hnx-hub-collect.service"])
+    argv = argv["ExecStart"][0].split()
+    assert argv[argv.index("--notify-topic") + 1] == "hub-alerts"
+    assert argv[argv.index("--notify-ceiling") + 1] == "red"
+
+
+def test_status_hub_login_refresh_runs_a_root_helper_on_a_calendar(tmp_path):
+    files = _render(tmp_path, "status_hub", HUB_COLLECT)
+    svc = _directives(files["hnx-hub-login-token.service"])
+    assert svc["ExecStart"][0].startswith("/usr/bin/python3 -I /usr/local/libexec/hnx-hub/")
+    assert "User" not in svc  # root: it reads the password files only root can
+    assert svc["ReadWritePaths"] == ["/etc/hnx-hub/issued"]
+    assert _directives(files["hnx-hub-login-token.timer"])["OnCalendar"] == ["*-*-* 00/4:15:00"]
+
+
+def test_status_hub_collector_inputs_are_checked(tmp_path):
+    _refusals(tmp_path, "status_hub", HUB_COLLECT, [
+        {"status_hub_root_dir": "relative/files"},
+        {"status_hub_collect_timeout_s": 0},
+        {"status_hub_collect_oncalendar": "*-*-* *:*:00\nExecStart=/bin/sh"},
+        {"status_hub_notify_ceiling": "orange"},
+        {"status_hub_extra_ca_refs": ["-----BEGIN CERTIFICATE-----"]},
+        {"status_hub_registers_dir": "../registers"},
+        # a login's password is a file for the root helper, never also an environment value
+        {"status_hub_secret_refs": [*HUB_COLLECT["status_hub_secret_refs"],
+                                    "secret:flow/reader-password"]},
+        {"status_hub_logins": [{**HUB_COLLECT["status_hub_logins"][0], "password_ref": "plain"}]},
+        {"status_hub_logins": [{**HUB_COLLECT["status_hub_logins"][0], "path": "api/token"}]},
+        {"status_hub_logins": [HUB_COLLECT["status_hub_logins"][0]] * 2},  # a name twice
+        # the form carries a password: verified https only, so TLS must be on
+        {**dict.fromkeys(("status_hub_tls_cert_ref", "status_hub_tls_key_ref",
+                          "status_hub_client_ca_ref"), ""),
+         "status_hub_client_names": [], "status_hub_extra_ca_refs": [], "status_hub_plain_http": True},
+    ])  # fmt: skip

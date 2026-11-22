@@ -93,3 +93,35 @@
       explicit opt-in), never both; TLS needs status_hub_tls_server_name (a name in the server
       certificate); status_hub_client_names (DNS names, no wildcard) and the hooks'
       client certificate (both references, and its name when the pin is set) need TLS
+
+# The collector (docs/status.md section 2): paths and names land in units, so they are checked like
+# the rest; every credential is a secret: reference, and a login password is a file for the root-run
+# helper, never also an environment value the hub's own processes would carry.
+- name: Validate the collector's settings
+  ansible.builtin.assert:
+    that:
+      - status_hub_collect_oncalendar is match('^[A-Za-z0-9*:/,. -]{1,80}\Z')
+      - status_hub_collect_timeout_s | int > 0 and status_hub_collect_timeout_s | int < 3600
+      - status_hub_root_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - status_hub_issued_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - status_hub_libexec_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - status_hub_logins_oncalendar is match('^[A-Za-z0-9*:/,. -]{1,80}\Z')
+      - status_hub_extra_ca_refs | select('match', '^secret:[a-z0-9][a-z0-9/_.-]*\Z') | list | length == status_hub_extra_ca_refs | length
+      - status_hub_extra_ca_refs | length == 0 or status_hub_tls | bool
+      - status_hub_notify_topic is match('^[A-Za-z0-9_-]{0,64}\Z')
+      - status_hub_notify_ceiling in ['clear', 'green', 'amber', 'amber+strict', 'red']
+      - status_hub_registers_dir == '' or status_hub_registers_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - status_hub_logins | length == 0 or status_hub_tls | bool
+      - status_hub_logins | map(attribute='name') | select('match', '^[a-z0-9][a-z0-9_-]{0,62}\Z') | list | length == status_hub_logins | length
+      - status_hub_logins | map(attribute='name') | unique | list | length == status_hub_logins | length
+      - status_hub_logins | map(attribute='service') | select('match', '^[a-z][a-z0-9-]{1,62}\Z') | list | length == status_hub_logins | length
+      - status_hub_logins | map(attribute='path') | select('match', '^/[A-Za-z0-9._/-]{1,200}\Z') | list | length == status_hub_logins | length
+      - status_hub_logins | map(attribute='username') | select('match', '^[A-Za-z0-9._@-]{1,64}\Z') | list | length == status_hub_logins | length
+      - status_hub_logins | map(attribute='password_ref') | select('match', '^secret:[a-z0-9][a-z0-9/_.-]*\Z') | list | length == status_hub_logins | length
+      - status_hub_logins | map(attribute='password_ref') | select('in', status_hub_secret_refs) | list | length == 0
+    fail_msg: >-
+      status_hub: the collector takes a calendar and timeout, absolute paths, extra CA certificates as
+      secret: references (TLS only), a notify topic and a TLP ceiling, and login tokens (TLS only) each with
+      a name, a registry service, an absolute path, a user name and a password_ref that is a secret:
+      reference not also listed in status_hub_secret_refs
+  when: status_hub_collect | bool or status_hub_registers_dir | length > 0
