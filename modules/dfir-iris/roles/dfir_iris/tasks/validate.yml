@@ -47,3 +47,28 @@
       administrator's login and email, nine distinct secret: references, absolute canonical
       directories and memory limits like 512m
   tags: [health, backup, restore, export, upgrade]
+
+# The enrichment wiring (off by default): an https URL on an internal name, a reference that is neither the
+# platform administrator's by name nor one of this module's own nine, and a CA reference.
+- name: Validate the enrichment wiring
+  ansible.builtin.assert:
+    that:
+      - dfir_iris_intel_url is match(dfir_iris_intel_url_pattern)
+      - (dfir_iris_intel_url | regex_replace('^https://([^:/]+).*$', '\\1')) is not match(dfir_iris_ipv4_pattern)
+      - dfir_iris_intel_name is match('^[A-Za-z][A-Za-z0-9._-]{0,62}\Z')
+      - dfir_iris_intel_key_ref is match(dfir_iris_ref_pattern)
+      - dfir_iris_intel_ca_ref is match(dfir_iris_ref_pattern)
+      - >-
+        [dfir_iris_admin_login_ref, dfir_iris_access_ref, dfir_iris_db_login_ref,
+         dfir_iris_db_admin_login_ref, dfir_iris_session_key_ref, dfir_iris_salt_ref,
+         dfir_iris_tls_cert_ref, dfir_iris_tls_key_ref] | select('equalto', dfir_iris_intel_key_ref) | list | length == 0
+      - dfir_iris_intel_key_ref != dfir_iris_intel_ca_ref
+      - dfir_iris_intel_on_create | bool in [true, false]
+      - dfir_iris_intel_on_update | bool in [true, false]
+    fail_msg: >-
+      case-management: the enrichment wiring needs an https:// base URL on an internal DNS name
+      (dfir_iris_intel_url), a name for the instance, and two distinct secret: references, the
+      dedicated account's key (dfir_iris_intel_key_ref, none of this module's own) and the CA
+      (dfir_iris_intel_ca_ref)
+  when: dfir_iris_intel_enabled | bool
+  tags: [health, backup, restore, export, upgrade]

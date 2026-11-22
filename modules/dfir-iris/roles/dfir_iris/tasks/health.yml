@@ -65,4 +65,20 @@
         fail_msg: >-
           case-management: /api/versions answered status {{ dfir_iris_probe_code }}; it must report
           {{ dfir_iris_app_tag }}
+
+    # the enrichment wiring, when on: the module is listed, configured and enabled. Whether the platform
+    # accepts the key is shown by a real enrichment, not here (the list holds no verdict).
+    - name: List the product's modules
+      ansible.builtin.include_tasks: enrichment_list.yml
+      when: dfir_iris_intel_enabled | bool
+    - name: The enrichment module is configured and enabled
+      ansible.builtin.assert:
+        that:
+          - dfir_iris_intel_mod | length > 0
+          - dfir_iris_intel_mod.is_active | bool
+          - dfir_iris_intel_mod.configured | bool
+        fail_msg: >-
+          case-management: the product's {{ dfir_iris_intel_module_human_name }} module must be listed,
+          configured and enabled (dfir_iris_intel_enabled is on); run main to wire it
+      when: dfir_iris_intel_enabled | bool
   tags: [health]

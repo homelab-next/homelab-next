@@ -5,6 +5,7 @@ key, and can be made to misbehave (an open API, a refused key, another version, 
 
 from __future__ import annotations
 
+import base64
 import json
 import ssl
 import threading
@@ -16,12 +17,20 @@ from forge_front import LOOPBACK
 
 class Front:
     def __init__(self, chain: str, key: str, workdir: Path, *, api_key: str, version: str,
-                 open_api=False, refuse_key=False, ping_status=200):  # fmt: skip
+                 open_api=False, refuse_key=False, ping_status=200, module_listed=True, settings=(), human_name=""):  # fmt: skip
         outer = self
         self.api_key, self.version = api_key, version
         self.open_api, self.refuse_key, self.ping_status = open_api, refuse_key, ping_status
         self.requests: list[tuple[str, str | None]] = []
         self.posts: list[tuple[str, str]] = []  # (path, body) of the keyed POSTs
+        # the product's module registry (one bundled module, as the real list shows it): settings
+        # by name; a mandatory one with no value leaves the module unconfigured, and so disabled
+        self.mandatory = list(settings)
+        self.module_listed = module_listed
+        self.human_name = human_name
+        self.module_id = 7
+        self.module_active = False
+        self.settings: dict = {}
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -42,6 +51,8 @@ class Front:
                 keyed = auth == f"Bearer {outer.api_key}" and not outer.refuse_key
                 if not (keyed or outer.open_api):
                     return self._send(401, {"status": "error"})
+                if self.path == "/manage/modules/list":
+                    return self._send(200, {"status": "success", "data": outer.module_list()})
                 if self.path.startswith("/manage/users/lookup/login/"):
                     return self._send(200, {"status": "success", "data": {"user_id": 1}})
                 if self.path == "/api/ping":
@@ -58,6 +69,17 @@ class Front:
             if auth != f"Bearer {outer.api_key}":
                 return handler._send(401, {"status": "error"})
             outer.posts.append((handler.path, body))
+            if handler.path == "/manage/modules/add":
+                outer.module_listed = True
+            elif handler.path.startswith("/manage/modules/set-parameter/"):
+                ident = base64.b64decode(handler.path.rsplit("/", 1)[1]).decode()
+                mod, name = ident.split("##")
+                if int(mod) != outer.module_id or name not in outer.mandatory:
+                    return handler._send(400, {"status": "error"})
+                outer.settings[name] = json.loads(body)["parameter_value"]
+                outer.module_active = outer.module_active and outer.configured()
+            elif handler.path == f"/manage/modules/enable/{outer.module_id}":
+                outer.module_active = True
             return handler._send(200, {"status": "success", "message": "User updated"})
 
         H.do_POST = do_POST
@@ -69,6 +91,22 @@ class Front:
         ctx.load_cert_chain(str(workdir / "front-chain.pem"), str(workdir / "front.key"))
         self.httpd.socket = ctx.wrap_socket(self.httpd.socket, server_side=True)
         self.port = self.httpd.server_address[1]
+
+    def configured(self) -> bool:
+        return all(n in self.settings for n in self.mandatory)
+
+    def module_list(self) -> list:
+        """The list as the product gives it: an unconfigured module is listed as disabled."""
+        if not self.module_listed:
+            return []
+        if not self.configured():
+            self.module_active = False
+        config = [{"param_name": n, "mandatory": True} for n in self.mandatory]
+        for c in config:
+            if c["param_name"] in self.settings:
+                c["value"] = self.settings[c["param_name"]]
+        return [{"id": self.module_id, "module_human_name": self.human_name, "is_active": self.module_active,
+                 "configured": self.configured(), "module_config": config}]  # fmt: skip
 
     def __enter__(self):
         threading.Thread(

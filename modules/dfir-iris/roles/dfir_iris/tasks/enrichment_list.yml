@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The product's module list, quietly; keeps the enrichment module's entry (an empty mapping when absent).
+- name: Ask for the module list
+  ansible.builtin.include_tasks: probe.yml
+  vars:
+    dfir_iris_probe_path: /manage/modules/list
+    dfir_iris_probe_keyed: true
+    dfir_iris_probe_quiet: true
+
+- name: Refuse a list the product did not give
+  ansible.builtin.assert:
+    that: dfir_iris_probe_code == '200'
+    fail_msg: >-
+      case-management: the module list answered status {{ dfir_iris_probe_code }} (curl exit
+      {{ dfir_iris_probe_curl_rc }}); the key must be an administrator's
+
+- name: Keep the enrichment module's entry
+  ansible.builtin.set_fact:
+    dfir_iris_intel_mod: >-
+      {{ ((dfir_iris_probe_body | from_json).data | selectattr('module_human_name', 'equalto', dfir_iris_intel_module_human_name) | list | first) | default({}) }}
+  no_log: true

@@ -32,3 +32,14 @@
     mode: "0750"
   loop: "{{ dfir_iris_files_subdirs }}"
   tags: [backup, export, restore]
+
+# the platform's CA, for the app and the worker (never the front's key): readable by the app's group
+- name: Create the trust directory for the enrichment wiring
+  ansible.builtin.file:
+    path: "{{ dfir_iris_data_root }}/trust"
+    state: directory
+    owner: "{{ dfir_iris_owner }}"
+    group: "{{ dfir_iris_app_gid | int }}"
+    mode: "0750"
+  when: dfir_iris_intel_enabled | bool
+  tags: [backup, export, restore]
