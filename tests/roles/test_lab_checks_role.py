@@ -97,6 +97,7 @@ def test_main_installs_the_checks_with_the_token_only_in_the_root_only_file(tmp_
     )
     assert f"--state {tmp_path}/data/state/checks.hourly.json" in service
     assert "--notify-ceiling red" in service
+    assert f"Environment=PATH={tmp_path}/bin:" in service  # the probes are found by their short names
     timer = (tmp_path / "units" / "hnx-checks.timer").read_text()
     assert "OnCalendar=*-*-* *:07:00 UTC" in timer and "OnBootSec=" not in timer
 

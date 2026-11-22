@@ -17,6 +17,8 @@ SuccessExitStatus=1 100
 ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ lab_checks_last_run_dir }} --group {{ lab_checks_last_run_group }} --job timer:lab_checks/{{ lab_checks_logical_id }} --unit %n --calendar "{{ lab_checks_oncalendar }}" --delay 0
 TimeoutStartSec={{ lab_checks_max_runtime_s }}
 Nice=10
+# the criteria's observables run under bash and name the probes by their short names
+Environment=PATH={{ lab_checks_bin_dir }}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 {% if hnx_module_slice | default('') %}
 Slice={{ hnx_module_slice }}
 {% endif %}
