@@ -9,6 +9,9 @@
 {% if cti_pipeline_lake_ca_ref != '' %}
 {% set _ = placeholders.update({'lake_ca': cti_pipeline_lake_ca_file}) %}
 {% endif %}
+{% if cti_pipeline_synapse_ca_ref != '' %}
+{% set _ = placeholders.update({'synapse_ca': cti_pipeline_synapse_ca_file}) %}
+{% endif %}
 {% set handoff = {'source': lane_root ~ '/publishable',
                   'dest': cti_pipeline_handoff_dir ~ '/' ~ item.lane,
                   'keep': cti_pipeline_handoff_keep | int} %}

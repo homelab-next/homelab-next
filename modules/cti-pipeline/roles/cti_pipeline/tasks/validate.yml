@@ -167,6 +167,8 @@
         | map('string') | map('split', ':', 1) | map('last') | reject('match', cti_pipeline_namespace_pattern) | list | length == 0
       - cti_pipeline_lake_ca_ref == '' or cti_pipeline_lake_ca_ref is match(cti_pipeline_ref_pattern)
       - cti_pipeline_lake_ca_ref == '' or cti_pipeline_lake_ca_ref.split(':', 1)[1] is match(cti_pipeline_namespace_pattern)
+      - cti_pipeline_synapse_ca_ref == '' or cti_pipeline_synapse_ca_ref is match(cti_pipeline_ref_pattern)
+      - cti_pipeline_synapse_ca_ref == '' or cti_pipeline_synapse_ca_ref.split(':', 1)[1] is match(cti_pipeline_namespace_pattern)
       - cti_pipeline_gateway_key_ref is match(cti_pipeline_ref_pattern)
       - cti_pipeline_gateway_key_ref.split(':', 1)[1] is match(cti_pipeline_namespace_pattern)
     fail_msg: >-

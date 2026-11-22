@@ -41,6 +41,15 @@
     mode: "0644"
   when: cti_pipeline_lake_ca_ref != ''
 
+- name: Write the graph store's certificate (public, read by the jobs)
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', cti_pipeline_synapse_ca_ref) }}"
+    dest: "{{ cti_pipeline_synapse_ca_file }}"
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "0644"
+  when: cti_pipeline_synapse_ca_ref != ''
+
 - name: Install the job wrapper
   ansible.builtin.copy:
     src: hnx-cti-run
