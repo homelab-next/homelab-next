@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the walk's state from an export (intel_ingest_restore_source: <export>/ holding state.json).
+# The source is checked first (this module's form, never empty); the timer is stopped only for the
+# copy and a running job is waited for, because the job rewrites the state after every page. Unlike
+# the install's seed, this REPLACES the live state: it is the explicit way to move the walk.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: A restore source is named, and is an absolute directory of its own
+      ansible.builtin.assert:
+        that:
+          - intel_ingest_restore_source is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z')
+          - intel_ingest_restore_source is not match('^' ~ (intel_ingest_state_dir | regex_escape) ~ '(/|\Z)')
+        fail_msg: "intel-ingest: intel_ingest_restore_source must be an absolute path of at least two components, outside the live state directory"
+    - name: Read the exported state
+      ansible.builtin.slurp:
+        src: "{{ intel_ingest_restore_source }}/state.json"
+      register: intel_ingest_restore_state
+    - name: The exported state is this module's form
+      ansible.builtin.include_tasks: state_check.yml
+      vars:
+        intel_ingest_state_text: "{{ intel_ingest_restore_state.content | b64decode }}"
+    - name: Stop the timer while the state is replaced
+      ansible.builtin.systemd_service:
+        name: "{{ intel_ingest_timer }}"
+        state: stopped
+      when: not ansible_check_mode and intel_ingest_start | bool
+    - name: Wait for a running job to finish (it rewrites the state after every page)
+      ansible.builtin.command:
+        argv: "{{ [intel_ingest_systemctl_cli, 'is-active', '--quiet', intel_ingest_unit] }}"
+      register: intel_ingest_running
+      until: intel_ingest_running.rc != 0
+      retries: 60
+      delay: 10
+      changed_when: false
+      failed_when: false
+      when: not ansible_check_mode and intel_ingest_start | bool
+    - name: Install the state
+      ansible.builtin.copy:
+        content: "{{ (intel_ingest_restore_state.content | b64decode | trim) ~ '\n' }}"
+        dest: "{{ intel_ingest_state_file }}"
+        owner: "{{ intel_ingest_user }}"
+        group: "{{ intel_ingest_group }}"
+        mode: "0600"
+      no_log: true
+    - name: Arm the timer again
+      ansible.builtin.systemd_service:
+        name: "{{ intel_ingest_timer }}"
+        state: started
+      when: not ansible_check_mode and intel_ingest_start | bool
+  tags: [restore]

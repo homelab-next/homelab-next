@@ -45,3 +45,6 @@ allow:
   - path: modules/cti-pipeline/roles/cti_pipeline/files/cti_state.py
     rule: lake
     reason: the pipeline role's state tool copies the app's own local SQLite store (data/cti.db) through the database's backup API, counts its tables' rows and runs its integrity check for the export and restore checks, with the stdlib module because it runs on a guest with no homelabnext package; it is an application's database, not the shared lake, and nothing here queries the lake
+  - path: modules/intel-ingest/roles/intel_ingest/files/hnx_intel_ingest.py
+    rule: state
+    reason: a standalone stdlib script run by a unit with the guest's system interpreter (no homelabnext package to import); its state file is the job's own resume checkpoint (per attribute type, the highest id ingested and the in-progress page, replaced atomically after every page), carried over from the old lab's job, not checker state

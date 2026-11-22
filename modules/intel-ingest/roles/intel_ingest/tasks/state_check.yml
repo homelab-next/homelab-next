@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Refuse a walk state that is not this module's form before it is installed anywhere: a JSON object
+# whose keys are attribute types the script walks and whose values are either a legacy watermark
+# (an integer) or {watermark_id: integer, in_progress: null or {page: integer >= 1, newest_id:
+# integer}}. An empty object, an unknown type or a wrong shape is an error, never a quiet cold start.
+# Input: intel_ingest_state_text (the file's text).
+- name: Parse the state
+  ansible.builtin.set_fact:
+    intel_ingest_state_doc: "{{ intel_ingest_state_text | from_json }}"
+
+- name: Split the entries
+  ansible.builtin.set_fact:
+    intel_ingest_state_maps: "{{ intel_ingest_state_doc.values() | select('mapping') | list }}"
+    intel_ingest_state_other: "{{ intel_ingest_state_doc.values() | reject('mapping') | list }}"
+    intel_ingest_state_open: >-
+      {{ intel_ingest_state_doc.values() | select('mapping') | map(attribute='in_progress', default=none)
+         | reject('none') | list }}
+  no_log: true
+
+- name: The state is this module's form
+  ansible.builtin.assert:
+    that:
+      - intel_ingest_state_doc is mapping
+      - intel_ingest_state_doc | length > 0
+      - intel_ingest_state_doc.keys() | difference(intel_ingest_types) | length == 0
+      - intel_ingest_state_other | reject('integer') | list | length == 0
+      - intel_ingest_state_other | select('lt', 0) | list | length == 0
+      - intel_ingest_state_maps | map(attribute='watermark_id', default=-1) | map('int', -1) | select('lt', 0) | list | length == 0
+      - intel_ingest_state_open | reject('mapping') | list | length == 0
+      - intel_ingest_state_open | select('mapping') | map(attribute='page', default=0) | map('int', 0) | select('lt', 1) | list | length == 0
+      - intel_ingest_state_open | select('mapping') | map(attribute='newest_id', default=-1) | map('int', -1) | select('lt', 0) | list | length == 0
+    fail_msg: >-
+      intel-ingest: the state is not this module's form: a JSON object keyed by the walked types
+      ({{ intel_ingest_types | join(', ') }}) whose values are a watermark or {watermark_id,
+      in_progress: null or {page >= 1, newest_id}}
+  no_log: true

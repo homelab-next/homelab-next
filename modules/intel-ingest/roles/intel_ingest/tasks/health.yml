@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the script, the environment, the logins and the CA bundle are in place, the timer is
+# armed, and the walk's state (when there is one) is this module's form. Nothing is written, and neither
+# service is called: whether the last run reached them is the unit's own result, shown by the timer.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Look for the script, the environment, the logins and the CA bundle
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: intel_ingest_files
+      loop: "{{ [intel_ingest_script, intel_ingest_env_file, intel_ingest_login_env_file, intel_ingest_ca_bundle_file] }}"
+    - name: They are all there
+      ansible.builtin.assert:
+        that: intel_ingest_files.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: "intel-ingest: missing {{ intel_ingest_files.results | rejectattr('stat.exists') | map(attribute='item') | list }} (run the install)"
+    - name: Ask systemd about the timer
+      ansible.builtin.command:
+        argv: "{{ [intel_ingest_systemctl_cli, 'is-active', intel_ingest_timer] }}"
+      register: intel_ingest_active
+      changed_when: false
+      failed_when: false
+    - name: The timer is armed
+      ansible.builtin.assert:
+        that: intel_ingest_active.rc == 0
+        fail_msg: "intel-ingest: the timer {{ intel_ingest_timer }} is not active ({{ intel_ingest_active.stdout }})"
+    - name: Look for the walk's state
+      ansible.builtin.slurp:
+        src: "{{ intel_ingest_state_file }}"
+      register: intel_ingest_live_state
+      failed_when: false
+    - name: The state, when there is one, is this module's form
+      ansible.builtin.include_tasks: state_check.yml
+      vars:
+        intel_ingest_state_text: "{{ intel_ingest_live_state.content | b64decode }}"
+      when: intel_ingest_live_state.content is defined
+  tags: [health]

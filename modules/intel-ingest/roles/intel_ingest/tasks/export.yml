@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy, in an open format: the walk's state (JSON) under <data root>/export/<stamp>/. Built
+# beside its final name and renamed into place, so a half-written export is never mistaken for a
+# finished one. The indicators themselves are the graph store's and the platform's, exported there.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Name this export
+      ansible.builtin.set_fact:
+        intel_ingest_export_stamp: "{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}"
+    - name: Read the walk's state
+      ansible.builtin.slurp:
+        src: "{{ intel_ingest_state_file }}"
+      register: intel_ingest_export_state
+      failed_when: false
+    - name: The state is this module's form (an export of a bad state is refused)
+      ansible.builtin.include_tasks: state_check.yml
+      vars:
+        intel_ingest_state_text: "{{ intel_ingest_export_state.content | b64decode }}"
+      when: intel_ingest_export_state.content is defined
+    - name: Build the export beside its final name
+      ansible.builtin.file:
+        path: "{{ intel_ingest_export_dir }}/.{{ intel_ingest_export_stamp }}.incoming"
+        state: directory
+        owner: "{{ intel_ingest_owner }}"
+        group: "{{ intel_ingest_owner_group }}"
+        mode: "0700"
+    - name: Copy the state into it
+      ansible.builtin.copy:
+        src: "{{ intel_ingest_state_file }}"
+        dest: "{{ intel_ingest_export_dir }}/.{{ intel_ingest_export_stamp }}.incoming/state.json"
+        remote_src: true
+        owner: "{{ intel_ingest_owner }}"
+        group: "{{ intel_ingest_owner_group }}"
+        mode: "0600"
+      when: intel_ingest_export_state.content is defined
+    - name: Rename it into place
+      ansible.builtin.command:
+        argv: [mv, -T, "{{ intel_ingest_export_dir }}/.{{ intel_ingest_export_stamp }}.incoming", "{{ intel_ingest_export_dir }}/{{ intel_ingest_export_stamp }}"]
+      changed_when: true
+  tags: [export]

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+# a reference with no secret behind it is refused here, before any file is written
+- name: Every secret resolves, in its form
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Create the accounts and the directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Write the script, the environment, the credentials, the state seed and the units
+  ansible.builtin.include_tasks: config.yml

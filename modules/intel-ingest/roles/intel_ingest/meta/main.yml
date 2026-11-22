@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "Daily ingest of the threat-intel platform's actionable indicators into the graph store, with a resumable, atomically checkpointed walk."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []
