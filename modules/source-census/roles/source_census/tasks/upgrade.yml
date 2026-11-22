@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The census is code in the runtime release, so there is no version of its own to bump: this hook
+# proves the installed release answers the census command and records which release it is, so an
+# upgrade of the release is a recorded event. The settings converge on the next install.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The installed release
+      ansible.builtin.command:
+        argv: ["{{ source_census_hnx_bin }}", --version]
+      register: source_census_release
+      changed_when: false
+      check_mode: false
+    - name: The release answers the census command
+      ansible.builtin.command:
+        argv: ["{{ source_census_hnx_bin }}", lake, source-census, --help]
+      changed_when: false
+      check_mode: false
+    - name: Record the release
+      ansible.builtin.copy:
+        dest: "{{ source_census_state_dir }}/release.json"
+        content: "{{ {'runtime': source_census_release.stdout | trim} | to_nice_json }}\n"
+        owner: "{{ source_census_user }}"
+        group: "{{ source_census_group }}"
+        mode: "0644"
+  tags: [upgrade]

@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: The daily source census, its settings, its credentials and its service user; the schedule is the module's fleet unit.
+    options: &opts
+      source_census_logical_id:
+        type: str
+        description: The instance's id (the module's selection instance).
+        required: true
+      source_census_lake_domain:
+        type: str
+        description: The registry domain the lake-query endpoint resolves under.
+        required: true
+      source_census_lake_warehouse:
+        type: str
+        description: The lake catalog's warehouse name (the shared lake client needs it to be built; the census sends the catalog nothing).
+        required: true
+      source_census_lake_catalog:
+        type: str
+        description: The query engine's catalog name the namespace lives in (a session setting, so a bare table name resolves).
+        required: true
+      source_census_user:
+        type: str
+        description: The system user the run uses.
+        default: hnx-source-census
+      source_census_group:
+        type: str
+        description: The system group the run uses.
+        default: hnx-source-census
+      source_census_hnx_bin:
+        type: str
+        description: The hnx command of the runtime release (role hnx_runtime), which holds the census; the scheduled run is `hnx lake source-census`.
+        default: /opt/hnx/bin/hnx
+      source_census_lake_namespace:
+        type: str
+        description: The lake namespace of the raw-archive table (a fresh SOC namespace, never a migrated one).
+        default: soc
+      source_census_lake_user:
+        type: str
+        description: The reader id the census signs in as (declared in the site's tlp_readers).
+        default: "analyzer:source-census"
+      source_census_lake_ca_file:
+        type: str
+        description: A private CA file that verifies the query endpoint (empty means the system roots).
+        default: ""
+      source_census_reader_cred:
+        type: str
+        description: The secret reference of the reader's engine password (a name, never a value).
+        default: secret:source-census/reader-password
+      source_census_notify_cred:
+        type: str
+        description: The secret reference of the notify slot's publish token (a name, never a value).
+        default: secret:source-census/notify-token
+      source_census_notify_topic:
+        type: str
+        description: The notify topic the page goes to.
+        default: source-census
+      source_census_notify_ceiling:
+        type: str
+        description: The notify channel's TLP ceiling (clear, green, amber, amber+strict or red); a page above it is withheld.
+        default: red
+        choices: [clear, green, amber, amber+strict, red]
+      source_census_table:
+        type: str
+        description: The raw-archive table the census groups.
+        default: raw_archive
+      source_census_source_columns:
+        type: list
+        elements: str
+        description: The columns that identify a source (a source is one distinct tuple of them).
+        default: [source, decoder]
+      source_census_time_column:
+        type: str
+        description: The event time column.
+        default: time
+      source_census_window_days:
+        type: int
+        description: The window a cadence is learned over, in days (at least 2).
+        default: 8
+      source_census_multiple:
+        type: float
+        description: A source is flagged after this many of its own cadences in silence.
+        default: 3
+      source_census_min_silence_hours:
+        type: float
+        description: Never flag a source silent for less than this many hours, whatever its cadence.
+        default: 2
+      source_census_floor_hours:
+        type: float
+        description: The absolute silence, in hours, after which a still-learning source that has arrived enough times is flagged.
+        default: 24
+      source_census_learning_min_arrivals:
+        type: int
+        description: How many arrivals a learning source needs before the floor applies.
+        default: 3
+      source_census_expected:
+        type: list
+        elements: dict
+        description: Declared sources, each {name, match, cadence_hours, grace}; a match names source columns by text or by equals, prefix, suffix or contains.
+        default: []
+      source_census_acknowledged:
+        type: list
+        elements: dict
+        description: The acknowledged-quiet list, each {name or match, owner, reason, expires YYYY-MM-DD}; an expired entry covers nothing.
+        default: []
+      source_census_dark_tables:
+        type: list
+        elements: str
+        description: The tables all-classes-dark looks at (empty means the census table); it fails when none has a row in its window.
+        default: []
+      source_census_dark_hours:
+        type: float
+        description: The window of all-classes-dark, in hours.
+        default: 24
+      source_census_export_dir:
+        type: str
+        description: Where the export writes the state copy.
+        default: /var/lib/hnx-modules/source-census/export
+      source_census_restore_source:
+        type: str
+        description: A directory holding state.json and state.sha256 to restore (restore hook).
+        default: ""
+  health:
+    short_description: Fail unless the settings, the credential files and the census command are in place.
+    options: *opts
+  readiness:
+    short_description: Fail unless the host has the runtime release with the census and every credential is set.
+    options: *opts
+  backup:
+    short_description: Declare what a backup captures (the paging state).
+    options: *opts
+  restore:
+    short_description: Restore the paging state from a directory, never over a flagged set.
+    options: *opts
+  upgrade:
+    short_description: Prove the installed release answers the census command and record it.
+    options: *opts
+  export:
+    short_description: Write the paging state as JSON with its sha256.
+    options: *opts

@@ -279,6 +279,16 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "writes: policies, SSH roles, OIDC login roles)",
         lambda a: importlib.import_module("homelabnext.sshca").main(a),
     ),
+    "lake": (
+        "commands over the lake: source-census (every source against its own cadence, and all "
+        "classes dark; pages a newly flagged set only; the source-census module's criteria)",
+        lambda a: importlib.import_module("homelabnext.lake.cli").main(a),
+    ),
+    "logbursts": (
+        "cluster a log's error lines in time into bursts, collapse them to distinct message shapes "
+        "and say ONGOING (exit 1) or RECOVERED (exit 0); --benign takes a reviewed list",
+        lambda a: importlib.import_module("homelabnext.logbursts").main(a),
+    ),
     "novelty": (
         "behavioural novelty baselines (ADR-0036, docs/novelty.md): run (score a spec's profiles "
         "for --as-of, write advisory findings)|corroborate (entities flagged by >= 2 sources)",

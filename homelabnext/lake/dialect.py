@@ -2,8 +2,8 @@
 """The SQL an adapter's query path speaks for the few expressions the portable subset lacks.
 
 The portable subset (``README.md``) has no struct field access and no portable way to take the
-UTC date of a timestamp.  :meth:`~homelabnext.lake.ceiling.CeilingReader.count_by` needs both,
-so every adapter that runs SQL declares its dialect in a ``sql_dialect`` class attribute and
+UTC date (or UTC hour) of a timestamp.  :meth:`~homelabnext.lake.ceiling.CeilingReader.count_by`
+needs the first two, the source census (:mod:`homelabnext.lake.census`) the hour, so every adapter that runs SQL declares its dialect in a ``sql_dialect`` class attribute and
 this module turns a validated column path into that dialect's expression.  There are two:
 
 =============== ============================================ ==============================
@@ -29,7 +29,7 @@ from typing import Any
 
 from .errors import LakeError
 
-__all__ = ["DIALECTS", "JSON_TEXT", "STRUCT", "day_expr", "dialect_of", "field_expr"]
+__all__ = ["DIALECTS", "JSON_TEXT", "STRUCT", "day_expr", "dialect_of", "field_expr", "hour_expr"]
 
 #: structs as JSON text, timestamps as UTC text (the SQLite fake)
 JSON_TEXT = "json-text"
@@ -77,4 +77,14 @@ def day_expr(dialect: str, expr: str) -> str:
         return f"substr({expr}, 1, 10)"
     if dialect == STRUCT:
         return f"CAST({expr} AS DATE)"
+    raise LakeError(f"unknown SQL dialect {dialect!r}")
+
+
+def hour_expr(dialect: str, expr: str) -> str:
+    """The UTC hour of the timestamp expression ``expr`` as text ``YYYY-MM-DD HH`` (the same text
+    in both dialects, so a result reads alike whatever engine answered)."""
+    if dialect in (JSON_TEXT, STRUCT):
+        # JSON_TEXT stores UTC text already; STRUCT engines are pinned to a UTC session, where
+        # CAST(timestamp AS VARCHAR) prints 'YYYY-MM-DD HH:MM:SS...'
+        return f"substr(CAST({expr} AS VARCHAR), 1, 13)"
     raise LakeError(f"unknown SQL dialect {dialect!r}")

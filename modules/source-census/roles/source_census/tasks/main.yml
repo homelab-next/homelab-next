@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Create the user and the directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Write the credentials
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Write the settings
+  ansible.builtin.include_tasks: config.yml
