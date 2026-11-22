@@ -72,7 +72,7 @@ registry.
 | Parameter | Sensitive | From |
 |---|---|---|
 | `HNX_LAKE_S3_ENDPOINT`, `HNX_LAKE_S3_REGION`, `HNX_LAKE_WAREHOUSE` | no | the object store's registry row, `nifi_region`, `nifi_warehouse` |
-| `HNX_LAKE_CATALOG_URI`, `HNX_LAKE_QUERY_URL` | no | the lake-catalog and lake-query rows |
+| `HNX_LAKE_CATALOG_URI`, `HNX_LAKE_QUERY_URL` | no | the lake-catalog and lake-query rows; the catalog's address followed by `nifi_catalog_path` (empty by default, `/catalog` for a catalog that serves its API there, with `nifi_warehouse` then the warehouse's name) |
 | `HNX_EVENTS_URL` | no | the events row |
 | `HNX_TRUSTSTORE_PATH` | no | the stores the role builds |
 | `HNX_LAKE_S3_ACCESS_KEY`, `HNX_LAKE_S3_SECRET_KEY` | yes | `secret:nifi/s3-access-key`, `secret:nifi/s3-secret-key` |
