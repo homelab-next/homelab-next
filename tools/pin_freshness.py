@@ -142,6 +142,18 @@ SOURCES: dict[str, tuple[str, str]] = {
         "PostgreSQL release page by hand, within the pinned major version",
     ),
     "role:media/media_image": ("github", "jellyfin/jellyfin"),
+    "role:misp/misp_core_image": ("github", "MISP/MISP"),
+    "role:misp/misp_modules_image": ("github", "MISP/misp-modules"),
+    "role:misp/misp_db_image": (
+        "none",
+        "the Docker official image (docker.io/library/mariadb): compare its tags with the MariaDB "
+        "release page by hand, within the pinned 10.11 series (the series the dump was taken on)",
+    ),
+    "role:misp/misp_redis_image": (
+        "none",
+        "the Valkey project's image (docker.io/valkey/valkey): compare its tags with the Valkey "
+        "release page by hand, within the pinned 7.2 series (the cache holds nothing that must survive)",
+    ),
     "role:media_automation/media_automation_gluetun_image": ("github", "qdm12/gluetun"),
     "role:media_automation/media_automation_qbittorrent_image": (
         "none",
@@ -347,6 +359,24 @@ NOTES: dict[str, str] = {
         "modules/freshrss/module.yml and the lab registry's version; the same or a newer version only "
         "(the application migrates its database forward on first start and cannot go back; the role "
         "refuses an older target), so export every account first (the upgrade playbook does)"
+    ),
+    "role:misp/misp_core_image": (
+        "an image (modules/misp): bump the tag and its digest together with role:misp/misp_modules_image, "
+        "with product.version in modules/misp/module.yml and the lab registry's version; the same or a "
+        "newer version only (the application migrates its schema forward on first start and cannot go "
+        "back; the role refuses an older target), so export the database first (the upgrade playbook does)"
+    ),
+    "role:misp/misp_modules_image": (
+        "an image (modules/misp): bump the tag and its digest together with role:misp/misp_core_image; "
+        "the same or a newer version only (the upgrade hook refuses an older target)"
+    ),
+    "role:misp/misp_db_image": (
+        "an image (modules/misp): the tag and its digest together, within the pinned 10.11 series; a "
+        "different series is a migration of its own (export first)"
+    ),
+    "role:misp/misp_redis_image": (
+        "an image (modules/misp): the tag and its digest together, within the pinned 7.2 series; the "
+        "cache holds queued jobs and sessions only, nothing to migrate"
     ),
     "role:synapse_cortex/synapse_cortex_image": (
         "an image (modules/synapse-cortex): bump the tag and its digest together, with product.version in "

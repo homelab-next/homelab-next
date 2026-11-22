@@ -265,6 +265,7 @@ MIGRATION_PROOF = {
     "graph-store": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "enrichment": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "feed-reader": "reference: the slot is provisional (no contract), so nothing can add export/import_",
+    "threat-intel": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "media": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "media-automation": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "object-store": "reference: the object_store protocol has no export/import_ yet",

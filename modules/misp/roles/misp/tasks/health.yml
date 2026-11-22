@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: every container of the project runs and is healthy; the published port accepts a
+# connection; the sign-in page answers 200; a call with no key and a call with a key that is no
+# account's are REFUSED (the platform is private); every account's own key is accepted and the
+# version it reports is the pinned application's; every background worker is RUNNING (healthy
+# containers with no workers is the silent failure of LL-386); and the database holds at least the
+# counts the site expects. Read-only: nothing is created, changed or fetched. The API calls run in
+# the application container against its own loopback, so no key crosses the network and no
+# certificate has to be trusted.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: misp
+        compose_app_dir: "{{ misp_app.compose_app_dir }}"
+        compose_app_spec: "{{ misp_app.compose_app_spec }}"
+    - name: The published port accepts a connection
+      ansible.builtin.wait_for:
+        host: "{{ misp_bind }}"
+        port: "{{ misp_port | int }}"
+        timeout: "{{ misp_health_timeout | int }}"
+      check_mode: false
+    - name: The sign-in page, a call with no key and a call with a key that is no account's
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, HNX_KEY, -e, HNX_PATH, -e, HNX_ACCEPT, misp-core, sh, -c, "{{ misp_api_status_script }}"]
+        expand_argument_vars: false
+      environment:
+        HNX_KEY: "{{ item.key }}"
+        HNX_PATH: "{{ item.path }}"
+        HNX_ACCEPT: "{{ item.accept | default('application/json') }}"
+      loop:
+        - {name: sign-in, path: /users/login, key: "", accept: text/html, want: ["200"]}
+        - {name: no key, path: /servers/getVersion, key: "", want: ["401", "403"]}
+        - {name: unknown key, path: /servers/getVersion, key: "0000000000000000000000000000000000000000", want: ["401", "403"]}
+      loop_control:
+        label: "{{ item.name }}"
+      register: misp_probes
+      changed_when: false
+      check_mode: false
+      failed_when: false
+    - name: Each answered as it must
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+          - item.stdout | trim in item.item.want
+        fail_msg: "misp: '{{ item.item.name }}' answered {{ item.stdout | default('nothing') | trim }}, expected {{ item.item.want | join(' or ') }} (an open API is refused here)"
+      loop: "{{ misp_probes.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+    - name: Check each account
+      ansible.builtin.include_tasks: health_one.yml
+      loop: "{{ misp_accounts }}"
+      loop_control:
+        loop_var: misp_acct
+        index_var: misp_i
+        label: "account {{ misp_i }}"
+    - name: Every background worker is running
+      ansible.builtin.include_tasks: workers_check.yml
+    - name: Read the row counts
+      ansible.builtin.include_tasks: counts.yml
+    - name: The database holds what the site expects
+      ansible.builtin.assert:
+        that: misp_counts[item.key] | int >= item.value | int
+        fail_msg: "misp: the database holds {{ misp_counts[item.key] }} {{ item.key }}, fewer than the {{ item.value }} expected (data was lost, or an import did not happen)"
+      loop: "{{ misp_expected_min_counts | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+  tags: [health]

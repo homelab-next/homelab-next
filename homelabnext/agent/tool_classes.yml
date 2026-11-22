@@ -115,6 +115,7 @@ capabilities:
   cap:case-management: [record-write]  # the case-management slot: incident cases, alerts and their notes written through the product's API (the stage-6 `cases` slot keeps the alert-to-case contract; this is the product's own case store)
   cap:enrichment: [read]  # the enrichment slot: a service that looks an observable up in public sources and answers (it changes nothing the lab holds)
   cap:feed-reader: [read]  # the feed-reader slot: subscribed feeds and their entries read through the Fever and Google Reader APIs
+  cap:threat-intel: [read]  # the threat-intel slot: events, attributes and feeds of a threat-intelligence platform read through its API with a per-user key
   cap:tts: [read]  # the tts slot: a service that renders text to speech in the operator's voice (it changes nothing)
   cap:chat: [exec]  # the chat slot: a front end that sends people's prompts to the model gateway under its own key; broker-only, an agent has no use for it
   # the capabilities the other example registries use (examples/four-box-lab, lab-topology,

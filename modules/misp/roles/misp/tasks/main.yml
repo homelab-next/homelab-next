@@ -1,0 +1,120 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Put the internal-CA certificate in place
+  ansible.builtin.include_tasks: tls.yml
+
+# The passwords reach only the env_files (0600). The application takes the database account, the
+# cache password, the administrator's first password and key, the encryption key and the GnuPG
+# passphrase from its environment; the database sets its accounts when its data directory is first
+# created and ignores them afterwards.
+- name: Read the credentials the containers take
+  ansible.builtin.set_fact:
+    misp_secret_env:
+      redis:
+        REDIS_PASSWORD: "{{ lookup('hnx_secret', misp_cache_login_ref) }}"
+      db:
+        MYSQL_PASSWORD: "{{ lookup('hnx_secret', misp_db_login_ref) }}"
+        MYSQL_ROOT_PASSWORD: "{{ lookup('hnx_secret', misp_db_root_login_ref) }}"
+      misp-core:
+        MYSQL_PASSWORD: "{{ lookup('hnx_secret', misp_db_login_ref) }}"
+        REDIS_PASSWORD: "{{ lookup('hnx_secret', misp_cache_login_ref) }}"
+        ADMIN_PASSWORD: "{{ lookup('hnx_secret', misp_admin_login_ref) }}"
+        ADMIN_KEY: "{{ lookup('hnx_secret', misp_admin_key_ref) }}"
+        ENCRYPTION_KEY: "{{ lookup('hnx_secret', misp_encryption_key_ref) }}"
+        GPG_PASSPHRASE: "{{ lookup('hnx_secret', misp_gpg_passphrase_ref) }}"
+        # not a secret, but compose_app keeps a name like this out of the compose file: the first
+        # start's administrator key and password are printed to no log
+        DISABLE_PRINTING_PLAINTEXT_CREDENTIALS: "true"
+  no_log: true
+
+- name: Render and start the platform
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ misp_app.compose_app_name }}"
+    compose_app_dir: "{{ misp_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ misp_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ misp_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ misp_app.compose_app_owner }}"
+    compose_app_group: "{{ misp_app.compose_app_group }}"
+    compose_app_start: "{{ misp_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ misp_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ misp_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ misp_secret_env }}"
+    compose_app_bind_roots: ["{{ misp_dir }}", "{{ misp_data_root }}"]
+  no_log: true
+
+- name: Restart the application when its certificate changed (it reads it at start)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", restart, misp-core]
+  when: misp_start | bool and misp_tls_files is changed
+  changed_when: true
+
+- name: Wait for the application to answer (its first start builds the schema)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, HNX_PATH, misp-core, sh, -c, "{{ misp_api_status_script }}"]
+    expand_argument_vars: false
+  environment:
+    HNX_PATH: /users/heartbeat
+  register: misp_up
+  until: misp_up.rc == 0 and misp_up.stdout | trim == '200'
+  retries: "{{ ((misp_ready_timeout | int) / 10) | int }}"
+  delay: 10
+  changed_when: false
+  failed_when: false
+  when: misp_start | bool
+
+- name: Refuse to go on when it never answered
+  ansible.builtin.assert:
+    that: misp_up.stdout | default('') | trim == '200'
+    fail_msg: "misp: the application did not answer within {{ misp_ready_timeout }} seconds of the start (docker compose logs misp-core)"
+  when: misp_start | bool
+
+# The application answers its heartbeat (and its containers report healthy) minutes before its first
+# start has built the schema and created the first account: an API call in that window is an
+# internal error, and a key set before the account exists has nothing to attach to. The first account
+# in the database is what says the first start got that far (found against the real image).
+- name: Wait for the database to hold its first account (the first start has built the schema)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, MYSQL_PWD, db,
+           mariadb, --user=root, --batch, --skip-column-names, misp, -e, "SELECT COUNT(*) FROM users"]
+  environment:
+    MYSQL_PWD: "{{ lookup('hnx_secret', misp_db_root_login_ref) }}"
+  register: misp_first_account
+  until: misp_first_account.rc == 0 and (misp_first_account.stdout | trim) is match('^[0-9]+\Z') and (misp_first_account.stdout | trim | int) >= 1
+  retries: "{{ ((misp_ready_timeout | int) / 10) | int }}"
+  delay: 10
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+  when: misp_start | bool
+
+- name: Refuse to go on when the first start never created an account
+  ansible.builtin.assert:
+    that: (misp_first_account.stdout | default('') | trim) is match('^[0-9]+\Z') and (misp_first_account.stdout | trim | int) >= 1
+    fail_msg: "misp: the database holds no account {{ misp_ready_timeout }} seconds after the start (the first start did not finish building the schema: docker compose logs misp-core)"
+  when: misp_start | bool
+
+- name: Settle the application (wait for its start to finish; restart it once when its first start left it broken)
+  ansible.builtin.include_tasks: settle.yml
+  when: misp_start | bool
+
+- name: Start the background workers
+  ansible.builtin.include_tasks: workers.yml
+  when: misp_start | bool
+
+- name: Set the administrator's and the consumers' API keys
+  ansible.builtin.include_tasks: keys.yml
+  when: misp_start | bool

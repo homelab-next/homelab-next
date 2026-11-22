@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). No environment
+# holds a secret: they reach the containers only through compose_app's 0600 env files
+# (compose_app_secret_env, built in main). The database engine is tuned for a large attribute table
+# (the buffer pool is a setting) and publishes nothing; only the application publishes a port, on
+# the guest's own address. Capabilities: the application's entrypoint chowns and drops privileges
+# for nginx, PHP and its supervisor and writes the audit log (AUDIT_WRITE); the database's SYS_NICE
+# is what its image asks for to stop a runaway log. Every container joins the module's role slice
+# (compose_app's cgroup_parent), whose CPU quota and memory limit are the module's footprint: the
+# database cannot take the guest (LL-504).
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    misp_app:
+      compose_app_name: misp
+      compose_app_dir: "{{ misp_dir }}"
+      compose_app_data_dir: "{{ misp_data_root }}"
+      compose_app_export_dir: "{{ misp_data_root }}/export"
+      compose_app_owner: "{{ misp_owner }}"
+      compose_app_group: "{{ misp_group }}"
+      compose_app_start: "{{ misp_start }}"
+      compose_app_validate_with_docker: "{{ misp_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          redis:
+            image: "{{ misp_redis_repository }}"
+            tag: "{{ misp_redis_tag }}"
+            digest: "{{ misp_redis_digest }}"
+            command: [sh, -c, 'exec valkey-server --requirepass "$REDIS_PASSWORD" --save ""']
+            environment:
+              TZ: "{{ misp_timezone }}"
+            cap_add: [SETUID, SETGID]
+            volumes:
+              - "{{ misp_data_root }}/cache:/data"
+            mem_limit: "{{ misp_redis_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, 'valkey-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG']
+              interval: 10s
+              timeout: 5s
+              retries: 5
+              start_period: 10s
+          db:
+            image: "{{ misp_db_repository }}"
+            tag: "{{ misp_db_tag }}"
+            digest: "{{ misp_db_digest }}"
+            command:
+              - "--innodb-buffer-pool-size={{ misp_innodb_buffer_pool_size }}"
+              - --innodb-change-buffering=none
+              - --innodb-io-capacity=1000
+              - --innodb-io-capacity-max=2000
+              - --innodb-log-file-size=600M
+              - --innodb-stats-persistent=ON
+              - --max-allowed-packet=256M
+            environment:
+              TZ: "{{ misp_timezone }}"
+              MYSQL_USER: misp
+              MYSQL_DATABASE: misp
+            cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, SYS_NICE]
+            volumes:
+              - "{{ misp_data_root }}/mysql:/var/lib/mysql"
+            mem_limit: "{{ misp_db_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, 'mariadb-admin --user=misp --password="$MYSQL_PASSWORD" status']
+              interval: 15s
+              timeout: 5s
+              retries: 5
+              start_period: 60s
+          misp-modules:
+            image: "{{ misp_modules_repository }}"
+            tag: "{{ misp_modules_tag }}"
+            digest: "{{ misp_modules_digest }}"
+            environment:
+              TZ: "{{ misp_timezone }}"
+              # the port the service listens on, named once so its own probe reads it
+              HNX_PROBE_PORT: "6666"
+            mem_limit: "{{ misp_modules_mem_limit }}"
+            healthcheck:
+              # the image has python and no curl
+              test:
+                - CMD
+                - python3
+                - -c
+                - "import os, urllib.request; urllib.request.urlopen('http://localhost:' + os.environ['HNX_PROBE_PORT'] + '/modules', timeout=4)"
+              interval: 15s
+              timeout: 5s
+              retries: 5
+              start_period: 30s
+          misp-core:
+            image: "{{ misp_core_repository }}"
+            tag: "{{ misp_core_tag }}"
+            digest: "{{ misp_core_digest }}"
+            depends_on: [redis, db, misp-modules]
+            environment:
+              TZ: "{{ misp_timezone }}"
+              BASE_URL: "{{ misp_effective_url }}"
+              ADMIN_EMAIL: "{{ misp_admin_email }}"
+              ADMIN_ORG: "{{ misp_admin_org }}"
+              CORE_RUNNING_TAG: "{{ misp_core_tag }}"
+              MYSQL_HOST: db
+              MYSQL_USER: misp
+              MYSQL_DATABASE: misp
+              REDIS_HOST: redis
+              MISP_MODULES_FQDN: http://misp-modules
+              DISABLE_IPV6: "true"
+              INNODB_BUFFER_POOL_SIZE: "{{ misp_innodb_buffer_pool_size }}"
+            cap_add: [AUDIT_WRITE, CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, NET_BIND_SERVICE]
+            ports: ["{{ misp_bind }}:{{ misp_port | int }}:443"]
+            volumes:
+              - "{{ misp_data_root }}/configs:{{ misp_container_configs }}"
+              - "{{ misp_data_root }}/logs:{{ misp_container_logs }}"
+              - "{{ misp_data_root }}/files:{{ misp_container_files }}"
+              - "{{ misp_data_root }}/gnupg:{{ misp_container_gnupg }}"
+              - "{{ misp_data_root }}/ssl:{{ misp_container_ssl }}"
+            mem_limit: "{{ misp_core_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, 'curl -fks https://localhost/users/heartbeat > /dev/null']
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 180s
+  vars:
+    misp_effective_url: "{{ misp_base_url if misp_base_url | length > 0 else 'https://' ~ misp_bind ~ (':' ~ (misp_port | int) if (misp_port | int) != 443 else '') }}"
+  tags: [health, backup, restore, export, upgrade]
