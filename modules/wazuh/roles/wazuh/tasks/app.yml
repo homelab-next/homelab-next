@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). No
+# environment holds a secret: the passwords go in compose_app_secret_env. The manager is the
+# product's own init (s6) running its daemons as root with a short capability list (the rest are
+# dropped); the indexer and the dashboard run as the images' user. Only the agents' event port, the
+# enrolment port, the two APIs, the dashboard and (when configured) the syslog input are published,
+# all on the guest's own address; the hypervisor's per-VM firewall admits the named consumers.
+# The manager's health is its daemons' real processes, not the product's status command (which
+# reads pid files and reports a dead daemon as running).
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    wazuh_app:
+      compose_app_name: wazuh
+      compose_app_dir: "{{ wazuh_dir }}"
+      compose_app_data_dir: "{{ wazuh_data_root }}"
+      compose_app_export_dir: "{{ wazuh_data_root }}/export"
+      compose_app_owner: "{{ wazuh_owner }}"
+      compose_app_group: "{{ wazuh_group }}"
+      compose_app_start: "{{ wazuh_start }}"
+      compose_app_validate_with_docker: "{{ wazuh_validate_with_docker }}"
+      compose_app_network_subnet: "{{ wazuh_network_subnet }}"
+      compose_app_spec:
+        services:
+          indexer:
+            image: "{{ wazuh_indexer_repository }}"
+            tag: "{{ wazuh_indexer_tag }}"
+            digest: "{{ wazuh_indexer_digest }}"
+            user: "{{ wazuh_indexer_uid | int }}:{{ wazuh_indexer_gid | int }}"
+            environment:
+              OPENSEARCH_JAVA_OPTS: "-Xms{{ wazuh_indexer_heap }} -Xmx{{ wazuh_indexer_heap }}"
+            ports: ["{{ wazuh_bind }}:{{ wazuh_indexer_port | int }}:{{ wazuh_container_indexer_port }}"]
+            volumes:
+              - "{{ wazuh_data_root }}/indexer:/var/lib/wazuh-indexer"
+              - "{{ wazuh_data_root }}/certs/root-ca.pem:/usr/share/wazuh-indexer/config/certs/root-ca.pem:ro"
+              - "{{ wazuh_data_root }}/certs/indexer.pem:/usr/share/wazuh-indexer/config/certs/indexer.pem:ro"
+              - "{{ wazuh_data_root }}/certs/indexer-key.pem:/usr/share/wazuh-indexer/config/certs/indexer-key.pem:ro"
+              - "{{ wazuh_data_root }}/certs/admin.pem:/usr/share/wazuh-indexer/config/certs/admin.pem:ro"
+              - "{{ wazuh_data_root }}/certs/admin-key.pem:/usr/share/wazuh-indexer/config/certs/admin-key.pem:ro"
+              - "{{ wazuh_data_root }}/config/indexer.yml:/usr/share/wazuh-indexer/config/opensearch.yml:ro"
+              - "{{ wazuh_data_root }}/config/internal_users.yml:/usr/share/wazuh-indexer/config/opensearch-security/internal_users.yml:ro"
+            mem_limit: "{{ wazuh_indexer_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, "curl -sk -o /dev/null -w '%{http_code}' https://localhost:{{ wazuh_container_indexer_port }} | grep -q 401"]
+              interval: 15s
+              timeout: 10s
+              retries: 20
+              start_period: 90s
+          manager:
+            image: "{{ wazuh_manager_repository }}"
+            tag: "{{ wazuh_manager_tag }}"
+            digest: "{{ wazuh_manager_digest }}"
+            cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, FSETID, SETUID, SETGID, KILL, NET_BIND_SERVICE, SYS_CHROOT, SETPCAP]
+            depends_on: [indexer]
+            environment:
+              INDEXER_URL: "https://indexer:{{ wazuh_container_indexer_port }}"
+              INDEXER_USERNAME: "{{ wazuh_indexer_user }}"
+              FILEBEAT_SSL_VERIFICATION_MODE: full
+              SSL_CERTIFICATE_AUTHORITIES: /etc/ssl/root-ca.pem
+              SSL_CERTIFICATE: /etc/ssl/filebeat.pem
+              SSL_KEY: /etc/ssl/filebeat.key
+              API_USERNAME: "{{ wazuh_api_user }}"
+            ports: >-
+              {{ ['%s:%d:%d' | format(wazuh_bind, wazuh_agent_port | int, wazuh_container_agent_port),
+                  '%s:%d:%d' | format(wazuh_bind, wazuh_enrollment_port | int, wazuh_container_enrollment_port),
+                  '%s:%d:%d' | format(wazuh_bind, wazuh_api_port | int, wazuh_container_api_port)]
+                 + (['%s:%d:%d/udp' | format(wazuh_bind, wazuh_syslog_port | int, wazuh_syslog_container_port)] if wazuh_syslog_allowed_ips | length > 0 else []) }}
+            volumes:
+              - "{{ wazuh_data_root }}/manager/api-configuration:/var/ossec/api/configuration"
+              - "{{ wazuh_data_root }}/manager/etc:/var/ossec/etc"
+              - "{{ wazuh_data_root }}/manager/logs:/var/ossec/logs"
+              - "{{ wazuh_data_root }}/manager/queue:/var/ossec/queue"
+              - "{{ wazuh_data_root }}/manager/multigroups:/var/ossec/var/multigroups"
+              - "{{ wazuh_data_root }}/manager/integrations:/var/ossec/integrations"
+              - "{{ wazuh_data_root }}/manager/active-response:/var/ossec/active-response/bin"
+              - "{{ wazuh_data_root }}/manager/agentless:/var/ossec/agentless"
+              - "{{ wazuh_data_root }}/manager/wodles:/var/ossec/wodles"
+              - "{{ wazuh_data_root }}/manager/filebeat-etc:/etc/filebeat"
+              - "{{ wazuh_data_root }}/manager/filebeat-var:/var/lib/filebeat"
+              - "{{ wazuh_data_root }}/certs/root-ca.pem:/etc/ssl/root-ca.pem:ro"
+              - "{{ wazuh_data_root }}/certs/manager.pem:/etc/ssl/filebeat.pem:ro"
+              - "{{ wazuh_data_root }}/certs/manager-key.pem:/etc/ssl/filebeat.key:ro"
+              - "{{ wazuh_data_root }}/config/ossec.conf:/wazuh-config-mount/etc/ossec.conf:ro"
+              - "{{ wazuh_data_root }}/config/authd.pass:/wazuh-config-mount/etc/authd.pass:ro"
+            mem_limit: "{{ wazuh_manager_mem_limit }}"
+            healthcheck:
+              test: [CMD, bash, -c, "for d in analysisd remoted authd db modulesd monitord; do pgrep -x wazuh-$d >/dev/null || exit 1; done; pgrep -f 'wazuh-apid[.]py' >/dev/null"]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 180s
+          dashboard:
+            image: "{{ wazuh_dashboard_repository }}"
+            tag: "{{ wazuh_dashboard_tag }}"
+            digest: "{{ wazuh_dashboard_digest }}"
+            user: "{{ wazuh_dashboard_uid | int }}:{{ wazuh_dashboard_gid | int }}"
+            depends_on: [indexer, manager]
+            environment:
+              DASHBOARD_USERNAME: "{{ wazuh_dashboard_user }}"
+              WAZUH_API_URL: https://manager
+              API_PORT: "{{ wazuh_container_api_port }}"
+              API_USERNAME: "{{ wazuh_api_user }}"
+            ports: ["{{ wazuh_bind }}:{{ wazuh_dashboard_port | int }}:{{ wazuh_container_dashboard_port }}"]
+            volumes:
+              - "{{ wazuh_data_root }}/certs/root-ca.pem:/usr/share/wazuh-dashboard/certs/root-ca.pem:ro"
+              - "{{ wazuh_data_root }}/config/dashboard.yml:/usr/share/wazuh-dashboard/config/opensearch_dashboards.yml:ro"
+            mem_limit: "{{ wazuh_dashboard_mem_limit }}"
+            healthcheck:
+              test: [CMD, curl, -fsS, -o, /dev/null, "http://localhost:{{ wazuh_container_dashboard_port }}/app/login"]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 120s
+  tags: [health, backup, restore, export, upgrade]

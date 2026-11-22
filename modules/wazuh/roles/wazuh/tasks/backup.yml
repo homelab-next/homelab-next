@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's
+# paths); the export first writes a consistent copy of the manager's state and the hot index into it
+# (export/), so a restore never depends on the live indexer being caught between two writes.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Copy the index tool
+      ansible.builtin.copy:
+        src: hnx_wazuh_index.py
+        dest: "{{ wazuh_data_root }}/config/hnx_wazuh_index.py"
+        owner: "{{ wazuh_owner }}"
+        group: "{{ wazuh_group }}"
+        mode: "0750"
+    - name: Archive, export and list
+      ansible.builtin.include_tasks: dump.yml
+    - name: Delegate to compose_app (the backup manifest names the data root)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: backup
+      vars:
+        compose_app_name: wazuh
+        compose_app_dir: "{{ wazuh_app.compose_app_dir }}"
+        compose_app_data_dir: "{{ wazuh_app.compose_app_data_dir }}"
+        compose_app_export_dir: "{{ wazuh_app.compose_app_export_dir }}"
+        compose_app_owner: "{{ wazuh_app.compose_app_owner }}"
+        compose_app_group: "{{ wazuh_app.compose_app_group }}"
+        compose_app_spec: "{{ wazuh_app.compose_app_spec }}"
+  tags: [backup]

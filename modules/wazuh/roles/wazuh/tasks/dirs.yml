@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root and the project's own directories. The indexer's data belongs to the image's user; the
+# manager's directories are created and owned by the product's own init on its first start (an
+# empty directory is how it knows to copy its defaults in, so nothing is written under manager/
+# before then); certs/ and config/ are root's with the indexer's group able to read the files it
+# mounts; export/ is root's and 0700 (the agents' keys are in it). Nothing here is ever removed by
+# the role (a bind-mounted directory taken away under a running container breaks it).
+- name: Create the data root, the containers' directories and the project's
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ wazuh_data_root }}", owner: "{{ wazuh_owner }}", group: "{{ wazuh_group }}", mode: "0755"}
+    - {path: "{{ wazuh_data_root }}/indexer", owner: "{{ wazuh_indexer_uid | int }}", group: "{{ wazuh_indexer_gid | int }}", mode: "0750"}
+    - {path: "{{ wazuh_data_root }}/certs", owner: "{{ wazuh_owner }}", group: "{{ wazuh_indexer_gid | int }}", mode: "{{ wazuh_cert_dir_mode }}"}
+    - {path: "{{ wazuh_data_root }}/config", owner: "{{ wazuh_owner }}", group: "{{ wazuh_indexer_gid | int }}", mode: "0750"}
+    - {path: "{{ wazuh_data_root }}/export", owner: "{{ wazuh_owner }}", group: "{{ wazuh_group }}", mode: "0700"}
+    - {path: "{{ wazuh_dir }}", owner: "{{ wazuh_owner }}", group: "{{ wazuh_group }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]
+
+# the manager's own directories: empty, for the product's init to fill (it sets their owner and mode,
+# which a later run must not reset, so only manager/ itself has attributes here). manager/ is
+# world-traversable so a reader in the product's group (the log pipeline) can reach logs/ under it.
+- name: Create the manager's directory
+  ansible.builtin.file:
+    path: "{{ wazuh_data_root }}/manager"
+    state: directory
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0755"
+  tags: [backup, export, restore]
+
+- name: Create the manager's state directories (empty; the product's init fills them)
+  ansible.builtin.file:
+    path: "{{ wazuh_data_root }}/manager/{{ item }}"
+    state: directory
+  loop: [api-configuration, etc, logs, queue, multigroups, integrations, active-response, agentless, wodles, filebeat-etc, filebeat-var]
+  tags: [backup, export, restore]

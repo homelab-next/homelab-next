@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore from an export (README, "Export and restore"): the source (wazuh_restore_source) is checked
+# first and nothing is written until it passes (listing.jsonl names exactly the files the source has,
+# with the sizes and sha256 they have, and its version.txt is not newer than the pinned product). Then,
+# with the manager and the dashboard STOPPED, a safety export of what is there (pre-restore-*, in
+# export/) is taken, the state archive is unpacked over the manager's directories, the stack is
+# started and the index files are loaded back through the indexer's API (by their own ids, so a
+# second run changes nothing). The CA and the node certificates are not part of an export: they are
+# kept (create-only), and the agents' keys come back with the state archive.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Read the source's listing
+      ansible.builtin.slurp:
+        src: "{{ wazuh_restore_source }}/listing.jsonl"
+      register: wazuh_restore_listing
+    - name: Name what the listing says
+      ansible.builtin.set_fact:
+        wazuh_restore_rows: "{{ (wazuh_restore_listing.content | b64decode).splitlines() | reject('equalto', '') | map('from_json') | list }}"
+    - name: Read the source's files (size, sha256)
+      ansible.builtin.stat:
+        path: "{{ wazuh_restore_source }}/{{ item }}"
+        checksum_algorithm: sha256
+        follow: false
+      loop: "{{ wazuh_restore_rows | map(attribute='key') | sort | list }}"
+      register: wazuh_restore_stat
+    - name: Refuse a source that is not exactly what its listing says (nothing is written)
+      ansible.builtin.assert:
+        that:
+          - "'manager-state.tar' in (wazuh_restore_rows | map(attribute='key') | list)"
+          - "'version.txt' in (wazuh_restore_rows | map(attribute='key') | list)"
+          - wazuh_restore_stat.results | rejectattr('stat.exists') | list | length == 0
+          - wazuh_restore_stat.results | selectattr('stat.islnk', 'equalto', true) | list | length == 0
+          - wazuh_restore_stat.results | selectattr('stat.isreg', 'equalto', false) | list | length == 0
+          - >-
+            wazuh_restore_stat.results | map(attribute='stat') | map(attribute='checksum') | sort
+            == wazuh_restore_rows | sort(attribute='key') | map(attribute='sha256') | sort
+          - >-
+            wazuh_restore_stat.results | map(attribute='stat') | map(attribute='size') | map('int') | sort
+            == wazuh_restore_rows | map(attribute='size') | map('int') | sort
+        fail_msg: "siem: {{ wazuh_restore_source }} is not an intact export (listing, sizes or sha256 differ)"
+    - name: Read the version the source was taken from
+      ansible.builtin.slurp:
+        src: "{{ wazuh_restore_source }}/version.txt"
+      register: wazuh_restore_version
+    - name: Refuse an export from a NEWER product version than the pinned one (nothing is written)
+      ansible.builtin.assert:
+        that:
+          - (wazuh_restore_version.content | b64decode | trim) is match(wazuh_tag_pattern)
+          - (wazuh_restore_version.content | b64decode | trim) is version(wazuh_manager_tag, '<=')
+        fail_msg: >-
+          siem: the export was taken from product version {{ wazuh_restore_version.content | b64decode | trim }},
+          newer than the pinned {{ wazuh_manager_tag }}; bump the pin first (a newer export is never restored into an older product)
+    - name: Copy the index tool
+      ansible.builtin.copy:
+        src: hnx_wazuh_index.py
+        dest: "{{ wazuh_data_root }}/config/hnx_wazuh_index.py"
+        owner: "{{ wazuh_owner }}"
+        group: "{{ wazuh_group }}"
+        mode: "0750"
+    - name: Is a stack already installed
+      ansible.builtin.stat:
+        path: "{{ wazuh_dir }}/docker-compose.yml"
+      register: wazuh_restore_installed
+    - name: Take a safety export of what is there
+      ansible.builtin.include_tasks: dump.yml
+      vars:
+        wazuh_dump_prefix: "pre-restore-{{ ansible_date_time.iso8601_basic_short }}-"
+      when: wazuh_restore_installed.stat.exists
+    - name: Stop the manager and the dashboard
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ wazuh_dir }}/docker-compose.yml", stop, manager, dashboard]
+      changed_when: true
+      when: wazuh_restore_installed.stat.exists
+    - name: Unpack the state archive over the manager's directories
+      ansible.builtin.command:
+        argv: [tar, --extract, --same-owner, --numeric-owner, --file, "{{ wazuh_restore_source }}/manager-state.tar",
+               --directory, "{{ wazuh_data_root }}/manager"]
+      changed_when: true
+    - name: Converge the stack
+      ansible.builtin.include_tasks: main.yml
+    - name: Load the index files back
+      ansible.builtin.command:
+        argv: [python3, -I, "{{ wazuh_data_root }}/config/hnx_wazuh_index.py", restore,
+               --url, "https://{{ wazuh_bind }}:{{ wazuh_indexer_port }}", --ca, "{{ wazuh_data_root }}/certs/root-ca.pem",
+               --dir, "{{ wazuh_restore_source }}/index"]
+      environment:
+        HNX_INDEXER_PASSWORD: "{{ lookup('hnx_secret', wazuh_indexer_admin_ref) }}"
+      changed_when: true
+      no_log: true
+      when: wazuh_restore_rows | map(attribute='key') | select('match', '^index/') | list | length > 0
+  tags: [restore]

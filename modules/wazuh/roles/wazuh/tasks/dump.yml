@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+# The export (jsonl listing; with wazuh_dump_prefix every name carries it, the restore's safety copy):
+# manager-state.tar (the manager's etc, API configuration, multigroups and queue: the agents' keys, the
+# rule files and the agent database), index/<name>.jsonl (the hot index, one file per alerts index,
+# through the indexer's API), version.txt (the product version) and listing.jsonl (key, size, sha256).
+# A snapshot: every run writes a new one (the hook reports changed). Secret-bearing (the agents'
+# keys), so export/ is 0700. The indexer's data is derivative: the lake holds the history.
+- name: Archive the manager's state
+  ansible.builtin.command:
+    argv: [tar, --create, --file, "{{ wazuh_data_root }}/export/.{{ wazuh_dump_prefix | default('') }}manager-state.tar.tmp",
+           --directory, "{{ wazuh_data_root }}/manager", etc, api-configuration, multigroups, queue]
+  register: wazuh_tar
+  failed_when: wazuh_tar.rc not in [0, 1]  # 1: a file changed while it was read (the queue is live)
+  changed_when: true
+  tags: [backup, export]
+
+- name: Put the state archive in place
+  ansible.builtin.command:
+    argv: [mv, -f, "{{ wazuh_data_root }}/export/.{{ wazuh_dump_prefix | default('') }}manager-state.tar.tmp",
+           "{{ wazuh_data_root }}/export/{{ wazuh_dump_prefix | default('') }}manager-state.tar"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Export the hot index
+  ansible.builtin.command:
+    argv: [python3, -I, "{{ wazuh_data_root }}/config/hnx_wazuh_index.py", export,
+           --url, "https://{{ wazuh_bind }}:{{ wazuh_indexer_port }}", --ca, "{{ wazuh_data_root }}/certs/root-ca.pem",
+           --dir, "{{ wazuh_data_root }}/export/{{ wazuh_dump_prefix | default('') }}index"]
+  environment:
+    HNX_INDEXER_PASSWORD: "{{ lookup('hnx_secret', wazuh_indexer_admin_ref) }}"
+  register: wazuh_index_export
+  changed_when: true
+  no_log: true
+  tags: [backup, export]
+
+- name: Record the product version the export was taken from (a newer one is never restored into an older)
+  ansible.builtin.copy:
+    content: "{{ wazuh_manager_tag }}\n"
+    dest: "{{ wazuh_data_root }}/export/{{ wazuh_dump_prefix | default('') }}version.txt"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0600"
+  tags: [backup, export]
+
+- name: Find the index files
+  ansible.builtin.find:
+    paths: ["{{ wazuh_data_root }}/export/{{ wazuh_dump_prefix | default('') }}index"]
+    patterns: ["*.jsonl"]
+  register: wazuh_index_files
+  tags: [backup, export]
+
+- name: Read the files (size, sha256)
+  ansible.builtin.stat:
+    path: "{{ wazuh_data_root }}/export/{{ item }}"
+    checksum_algorithm: sha256
+  loop: >-
+    {{ [wazuh_dump_prefix | default('') ~ 'manager-state.tar', wazuh_dump_prefix | default('') ~ 'version.txt']
+       + (wazuh_index_files.files | map(attribute='path') | map('basename') | sort
+          | map('regex_replace', '^', (wazuh_dump_prefix | default('')) ~ 'index/') | list) }}
+  register: wazuh_export_stat
+  tags: [backup, export]
+
+- name: Refuse an empty state archive (an archive with nothing in it is not a copy)
+  ansible.builtin.assert:
+    that: wazuh_export_stat.results[0].stat.size | int > 0
+    fail_msg: "siem: the manager's state archive is empty; nothing was listed"
+  tags: [backup, export]
+
+- name: Write the listing
+  ansible.builtin.copy:
+    content: |
+      {% for r in wazuh_export_stat.results %}{{ {'key': r.item[(wazuh_dump_prefix | default('')) | length:], 'size': r.stat.size, 'sha256': r.stat.checksum} | to_json(sort_keys=true) }}
+      {% endfor %}
+    dest: "{{ wazuh_data_root }}/export/{{ wazuh_dump_prefix | default('') }}listing.jsonl"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0600"
+  tags: [backup, export]

@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# One node certificate (wazuh_cert: name, cn, san, group, mode), signed by the stack's CA. The key is
+# PKCS#8 (what the indexer's security plugin reads); the signing request and the extensions file are
+# scratch and removed. Skipped when the certificate exists.
+- name: Generate the key (PKCS#8)
+  ansible.builtin.command:
+    argv: [openssl, genpkey, -algorithm, RSA, -pkeyopt, "rsa_keygen_bits:{{ wazuh_cert_key_bits }}",
+           -out, "{{ wazuh_data_root }}/certs/{{ wazuh_cert.name }}-key.pem"]
+    creates: "{{ wazuh_data_root }}/certs/{{ wazuh_cert.name }}-key.pem"
+  tags: [restore]
+
+- name: Write the extensions
+  ansible.builtin.copy:
+    content: |
+      subjectAltName={{ wazuh_cert.san }}
+      extendedKeyUsage=serverAuth,clientAuth
+    dest: "{{ wazuh_data_root }}/certs/{{ wazuh_cert.name }}.ext"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0600"
+  tags: [restore]
+
+- name: Create the signing request
+  ansible.builtin.command:
+    argv: [openssl, req, -new, -key, "{{ wazuh_data_root }}/certs/{{ wazuh_cert.name }}-key.pem",
+           -subj, "{{ wazuh_cert_subject_base }}/CN={{ wazuh_cert.cn }}",
+           -out, "{{ wazuh_data_root }}/certs/{{ wazuh_cert.name }}.csr"]
+    creates: "{{ wazuh_data_root }}/certs/{{ wazuh_cert.name }}.pem"
+  tags: [restore]
+
+- name: Sign it
+  ansible.builtin.command:
+    argv: [openssl, x509, -req, -in, "{{ wazuh_data_root }}/certs/{{ wazuh_cert.name }}.csr",
+           -CA, "{{ wazuh_data_root }}/certs/root-ca.pem", -CAkey, "{{ wazuh_data_root }}/certs/root-ca.key",
+           -CAcreateserial, -sha256, -days, "{{ wazuh_cert_days }}",
+           -extfile, "{{ wazuh_data_root }}/certs/{{ wazuh_cert.name }}.ext",
+           -out, "{{ wazuh_data_root }}/certs/{{ wazuh_cert.name }}.pem"]
+    creates: "{{ wazuh_data_root }}/certs/{{ wazuh_cert.name }}.pem"
+  tags: [restore]
+
+- name: Remove the scratch files
+  ansible.builtin.file:
+    path: "{{ wazuh_data_root }}/certs/{{ wazuh_cert.name }}.{{ item }}"
+    state: absent
+  loop: [csr, ext]
+  tags: [restore]
+
+- name: Set the certificate and key's owner and mode
+  ansible.builtin.file:
+    path: "{{ wazuh_data_root }}/certs/{{ wazuh_cert.name }}{{ item }}"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_cert.group }}"
+    mode: "{{ wazuh_cert.mode if item == '-key.pem' else '0644' }}"
+  loop: [".pem", "-key.pem"]
+  tags: [restore]

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry rows (platform/service) this provider contributes, keyed by slot and renamed to the
+# instance the site selects; version is product.version, host the module's host role
+# (docs/modules/registry-rows.md). The row is the manager's agent port (the siem-agent control
+# resolves the manager's host and this port by the instance's logical id; enrolment is the
+# manager's 1515 beside it). The module is one instance for both its slots (siem-source and
+# hot-index), so it contributes one row; the indexer's API (9200, https, the module's private CA) and the
+# dashboard (plain http on the guest, published through the edge by the site's own route) are
+# described in the README, "The contract". No public route.
+services:
+  siem-source:
+    capability: siem-source
+    impl: wazuh
+    host: server
+    protocol: tcp
+    port: 1514
+    health: {kind: tcp}
+    owner: operator
+    tls: internal
+    auth: own
+    tags: [siem, soc]
+    description: The Wazuh manager's agent event port (1514/tcp; enrolment on 1515 needs the enrolment password). The agents and the sensors' agents connect here.

@@ -1,0 +1,10 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# The manager's integration entry point (a custom-<name> script, run by the integration daemon with
+# the alert file, the api key and the hook url): hands them to the product's own Python.
+WPYTHON_BIN="framework/python/bin/python3"
+SCRIPT_PATH_NAME="$0"
+DIR_NAME="$(cd "$(dirname "${SCRIPT_PATH_NAME}")" || exit 1; pwd -P)"
+SCRIPT_NAME="$(basename "${SCRIPT_PATH_NAME}")"
+WAZUH_PATH="$(dirname "${DIR_NAME}")"
+exec "${WAZUH_PATH}/${WPYTHON_BIN}" "${WAZUH_PATH}/integrations/${SCRIPT_NAME}.py" "$@"
