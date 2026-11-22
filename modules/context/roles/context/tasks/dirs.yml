@@ -24,3 +24,16 @@
   loop_control:
     label: "{{ item.path }}"
   tags: [backup]
+# The checkouts are the container user's all the way down. A file left in them by another user (a
+# root-owned __pycache__ from a python run inside a checkout on 2026-11-21) makes the service's
+# own swap of the old checkout fail with PermissionError, so every reindex reports "indexing failed
+# (PermissionError)" until it is cleaned. The tree is derived data (a reindex refetches it), so
+# re-owning it on every run is safe and idempotent; mode is left as the service wrote it.
+- name: Own every file under the checkouts by the container user
+  ansible.builtin.file:
+    path: "{{ context_data_root }}/sources"
+    state: directory
+    recurse: true
+    owner: "{{ context_uid | int }}"
+    group: "{{ context_gid | int }}"
+  tags: [backup]
