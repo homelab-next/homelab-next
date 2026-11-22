@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: the module pins no artefact or image (its script ships with the role), so an upgrade is a
+# validated re-converge: the upgrade hook refuses a live state that is not this module's form, the state
+# is exported first, then the role converges on the new script. Run the health hook after.
+#   ansible-playbook -i <inventory> modules/intel-ingest/playbooks/upgrade.yml
+- name: Upgrade the threat-intel indicator ingest
+  hosts: mod_intel_ingest_job
+  become: true
+  tasks:
+    - name: Validate the upgrade
+      ansible.builtin.include_role:
+        name: intel_ingest
+        tasks_from: upgrade
+    - name: Export the state first
+      ansible.builtin.include_role:
+        name: intel_ingest
+        tasks_from: export
+    - name: Converge on the new script
+      ansible.builtin.include_role:
+        name: intel_ingest

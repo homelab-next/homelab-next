@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# Refuse a bad input before anything is read or written: the names that end up in unit names and
+# paths are checked here, so no later task has to trust them.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - intel_ingest_logical_id is match('^[a-z][a-z0-9-]{0,30}\Z')
+      - intel_ingest_threat_intel_url is match('^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?\Z')
+      - intel_ingest_graph_url is match('^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?\Z')
+      - intel_ingest_graph_user is match('^[A-Za-z][A-Za-z0-9_.-]{0,62}\Z')
+      - intel_ingest_threat_intel_key_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - intel_ingest_graph_login_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - intel_ingest_threat_intel_ca_ref == '' or intel_ingest_threat_intel_ca_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - intel_ingest_graph_ca_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - intel_ingest_threat_intel_key_ref != intel_ingest_graph_login_ref
+      # both services are verified against a CA file: never neither
+      - intel_ingest_threat_intel_ca_ref != ''
+      - intel_ingest_graph_ca_ref != ''
+      - >-
+        intel_ingest_hosts | map(attribute='name', default='') | reject('match', '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\\Z') | list | length == 0
+      - >-
+        intel_ingest_hosts | map(attribute='address', default='') | reject('match', '^[0-9]{1,3}(\\.[0-9]{1,3}){3}\\Z') | list | length == 0
+      - intel_ingest_oncalendar is match('^[A-Za-z0-9 *:/,.-]{3,80}\Z')
+      - intel_ingest_max_runtime_s | int >= 60
+      - intel_ingest_state_seed_file == '' or intel_ingest_state_seed_file is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z')
+      - >-
+        [intel_ingest_config_dir, intel_ingest_data_root]
+        | reject('match', '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z') | list | length == 0
+    fail_msg: >-
+      intel-ingest: an input is invalid (the instance id, two https URLs, the graph account's name,
+      secret references, the platform's CA (required), the graph store's CA or exact certificate (both required: the
+      ingest never talks to an unverified service), the schedule, the cap and absolute paths of at least
+      two components are all checked)
+  tags: [readiness, health, backup, export, restore, upgrade]
