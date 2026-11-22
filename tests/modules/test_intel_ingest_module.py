@@ -31,7 +31,11 @@ def test_the_manifest_is_a_feature_that_requires_the_two_slots_and_the_secret_st
 def test_every_secret_default_is_a_reference_and_the_state_is_exportable():
     m = _manifest()
     for cfg in m["config"].values():
-        assert cfg["type"] == "secret" and cfg["default"].startswith("secret:") and "/" in cfg["default"]
+        assert (
+            cfg["type"] == "secret"
+            and cfg["default"].startswith("secret:")
+            and "/" in cfg["default"]
+        )
     assert [d["id"] for d in m["data"]] == ["state"]
     defaults = yaml.safe_load((ROLE / "defaults" / "main.yml").read_text())
     refs = {v for k, v in defaults.items() if k.endswith("_ref") and v}
