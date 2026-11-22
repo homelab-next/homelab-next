@@ -94,7 +94,8 @@ cti_pipeline_jobs:
 A step's first element is `{python}`, `{app}/<path>` or an absolute path. Placeholders, replaced
 whole in arguments and environment values by the wrapper: `{python}` (the current release's venv
 python), `{app}` (its app tree), `{lane_root}`, `{config}` and `{lake_ca}` (the lab CA, when
-`cti_pipeline_lake_ca_ref` is set). The working directory is the lane root, so an app that uses
+`cti_pipeline_lake_ca_ref` is set) and `{synapse_ca}` (the graph store's own certificate, when
+`cti_pipeline_synapse_ca_ref` is set: a job names it in its env so it trusts that certificate alone). The working directory is the lane root, so an app that uses
 relative `data/`, `state/`, `podcast/` and `dist/` finds its own lane's. That directory is the
 lane's to write, so python must never import from it: the wrapper sets `PYTHONSAFEPATH=1` for every
 step of both lanes (`-m <pkg>` and a script never put the working directory on the import path),
