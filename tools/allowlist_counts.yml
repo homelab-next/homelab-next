@@ -14,7 +14,7 @@ counts:
   credential-headers-allow: 1
   run-output-lint-allow: 0
   shared-helpers-allow: 15
-  tls-verify-allow: 0
+  tls-verify-allow: 1
   workstation-refs-allow: 2
   yaml-loader-allow: 52
   scrub-allow-markers: 72
@@ -27,6 +27,6 @@ digests:
   credential-headers-allow: sha256:741f0c84795e4d682d16a229a223a75fc3080304ad8d56716be9730c2524c230
   run-output-lint-allow: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   shared-helpers-allow: sha256:65a1e62e06cdabecc08b174a61d8b96c9ebd28c9e39511718d71dae01057a0d9
-  tls-verify-allow: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  tls-verify-allow: sha256:bdf33385c1de9a45e8c40c96e46e3b6c9b640a35e256368948e28a9018ae83b8
   workstation-refs-allow: sha256:efc83f88ce7abea0c7e7b37f84bdf9b1ab41dcb56bec6ca6ff33dd296054c887
   yaml-loader-allow: sha256:b1868fa91fa08eed5370660b2c0c039d9db8862907915a7b995152a5987be441

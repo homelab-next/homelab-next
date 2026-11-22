@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Paths allowed to turn TLS verification off, each with a mandatory reason (tools/tls_verify_lint.py).
+allow:
+  - path: "modules/intel-ingest/roles/intel_ingest/files/hnx_intel_ingest.py"
+    reason: "the graph store makes its own self-signed certificate (CN and SAN a fixed name, no CA flag) and keeps it in its data; the script PINS it: it reads the presented certificate and refuses unless its exact SHA-256 equals the pinned fingerprint from the environment (a stronger check than CA trust, which a self-signed leaf with no CA flag cannot satisfy), and a host with neither a pin nor a CA file is refused, never connected unverified; the platform is verified normally against the lab CA"
