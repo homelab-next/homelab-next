@@ -593,7 +593,9 @@ def _mkdir_final(path: str, gid: int) -> None:
     except FileExistsError:
         st = os.lstat(path)
         if not stat.S_ISDIR(st.st_mode) or stat.S_IMODE(st.st_mode) != 0o750:
-            raise HandoffError("a handoff directory exists with another mode or type: " + os.path.basename(path)) from None
+            raise HandoffError(
+                "a handoff directory exists with another mode or type: " + os.path.basename(path)
+            ) from None
         if st.st_gid != gid:
             os.chown(path, -1, gid)
         return
