@@ -211,11 +211,8 @@ def newest_snapshot(cfg, guest, store, env, at):
 
 # ---------------------------------------------------------------- the checks inside the image
 def sha256_of(path):
-    h = hashlib.sha256()
     with open(path, "rb") as fh:
-        for block in iter(lambda: fh.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
+        return hashlib.file_digest(fh, "sha256").hexdigest()
 
 
 def find_exports(root):
