@@ -79,7 +79,7 @@ def _hand(body, now=NOW):
 # ---------------------------------------------------------------------------------- the wrapper
 
 
-def test_handed_off_dirs_keep_setgid_and_the_lane_out_group(tmp_path):
+def test_handed_off_dirs_are_the_lane_out_group_at_0750_with_no_setgid_bit(tmp_path):
     _p, body, root, dest = _with_handoff(tmp_path)
     others = [g for g in os.getgroups() if g != os.getgid()]
     out_gid = others[0] if others else os.getgid()  # a group the test user may chown to
@@ -94,9 +94,34 @@ def test_handed_off_dirs_keep_setgid_and_the_lane_out_group(tmp_path):
     for d in (dest / "site", got, got / "assets"):
         st = d.stat()
         assert st.st_gid == out_gid
-        assert oct(st.st_mode & 0o7777) == "0o2750"
+        # no setgid: the unit's RestrictSUIDSGID forbids setting it
+        assert oct(st.st_mode & 0o7777) == "0o750"
     for f in (got / "index.html", got / "assets" / "a.css", got / "sidecar.json"):
         assert f.stat().st_gid == out_gid and oct(f.stat().st_mode & 0o777) == "0o640"
+
+
+def test_handoff_survives_a_sandbox_that_refuses_any_setgid_chmod(tmp_path, monkeypatch):
+    """The job unit runs with RestrictSUIDSGID=yes: a chmod that sets S_ISGID fails with EPERM.
+    The handoff must not ask for it, and must still hand off every entry with its group."""
+    import errno
+    import stat as stat_mod
+
+    real_chmod = os.chmod
+
+    def sandboxed_chmod(path, mode, *a, **kw):
+        if mode & stat_mod.S_ISGID:
+            raise PermissionError(errno.EPERM, "setgid refused by RestrictSUIDSGID", str(path))
+        return real_chmod(path, mode, *a, **kw)
+
+    _p, body, root, dest = _with_handoff(tmp_path)
+    _item(root, "site", "b1", {"index.html": "<p>x</p>", "assets/a.css": "p{}"})
+    monkeypatch.setattr(run.os, "chmod", sandboxed_chmod)
+    counts = _hand(body)
+    assert counts["copied"] == 1 and counts["refused"] == 0
+    got = dest / "site" / "b1"
+    for d in (dest / "site", got, got / "assets"):
+        assert oct(d.stat().st_mode & 0o7777) == "0o750"
+    assert (got / "assets" / "a.css").read_text() == "p{}"
 
 
 def test_new_items_are_copied_whole_with_group_readable_modes_whatever_the_umask(tmp_path):
@@ -457,3 +482,38 @@ def test_the_group_exists_before_the_dropin_that_names_it():
     main = (ROLE / "tasks" / "main.yml").read_text()
     assert main.index("dirs.yml") < main.index("config.yml")
     assert "cti_pipeline_handoff_group[item]" in (ROLE / "tasks" / "dirs.yml").read_text()
+
+
+def test_handoff_dirs_get_their_mode_at_creation_never_via_a_directory_chmod(tmp_path, monkeypatch):
+    """No directory is ever chmod'd: the 0750 is given at creation (umask cleared for the call), so a
+    narrow or a wide process umask both yield exactly 0750."""
+    real_chmod = os.chmod
+
+    def no_dir_chmod(path, mode, *a, **kw):
+        assert not os.path.isdir(path), f"a directory chmod: {path}"
+        return real_chmod(path, mode, *a, **kw)
+
+    for umask in (0o077, 0o000):
+        sub = tmp_path / f"u{umask:o}"
+        sub.mkdir()
+        _p, body, root, dest = _with_handoff(sub)
+        _item(root, "site", "b1", {"index.html": "<p>x</p>", "assets/deep/a.css": "p{}"})
+        old = os.umask(umask)
+        try:
+            with monkeypatch.context() as m:
+                m.setattr(run.os, "chmod", no_dir_chmod)
+                _hand(body)
+        finally:
+            os.umask(old)
+        got = dest / "site" / "b1"
+        for d in (dest / "site", got, got / "assets", got / "assets" / "deep"):
+            assert oct(d.stat().st_mode & 0o7777) == "0o750"
+
+
+def test_an_existing_handoff_dir_with_another_mode_fails_loudly_and_is_not_rechmodded(tmp_path):
+    _p, body, root, dest = _with_handoff(tmp_path)
+    _item(root, "site", "b1", {"index.html": "<p>x</p>"})
+    (dest / "site").mkdir(mode=0o700)
+    with pytest.raises(run.HandoffError):
+        _hand(body)
+    assert oct((dest / "site").stat().st_mode & 0o7777) == "0o700"
