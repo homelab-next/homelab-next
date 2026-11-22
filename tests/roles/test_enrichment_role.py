@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import pwd
+import string
 import sys
 import types
 from pathlib import Path
@@ -271,6 +272,11 @@ def _first_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
         ({}, {f"HNX_SECRET_{UP}_DB_PASSWORD": "short"}),
         ({}, {f"HNX_SECRET_{UP}_DB_PASSWORD": "has'quote-0123456789abcdefgh"}),
         ({}, {f"HNX_SECRET_{UP}_DJANGO_SECRET": "k" * 20}),
+        ({}, {f"HNX_SECRET_{UP}_DJANGO_SECRET": "k" * 20 + "'" + "k" * 20}),
+        ({}, {f"HNX_SECRET_{UP}_DJANGO_SECRET": "k" * 20 + '"' + "k" * 20}),
+        ({}, {f"HNX_SECRET_{UP}_DJANGO_SECRET": "k" * 20 + " " + "k" * 20}),
+        ({}, {f"HNX_SECRET_{UP}_DJANGO_SECRET": "k" * 20 + "\n" + "k" * 20}),
+        ({}, {f"HNX_SECRET_{UP}_DJANGO_SECRET": "k" * 20 + "\t" + "k" * 20}),
         ({}, {f"HNX_SECRET_{UP}_API_TOKEN": "t" * 32}),
         ({}, {f"HNX_SECRET_{UP}_ADMIN_PASSWORD": "short"}),
         ({}, {f"HNX_SECRET_{UP}_DJANGO_SECRET": DB_PASSWORD}),
@@ -281,6 +287,31 @@ def test_main_refuses_bad_inputs_and_credentials(first, over, env):
     r, tmp_path = first
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+# every character the framework's secret-key generator draws from (letters, digits, !@#$%^&*(-_=+))
+FRAMEWORK_CHARS = string.ascii_lowercase + string.digits + "!@#$%^&*(-_=+)"
+FRAMEWORK_VALUE = (FRAMEWORK_CHARS * 2)[:50]
+
+
+def _first_main_accepts_a_framework_generated_signing_secret(tmp_path):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pv(tmp_path),
+        "env": {**SECRETS, f"HNX_SECRET_{UP}_DJANGO_SECRET": FRAMEWORK_VALUE},
+    }
+
+
+@first_run(_first_main_accepts_a_framework_generated_signing_secret)
+def test_main_accepts_a_framework_generated_signing_secret(first):
+    """The source instance's secret holds characters like !%)*@^ ; it is carried over unchanged,
+    written single-quoted (so none is special) and never printed."""
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    env = (tmp_path / "app" / "secrets" / "uwsgi.env").read_text()
+    assert f"DJANGO_SECRET='{FRAMEWORK_VALUE}'" in env
+    assert FRAMEWORK_VALUE not in r.stdout + r.stderr
 
 
 # ----------------------------------------------------------------------------- a fake docker
