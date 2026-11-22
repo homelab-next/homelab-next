@@ -272,6 +272,11 @@ argument_specs:
         description: state (the archive, with the service stopped) or flows (import the portable definitions
           by name).
         default: state
+      nifi_flow_run: &idflowrun
+        type: dict
+        description: Flows mode, flow name to true/false; true starts that group after its parameter context
+          is bound and its controller services are ENABLED. Absent or false leaves its run state alone.
+        default: {}
   readiness:
     short_description: Fail unless the container engine, every credential and the lake and bus dependencies
       are ready.
@@ -555,11 +560,7 @@ argument_specs:
         type: path
         description: Directory holding an export (listing.jsonl, state.tar.gz, flows/).
         required: true
-      nifi_flow_run:
-        type: dict
-        description: Flows mode, flow name to true/false; true starts that group after its parameter context
-          is bound and its controller services are ENABLED. Absent or false leaves its run state alone.
-        default: {}
+      nifi_flow_run: *idflowrun
   upgrade:
     short_description: Validate an image bump (tag and digest) and record it as pending.
     options:
