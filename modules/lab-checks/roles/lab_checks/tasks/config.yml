@@ -77,7 +77,8 @@
   register: lab_checks_validate
   changed_when: false
   failed_when: lab_checks_validate.rc != 0
-  check_mode: false
+  # in check mode the staging copy above did not write, so there is nothing on the host to validate
+  when: not ansible_check_mode
 
 - name: Put the register in place
   ansible.builtin.copy:
