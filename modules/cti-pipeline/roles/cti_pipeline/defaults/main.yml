@@ -52,7 +52,7 @@ cti_pipeline_publish_mode_env: PUBLISH_MODE
 # {<job>: {steps: [[argv], ...], timeout_s, max_age_s, lanes?, env?, refs?}}
 #   job        a slug of up to 48 characters, the unit's instance first part (hnx-<id>@<job>-<lane>)
 #   steps      argv lists run in order in the lane root; the first failure ends the job. Placeholders
-#              {python} {app} {lane_root} {config} {lake_ca} (README, "Jobs")
+#              {python} {app} {lane_root} {config} {lake_ca} {synapse_ca} (README, "Jobs")
 #   timeout_s  the unit's TimeoutStartSec; max_age_s the health hook's freshness bound (0: not judged)
 #   lanes      a subset of cti_pipeline_lanes (default: all); env merged over the lane's env
 #   refs       the names (of the lane's refs) this job's processes get (default: every one of the lane's)
@@ -123,6 +123,9 @@ cti_pipeline_lake_query_id: ""
 cti_pipeline_lake_probe_path: /v1/info
 # the lab CA (a secret holding PEM) written to <config>/lake-ca.pem, the {lake_ca} placeholder; empty: none
 cti_pipeline_lake_ca_ref: ""
+# the graph store's own certificate (a secret holding PEM; public) written to <config>/synapse-ca.pem, the {synapse_ca} placeholder; empty: none.
+# A job's env names it (the app's SYNAPSE_CA_FILE) so that job trusts that certificate alone, never the lab CA
+cti_pipeline_synapse_ca_ref: ""
 cti_pipeline_allow_plain_http: false
 cti_pipeline_health_timeout: 20
 

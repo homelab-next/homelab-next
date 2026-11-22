@@ -251,3 +251,18 @@ def test_quiesce_also_blocks_a_loaded_instance_the_site_no_longer_declares():
     )
     names = tasks[1]["ansible.builtin.set_fact"]["cti_pipeline_quiesce_units"]
     assert "cti_pipeline_quiesce_loaded.stdout_lines" in names and "unique" in names
+
+
+def test_synapse_ca_placeholder_is_only_named_when_the_ref_is_set(site):
+    ctx, inst = site
+    off = json.loads(render("job-spec.json.j2", ctx, inst["fresh-real"]))
+    assert "synapse_ca" not in off["placeholders"]
+    on_ctx = {**ctx, "cti_pipeline_synapse_ca_ref": "secret:cti-pipeline/synapse-ca"}
+    on = json.loads(render("job-spec.json.j2", on_ctx, inst["fresh-real"]))
+    assert on["placeholders"]["synapse_ca"] == f"{ctx['cti_pipeline_config_dir']}/synapse-ca.pem"
+    assert "lake_ca" not in on["placeholders"]  # independent of the lake CA ref
+
+
+def test_the_wrapper_accepts_the_synapse_ca_placeholder():
+    text = (ROLE / "files" / "hnx-cti-run").read_text()
+    assert '"lake_ca", "synapse_ca")' in text
