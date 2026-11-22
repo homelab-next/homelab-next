@@ -5,7 +5,8 @@
 # credential (the app creates the administrator before it listens, and the worker waits for it).
 # The worker is NOT given IRIS_WORKER: with it the product skips its start-up and its session key
 # and salt, which the worker's module hooks decrypt stored settings with (the official compose
-# leaves it unset). Only the front publishes a port.
+# leaves it unset). Only the front publishes a port. With the enrichment wiring on, the app and the worker (the
+# two processes that call the platform) get the CA directory read-only.
 - name: Build the application spec
   ansible.builtin.set_fact:
     dfir_iris_app:
@@ -61,10 +62,11 @@
             environment: >-
               {{ dfir_iris_fixed_env | combine({'IRIS_ADM_USERNAME': dfir_iris_admin_user,
                                                 'IRIS_ADM_EMAIL': dfir_iris_admin_email}) }}
-            volumes:
-              - "{{ dfir_iris_data_root }}/files/server_data:{{ dfir_iris_container_files }}/server_data"
-              - "{{ dfir_iris_data_root }}/files/user_templates:{{ dfir_iris_container_files }}/user_templates"
-              - "{{ dfir_iris_data_root }}/files/downloads:{{ dfir_iris_container_files }}/downloads"
+            volumes: >-
+              {{ [dfir_iris_data_root ~ '/files/server_data:' ~ dfir_iris_container_files ~ '/server_data',
+                  dfir_iris_data_root ~ '/files/user_templates:' ~ dfir_iris_container_files ~ '/user_templates',
+                  dfir_iris_data_root ~ '/files/downloads:' ~ dfir_iris_container_files ~ '/downloads']
+                 + ([dfir_iris_data_root ~ '/trust:' ~ dfir_iris_container_trust ~ ':ro'] if dfir_iris_intel_enabled | bool else []) }}
             mem_limit: "{{ dfir_iris_app_mem_limit }}"
             healthcheck:
               test: [CMD, curl, -fsS, -o, /dev/null, "http://localhost:{{ dfir_iris_container_app_port }}/login"]
@@ -80,10 +82,11 @@
             user: "{{ dfir_iris_app_uid | int }}:{{ dfir_iris_app_gid | int }}"
             depends_on: [db, broker, app]
             environment: "{{ dfir_iris_fixed_env }}"
-            volumes:
-              - "{{ dfir_iris_data_root }}/files/server_data:{{ dfir_iris_container_files }}/server_data"
-              - "{{ dfir_iris_data_root }}/files/user_templates:{{ dfir_iris_container_files }}/user_templates"
-              - "{{ dfir_iris_data_root }}/files/downloads:{{ dfir_iris_container_files }}/downloads"
+            volumes: >-
+              {{ [dfir_iris_data_root ~ '/files/server_data:' ~ dfir_iris_container_files ~ '/server_data',
+                  dfir_iris_data_root ~ '/files/user_templates:' ~ dfir_iris_container_files ~ '/user_templates',
+                  dfir_iris_data_root ~ '/files/downloads:' ~ dfir_iris_container_files ~ '/downloads']
+                 + ([dfir_iris_data_root ~ '/trust:' ~ dfir_iris_container_trust ~ ':ro'] if dfir_iris_intel_enabled | bool else []) }}
             mem_limit: "{{ dfir_iris_worker_mem_limit }}"
             healthcheck:
               test: [CMD, pgrep, -f, celery]

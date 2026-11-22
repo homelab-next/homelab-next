@@ -34,7 +34,9 @@
   check_mode: false
   no_log: true
 
+# dfir_iris_probe_quiet: the body may hold a secret (the module settings list), so the facts are not shown
 - name: Keep the status line and the body (never the request)
+  no_log: "{{ dfir_iris_probe_quiet | default(false) | bool }}"
   ansible.builtin.set_fact:
     dfir_iris_probe_code: "{{ (dfir_iris_probe_out.stdout | default('') | trim).splitlines() | last | default('0') if (dfir_iris_probe_out.rc | default(1)) == 0 else '0' }}"
     dfir_iris_probe_body: "{{ ((dfir_iris_probe_out.stdout | default('')).splitlines()[:-1] | join('\n')) if (dfir_iris_probe_out.rc | default(1)) == 0 else '' }}"

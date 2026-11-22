@@ -32,6 +32,9 @@ ROOT = Path(__file__).resolve().parents[2]
 ROLE = str(ROLE_DIR)
 USER = pwd.getpwuid(os.getuid()).pw_name
 DEFAULTS = defaults()
+#: the role's fixed values: the product's module and setting names live there only
+FIXED = yaml.safe_load((ROLE_DIR / "vars" / "main.yml").read_text())
+SET = FIXED[P + "intel_settings"]
 #: the example registry's edge address (a documentation-range address, never connected to)
 GUEST = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())["hosts"]["edge-core"][
     "address"
@@ -257,7 +260,16 @@ def _env(pki, **extra):
 
 def _front(tmp_path, pki, **kw):
     return Front(
-        pki["chain"], pki["key"], tmp_path, **{"api_key": ACCESS, "version": VERSION, **kw}
+        pki["chain"],
+        pki["key"],
+        tmp_path,
+        **{
+            "api_key": ACCESS,
+            "version": VERSION,
+            "settings": list(SET.values()),
+            "human_name": FIXED[P + "intel_module_human_name"],
+            **kw,
+        },
     )
 
 
@@ -656,3 +668,146 @@ def test_upgrade_records_only_a_pinned_target_that_is_not_older(first):
         r = run_role(tmp_path, ROLE, "upgrade", {**v, **bad}, env=SECRETS)
         assert r.returncode != 0, bad
         assert not (tmp_path / "app" / "pending-upgrade.json").exists()
+
+
+# ----------------------------------------------------------------------------- the enrichment wiring
+
+INTEL_URL = "https://threat-intel.example.internal"
+INTEL_KEY = "m" * 20 + "7" * 20  # a platform key: 40 letters and digits (built here, not a literal)
+INTEL_ENV = {env_for(ref("threat-intel-key")): INTEL_KEY}
+
+
+def intel_vars(tmp_path: Path, **kw) -> dict:
+    return pv(tmp_path, **{"intel_enabled": True, "intel_url": INTEL_URL, **kw})
+
+
+def _first_main_mounts_the_platform_ca_into_the_app_and_the_worker_only(tmp_path):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": intel_vars(tmp_path),
+        "env": {**SECRETS, **INTEL_ENV},
+    }
+
+
+@first_run(_first_main_mounts_the_platform_ca_into_the_app_and_the_worker_only)
+def test_main_mounts_the_platform_ca_into_the_app_and_the_worker_only(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    svc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]
+    want = f"{tmp_path}/data/trust:/etc/hnx-trust:ro"
+    assert want in svc["app"]["volumes"] and want in svc["worker"]["volumes"]
+    for name in ("db", "broker", "nginx"):
+        assert all("/trust" not in v for v in svc[name]["volumes"]), name
+    ca = tmp_path / "data" / "trust" / "threat-intel-ca.pem"
+    assert ca.read_text().startswith("-----BEGIN CERTIFICATE-----")
+    # the platform's key is a secret of the module's own: in no file and no output
+    text = (tmp_path / "app" / "docker-compose.yml").read_text()
+    assert INTEL_KEY not in text + r.stdout + r.stderr
+    assert all(INTEL_KEY not in p.read_text() for p in (tmp_path / "app" / "secrets").iterdir())
+
+
+def _first_main_without_the_wiring_mounts_nothing(tmp_path):
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": pv(tmp_path), "env": SECRETS}
+
+
+@first_run(_first_main_without_the_wiring_mounts_nothing)
+def test_main_without_the_wiring_mounts_nothing(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    svc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]
+    assert all("/trust" not in v for s in svc.values() for v in s.get("volumes", []))
+    assert not (tmp_path / "data" / "trust").exists()
+
+
+def _first_main_refuses_a_bad_wiring(tmp_path, over, env):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": intel_vars(tmp_path, **over),
+        "env": {**SECRETS, **INTEL_ENV, **{env_for(ref(n)): v for n, v in env.items()}},
+    }
+
+
+@pytest.mark.parametrize(
+    "over, env",
+    [
+        ({"intel_url": "http://threat-intel.example.internal"}, {}),
+        ({"intel_url": f"https://{GUEST}"}, {}),
+        ({"intel_url": ""}, {}),
+        ({"intel_key_ref": ref("api-key")}, {}),  # the module's own administrator key
+        ({"intel_key_ref": ref("ca")}, {}),
+        ({"intel_name": "has a space"}, {}),
+        ({}, {"threat-intel-key": "short"}),
+        ({}, {"threat-intel-key": SESSION_KEY}),  # the same value as another credential
+        ({}, {"threat-intel-key": ""}),
+    ],
+)  # fmt: skip
+@first_run(_first_main_refuses_a_bad_wiring)
+def test_main_refuses_a_bad_wiring(first, over, env):
+    r, tmp_path = first
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+    assert INTEL_KEY not in r.stdout + r.stderr
+
+
+def _wired(tmp_path, pki, **front_kw):
+    env = _env(pki, **INTEL_ENV, **_docker(tmp_path))
+    front = _front(tmp_path, pki, **front_kw)
+    return env, front
+
+
+def test_main_wires_the_module_and_a_second_run_changes_nothing(tmp_path, pki):
+    env, front = _wired(tmp_path, pki)
+    with front:
+        v = intel_vars(tmp_path, **{"ansible_host": LOOPBACK, "port": front.port, "start": True, "ready_timeout": 10})  # fmt: skip
+        r = run_role(tmp_path, ROLE, "main", v, env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+        cfg = json.loads(front.settings[SET["config"]])
+        assert cfg == {
+            "name": "threat-intel",
+            "type": "public",
+            "url": [INTEL_URL],
+            "key": [INTEL_KEY],
+            "ssl": ["/etc/hnx-trust/threat-intel-ca.pem"],
+        }
+        assert front.settings[SET["on_create"]] is True
+        assert front.settings[SET["on_update"]] is False
+        assert front.settings[SET["manual"]] is True
+        assert front.module_active is True
+        # one write a setting, then one enable, every call keyed with the administrator's key
+        posts = [p for p, _ in front.posts if p.startswith("/manage/modules/")]
+        assert posts.count("/manage/modules/enable/7") == 1 and len(posts) == 6, posts
+        assert posts[-1] == "/manage/modules/enable/7"
+        # no secret in an argument, an output or a log line
+        for out in (r.stdout, r.stderr, " ".join(_calls(tmp_path)), (tmp_path / "curl.log").read_text()):  # fmt: skip
+            assert INTEL_KEY not in out
+        before = len(front.posts)
+        again = run_role(tmp_path, ROLE, "main", v, env=env)
+        assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+        assert [p for p, _ in front.posts[before:] if p.startswith("/manage/modules/")] == []
+
+
+def test_main_registers_a_module_the_product_does_not_list(tmp_path, pki):
+    env, front = _wired(tmp_path, pki, module_listed=False)
+    with front:
+        v = intel_vars(tmp_path, **{"ansible_host": LOOPBACK, "port": front.port, "start": True, "ready_timeout": 10})  # fmt: skip
+        r = run_role(tmp_path, ROLE, "main", v, env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+        adds = [b for p, b in front.posts if p == "/manage/modules/add"]
+        assert [json.loads(b) for b in adds] == [{"module_name": FIXED[P + "intel_module_name"]}]
+        assert front.module_active is True
+
+
+def test_health_checks_the_module_when_the_wiring_is_on(tmp_path, pki):
+    env, front = _wired(tmp_path, pki)
+    with front:
+        v = intel_vars(tmp_path, **{"ansible_host": LOOPBACK, "port": front.port, "start": True, "ready_timeout": 10})  # fmt: skip
+        assert run_role(tmp_path, ROLE, "main", v, env=env).returncode == 0
+        ok = run_role(tmp_path, ROLE, "health", v, env=env)
+        assert ok.returncode == 0, ok.stdout + ok.stderr
+        assert INTEL_KEY not in ok.stdout + ok.stderr
+        front.module_active = False  # the product disabled it
+        bad = run_role(tmp_path, ROLE, "health", v, env=env)
+        assert bad.returncode != 0
+        assert "configured and enabled" in bad.stdout + bad.stderr

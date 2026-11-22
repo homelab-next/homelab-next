@@ -134,12 +134,15 @@ def test_the_row_is_internal_https_with_the_products_own_accounts_and_no_public_
     assert "public_hostname" not in row and "version" not in row and "roles" not in row
 
 
-def test_the_secrets_are_the_nine_the_role_reads_and_nothing_else():
+def test_the_secrets_are_the_ten_the_role_reads_and_nothing_else():
     manifest = ld.load_yaml(MODULE / "module.yml")
     declared = sorted(c["secret"] for c in manifest["credentials"])
-    assert len(declared) == 9 and all(s.startswith(f"secret:{MID}/") for s in declared)
+    # nine for the service, one for the optional MISP wiring (the platform account's key)
+    assert len(declared) == 10 and all(s.startswith(f"secret:{MID}/") for s in declared)
     assert all(c["holder"] == "provider" for c in manifest["credentials"])
-    refs = sorted(v for k, v in defaults().items() if k.endswith("_ref"))
+    refs = sorted(
+        v for k, v in defaults().items() if k.endswith("_ref") and str(v).startswith("secret:")
+    )
     assert refs == declared
     text = "".join(p.read_text() for p in MODULE.rglob("*.yml"))
     assert sorted(set(re.findall(r"secret:[a-z0-9/_.-]+", text))) == declared

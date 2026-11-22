@@ -61,3 +61,18 @@ dfir_iris_pem_key_pattern: '(?s)-----BEGIN (RSA |EC )?PRIVATE KEY-----.+-----END
 # a real newline for the config lines curl reads from its standard input (a Jinja string literal keeps "\n" as two characters)
 dfir_iris_nl: "\n"
 dfir_iris_bs: "\\"
+# the product's bundled enrichment module: how it is registered, and where the platform's CA is mounted
+dfir_iris_intel_module_name: iris_misp_module
+dfir_iris_intel_module_human_name: IrisMISP
+# the module's own setting names (the product's), by what they are for; the only place they are spelled
+dfir_iris_intel_settings:
+  config: misp_config
+  report: misp_report_as_attribute
+  manual: misp_manual_hook_enabled
+  on_create: misp_on_create_hook_enabled
+  on_update: misp_on_update_hook_enabled
+dfir_iris_container_trust: /etc/hnx-trust
+dfir_iris_intel_ca_file: threat-intel-ca.pem
+dfir_iris_intel_url_pattern: '^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?/?\Z'
+# the platform's API key: 40 letters and digits
+dfir_iris_intel_key_value_pattern: '^[A-Za-z0-9]{40}\Z'
