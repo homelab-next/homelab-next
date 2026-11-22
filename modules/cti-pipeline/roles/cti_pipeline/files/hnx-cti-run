@@ -581,33 +581,55 @@ def _same_item(src: str, files: dict, dest: str) -> bool:
     return all(_read_nofollow(os.path.join(src, r)) == _read_nofollow(os.path.join(dest, r)) for r in files)
 
 
-def _set_dir(path: str, gid: int) -> None:
-    """A handed-off directory: the lane's out group, setgid (so entries inherit it), 02750.  chown
-    first: a chmod on a directory of another group would drop the setgid bit."""
+def _mkdir_final(path: str, gid: int) -> None:
+    """Make one handed-off directory with its final mode: the lane's out group, exactly 0750, no setgid
+    bit (the unit runs under RestrictSUIDSGID=yes and nothing needs it: every entry is chgrp'd
+    explicitly, never left to inherit).  The mode is given at creation, with the umask cleared for the
+    call so the result is exactly 0750 whatever the unit's UMask, never widened by a chmod afterwards.
+    A directory already there is verified (mode, group), never re-moded: a mismatch is an error."""
+    old = os.umask(0)
+    try:
+        os.mkdir(path, 0o750)
+    except FileExistsError:
+        st = os.lstat(path)
+        if not stat.S_ISDIR(st.st_mode) or stat.S_IMODE(st.st_mode) != 0o750:
+            raise HandoffError(
+                "a handoff directory exists with another mode or type: " + os.path.basename(path)
+            ) from None
+        if st.st_gid != gid:
+            os.chown(path, -1, gid)
+        return
+    finally:
+        os.umask(old)
     os.chown(path, -1, gid)
-    os.chmod(path, 0o2750)
+
+
+def _mkdirs_final(root: str, rel_dir: str, gid: int) -> None:
+    """Each missing directory of ``rel_dir`` under ``root``, created by :func:`_mkdir_final`."""
+    cur = root
+    for part in rel_dir.split(os.sep):
+        if part in ("", "."):
+            continue
+        cur = os.path.join(cur, part)
+        _mkdir_final(cur, gid)
 
 
 def _copy_item(src: str, files: dict, dest_kind_dir: str, name: str, gid: int) -> None:
     """Build the item beside its place (``.tmp-<hex>``, group-readable) and rename it in: a reader
     sees all of an item or none of it, never half.  Every directory is the lane's out group ``gid``
-    with the setgid bit (02750) and every file 0640 in that group, set explicitly: the publishing
-    module reads through that group alone."""
+    at 0750 and every file 0640 in that group, each set explicitly (no reliance on setgid
+    inheritance): the publishing module reads through that group alone."""
     tmp = os.path.join(dest_kind_dir, ".tmp-" + os.urandom(6).hex())
-    os.mkdir(tmp, 0o750)
+    _mkdir_final(tmp, gid)
     try:
-        _set_dir(tmp, gid)
         for rel in sorted(files):
             target = os.path.join(tmp, rel)
-            os.makedirs(os.path.dirname(target), mode=0o750, exist_ok=True)
+            _mkdirs_final(tmp, os.path.dirname(rel), gid)
             fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o640)
             with os.fdopen(fd, "wb") as out:
                 out.write(_read_nofollow(os.path.join(src, rel)))
             os.chown(target, -1, gid)
             os.chmod(target, 0o640)  # the unit's UMask is 0077; the reader reads through the group
-        for dirpath, dirnames, _files in os.walk(tmp):
-            for d in dirnames:
-                _set_dir(os.path.join(dirpath, d), gid)
         os.rename(tmp, os.path.join(dest_kind_dir, name))
     except BaseException:
         with contextlib.suppress(OSError):
@@ -661,11 +683,12 @@ def handoff(spec: dict, now_s: float | None = None, ids: dict | None = None) -> 
     Per item (``<source>/<kind>/<id>/``, a ``sidecar.json`` beside the files): an item already there
     with the same bytes is left alone; a changed item under a name already handed off is a conflict
     (a published id never changes: refused, never overwritten); a new one is copied, with mode 0640 and
-    0750 (directories 02750, setgid, group the lane's out group) whatever the unit's umask, into a ``.tmp-`` directory and renamed in.  Links, devices and
-    hard-linked files, or a missing sidecar, refuse the item (``refused``); entries that are not item
-    directories are ``skipped``.  Returns the counters (copied, unchanged, conflicts, refused, skipped,
-    pruned), or None without a handoff block; raises :class:`HandoffError` for what it cannot judge.  ``ids``, when given, is filled with the
-    ``conflicts`` and ``refused`` item names (never content)."""
+    0750 (directories group the lane's out group, no setgid bit) whatever the unit's umask, into a
+    ``.tmp-`` directory and renamed in.  Links, devices and hard-linked files, or a missing sidecar,
+    refuse the item (``refused``); entries that are not item directories are ``skipped``.  Returns
+    the counters (copied, unchanged, conflicts, refused, skipped, pruned), or None without a handoff
+    block; raises :class:`HandoffError` for what it cannot judge.  ``ids``, when given, is filled
+    with the ``conflicts`` and ``refused`` item names (never content)."""
     h = spec.get("handoff")
     if h is None:
         return None
@@ -687,8 +710,7 @@ def handoff(spec: dict, now_s: float | None = None, ids: dict | None = None) -> 
         ddir = os.path.join(h["dest"], kind)
         if os.path.islink(ddir):
             raise HandoffError("the handoff kind directory is a link")
-        os.makedirs(ddir, mode=0o750, exist_ok=True)
-        _set_dir(ddir, gid)
+        _mkdir_final(ddir, gid)
         names = sorted(n for n in os.listdir(sdir) if not n.startswith("."))
         for name in names:
             src = os.path.join(sdir, name)
