@@ -17,7 +17,6 @@
       - intel_ingest_threat_intel_ca_ref != ''
       - intel_ingest_graph_ca_ref != ''
       - intel_ingest_oncalendar is match('^[A-Za-z0-9 *:/,.-]{3,80}\Z')
-      - intel_ingest_randomized_delay_s | int >= 0
       - intel_ingest_max_runtime_s | int >= 60
       - intel_ingest_state_seed_file == '' or intel_ingest_state_seed_file is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z')
       - >-

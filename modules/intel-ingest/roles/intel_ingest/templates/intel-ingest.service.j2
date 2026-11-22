@@ -12,6 +12,8 @@ User={{ intel_ingest_user }}
 Group={{ intel_ingest_group }}
 EnvironmentFile={{ intel_ingest_env_file }}
 EnvironmentFile={{ intel_ingest_login_env_file }}
+# the timer's runs are reported to the shared last-run record (the writer runs privileged: +)
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ intel_ingest_last_run_dir }} --group {{ intel_ingest_last_run_group }} --job timer:intel_ingest/intel-ingest --unit %n --calendar "{{ intel_ingest_oncalendar }}" --delay 0
 ExecStart=/usr/local/libexec/homelabnext/hnx-intel-ingest
 # the script saves its checkpoint on SIGTERM and exits cleanly; give it time to finish the current page
 KillSignal=SIGTERM
@@ -19,6 +21,7 @@ TimeoutStopSec=5min
 # exit 2 is the script's DELIBERATE "paused at the cap or on a signal, resume next time": progress, not failure
 SuccessExitStatus=2
 Nice=10
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ intel_ingest_last_run_dir }} --group {{ intel_ingest_last_run_group }} --job timer:intel_ingest/intel-ingest --unit %n --calendar "{{ intel_ingest_oncalendar }}" --delay 0
 {% if hnx_module_slice | default('') %}
 Slice={{ hnx_module_slice }}
 {% endif %}

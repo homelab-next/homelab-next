@@ -72,10 +72,6 @@ argument_specs:
         type: str
         description: The daily run's systemd calendar expression.
         default: '*-*-* 13:00:00 UTC'
-      intel_ingest_randomized_delay_s:
-        type: int
-        description: Random delay added to the run, in seconds.
-        default: 600
       intel_ingest_max_runtime_s:
         type: int
         description: Per-run wall-clock cap in seconds; a run that cannot finish pauses on its checkpoint
@@ -99,6 +95,18 @@ argument_specs:
         type: path
         description: Where the units are written.
         default: /etc/systemd/system
+      intel_ingest_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      intel_ingest_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      intel_ingest_last_run_writer:
+        type: path
+        description: Where the shared last-run writer is installed.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
       intel_ingest_systemctl_cli:
         type: str
         description: The systemctl command the hooks use.

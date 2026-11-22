@@ -83,6 +83,14 @@
   when: intel_ingest_state_seed_file != '' and not intel_ingest_state_stat.stat.exists
   no_log: true
 
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ intel_ingest_last_run_dir }}"
+    last_run_group: "{{ intel_ingest_last_run_group }}"
+    last_run_writer: "{{ intel_ingest_last_run_writer }}"
+
 - name: Write the units
   ansible.builtin.template:
     src: "{{ item.src }}"

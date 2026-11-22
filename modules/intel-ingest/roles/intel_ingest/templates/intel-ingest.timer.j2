@@ -8,7 +8,6 @@ Description=intel-ingest {{ intel_ingest_logical_id }}: daily
 
 [Timer]
 OnCalendar={{ intel_ingest_oncalendar }}
-RandomizedDelaySec={{ intel_ingest_randomized_delay_s | int }}
 Persistent=true
 Unit={{ intel_ingest_unit }}
 

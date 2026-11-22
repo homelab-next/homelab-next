@@ -1103,6 +1103,7 @@
         "timer:clamav/scan",
         "timer:context/reindex",
         "timer:honeypot/lake",
+        "timer:intel_ingest/intel-ingest",
         "timer:honeypot/report",
         "timer:lynis/scan",
         "timer:media_automation/cleanup-downloads",

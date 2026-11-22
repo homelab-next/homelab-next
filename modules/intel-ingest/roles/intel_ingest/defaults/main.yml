@@ -37,7 +37,6 @@ intel_ingest_graph_ca_ref: secret:intel-ingest/graph-ca
 # cannot finish pauses on its checkpoint (the script exits 2, which the unit accepts) and the next
 # run resumes
 intel_ingest_oncalendar: "*-*-* 13:00:00 UTC"
-intel_ingest_randomized_delay_s: 600
 intel_ingest_max_runtime_s: 7200
 # an existing walk state (the old lab's state.json, or an export's) installed ONLY when the state
 # directory holds none: create-only, never replaces a live state. It must be this module's form.
@@ -49,3 +48,8 @@ intel_ingest_start: true
 intel_ingest_unit_dir: /etc/systemd/system
 intel_ingest_systemctl_cli: systemctl
 intel_ingest_health_timeout: 10
+# the shared last-run record directory (role last_run) and the group that may read it: the timer's runs
+# are reported there
+intel_ingest_last_run_dir: /var/lib/homelabnext/last-run
+intel_ingest_last_run_group: root
+intel_ingest_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
