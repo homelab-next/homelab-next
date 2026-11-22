@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the client's preferences
+      ansible.builtin.command:
+        argv: ["{{ subnet_router_cli }}", debug, prefs]
+      register: subnet_router_health
+      changed_when: false
+      check_mode: false  # read-only: it runs in --check too
+    - name: Read the kernel's forwarding switch
+      ansible.builtin.slurp:
+        src: "{{ subnet_router_forward_file }}"
+      register: subnet_router_forward
+    - name: Fail unless exactly the listed networks are advertised and forwarding is on
+      ansible.builtin.assert:
+        that:
+          - >-
+            ((subnet_router_health.stdout | from_json).AdvertiseRoutes | default([], true) | sort)
+            == (subnet_router_advertise_routes | unique | sort)
+          - (subnet_router_forward.content | b64decode | trim) == '1'
+        fail_msg: "subnet_router: the advertised networks differ from the list, or IPv4 forwarding is off"
+  tags: [health]

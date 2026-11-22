@@ -178,6 +178,34 @@ forward and answered healthy. To do it for real:
 
 The restore drops and recreates every object in `iris_db`; it is not additive.
 
+## Enrichment from the threat-intel platform (optional)
+
+The image bundles the product's MISP module (`iris-misp-module`). With `dfir_iris_intel_enabled: true`
+the role wires it after the app answers with the administrator's key, through the product's own
+administration API (never the database): it finds the module (registering `iris_misp_module` when
+the product does not list it), writes each setting that differs, then enables it. A second run
+changes nothing.
+
+| Variable | Meaning |
+|---|---|
+| `dfir_iris_intel_url` | the platform's HTTPS base URL, an internal DNS name (an IP address, plain HTTP or an empty value is refused) |
+| `dfir_iris_intel_key_ref` | the secret named `dfir-iris/threat-intel-key` by default: the API key (40 letters and digits) of a **dedicated** platform account with the least role that can search attributes. Never the platform administrator's, and distinct from every credential of this module |
+| `dfir_iris_intel_ca_ref` | the CA the platform's certificate is checked against (default: the lab CA, `dfir_iris_ca_ref`); written to `trust/threat-intel-ca.pem` and mounted read-only at `/etc/hnx-trust` in the app and the worker, the two processes that call the platform; the front's key is never in that directory |
+| `dfir_iris_intel_name` | the instance's name in the settings and in the enrichment (default `threat-intel`) |
+| `dfir_iris_intel_on_create` / `_on_update` | enrich an IOC when it is created (default on) / updated (default off); the manual "Get MISP insight" action is always on |
+
+The product stores a module's settings in its database as JSON, so the key is in the database (and in
+every export of it) in clear, like any module setting of the product; it is in no environment, compose
+file or argument (curl reads it on standard input, the tasks are `no_log`, and the probe hides the
+module list, which holds it once set). Rotating the key is changing the secret and running `main`
+again. `health` then also checks that the module is listed, configured and enabled (the product's
+own module list disables a module it finds unconfigured, so listing is not strictly read-only).
+Whether the platform accepts the key is shown by a real enrichment: add an IOC to a case and read the
+"MISP" insight on it.
+
+The module prefers the `threat-intel` capability: a site that selects a provider for it reaches it
+with no extra grant line; a site with none keeps the option off.
+
 ## Upgrade
 
 `playbooks/upgrade.yml -e dfir_iris_target_image=<repository:vX.Y.Z@sha256:...>` (or

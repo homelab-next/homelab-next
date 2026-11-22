@@ -113,6 +113,38 @@ argument_specs:
         description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
           with.'
         default: secret:dfir-iris/ca
+      dfir_iris_intel_enabled:
+        type: bool
+        description: Wire the product's bundled enrichment module to the threat-intel platform (register, configure,
+          enable); off by default.
+        default: false
+      dfir_iris_intel_url:
+        type: str
+        description: The threat-intel platform's HTTPS base URL (an internal name); required when the MISP
+          wiring is on.
+        default: ''
+      dfir_iris_intel_key_ref:
+        type: str
+        description: 'secret: reference of the API key of the DEDICATED platform account the module reads
+          with (never the platform administrator''s).'
+        default: secret:dfir-iris/threat-intel-key
+      dfir_iris_intel_ca_ref:
+        type: str
+        description: 'secret: reference of the CA certificate (PEM) the platform''s certificate is checked
+          against; by default the lab CA.'
+        default: '{{ dfir_iris_ca_ref }}'
+      dfir_iris_intel_name:
+        type: str
+        description: The platform instance's name in the product's settings and in the enrichment it adds.
+        default: threat-intel
+      dfir_iris_intel_on_create:
+        type: bool
+        description: Enrich an IOC automatically when it is created.
+        default: true
+      dfir_iris_intel_on_update:
+        type: bool
+        description: Enrich an IOC automatically when it is updated.
+        default: false
       dfir_iris_db_uid:
         type: int
         description: The database image's user id (postgres in the image).
@@ -287,6 +319,38 @@ argument_specs:
         description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
           with.'
         default: secret:dfir-iris/ca
+      dfir_iris_intel_enabled:
+        type: bool
+        description: Wire the product's bundled enrichment module to the threat-intel platform (register, configure,
+          enable); off by default.
+        default: false
+      dfir_iris_intel_url:
+        type: str
+        description: The threat-intel platform's HTTPS base URL (an internal name); required when the MISP
+          wiring is on.
+        default: ''
+      dfir_iris_intel_key_ref:
+        type: str
+        description: 'secret: reference of the API key of the DEDICATED platform account the module reads
+          with (never the platform administrator''s).'
+        default: secret:dfir-iris/threat-intel-key
+      dfir_iris_intel_ca_ref:
+        type: str
+        description: 'secret: reference of the CA certificate (PEM) the platform''s certificate is checked
+          against; by default the lab CA.'
+        default: '{{ dfir_iris_ca_ref }}'
+      dfir_iris_intel_name:
+        type: str
+        description: The platform instance's name in the product's settings and in the enrichment it adds.
+        default: threat-intel
+      dfir_iris_intel_on_create:
+        type: bool
+        description: Enrich an IOC automatically when it is created.
+        default: true
+      dfir_iris_intel_on_update:
+        type: bool
+        description: Enrich an IOC automatically when it is updated.
+        default: false
       dfir_iris_db_uid:
         type: int
         description: The database image's user id (postgres in the image).
@@ -460,6 +524,38 @@ argument_specs:
         description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
           with.'
         default: secret:dfir-iris/ca
+      dfir_iris_intel_enabled:
+        type: bool
+        description: Wire the product's bundled enrichment module to the threat-intel platform (register, configure,
+          enable); off by default.
+        default: false
+      dfir_iris_intel_url:
+        type: str
+        description: The threat-intel platform's HTTPS base URL (an internal name); required when the MISP
+          wiring is on.
+        default: ''
+      dfir_iris_intel_key_ref:
+        type: str
+        description: 'secret: reference of the API key of the DEDICATED platform account the module reads
+          with (never the platform administrator''s).'
+        default: secret:dfir-iris/threat-intel-key
+      dfir_iris_intel_ca_ref:
+        type: str
+        description: 'secret: reference of the CA certificate (PEM) the platform''s certificate is checked
+          against; by default the lab CA.'
+        default: '{{ dfir_iris_ca_ref }}'
+      dfir_iris_intel_name:
+        type: str
+        description: The platform instance's name in the product's settings and in the enrichment it adds.
+        default: threat-intel
+      dfir_iris_intel_on_create:
+        type: bool
+        description: Enrich an IOC automatically when it is created.
+        default: true
+      dfir_iris_intel_on_update:
+        type: bool
+        description: Enrich an IOC automatically when it is updated.
+        default: false
       dfir_iris_db_uid:
         type: int
         description: The database image's user id (postgres in the image).
@@ -634,6 +730,38 @@ argument_specs:
         description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
           with.'
         default: secret:dfir-iris/ca
+      dfir_iris_intel_enabled:
+        type: bool
+        description: Wire the product's bundled enrichment module to the threat-intel platform (register, configure,
+          enable); off by default.
+        default: false
+      dfir_iris_intel_url:
+        type: str
+        description: The threat-intel platform's HTTPS base URL (an internal name); required when the MISP
+          wiring is on.
+        default: ''
+      dfir_iris_intel_key_ref:
+        type: str
+        description: 'secret: reference of the API key of the DEDICATED platform account the module reads
+          with (never the platform administrator''s).'
+        default: secret:dfir-iris/threat-intel-key
+      dfir_iris_intel_ca_ref:
+        type: str
+        description: 'secret: reference of the CA certificate (PEM) the platform''s certificate is checked
+          against; by default the lab CA.'
+        default: '{{ dfir_iris_ca_ref }}'
+      dfir_iris_intel_name:
+        type: str
+        description: The platform instance's name in the product's settings and in the enrichment it adds.
+        default: threat-intel
+      dfir_iris_intel_on_create:
+        type: bool
+        description: Enrich an IOC automatically when it is created.
+        default: true
+      dfir_iris_intel_on_update:
+        type: bool
+        description: Enrich an IOC automatically when it is updated.
+        default: false
       dfir_iris_db_uid:
         type: int
         description: The database image's user id (postgres in the image).
@@ -807,6 +935,38 @@ argument_specs:
         description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
           with.'
         default: secret:dfir-iris/ca
+      dfir_iris_intel_enabled:
+        type: bool
+        description: Wire the product's bundled enrichment module to the threat-intel platform (register, configure,
+          enable); off by default.
+        default: false
+      dfir_iris_intel_url:
+        type: str
+        description: The threat-intel platform's HTTPS base URL (an internal name); required when the MISP
+          wiring is on.
+        default: ''
+      dfir_iris_intel_key_ref:
+        type: str
+        description: 'secret: reference of the API key of the DEDICATED platform account the module reads
+          with (never the platform administrator''s).'
+        default: secret:dfir-iris/threat-intel-key
+      dfir_iris_intel_ca_ref:
+        type: str
+        description: 'secret: reference of the CA certificate (PEM) the platform''s certificate is checked
+          against; by default the lab CA.'
+        default: '{{ dfir_iris_ca_ref }}'
+      dfir_iris_intel_name:
+        type: str
+        description: The platform instance's name in the product's settings and in the enrichment it adds.
+        default: threat-intel
+      dfir_iris_intel_on_create:
+        type: bool
+        description: Enrich an IOC automatically when it is created.
+        default: true
+      dfir_iris_intel_on_update:
+        type: bool
+        description: Enrich an IOC automatically when it is updated.
+        default: false
       dfir_iris_db_uid:
         type: int
         description: The database image's user id (postgres in the image).
@@ -981,6 +1141,38 @@ argument_specs:
         description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
           with.'
         default: secret:dfir-iris/ca
+      dfir_iris_intel_enabled:
+        type: bool
+        description: Wire the product's bundled enrichment module to the threat-intel platform (register, configure,
+          enable); off by default.
+        default: false
+      dfir_iris_intel_url:
+        type: str
+        description: The threat-intel platform's HTTPS base URL (an internal name); required when the MISP
+          wiring is on.
+        default: ''
+      dfir_iris_intel_key_ref:
+        type: str
+        description: 'secret: reference of the API key of the DEDICATED platform account the module reads
+          with (never the platform administrator''s).'
+        default: secret:dfir-iris/threat-intel-key
+      dfir_iris_intel_ca_ref:
+        type: str
+        description: 'secret: reference of the CA certificate (PEM) the platform''s certificate is checked
+          against; by default the lab CA.'
+        default: '{{ dfir_iris_ca_ref }}'
+      dfir_iris_intel_name:
+        type: str
+        description: The platform instance's name in the product's settings and in the enrichment it adds.
+        default: threat-intel
+      dfir_iris_intel_on_create:
+        type: bool
+        description: Enrich an IOC automatically when it is created.
+        default: true
+      dfir_iris_intel_on_update:
+        type: bool
+        description: Enrich an IOC automatically when it is updated.
+        default: false
       dfir_iris_db_uid:
         type: int
         description: The database image's user id (postgres in the image).
@@ -1158,6 +1350,38 @@ argument_specs:
         description: 'secret: reference of the lab CA certificate (PEM) the health hook verifies the service
           with.'
         default: secret:dfir-iris/ca
+      dfir_iris_intel_enabled:
+        type: bool
+        description: Wire the product's bundled enrichment module to the threat-intel platform (register, configure,
+          enable); off by default.
+        default: false
+      dfir_iris_intel_url:
+        type: str
+        description: The threat-intel platform's HTTPS base URL (an internal name); required when the MISP
+          wiring is on.
+        default: ''
+      dfir_iris_intel_key_ref:
+        type: str
+        description: 'secret: reference of the API key of the DEDICATED platform account the module reads
+          with (never the platform administrator''s).'
+        default: secret:dfir-iris/threat-intel-key
+      dfir_iris_intel_ca_ref:
+        type: str
+        description: 'secret: reference of the CA certificate (PEM) the platform''s certificate is checked
+          against; by default the lab CA.'
+        default: '{{ dfir_iris_ca_ref }}'
+      dfir_iris_intel_name:
+        type: str
+        description: The platform instance's name in the product's settings and in the enrichment it adds.
+        default: threat-intel
+      dfir_iris_intel_on_create:
+        type: bool
+        description: Enrich an IOC automatically when it is created.
+        default: true
+      dfir_iris_intel_on_update:
+        type: bool
+        description: Enrich an IOC automatically when it is updated.
+        default: false
       dfir_iris_db_uid:
         type: int
         description: The database image's user id (postgres in the image).

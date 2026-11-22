@@ -53,6 +53,10 @@ credentials:
     identity: token
     holder: provider
     purpose: the first administrator's API key, the bearer token the consumers and the health hook call the API with; the role sets the key in the database to this value, fresh or restored
+  - secret: secret:dfir-iris/threat-intel-key
+    identity: token
+    holder: provider
+    purpose: a dedicated threat-intel account's API key (not the platform administrator's), set in the product's enrichment module; read only when dfir_iris_intel_enabled is on
   - secret: secret:dfir-iris/tls-cert
     identity: certificate
     holder: provider
@@ -80,6 +84,13 @@ requires:
         baselines: [base]
       roles: [role:dfir_iris]
       purpose: runs the web app, its worker, PostgreSQL, the broker and the TLS front (docker_engine applied first, compose_app renders them)
+prefers:
+  capabilities:
+    - cap: cap:threat-intel
+      provisional: true
+      purpose: the product's bundled enrichment module enriches an IOC from the threat-intel platform over HTTPS with a dedicated account's key (dfir_iris_intel_enabled)
+      fallback:
+        behaviour: the enrichment module stays off and an IOC gets no threat-intel insight; every other function is unchanged
 provides:
   slots:
     case-management:
@@ -87,7 +98,7 @@ provides:
       provisional: true
       reason: case-management has no contract yet; the standard is the API refusing a caller with no key, answering one with a valid key and reporting its version, which the role's health hook reads (the cases slot keeps the alert-to-case contract)
       migration: {formats: [object-tree], export: role:dfir_iris, import: role:dfir_iris}
-egress: none
+egress: none  # the threat-intel platform is reached as a preferred capability (a slot grants no egress line)
 contributes:
   roles:
     - file: roles/dfir_iris

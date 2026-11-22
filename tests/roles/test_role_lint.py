@@ -85,6 +85,7 @@ SHIPPED = [
     "ssh_hardening",
     "sssd_ldap",
     "status_hub",
+    "subnet_router",
     "suricata_enroll",
     "tailscale_node",
     "trivy",

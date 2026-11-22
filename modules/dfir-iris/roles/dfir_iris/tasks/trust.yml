@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The CA certificate the threat-intel platform's certificate is checked against, written from its
+# secret to trust/ (mounted read-only into the app and the worker). A directory is mounted, not the
+# file, so a rotated CA is read by the next call with no recreate.
+- name: Write the platform's CA certificate
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', dfir_iris_intel_ca_ref) | trim ~ '\n' }}"
+    dest: "{{ dfir_iris_data_root }}/trust/{{ dfir_iris_intel_ca_file }}"
+    owner: "{{ dfir_iris_owner }}"
+    group: "{{ dfir_iris_app_gid | int }}"
+    mode: "0644"
+  no_log: true

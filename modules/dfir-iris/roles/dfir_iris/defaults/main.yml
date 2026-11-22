@@ -64,3 +64,20 @@ dfir_iris_validate_with_docker: true
 dfir_iris_health_timeout: 15
 # seconds main waits for the API to answer after a start (the first one creates the schema)
 dfir_iris_ready_timeout: 600
+# The product's bundled enrichment module (IrisMISP): off by default. When on, the role registers it if it is
+# missing, writes its settings through the product's administration API (the administrator's key), turns
+# the triggers on and enables it, so an IOC is enriched from the threat-intel provider's platform.
+# dfir_iris_intel_url is that platform's HTTPS base URL (an internal name); dfir_iris_intel_key_ref is a
+# DEDICATED account's API key on it (never the platform administrator's: grant the account the least
+# role that can search attributes). The platform's certificate is checked against dfir_iris_intel_ca_ref
+# (default: the lab CA the front's certificate came from), written to trust/ and mounted read-only into
+# the app and the worker, the two processes that call the platform.
+dfir_iris_intel_enabled: false
+dfir_iris_intel_url: ""
+dfir_iris_intel_key_ref: secret:dfir-iris/threat-intel-key
+dfir_iris_intel_ca_ref: "{{ dfir_iris_ca_ref }}"
+# the instance's name in the product's settings and in the enrichment it adds to an IOC
+dfir_iris_intel_name: threat-intel
+# enrich an IOC when it is created / updated; the manual "Get MISP insight" action is always on
+dfir_iris_intel_on_create: true
+dfir_iris_intel_on_update: false
