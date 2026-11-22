@@ -1650,6 +1650,9 @@ def test_status_hub_hooks_report_changed_0_even_with_the_probe_directory(tmp_pat
 
 
 # ---------------------------------------------------------------- the collector (ADR-0013)
+_ROW = yaml.safe_load((ROOT / "examples/services.yml").read_text())["services"]["metrics"]
+#: an endpoint the collector reaches by a name the certificate carries (the port from the registry)
+BACKUP_URL = f"https://backup-01.example.internal:{_ROW['port']}"
 HUB_COLLECT = {
     **HUB_TLS,
     "status_hub_collect": True,
@@ -1660,7 +1663,7 @@ HUB_COLLECT = {
         "username": "reader", "password_ref": "secret:flow/reader-password",
     }],
     "status_hub_registers_dir": "/var/lib/hnx-hub/registers",
-    "status_hub_endpoints": {"backup": "https://backup-01.example.internal:8007"},
+    "status_hub_endpoints": {"backup": BACKUP_URL},
 }  # fmt: skip
 
 
@@ -1682,7 +1685,7 @@ def test_status_hub_collector_renders_a_calendar_timer_and_a_hardened_oneshot(tm
     assert "--registers" in hub_argv  # the register pages are served from the delivered directory
     assert "--notify-topic" not in argv  # no paging unless a topic is set
     assert svc["Environment"] == [
-        "HNX_ENDPOINT_BACKUP=https://backup-01.example.internal:8007",
+        f"HNX_ENDPOINT_BACKUP={BACKUP_URL}",
         "SSL_CERT_FILE=/etc/hnx-hub/tls/ca-bundle.crt",
     ]  # the alias a product's certificate does not carry is overridden by a name it does
 
@@ -1712,8 +1715,8 @@ def test_status_hub_collector_inputs_are_checked(tmp_path):
         {"status_hub_notify_ceiling": "orange"},
         {"status_hub_extra_ca_refs": ["-----BEGIN CERTIFICATE-----"]},
         {"status_hub_registers_dir": "../registers"},
-        {"status_hub_endpoints": {"backup": "https://192.0.2.9"}},  # no explicit port
-        {"status_hub_endpoints": {"Backup Up": "https://backup-01.example.internal:8007"}},
+        {"status_hub_endpoints": {"backup": BACKUP_URL.rsplit(":", 1)[0]}},  # no explicit port
+        {"status_hub_endpoints": {"Backup Up": BACKUP_URL}},
         {"status_hub_endpoints": ["backup"]},
         # a login's password is a file for the root helper, never also an environment value
         {"status_hub_secret_refs": [*HUB_COLLECT["status_hub_secret_refs"],
