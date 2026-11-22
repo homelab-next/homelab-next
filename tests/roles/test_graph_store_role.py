@@ -42,15 +42,15 @@ GUEST = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())["hosts"
     "address"
 ]
 ROOT_PW = "Root-fake-" + "x" * 8
-PW1, PW2 = "Cti-fake-" + "a" * 9, "Misp-fake-" + "b" * 9
-NAME1, NAME2 = "cti-writer", "misp-ingest"
+PW1, PW2 = "Cti-fake-" + "a" * 9, "Feed-fake-" + "b" * 9
+NAME1, NAME2 = "cti-writer", "feed-ingest"
 ROOT_ENV = env_for(ref("root-password"))
 SECRETS = {
     ROOT_ENV: ROOT_PW,
     "HNX_SECRET_CONSUMER_GRAPH_NAME": NAME1,
     "HNX_SECRET_CONSUMER_GRAPH_PW": PW1,
-    "HNX_SECRET_CONSUMER_MISP_NAME": NAME2,
-    "HNX_SECRET_CONSUMER_MISP_PW": PW2,
+    "HNX_SECRET_CONSUMER_FEED_NAME": NAME2,
+    "HNX_SECRET_CONSUMER_FEED_PW": PW2,
 }
 USERS = [
     {
@@ -59,8 +59,8 @@ USERS = [
         "roles": ["writer"],
     },
     {
-        "name_ref": "secret:consumer/misp-name",
-        "password_ref": "secret:consumer/misp-pw",
+        "name_ref": "secret:consumer/feed-name",
+        "password_ref": "secret:consumer/feed-pw",
         "admin": False,
     },
 ]
@@ -182,7 +182,7 @@ def test_main_refuses_bad_inputs_and_writes_nothing(tmp_path, over, why):
 
 
 @pytest.mark.parametrize(
-    "missing", [ROOT_ENV, "HNX_SECRET_CONSUMER_GRAPH_NAME", "HNX_SECRET_CONSUMER_MISP_PW"]
+    "missing", [ROOT_ENV, "HNX_SECRET_CONSUMER_GRAPH_NAME", "HNX_SECRET_CONSUMER_FEED_PW"]
 )
 def test_a_reference_with_no_value_is_named_and_nothing_is_written(tmp_path, missing):
     env = {k: v for k, v in SECRETS.items() if k != missing}
@@ -191,7 +191,7 @@ def test_a_reference_with_no_value_is_named_and_nothing_is_written(tmp_path, mis
     want = {
         ROOT_ENV: ref("root-password"),
         "HNX_SECRET_CONSUMER_GRAPH_NAME": "secret:consumer/graph-name",
-        "HNX_SECRET_CONSUMER_MISP_PW": "secret:consumer/misp-pw",
+        "HNX_SECRET_CONSUMER_FEED_PW": "secret:consumer/feed-pw",
     }[missing]
     assert r.returncode != 0 and want in out, out
     assert not (tmp_path / "app").exists() and not (tmp_path / "data").exists()
@@ -207,7 +207,7 @@ def test_a_reference_with_no_value_is_named_and_nothing_is_written(tmp_path, mis
         ("HNX_SECRET_CONSUMER_GRAPH_NAME", "bad name"),
         ("HNX_SECRET_CONSUMER_GRAPH_NAME", "root"),  # root is the service's own account
         ("HNX_SECRET_CONSUMER_GRAPH_NAME", NAME2),  # one name twice
-        ("HNX_SECRET_CONSUMER_MISP_PW", PW1),  # one password twice
+        ("HNX_SECRET_CONSUMER_FEED_PW", PW1),  # one password twice
         ("HNX_SECRET_CONSUMER_GRAPH_PW", ROOT_PW),  # root's password reused
     ],
 )
