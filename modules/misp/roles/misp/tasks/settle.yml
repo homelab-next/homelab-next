@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0
+# Settle the application after a start. Its first start ends with `supervisorctl restart php-fpm`;
+# against the real image that restart can leave the first PHP master running (the new one stops with
+# "Another FPM instance seems to already listen", supervisor gives up on it) and that master has
+# cached the table list from BEFORE the schema updates, so every API call is an internal error until
+# the container is restarted (found against the real image: two clean first starts, both). The
+# entrypoint prints "INIT | Done" when it has finished; the role waits for it, asks the API with the
+# administrator's key, and restarts the application once when the answer is an internal error (a
+# restart is a second start of an initialised database: seconds, and it repeats nothing). A start
+# that is already settled answers 200 and is left alone.
+- name: Find the application's container
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", ps, -q, misp-core]
+  register: misp_core_id
+  changed_when: false
+  check_mode: false
+
+- name: Read when that container last started
+  ansible.builtin.command:
+    argv: [docker, inspect, "{{ misp_core_id.stdout | trim }}"]
+  register: misp_core_inspect
+  changed_when: false
+  check_mode: false
+  failed_when: misp_core_inspect.rc != 0 or (misp_core_inspect.stdout | from_json)[0].State.StartedAt is not defined
+
+- name: Wait for this start to finish (its entrypoint prints INIT | Done; earlier starts' lines are not counted)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", logs, --no-color, --no-log-prefix,
+           --since, "{{ (misp_core_inspect.stdout | from_json)[0].State.StartedAt }}", misp-core]
+  register: misp_init_log
+  until: misp_init_log.rc == 0 and 'INIT | Done' in misp_init_log.stdout
+  retries: "{{ ((misp_ready_timeout | int) / 10) | int }}"
+  delay: 10
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse to go on when the start never finished
+  ansible.builtin.assert:
+    that: "'INIT | Done' in misp_init_log.stdout | default('')"
+    fail_msg: "misp: the application's start did not finish within {{ misp_ready_timeout }} seconds (docker compose logs misp-core)"
+
+- name: Ask the API who the administrator is
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, HNX_KEY, -e, HNX_PATH, misp-core, sh, -c, "{{ misp_api_status_script }}"]
+    expand_argument_vars: false
+  environment:
+    HNX_KEY: "{{ lookup('hnx_secret', misp_admin_key_ref) }}"
+    HNX_PATH: /servers/getVersion
+  register: misp_settle_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Restart the application once when it answers with an internal error
+  when: misp_settle_probe.stdout | default('') | trim == '500'
+  block:
+    - name: Restart it
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", restart, misp-core]
+      changed_when: true
+    - name: Wait until it no longer answers with an internal error
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, HNX_KEY, -e, HNX_PATH, misp-core, sh, -c, "{{ misp_api_status_script }}"]
+        expand_argument_vars: false
+      environment:
+        HNX_KEY: "{{ lookup('hnx_secret', misp_admin_key_ref) }}"
+        HNX_PATH: /servers/getVersion
+      register: misp_settled
+      until: misp_settled.rc == 0 and misp_settled.stdout | trim in ['200', '401', '403']
+      retries: "{{ ((misp_ready_timeout | int) / 10) | int }}"
+      delay: 10
+      changed_when: false
+      failed_when: false
+      no_log: true
+    - name: Refuse to go on when it still answers with an internal error
+      ansible.builtin.assert:
+        that: misp_settled.stdout | default('') | trim in ['200', '401', '403']
+        fail_msg: "misp: the application still answers with an internal error after a restart (docker compose logs misp-core)"

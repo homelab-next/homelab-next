@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# One account (misp_acct): does the API accept its key?
+- name: Ask the API who the key belongs to
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, HNX_KEY, -e, HNX_PATH, misp-core, sh, -c, "{{ misp_api_status_script }}"]
+    expand_argument_vars: false
+  environment:
+    HNX_KEY: "{{ lookup('hnx_secret', misp_acct.key_ref) }}"
+    HNX_PATH: /users/view/me
+  register: misp_key_before
+  changed_when: false
+  failed_when: misp_key_before.rc != 0
+  no_log: true
+
+- name: Set the key on the account
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -u, www-data, -e, HNX_EMAIL, -e, HNX_KEY, misp-core, sh, -c, "{{ misp_set_key_script }}"]
+    expand_argument_vars: false
+  environment:
+    HNX_EMAIL: "{{ misp_acct.email }}"
+    HNX_KEY: "{{ lookup('hnx_secret', misp_acct.key_ref) }}"
+  changed_when: true
+  no_log: true
+  when: misp_key_before.stdout | trim != '200'
+
+- name: The account accepts its key
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, HNX_KEY, -e, HNX_PATH, misp-core, sh, -c, "{{ misp_api_status_script }}"]
+    expand_argument_vars: false
+  environment:
+    HNX_KEY: "{{ lookup('hnx_secret', misp_acct.key_ref) }}"
+    HNX_PATH: /users/view/me
+  register: misp_key_after
+  # the application is still enforcing its settings for a while after the first account exists
+  until: misp_key_after.rc == 0 and misp_key_after.stdout | trim == '200'
+  retries: 18
+  delay: 10
+  changed_when: false
+  failed_when: misp_key_after.rc != 0 or misp_key_after.stdout | trim != '200'
+  no_log: true

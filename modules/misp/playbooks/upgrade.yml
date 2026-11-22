@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned bump of the application and its modules service
+# (misp_target_core_image and misp_target_modules_image, tag and digest; the same or a newer version,
+# never an older one: the application migrates its schema forward on first start and cannot go
+# back), export the database first, then converge with the new pins.
+#   ansible-playbook -i <inventory> modules/misp/playbooks/upgrade.yml \
+#     -e misp_target_core_image=<ref> -e misp_target_modules_image=<ref>
+- name: Upgrade the threat-intel provider
+  hosts: mod_misp_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: misp
+        tasks_from: upgrade
+    - name: Export the database before the new image opens it
+      ansible.builtin.include_role:
+        name: misp
+        tasks_from: export
+    - name: Converge on the new pins
+      ansible.builtin.include_role:
+        name: misp
+      vars:
+        misp_core_image: "{{ misp_target_core_image }}"
+        misp_modules_image: "{{ misp_target_modules_image }}"

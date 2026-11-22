@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root and the export directory are root's, and the role holds them to that on every run.
+# The directories the containers mount are only CREATED here, never held to an owner or a mode:
+# each entrypoint takes the ownership of its own mount (the database's mysql user, the web server's
+# user for the configuration, logs, files and keys, with modes of its own, 0770 for the
+# configuration) and a role that put them back to root on every run would fight it and break the
+# application (found against the real image: a second run failed on the chown, and as root it
+# would have succeeded and locked the application out of its own configuration).
+- name: Create the data root and the export directory (held to root's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ misp_owner }}"
+    group: "{{ misp_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ misp_data_root }}", mode: "0750"}
+    - {path: "{{ misp_data_root }}/export", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]
+
+- name: Create the directories the containers mount (their entrypoints own them)
+  ansible.builtin.file:
+    path: "{{ misp_data_root }}/{{ item }}"
+    state: directory
+  loop: [mysql, cache, configs, logs, files, gnupg, ssl]
+  tags: [backup, export, restore]

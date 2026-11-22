@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Read the row counts (misp_count_keys) from the database into misp_counts, a mapping of name to
+# whole number. The root password travels in the environment of the one command. A line that is
+# missing, or a count that is not a number, is an error: a count that could not be read is never
+# zero.
+- name: Count the rows of the tables that matter
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, MYSQL_PWD, db,
+           mariadb, --user=root, --batch, --skip-column-names, misp, -e, "{{ misp_counts_sql }}"]
+  environment:
+    MYSQL_PWD: "{{ lookup('hnx_secret', misp_db_root_login_ref) }}"
+  register: misp_counted
+  changed_when: false
+  check_mode: false
+  failed_when: >-
+    misp_counted.rc != 0 or
+    (misp_counted.stdout_lines | select('match', '^[a-z_]+\t[0-9]+\Z') | list | length) != (misp_count_keys | length)
+  no_log: true
+
+- name: Keep the counts
+  ansible.builtin.set_fact:
+    misp_counts: >-
+      {{ dict(misp_counted.stdout_lines | map('regex_replace', '\t.*$', '') | list
+              | zip(misp_counted.stdout_lines | map('regex_replace', '^[^\t]*\t', '') | map('int') | list)) }}
+  no_log: true

@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - misp_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - misp_core_image is match(misp_pinned_ref_pattern)
+      - misp_modules_image is match(misp_pinned_ref_pattern)
+      - misp_db_image is match(misp_pinned_ref_pattern)
+      - misp_redis_image is match(misp_pinned_ref_pattern)
+      - misp_core_tag is match(misp_v_version_pattern)
+      - misp_modules_tag is match(misp_v_version_pattern)
+      - misp_db_tag is match(misp_version_pattern)
+      - misp_redis_tag is match(misp_version_pattern)
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - misp_bind is match(misp_ipv4_pattern)
+      - misp_bind != '0.0.0.0'
+      - misp_port | int >= 1 and misp_port | int <= 65535
+      - >-
+        [misp_dir, misp_data_root] | reject('match', misp_path_pattern) | list | length == 0
+      # a recursive removal of a path under the data root needs the root to be a real directory, never a shallow one
+      - misp_data_root.split('/') | length >= 4
+      - misp_timezone is match('^[A-Za-z][A-Za-z0-9_+/-]{0,63}\Z')
+      - misp_base_url == '' or misp_base_url is match(misp_url_pattern)
+      - misp_admin_email is match(misp_email_pattern)
+      - misp_admin_org is match(misp_org_pattern)
+      - misp_consumers is sequence and misp_consumers is not string and misp_consumers is not mapping
+      - misp_consumers | select('mapping') | list | length == misp_consumers | length
+      - >-
+        misp_consumers | reject('mapping') | list | length > 0 or
+        misp_consumers | map('dict2items') | map('map', attribute='key') | map('difference', ['email', 'key_ref']) | select | list | length == 0
+      - >-
+        misp_consumers | reject('mapping') | list | length > 0 or
+        (misp_consumers | selectattr('email', 'defined') | list | length == misp_consumers | length
+         and misp_consumers | selectattr('key_ref', 'defined') | list | length == misp_consumers | length)
+      - >-
+        misp_consumers | reject('mapping') | list | length > 0 or
+        misp_consumers | map(attribute='email', default='') | reject('match', misp_email_pattern) | list | length == 0
+      - misp_accounts | map(attribute='email') | unique | length == misp_accounts | length
+      - misp_refs | reject('match', misp_ref_pattern) | list | length == 0
+      - misp_refs | unique | length == misp_refs | length
+      - (misp_tls_cert_ref == '') == (misp_tls_key_ref == '')
+      - misp_innodb_buffer_pool_size is match(misp_size_pattern)
+      - >-
+        [misp_db_mem_limit, misp_core_mem_limit, misp_modules_mem_limit, misp_redis_mem_limit]
+        | reject('match', misp_mem_pattern) | list | length == 0
+      - misp_expected_min_counts is mapping
+      - misp_expected_min_counts | list | difference(misp_count_keys) | length == 0
+      - misp_expected_min_counts.values() | map('string') | reject('match', '^[0-9]{1,12}\Z') | list | length == 0
+      - misp_restore_counts is mapping
+      - misp_restore_counts | list | difference(misp_count_keys) | length == 0
+      - misp_restore_counts.values() | map('string') | reject('match', '^[0-9]{1,12}\Z') | list | length == 0
+      - misp_restore_dump == '' or misp_restore_dump is match(misp_path_pattern)
+      - misp_restore_dump == '' or misp_restore_dump.endswith('.sql.zst')
+      - misp_restore_sha256 == '' or misp_restore_sha256 is match(misp_sha256_pattern)
+      - misp_restore_files_tar == '' or misp_restore_files_tar is match(misp_path_pattern)
+      - misp_restore_files_sha256 == '' or misp_restore_files_sha256 is match(misp_sha256_pattern)
+      - misp_health_timeout | int > 0 and misp_ready_timeout | int > 0 and misp_import_timeout | int > 0
+    fail_msg: >-
+      misp: a registry id, four images pinned by tag and digest (the application and the modules
+      service a v-prefixed version, the database and the cache a plain one), the guest's IPv4 address
+      to publish on (not all interfaces), a port, absolute canonical directories, a timezone, an https
+      base URL or empty, an administrator email and organisation, consumers that are mappings with
+      email and key_ref only (distinct emails), distinct secret: references, a buffer pool like 10G,
+      memory limits like 512m, a TLS certificate and key both or neither, and counts that are whole numbers of the known names
+  tags: [health, backup, restore, export, upgrade]

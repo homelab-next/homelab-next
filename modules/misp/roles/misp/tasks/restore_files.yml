@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# The attachments and malware samples of the old instance: the numeric event directories under
+# files/ in its tarball. The tarball is the pinned file (sha256); every member to be extracted is
+# listed first by the helper (files/hnx_misp.py) and must be a directory or a regular file under
+# files/<digits>/ (no link, no device, no path with ..); only those members are extracted, as root's
+# files without the archive's owners and never over a file already there, into the data root's files
+# directory; the number of regular files found must reach the number listed. Configuration (configs, ssl, gnupg) is never extracted: the platform is configured from
+# the role's settings and secrets, not from the old instance's files.
+- name: Look at the tarball
+  ansible.builtin.stat:
+    path: "{{ misp_restore_files_tar }}"
+    checksum_algorithm: sha256
+    follow: false
+  register: misp_files_stat
+
+- name: Refuse a tarball that is not the pinned file (nothing is extracted)
+  ansible.builtin.assert:
+    that:
+      - misp_files_stat.stat.exists
+      - misp_files_stat.stat.isreg
+      - not misp_files_stat.stat.islnk
+      - misp_files_stat.stat.checksum == misp_restore_files_sha256
+    fail_msg: "misp: {{ misp_restore_files_tar }} is not the pinned tarball (missing, not a regular file, a link, or its sha256 differs)"
+
+- name: List, check and extract the event directories (a link, a device or an odd name refuses the lot)
+  ansible.builtin.include_tasks: helper.yml
+  vars:
+    misp_helper_cmd: files
+    misp_helper_input:
+      tar: "{{ misp_restore_files_tar }}"
+      dest: "{{ misp_data_root }}/files"
+    misp_helper_async: "{{ misp_import_timeout }}"
+
+- name: Every listed file is there
+  ansible.builtin.assert:
+    that: misp_facts.found | int >= misp_facts.listed | int > 0
+    fail_msg: "misp: {{ misp_facts.found }} attachment files after extraction, {{ misp_facts.listed }} listed"
