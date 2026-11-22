@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# Lakekeeper, the lake-catalog provider (modules/lakekeeper): the catalog server over PostgreSQL. Both
+# images are pinned by DIGEST (and tag, which compose_app requires); the digests are the ones the
+# lab-in-a-box stack runs and the 2026-11-22 rehearsal ran.
+# lakekeeper_logical_id (required): the instance's registry id, e.g. lake-catalog
+lakekeeper_image: "quay.io/lakekeeper/catalog:v0.14.1@sha256:7c5d6b178a1b5ae230bd7d3e7a09da4704ce58fafc66a8b90c3b6edb69ba9817"
+lakekeeper_postgres_image: "docker.io/library/postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
+# published on the guest's own address (the inventory's ansible_host), never on all interfaces; the VM
+# firewall admits the query engine and the lake's writers. 8181 is the registry row's port; a parallel
+# run beside the catalog being replaced sets another (8182) for the verification window only.
+lakekeeper_bind: "{{ ansible_host }}"
+lakekeeper_port: 8181
+lakekeeper_dir: /opt/compose/lakekeeper
+lakekeeper_data_root: /var/lib/hnx-modules/lakekeeper
+lakekeeper_export_dir: /var/backups/hnx-modules/lakekeeper/export
+lakekeeper_owner: root
+lakekeeper_group: root
+# the containers' users: ids no account on the host has
+lakekeeper_uid: 61060
+lakekeeper_gid: 61060
+lakekeeper_db_uid: 61061
+lakekeeper_db_gid: 61061
+lakekeeper_db_name: catalog
+lakekeeper_db_user: lakekeeper
+# the warehouse: the NAME clients give (iceberg.rest-catalog.warehouse) and the bucket it covers. The
+# base location is the BUCKET ROOT (no key prefix), so it contains every existing table location,
+# wherever the lake's earlier catalog put them (s3://<bucket>/<namespace>/<table>-<id>/).
+lakekeeper_warehouse_name: lake
+lakekeeper_bucket: iceberg-warehouse
+lakekeeper_region: garage
+# the object store's registry id; its url is resolved from the registry unless lakekeeper_s3_url is
+# set (scheme://host:port). The CATALOG's container reaches the store on this address.
+lakekeeper_object_store_id: object-store
+lakekeeper_s3_url: ""
+# soft deletes: a dropped table stays recoverable for this long and its files are never removed by
+# the catalog at drop time (the warehouse's push-s3-delete is off)
+lakekeeper_soft_delete_seconds: 31536000
+lakekeeper_db_login_ref: secret:lakekeeper/pg-password
+lakekeeper_encryption_key_ref: secret:lakekeeper/encryption-key
+lakekeeper_access_key_ref: secret:lakekeeper/s3-access-key
+lakekeeper_signing_ref: secret:lakekeeper/s3-secret-key
+lakekeeper_mem_limit: 512m
+lakekeeper_db_mem_limit: 768m
+lakekeeper_start: true
+lakekeeper_validate_with_docker: true
+lakekeeper_health_timeout: 10

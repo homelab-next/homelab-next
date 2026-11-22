@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+lakekeeper_container_port: 8181
+# PostgreSQL 18 keeps its cluster at <volume>/18/docker; the volume is the parent, so a later major gets
+# its own directory beside it (pg_upgrade --link). The export is a second mount, written by the database's user.
+lakekeeper_container_pg_volume: /var/lib/postgresql
+lakekeeper_container_export: /export
+# authentication is off (the catalog's allow-all backend: no OIDC provider is configured, decision D2),
+# the network is the only control; metrics and the UI-facing settings are the product's defaults
+lakekeeper_fixed_env:
+  RUST_LOG: warn
+lakekeeper_binary: /home/nonroot/lakekeeper
+lakekeeper_repository: "{{ lakekeeper_image.split('@')[0].rsplit(':', 1)[0] }}"
+lakekeeper_tag: "{{ lakekeeper_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+lakekeeper_digest: "{{ lakekeeper_image.split('@')[1] | default('') }}"
+lakekeeper_db_repository: "{{ lakekeeper_postgres_image.split('@')[0].rsplit(':', 1)[0] }}"
+lakekeeper_db_tag: "{{ lakekeeper_postgres_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+lakekeeper_db_digest: "{{ lakekeeper_postgres_image.split('@')[1] | default('') }}"
+lakekeeper_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+lakekeeper_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+lakekeeper_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+lakekeeper_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+lakekeeper_url_pattern: '^https?://[A-Za-z0-9.-]+:[0-9]{1,5}\Z'
+lakekeeper_bucket_pattern: '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\Z'
+lakekeeper_name_pattern: '^[a-z][a-z0-9_]{0,62}\Z'
+lakekeeper_region_pattern: '^[a-z][a-z0-9-]{1,31}\Z'
+# the password goes into a connection URL: only characters a URL carries as they are
+lakekeeper_db_login_pattern: '^[A-Za-z0-9._~-]{24,128}\Z'
+lakekeeper_encryption_key_pattern: '^[A-Za-z0-9._~+/=-]{32,256}\Z'
+lakekeeper_key_id_pattern: '^GK[0-9a-f]{24,32}\Z'
+lakekeeper_hex64_pattern: '^[0-9a-f]{64}\Z'
+lakekeeper_scripts: "{{ role_path }}/files"

@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the database from an export's dump (README, "Restore drill"): the source is checked first and
+# nothing is written until it passes (lakekeeper_backup.py check: no links, trusted owners, the
+# listing's one file with its size and sha256). Then, with the catalog stopped, the dump is staged in
+# export/db/ as the database's user, hashed again (what is restored is what was checked), and restored
+# with pg_restore --clean --if-exists in one transaction; the staged copy is removed and the catalog
+# started again whatever happened. The encryption key must be the one the dump was made under. Run
+# health afterwards.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Check the source (nothing is written)
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', lakekeeper_scripts ~ '/lakekeeper_backup.py') }}",
+               check, "{{ lakekeeper_restore_source }}", "{{ lakekeeper_db_uid | int }}"]
+      register: lakekeeper_restore_check
+      changed_when: false
+    - name: Restore with the catalog stopped
+      block:
+        - name: Stop the catalog
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ lakekeeper_dir }}/docker-compose.yml", stop, lakekeeper]
+          changed_when: true
+        - name: Stage the dump as the database's user (through the checked descriptor)
+          ansible.builtin.command:
+            argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', lakekeeper_scripts ~ '/lakekeeper_backup.py') }}",
+                   stage, "{{ lakekeeper_restore_source }}", "{{ lakekeeper_data_root }}/export/db/.restore.dump",
+                   "{{ lakekeeper_db_uid | int }}", "{{ lakekeeper_db_gid | int }}"]
+          changed_when: true
+        - name: Restore the database (one transaction)
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ lakekeeper_dir }}/docker-compose.yml", exec, -T, postgres,
+                   pg_restore, -U, "{{ lakekeeper_db_user }}", -d, "{{ lakekeeper_db_name }}",
+                   --clean, --if-exists, --no-owner, --single-transaction, --exit-on-error,
+                   "{{ lakekeeper_container_export }}/.restore.dump"]
+          changed_when: true
+      always:
+        - name: Remove the staged copy
+          ansible.builtin.file:
+            path: "{{ lakekeeper_data_root }}/export/db/.restore.dump"
+            state: absent
+        - name: Start the catalog again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ lakekeeper_dir }}/docker-compose.yml", up, -d, lakekeeper]
+          changed_when: true
+    - name: Prove the restored catalog (health)
+      ansible.builtin.include_tasks: health.yml
+  tags: [restore]

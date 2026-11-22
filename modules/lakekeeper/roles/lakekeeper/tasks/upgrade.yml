@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate and record an image bump (compose_app upgrade) for the catalog (lakekeeper_target_image) or the
+# database (lakekeeper_target_postgres_image, a minor version only: a major one is a dump and a restore
+# into a new cluster, README "Upgrading"). The playbook exports first, then converges; the catalog's
+# schema migration runs in main before the new image starts and is ONE WAY (the dump is the way back).
+- block:
+    - name: Name the target
+      ansible.builtin.set_fact:
+        lakekeeper_up_app: "{{ lakekeeper_target_image | default('') }}"
+        lakekeeper_up_db: "{{ lakekeeper_target_postgres_image | default('') }}"
+    - name: Refuse a target that is not pinned by tag and digest, or is another repository
+      ansible.builtin.assert:
+        that:
+          - (lakekeeper_up_app | length > 0) != (lakekeeper_up_db | length > 0)
+          - >-
+            lakekeeper_up_app | length == 0 or (lakekeeper_up_app is match(lakekeeper_pinned_ref_pattern)
+            and lakekeeper_up_app.split('@')[0].rsplit(':', 1)[0] == lakekeeper_repository)
+          - >-
+            lakekeeper_up_db | length == 0 or
+            (lakekeeper_up_db is match(lakekeeper_pinned_ref_pattern)
+             and lakekeeper_up_db.split('@')[0].rsplit(':', 1)[0] == lakekeeper_db_repository
+             and lakekeeper_up_db.split('@')[0].rsplit(':', 1)[1].split('.')[0]
+                 == lakekeeper_db_tag.split('.')[0])
+        fail_msg: >-
+          lakekeeper: name one target, {{ lakekeeper_repository }}:<tag>@sha256:<64 hex> or
+          {{ lakekeeper_db_repository }}:<same major>.<minor>@sha256:<64 hex>
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        lakekeeper_target: "{{ lakekeeper_up_app if lakekeeper_up_app | length > 0 else lakekeeper_up_db }}"
+        compose_app_name: lakekeeper
+        compose_app_dir: "{{ lakekeeper_app.compose_app_dir }}"
+        compose_app_owner: "{{ lakekeeper_app.compose_app_owner }}"
+        compose_app_group: "{{ lakekeeper_app.compose_app_group }}"
+        compose_app_spec: "{{ lakekeeper_app.compose_app_spec }}"
+        compose_app_upgrade_service: "{{ 'lakekeeper' if lakekeeper_up_app | length > 0 else 'postgres' }}"
+        compose_app_upgrade_tag: "{{ lakekeeper_target.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ lakekeeper_target.split('@')[1] }}"
+  tags: [upgrade]

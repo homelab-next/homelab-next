@@ -1,0 +1,237 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run Lakekeeper and its PostgreSQL as a compose_app, migrate the catalog database,
+      bootstrap the catalog and create the warehouse.
+    options: &id007
+      lakekeeper_logical_id: &id008
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. lake-catalog).
+        required: true
+      lakekeeper_image: &id009
+        type: str
+        description: repository:tag@sha256:<digest> of the catalog image.
+        default: quay.io/lakekeeper/catalog:v0.14.1@sha256:7c5d6b178a1b5ae230bd7d3e7a09da4704ce58fafc66a8b90c3b6edb69ba9817
+      lakekeeper_postgres_image: &id010
+        type: str
+        description: repository:tag@sha256:<digest> of the database image.
+        default: docker.io/library/postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+      lakekeeper_bind: &id011
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      lakekeeper_port: &id012
+        type: int
+        description: Host port (the registry row's port; a parallel run beside the catalog being replaced
+          uses another during its verification window).
+        default: 8181
+      lakekeeper_dir: &id013
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/lakekeeper
+      lakekeeper_data_root: &id014
+        type: path
+        description: 'The data root on the host: pgdata/ (the database volume) and export/.'
+        default: /var/lib/hnx-modules/lakekeeper
+      lakekeeper_export_dir: &id015
+        type: path
+        description: Where the exit copy is written (the backup hook writes under the data root's export/).
+        default: /var/backups/hnx-modules/lakekeeper/export
+      lakekeeper_owner: &id016
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      lakekeeper_group: &id017
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      lakekeeper_uid: &id018
+        type: int
+        description: The catalog container's user id (no account on the host has it).
+        default: 61060
+      lakekeeper_gid: &id019
+        type: int
+        description: The catalog container's group id.
+        default: 61060
+      lakekeeper_db_uid: &id020
+        type: int
+        description: The database container's user id.
+        default: 61061
+      lakekeeper_db_gid: &id021
+        type: int
+        description: The database container's group id.
+        default: 61061
+      lakekeeper_db_name: &id022
+        type: str
+        description: The database name.
+        default: catalog
+      lakekeeper_db_user: &id023
+        type: str
+        description: The database role the catalog connects as.
+        default: lakekeeper
+      lakekeeper_warehouse_name: &id024
+        type: str
+        description: The warehouse's NAME, which clients give as their warehouse setting.
+        default: lake
+      lakekeeper_bucket: &id025
+        type: str
+        description: The object store bucket the warehouse covers, at its root (no key prefix).
+        default: iceberg-warehouse
+      lakekeeper_region: &id026
+        type: str
+        description: The S3 region the catalog signs with.
+        default: garage
+      lakekeeper_object_store_id: &id001
+        type: str
+        description: The object store's registry id; its url is resolved from the registry.
+        default: object-store
+      lakekeeper_s3_url: &id002
+        type: str
+        description: 'scheme://host:port of the object store as the catalog''s container reaches it, overriding
+          the registry (empty: resolve it).'
+        default: ''
+      lakekeeper_soft_delete_seconds: &id027
+        type: int
+        description: How long a dropped table stays recoverable (soft delete), at least a day.
+        default: 31536000
+      lakekeeper_db_login_ref: &id003
+        type: str
+        description: 'secret: reference of the database role''s password.'
+        default: secret:lakekeeper/pg-password
+      lakekeeper_encryption_key_ref: &id004
+        type: str
+        description: 'secret: reference of the key that encrypts the stored warehouse credential (create-only,
+          never changed).'
+        default: secret:lakekeeper/encryption-key
+      lakekeeper_access_key_ref: &id005
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:lakekeeper/s3-access-key
+      lakekeeper_signing_ref: &id006
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:lakekeeper/s3-secret-key
+      lakekeeper_mem_limit: &id028
+        type: str
+        description: The catalog container's memory limit, like 512m.
+        default: 512m
+      lakekeeper_db_mem_limit: &id029
+        type: str
+        description: The database container's memory limit, like 768m.
+        default: 768m
+      lakekeeper_start: &id030
+        type: bool
+        description: Start the containers after rendering (false renders only).
+        default: true
+      lakekeeper_validate_with_docker: &id031
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      lakekeeper_health_timeout: &id032
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+  readiness:
+    short_description: Fail unless the container engine is ready, every credential resolves in its form
+      and the object store's address resolves.
+    options:
+      lakekeeper_object_store_id: *id001
+      lakekeeper_s3_url: *id002
+      lakekeeper_db_login_ref: *id003
+      lakekeeper_encryption_key_ref: *id004
+      lakekeeper_access_key_ref: *id005
+      lakekeeper_signing_ref: *id006
+  health:
+    short_description: Fail unless both containers are healthy, the database answers, the catalog is ok
+      and bootstrapped and the warehouse is as the module states it.
+    options: *id007
+  backup:
+    short_description: Dump the catalog database and list it, then delegate to the compose_app backup
+      hook.
+    options: *id007
+  export:
+    short_description: Dump the catalog database and list it (the exit copy).
+    options: *id007
+  restore:
+    short_description: Check an export, stop the catalog, restore the dump in one transaction, start the
+      catalog and prove it.
+    options:
+      lakekeeper_logical_id: *id008
+      lakekeeper_image: *id009
+      lakekeeper_postgres_image: *id010
+      lakekeeper_bind: *id011
+      lakekeeper_port: *id012
+      lakekeeper_dir: *id013
+      lakekeeper_data_root: *id014
+      lakekeeper_export_dir: *id015
+      lakekeeper_owner: *id016
+      lakekeeper_group: *id017
+      lakekeeper_uid: *id018
+      lakekeeper_gid: *id019
+      lakekeeper_db_uid: *id020
+      lakekeeper_db_gid: *id021
+      lakekeeper_db_name: *id022
+      lakekeeper_db_user: *id023
+      lakekeeper_warehouse_name: *id024
+      lakekeeper_bucket: *id025
+      lakekeeper_region: *id026
+      lakekeeper_object_store_id: *id001
+      lakekeeper_s3_url: *id002
+      lakekeeper_soft_delete_seconds: *id027
+      lakekeeper_db_login_ref: *id003
+      lakekeeper_encryption_key_ref: *id004
+      lakekeeper_access_key_ref: *id005
+      lakekeeper_signing_ref: *id006
+      lakekeeper_mem_limit: *id028
+      lakekeeper_db_mem_limit: *id029
+      lakekeeper_start: *id030
+      lakekeeper_validate_with_docker: *id031
+      lakekeeper_health_timeout: *id032
+      lakekeeper_restore_source:
+        type: path
+        description: The export directory to restore from (db/lakekeeper.dump and listing.jsonl).
+        required: true
+  upgrade:
+    short_description: Validate and record an image bump (the catalog's, or the database's within its
+      major version).
+    options:
+      lakekeeper_logical_id: *id008
+      lakekeeper_image: *id009
+      lakekeeper_postgres_image: *id010
+      lakekeeper_bind: *id011
+      lakekeeper_port: *id012
+      lakekeeper_dir: *id013
+      lakekeeper_data_root: *id014
+      lakekeeper_export_dir: *id015
+      lakekeeper_owner: *id016
+      lakekeeper_group: *id017
+      lakekeeper_uid: *id018
+      lakekeeper_gid: *id019
+      lakekeeper_db_uid: *id020
+      lakekeeper_db_gid: *id021
+      lakekeeper_db_name: *id022
+      lakekeeper_db_user: *id023
+      lakekeeper_warehouse_name: *id024
+      lakekeeper_bucket: *id025
+      lakekeeper_region: *id026
+      lakekeeper_object_store_id: *id001
+      lakekeeper_s3_url: *id002
+      lakekeeper_soft_delete_seconds: *id027
+      lakekeeper_db_login_ref: *id003
+      lakekeeper_encryption_key_ref: *id004
+      lakekeeper_access_key_ref: *id005
+      lakekeeper_signing_ref: *id006
+      lakekeeper_mem_limit: *id028
+      lakekeeper_db_mem_limit: *id029
+      lakekeeper_start: *id030
+      lakekeeper_validate_with_docker: *id031
+      lakekeeper_health_timeout: *id032
+      lakekeeper_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the catalog image to bump to (name this or the
+          database target).
+        default: ''
+      lakekeeper_target_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the database image to bump to, the same major version.
+        default: ''
