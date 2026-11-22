@@ -5,7 +5,7 @@
 # example production manifest maps (examples/broker/manifest.production.yml).  Build context is
 # the repository root:
 #   docker build -f compose/lab-in-a-box/broker/Dockerfile .
-FROM python:3.15.1-slim-bookworm@sha256:575f8bc12ec26542e0678bc6b60e385218248019d433157ec327264a78c3a853
+FROM python:3.15.2-slim-bookworm@sha256:96599df822d0e1c6bb700014a05c7f3c8cabc6e0f7ff3c4f9f69cee033b4b5d9
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONPATH=/src
 WORKDIR /src
 COPY constraints/bootstrap.txt constraints/ci.txt /src/constraints/
