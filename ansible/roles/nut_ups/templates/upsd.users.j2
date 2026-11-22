@@ -1,0 +1,5 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role nut_ups, control ups-protection); local changes are overwritten.
+[{{ nut_ups_monitor_user }}]
+  password = {{ nut_ups_pw.content | b64decode | trim }}
+  upsmon primary

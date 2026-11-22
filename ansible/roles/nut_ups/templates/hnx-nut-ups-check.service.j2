@@ -1,0 +1,10 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role nut_ups, control ups-protection); local changes are overwritten.
+[Unit]
+Description=homelabnext UPS metrics and fallback shutdown check (control ups-protection)
+After=nut-server.service
+
+[Service]
+Type=oneshot
+ExecStart={{ nut_ups_libexec_dir }}/nut-ups-check
+Nice=10

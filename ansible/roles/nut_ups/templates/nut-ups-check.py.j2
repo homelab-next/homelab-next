@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: nut-ups-check
+#   kind: job
+#   purpose: Write the UPS and shutdown-monitor state as node-exporter textfile metrics, and force a clean shutdown when on battery under the charge floor.
+#   owner: platform
+#   trigger: [timer:hnx-nut-ups-check, role:nut_ups]
+#   inputs: upsc output for the UPS; systemctl is-active nut-monitor
+#   outputs: nut_ups.prom in the textfile directory (atomic); on the charge floor, upsmon -c fsd
+#   installs_to: /usr/local/libexec/homelabnext/nut-ups-check
+#   exit:
+#     "0": checked and metrics written
+"""Managed by homelabnext (role nut_ups, control ups-protection); local changes are overwritten.
+
+Metrics (the metrics service's alert rules read them):
+  nut_ups_up                  1 when upsc answers for the UPS
+  nut_ups_on_battery          1 when the UPS status carries OB
+  nut_ups_low_battery         1 when the UPS status carries LB
+  nut_ups_battery_charge_percent
+  nut_monitor_active          1 when the shutdown monitor (nut-monitor) is active
+  nut_ups_check_timestamp_seconds   when this check last ran (a stale value alerts)
+Fallback shutdown: on battery with charge at or under the floor, ask upsmon for a forced shutdown
+(`upsmon -c fsd`), the same clean path as the UPS's own low-battery flag."""
+
+import os
+import subprocess
+import time
+
+UPS = {{ nut_ups_name | to_json }}
+UPSC = {{ nut_ups_upsc_cli | to_json }}
+UPSMON = {{ nut_ups_upsmon_cli | to_json }}
+SYSTEMCTL = {{ nut_ups_systemctl_cli | to_json }}
+OUT = os.path.join({{ nut_ups_textfile_dir | to_json }}, "nut_ups.prom")
+FLOOR = {{ nut_ups_shutdown_charge_percent | int }}
+LBL = '{ups="' + UPS + '"}'
+
+
+def run(argv):
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=20)
+        return r.returncode, r.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return 127, ""
+
+
+def main():
+    rc, out = run([UPSC, UPS + "@localhost"])
+    vars_ = {}
+    if rc == 0:
+        for line in out.splitlines():
+            k, _, v = line.partition(": ")
+            vars_[k.strip()] = v.strip()
+    up = 1 if rc == 0 and "ups.status" in vars_ else 0
+    flags = vars_.get("ups.status", "").split()
+    on_batt = 1 if "OB" in flags else 0
+    low = 1 if "LB" in flags else 0
+    try:
+        charge = float(vars_.get("battery.charge", "nan"))
+    except ValueError:
+        charge = float("nan")
+    mrc, mout = run([SYSTEMCTL, "is-active", "nut-monitor.service"])
+    mon = 1 if mrc == 0 and mout.strip() == "active" else 0
+    lines = [
+        "# HELP nut_ups_up 1 when the UPS answers upsc",
+        "# TYPE nut_ups_up gauge",
+        "nut_ups_up" + LBL + " " + str(up),
+        "# HELP nut_ups_on_battery 1 when the UPS runs on battery (OB)",
+        "# TYPE nut_ups_on_battery gauge",
+        "nut_ups_on_battery" + LBL + " " + str(on_batt),
+        "# HELP nut_ups_low_battery 1 when the UPS reports low battery (LB)",
+        "# TYPE nut_ups_low_battery gauge",
+        "nut_ups_low_battery" + LBL + " " + str(low),
+    ]
+    if charge == charge:  # not NaN
+        lines += [
+            "# HELP nut_ups_battery_charge_percent battery charge",
+            "# TYPE nut_ups_battery_charge_percent gauge",
+            "nut_ups_battery_charge_percent" + LBL + " " + format(charge, "g"),
+        ]
+    lines += [
+        "# HELP nut_monitor_active 1 when nut-monitor (the shutdown controller) is active",
+        "# TYPE nut_monitor_active gauge",
+        "nut_monitor_active " + str(mon),
+        "# HELP nut_ups_check_timestamp_seconds unix time of the last check",
+        "# TYPE nut_ups_check_timestamp_seconds gauge",
+        "nut_ups_check_timestamp_seconds " + str(int(time.time())),
+    ]
+    tmp = OUT + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, OUT)
+    if FLOOR and on_batt and charge == charge and charge <= FLOOR:
+        run([UPSMON, "-c", "fsd"])
+
+
+if __name__ == "__main__":
+    main()

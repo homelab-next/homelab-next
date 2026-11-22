@@ -446,6 +446,7 @@ def test_the_four_default_rules_use_the_settings(tmp_path):
     by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
     assert sorted(by) == [
         "DiskAlmostFull", "FilesystemReadOnly", "MemoryPressure", "NoTargets", "TargetDown",
+        "UpsCheckStale", "UpsLowBattery", "UpsMonitorDown", "UpsOnBattery", "UpsUnreadable",
         "Watchdog",
     ]  # fmt: skip
     assert by["TargetDown"]["for"] == "20m" and by["TargetDown"]["expr"] == "up == 0"
