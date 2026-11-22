@@ -35,10 +35,8 @@ products:
   - {name: agentmetry, why: the agent telemetry product}
 allow:
   - path: "modules/intel-ingest/roles/intel_ingest/files/hnx_intel_ingest.py"
-    products: [misp, synapse-cortex]
     reason: "the ingest's script is the bridge between two products' HTTP APIs (an attribute search on one, a query-language write on the other): their API field names, attribute types and query syntax are the script's content; every other file of the module, the role, its variables and its environment names the two services by slot"
   - path: "tests/modules/test_intel_ingest_script.py"
-    products: [misp, synapse-cortex]
     reason: "the unit tests of that script, which drive its walk against a stand-in for the first product's attribute search"
   - path: "tests/lake/golden/novelty_finding.*"
     reason: "the novelty_finding table's DDL goldens (ADR-0036), named like every other table's by the engine whose generated DDL each pins (the older tables' goldens are in the baseline); the generator is counted where it lives, homelabnext/lake/ddl.py"
