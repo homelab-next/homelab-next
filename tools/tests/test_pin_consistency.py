@@ -279,7 +279,11 @@ ORCHESTRATOR_ROUTES = "orchestrator/internal/api/server.go"
 #     401 until scrape auth exists (issue 251), and the example row declares no metrics block
 METRICS_SERVED: dict[str, dict] = {
     "lakekeeper": {
-        "versions": {"0.5.2", "0.14.1"},
+        # 0.15.1 read at v0.15.1 crates/lakekeeper/src/{config,metrics}.rs: same default port 9000
+        # (METRICS__PORT), Prometheus text on /metrics and as the fallback for every other path;
+        # it also answers "OK" on /health there, which is liveness, not metrics, so the "not"
+        # rule below still holds for a metrics block
+        "versions": {"0.5.2", "0.14.1", "0.15.1"},
         "port": "listener",
         "default_port": 9000,
         "paths": None,
