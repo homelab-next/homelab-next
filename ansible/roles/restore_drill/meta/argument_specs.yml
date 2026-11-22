@@ -32,6 +32,104 @@ argument_specs:
         type: path
         description: The drill records (JSON), the role's only data.
         default: /var/lib/homelabnext/restore-drill/drills.json
+      restore_drill_timer:
+        type: bool
+        description: Install the drill command, its config and a daily timer that drills the most overdue guest from the copy drilled the longest ago (tasks/timer.yml). Opt-in.
+        default: false
+      restore_drill_timer_calendar:
+        type: str
+        description: The timer's OnCalendar (UTC), after the backup server's prune and verify.
+        default: "*-*-* 13:00:00 UTC"
+      restore_drill_timer_delay_s:
+        type: int
+        description: The timer's randomized delay in seconds.
+        default: 600
+      restore_drill_config_file:
+        type: path
+        description: Where the drill's config is written (mode 0600).
+        default: /etc/hnx/restore-drill.json
+      restore_drill_env_file:
+        type: path
+        description: Where the drill's credentials are written (mode 0600).
+        default: /etc/hnx/restore-drill.env
+      restore_drill_client_cli:
+        type: str
+        description: The backup server's client command (the drill uses its snapshot list, restore and --repository conventions); required for the timer.
+        default: ""
+      restore_drill_pbs_authid:
+        type: str
+        description: The backup server's API token id (user@realm!token), read-only on the stores' namespace.
+        default: ""
+      restore_drill_pbs_host:
+        type: str
+        description: The backup server's address as the client reaches it (the backup host itself by default).
+        default: localhost
+      restore_drill_stores:
+        type: list
+        elements: str
+        description: The datastores a drill restores from, primary first; the timer alternates them (the second copy is drilled too).
+        default: []
+      restore_drill_namespace:
+        type: str
+        description: The namespace the guests' backups are in.
+        default: ""
+      restore_drill_vmids:
+        type: dict
+        description: Guest id to the backup server's vm id; every guest of restore_drill_guests needs one.
+        default: {}
+      restore_drill_expect_export:
+        type: list
+        elements: str
+        description: Guest ids whose image must carry a fresh application export under var/backups.
+        default: []
+      restore_drill_secret_env:
+        type: dict
+        description: "Credentials from the secrets capability at run time (PBS_PASSWORD, PBS_FINGERPRINT, NOTIFY_TOKEN); no literal default."
+        default: {}
+      restore_drill_scratch_dir:
+        type: path
+        description: Where an image is restored (needs room for the largest guest's used data); emptied after every drill.
+        default: /var/lib/homelabnext/restore-drill/scratch
+      restore_drill_min_free_gb:
+        type: int
+        description: Refuse a drill when the scratch space has less free than this (0 = no check).
+        default: 0
+      restore_drill_max_snapshot_age_h:
+        type: int
+        description: A newest snapshot older than this fails the drill (the backup did not run).
+        default: 36
+      restore_drill_max_export_age_h:
+        type: int
+        description: An application export older than this fails the drill (the scheduled dump did not run).
+        default: 36
+      restore_drill_notify_url:
+        type: str
+        description: The notifier's base URL; empty disables the notice.
+        default: ""
+      restore_drill_notify_topic:
+        type: str
+        description: The notifier's topic.
+        default: ""
+      restore_drill_unit_dir:
+        type: path
+        description: Where the units are written.
+        default: /etc/systemd/system
+      restore_drill_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      restore_drill_last_run_dir:
+        type: path
+        description: The directory of the timer's last-run record (role last_run).
+        default: /var/lib/homelabnext/last-run
+      restore_drill_last_run_group:
+        type: str
+        description: The group that may read the last-run record.
+        default: root
+      restore_drill_last_run_writer:
+        type: path
+        description: Where the shared last-run writer is installed.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
   health:
     short_description: Fail for every guest without a verified drill within restore_drill_max_age_days.
     options:

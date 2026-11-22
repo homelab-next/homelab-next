@@ -26,10 +26,13 @@
 - name: Work out each guest's last verified drill and its age
   vars:
     restore_drill_fmt: "%Y-%m-%dT%H:%M:%SZ"
-    restore_drill_records: "{{ (restore_drill_state_raw.content | b64decode | from_json).guests if restore_drill_state_stat.stat.exists else {} }}"
+    restore_drill_doc_read: "{{ (restore_drill_state_raw.content | b64decode | from_json) if restore_drill_state_stat.stat.exists else {} }}"
+    restore_drill_records: "{{ restore_drill_doc_read.guests | default({}) }}"
   ansible.builtin.set_fact:
     restore_drill_time: "{{ restore_drill_now or now(utc=true).strftime(restore_drill_fmt) }}"
     restore_drill_known: "{{ restore_drill_records }}"
+    # everything else in the file (the services mapping, the notifier's state) is the timer's and is kept as it is
+    restore_drill_rest: "{{ restore_drill_doc_read | dict2items | rejectattr('key', 'eq', 'guests') | items2dict }}"
     restore_drill_ages: >-
       {%- set out = {} -%}
       {%- set t = (restore_drill_now or now(utc=true).strftime(restore_drill_fmt)) | to_datetime(restore_drill_fmt) -%}

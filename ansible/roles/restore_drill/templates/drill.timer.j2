@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role restore_drill); local changes are overwritten.
+[Unit]
+Description=Restore drill, daily (one guest, rotating)
+
+[Timer]
+OnCalendar={{ restore_drill_timer_calendar }}
+RandomizedDelaySec={{ restore_drill_timer_delay_s }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

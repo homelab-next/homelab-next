@@ -165,6 +165,47 @@ argument_specs:
         type: str
         description: The systemctl command.
         default: systemctl
+      compose_app_export_timer:
+        type: bool
+        description: >-
+          Schedule the application-consistent database dump (tasks/export_timer.yml, ADR-0042
+          decision 2): a timer runs hnx-export-run, which dumps every PostgreSQL, MariaDB or MySQL
+          service of the spec from inside its container into <export dir>/db. Opt-in.
+        default: false
+      compose_app_export_engines:
+        type: dict
+        description: >-
+          Overrides of the engine found from a service's image: {service: postgres, mysql or none}
+          (none disables the dump of that service). Each key is a service of the spec.
+        default: {}
+      compose_app_export_calendar:
+        type: str
+        description: The timer's OnCalendar, in UTC, before the guest's image backup.
+        default: "*-*-* 07:30:00 UTC"
+      compose_app_export_delay_s:
+        type: int
+        description: The timer's randomized delay in seconds (staggers the applications of one guest).
+        default: 900
+      compose_app_export_script:
+        type: path
+        description: Where the dump script is installed.
+        default: /usr/local/libexec/homelabnext/hnx-export-run
+      compose_app_export_manifest:
+        type: path
+        description: Where the role writes the dump script's manifest (the jobs, the export directory).
+        default: "{{ compose_app_dir }}/export-manifest.json"
+      compose_app_export_last_run_dir:
+        type: path
+        description: The directory of the timer's last-run record (role last_run).
+        default: /var/lib/homelabnext/last-run
+      compose_app_export_last_run_group:
+        type: str
+        description: The group that may read the last-run record.
+        default: root
+      compose_app_export_last_run_writer:
+        type: path
+        description: Where the shared last-run writer is installed.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
   health:
     short_description: Assert every service of the spec has a container and every container is running and healthy.
     options:

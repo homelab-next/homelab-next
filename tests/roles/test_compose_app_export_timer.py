@@ -1,0 +1,285 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The scheduled database dump of compose_app (ADR-0042 decision 2): the dump script against a fake
+``docker compose exec``, and the role's timer task end to end on localhost."""
+
+from __future__ import annotations
+
+import grp
+import importlib.util
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+import pytest
+from rolerun import calls, fake, first_run, logging_fake, run_role
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / "ansible/roles/compose_app/files/hnx-export-run.py"
+
+
+def load():
+    spec = importlib.util.spec_from_file_location("hnx_export_run", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# A fake `docker compose -f F exec -T <service> <argv...>`: answers by what is asked.
+DOCKER = r"""
+import os, sys
+a = sys.argv[1:]
+cmd = " ".join(a[a.index("-T") + 2:])
+log = open(LOG, "a"); log.write(cmd + "\n"); log.close()
+if os.path.exists(FAIL + ".all"):
+    sys.stderr.write("boom\n"); sys.exit(1)
+if "pg_database" in cmd:
+    sys.stdout.write("appdb\nother\n")
+elif "pg_dumpall" in cmd:
+    sys.stdout.write("-- PostgreSQL database cluster dump complete\n")
+elif "pg_dump -Fc" in cmd:
+    if os.path.exists(FAIL + ".pg"):
+        sys.stderr.write("denied\n"); sys.exit(1)
+    sys.stdout.buffer.write(b"PGDMP" + b"x" * 64)
+elif "mariadb-dump" in cmd:
+    sys.stdout.write("-- Dump completed on 2026-11-22\n" if not os.path.exists(FAIL + ".trunc") else "CREATE TABLE")
+"""
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    body = DOCKER.replace("LOG", repr(str(tmp_path / "docker.log"))).replace(
+        "FAIL", repr(str(tmp_path / "fail"))
+    )
+    fake(bindir / "docker", body)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    return tmp_path
+
+
+def manifest(tmp_path, jobs, export=None):
+    export = export or str(tmp_path / "var" / "backups" / "compose" / "app" / "export" / "db")
+    doc = {
+        "app": "app",
+        "compose_file": str(tmp_path / "docker-compose.yml"),
+        "export_dir": export,
+        "jobs": jobs,
+        "images": {"db": "x@sha256:" + "0" * 64},
+    }
+    p = tmp_path / "manifest.json"
+    p.write_text(json.dumps(doc))
+    return p, Path(export)
+
+
+def test_postgres_dumps_every_database_and_the_globals_and_lists_them(env):
+    mod = load()
+    mf, export = manifest(env, [{"service": "db", "engine": "postgres"}])
+    assert mod.main(["--manifest", str(mf)]) == 0
+    assert sorted(p.name for p in (export / "db").iterdir()) == [
+        "appdb.dump",
+        "globals.sql",
+        "other.dump",
+    ]
+    listing = (export / "listing.sha256").read_text()
+    assert "db/appdb.dump" in listing and "db/globals.sql" in listing
+    meta = json.loads((export / "manifest.json").read_text())
+    assert meta["jobs"]["db"]["engine"] == "postgres" and "image backup" in meta["does_not_carry"]
+    assert stat.S_IMODE((export / "db" / "appdb.dump").stat().st_mode) == 0o600
+    assert stat.S_IMODE(export.stat().st_mode) == 0o700
+    # the dump ran inside the container as its own user: no password on any command line
+    assert all(
+        "PASSWORD" not in line.split("MYSQL_PWD")[0]
+        for line in (env / "docker.log").read_text().splitlines()
+    )
+
+
+def test_mysql_dump_is_a_single_transaction_dump_checked_for_its_trailer(env):
+    mod = load()
+    mf, export = manifest(env, [{"service": "db", "engine": "mysql"}])
+    assert mod.main(["--manifest", str(mf)]) == 0
+    assert (export / "db" / "all-databases.sql").read_text().startswith("-- Dump completed")
+    assert "--single-transaction" in (env / "docker.log").read_text()
+
+
+def test_a_truncated_dump_fails_the_run_and_leaves_the_last_good_one(env):
+    mod = load()
+    mf, export = manifest(env, [{"service": "db", "engine": "mysql"}])
+    assert mod.main(["--manifest", str(mf)]) == 0
+    good = (export / "db" / "all-databases.sql").read_text()
+    (env / "fail.trunc").write_text("")
+    assert mod.main(["--manifest", str(mf)]) == 1
+    assert (export / "db" / "all-databases.sql").read_text() == good
+    assert not [p for p in export.iterdir() if p.name.startswith(".stage-")]
+
+
+def test_one_failing_service_does_not_stop_the_others_and_keeps_its_old_dump(env):
+    mod = load()
+    jobs = [{"service": "db", "engine": "postgres"}, {"service": "sql", "engine": "mysql"}]
+    mf, export = manifest(env, jobs)
+    assert mod.main(["--manifest", str(mf)]) == 0
+    (env / "fail.pg").write_text("")
+    assert mod.main(["--manifest", str(mf)]) == 1
+    meta = json.loads((export / "manifest.json").read_text())
+    assert meta["jobs"]["db"].get("stale") is True and "stale" not in meta["jobs"]["sql"]
+    assert (export / "db" / "appdb.dump").exists()
+
+
+def test_the_previous_dump_is_kept_once(env):
+    mod = load()
+    mf, export = manifest(env, [{"service": "sql", "engine": "mysql"}])
+    assert mod.main(["--manifest", str(mf)]) == 0
+    assert mod.main(["--manifest", str(mf)]) == 0
+    assert mod.main(["--manifest", str(mf)]) == 0
+    assert sorted(p.name for p in export.iterdir() if p.is_dir()) == ["sql", "sql.prev"]
+
+
+def test_a_dead_engine_container_fails(env):
+    mod = load()
+    mf, _ = manifest(env, [{"service": "db", "engine": "postgres"}])
+    (env / "fail.all").write_text("")
+    assert mod.main(["--manifest", str(mf)]) == 1
+
+
+@pytest.mark.parametrize(
+    "export",
+    ["relative/path", "/var/../etc/x", "/tmp", "/a/b"],
+)
+def test_a_shallow_or_traversing_export_dir_is_refused(env, export):
+    mod = load()
+    mf, _ = manifest(env, [{"service": "db", "engine": "postgres"}], export=export)
+    assert mod.main(["--manifest", str(mf)]) == 2
+
+
+def test_a_symlinked_export_dir_is_refused(env):
+    mod = load()
+    real = env / "real" / "deep" / "dir"
+    real.mkdir(parents=True)
+    link = env / "link" / "to" / "x"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(real)
+    mf, _ = manifest(env, [{"service": "db", "engine": "postgres"}], export=str(link))
+    assert mod.main(["--manifest", str(mf)]) == 2
+
+
+def test_an_unknown_engine_or_name_is_refused(env):
+    mod = load()
+    for job in ({"service": "db", "engine": "mongo"}, {"service": "../x", "engine": "postgres"}):
+        mf, _ = manifest(env, [job])
+        assert mod.main(["--manifest", str(mf)]) == 2
+
+
+def test_no_jobs_is_a_clean_no_op(env):
+    mod = load()
+    mf, export = manifest(env, [])
+    assert mod.main(["--manifest", str(mf)]) == 0
+    assert not export.exists()
+
+
+# ------------------------------------------------------------------ the role's timer task
+SPEC = {
+    "services": {
+        "web": {
+            "image": "registry.example.internal/org/web",
+            "tag": "1",
+            "digest": "sha256:" + "a" * 64,
+        },
+        "db": {"image": "docker.io/library/postgres", "tag": "17", "digest": "sha256:" + "b" * 64},
+        "maria": {
+            "image": "docker.io/library/mariadb",
+            "tag": "11",
+            "digest": "sha256:" + "c" * 64,
+        },
+        "cache": {"image": "docker.io/library/valkey", "tag": "8", "digest": "sha256:" + "d" * 64},
+    }
+}
+
+
+def role_vars(tmp_path, spec=SPEC, **kw):
+    d = {
+        "compose_app_name": "app",
+        "compose_app_spec": spec,
+        "compose_app_dir": str(tmp_path / "opt"),
+        "compose_app_export_dir": str(tmp_path / "export"),
+        "compose_app_owner": os.getenv("USER") or "root",
+        "compose_app_group": grp.getgrgid(os.getgid()).gr_name,
+        "compose_app_unit_dir": str(tmp_path / "units"),
+        "compose_app_systemctl_cli": logging_fake(tmp_path, "systemctl", out="disabled\n"),
+        "compose_app_export_script": str(tmp_path / "libexec" / "hnx-export-run"),
+        "compose_app_export_last_run_dir": str(tmp_path / "last-run"),
+        "compose_app_export_last_run_group": grp.getgrgid(os.getgid()).gr_name,
+        "compose_app_export_last_run_writer": str(tmp_path / "libexec" / "hnx-last-run"),
+    }
+    (tmp_path / "units").mkdir(exist_ok=True)
+    (tmp_path / "opt").mkdir(exist_ok=True)
+    d.update(kw)
+    return d
+
+
+def _timer_first(tmp_path):
+    return {"role": "compose_app", "tasks_from": "export_timer", "extra_vars": role_vars(tmp_path)}
+
+
+@first_run(_timer_first)
+def test_the_timer_task_installs_script_manifest_units_and_arms_the_timer(first):
+    result, tmp = first
+    assert result.returncode == 0, result.stdout + result.stderr
+    mf = json.loads((tmp / "opt" / "export-manifest.json").read_text())
+    assert mf["jobs"] == [
+        {"service": "db", "engine": "postgres"},
+        {"service": "maria", "engine": "mysql"},
+    ]
+    assert mf["export_dir"] == str(tmp / "export" / "db")
+    assert mf["images"]["db"].endswith("@sha256:" + "b" * 64)
+    assert stat.S_IMODE((tmp / "opt" / "export-manifest.json").stat().st_mode) == 0o600
+    service = (tmp / "units" / "hnx-export-app.service").read_text()
+    assert "hnx-export-run --manifest" in service and "timer:compose_app/export-app" in service
+    timer = (tmp / "units" / "hnx-export-app.timer").read_text()
+    assert "OnCalendar=*-*-* 07:30:00 UTC" in timer and "RandomizedDelaySec=900" in timer
+    assert (tmp / "libexec" / "hnx-export-run").stat().st_mode & stat.S_IEXEC
+    log = calls(tmp)
+    assert "systemctl daemon-reload" in log and "systemctl enable --now hnx-export-app.timer" in log
+
+
+def test_an_override_can_disable_or_add_an_engine_and_a_bad_one_is_refused(tmp_path):
+    ok = run_role(
+        tmp_path,
+        "compose_app",
+        "export_timer",
+        role_vars(tmp_path, compose_app_export_engines={"db": "none", "web": "mysql"}),
+    )
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    jobs = json.loads((tmp_path / "opt" / "export-manifest.json").read_text())["jobs"]
+    assert [j["service"] for j in jobs] == ["maria", "web"]
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    for eng in ({"db": "mongo"}, {"nosuch": "postgres"}):
+        r = run_role(
+            bad, "compose_app", "export_timer", role_vars(bad, compose_app_export_engines=eng)
+        )
+        assert r.returncode != 0 and "compose_app_export_engines" in r.stdout + r.stderr
+
+
+def test_an_application_with_no_database_gets_no_timer(tmp_path):
+    spec = {"services": {"web": SPEC["services"]["web"], "cache": SPEC["services"]["cache"]}}
+    r = run_role(tmp_path, "compose_app", "export_timer", role_vars(tmp_path, spec=spec))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (tmp_path / "units" / "hnx-export-app.timer").exists()
+    assert "enable" not in " ".join(calls(tmp_path))
+
+
+def test_the_timer_a_database_left_is_removed_when_the_database_goes(tmp_path):
+    first = run_role(tmp_path, "compose_app", "export_timer", role_vars(tmp_path))
+    assert first.returncode == 0, first.stdout + first.stderr
+    (tmp_path / "calls.log").unlink()
+    spec = {"services": {"web": SPEC["services"]["web"]}}
+    r = run_role(tmp_path, "compose_app", "export_timer", role_vars(tmp_path, spec=spec))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (tmp_path / "units" / "hnx-export-app.timer").exists()
+    assert "systemctl disable --now hnx-export-app.timer" in calls(tmp_path)
+
+
+def test_the_script_is_a_program_the_interpreter_can_compile():
+    compile(SCRIPT.read_text(), str(SCRIPT), "exec")
+    assert sys.version_info >= (3, 8)
