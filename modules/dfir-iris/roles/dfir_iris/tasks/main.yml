@@ -14,6 +14,10 @@
 - name: Write the certificate files
   ansible.builtin.include_tasks: tls.yml
 
+- name: Write the threat-intel platform's CA for the product's enrichment module
+  ansible.builtin.include_tasks: trust.yml
+  when: dfir_iris_intel_enabled | bool
+
 # The passwords and keys reach only the env_files (0600). The product creates the first
 # administrator (login and password) when it meets an EMPTY database and ignores the password
 # afterwards, so rotating it is done in the product, not here (README). The API key does not reach a
@@ -97,3 +101,7 @@
 - name: Set the real administrator password, drop the throwaway and discard the app's log
   ansible.builtin.include_tasks: bootstrap_done.yml
   when: dfir_iris_start | bool and not ansible_check_mode and not dfir_iris_marker.stat.exists
+
+- name: Wire the product's enrichment module to the threat-intel platform
+  ansible.builtin.include_tasks: enrichment.yml
+  when: dfir_iris_start | bool and dfir_iris_intel_enabled | bool and not ansible_check_mode

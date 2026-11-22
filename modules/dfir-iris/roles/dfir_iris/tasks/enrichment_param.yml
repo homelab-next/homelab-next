@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# One setting of the enrichment module: written through the product only when the stored value is not the
+# wanted one (a setting never set has no stored value). The parameter is named to the API as
+# base64("<module id>##<setting>"). The value may hold the platform's key: quiet, no_log.
+- name: Read the stored value
+  ansible.builtin.set_fact:
+    dfir_iris_intel_have: >-
+      {{ (dfir_iris_intel_mod.module_config | selectattr('param_name', 'equalto', dfir_iris_intel_param.name)
+          | selectattr('value', 'defined') | map(attribute='value') | list | first) | default(none) }}
+  no_log: true
+
+- name: Write the setting
+  ansible.builtin.include_tasks: probe.yml
+  vars:
+    dfir_iris_probe_path: "/manage/modules/set-parameter/{{ ((dfir_iris_intel_mod.id | string) ~ '##' ~ dfir_iris_intel_param.name) | b64encode }}"
+    dfir_iris_probe_keyed: true
+    dfir_iris_probe_quiet: true
+    dfir_iris_probe_json: "{{ {'parameter_value': dfir_iris_intel_param.value} | to_json }}"
+  when: dfir_iris_intel_have != dfir_iris_intel_param.value
+
+- name: Refuse a setting the product did not accept
+  ansible.builtin.assert:
+    that: dfir_iris_probe_code == '200'
+    fail_msg: >-
+      case-management: the product refused the enrichment module's setting {{ dfir_iris_intel_param.name }}
+      (status {{ dfir_iris_probe_code }})
+  when: dfir_iris_intel_have != dfir_iris_intel_param.value
+
+- name: Record that a setting was written
+  ansible.builtin.set_fact:
+    dfir_iris_intel_written: true
+  changed_when: true
+  when: dfir_iris_intel_have != dfir_iris_intel_param.value

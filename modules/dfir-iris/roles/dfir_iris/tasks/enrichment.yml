@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# Wire the product's bundled enrichment module (IrisMISP) to the threat-intel platform through the product's
+# own administration API, with the administrator's key: find the module (register it when it is not
+# there), write its settings, then enable it. A second run changes nothing: a setting is written only
+# when the module's stored value differs, and the module is enabled only when it is not. The module's
+# list holds the platform key once it is configured, so every call here is quiet (no_log, and the
+# probe's facts hidden); only the module's id and what differs is kept. Never in check mode, and only
+# after the API answers with the key (main.yml). The product lists a module it finds unconfigured as
+# disabled, so the enable call comes last, from a fresh list.
+- name: Compute the settings this module must hold
+  ansible.builtin.set_fact:
+    dfir_iris_intel_desired:
+      - name: "{{ dfir_iris_intel_settings.config }}"
+        value: >-
+          {{ {'name': dfir_iris_intel_name, 'type': 'public', 'url': [dfir_iris_intel_url | regex_replace('/\Z', '')],
+              'key': [lookup('hnx_secret', dfir_iris_intel_key_ref)],
+              'ssl': [dfir_iris_container_trust ~ '/' ~ dfir_iris_intel_ca_file]} | to_json }}
+      - {name: "{{ dfir_iris_intel_settings.report }}", value: true}
+      - {name: "{{ dfir_iris_intel_settings.manual }}", value: true}
+      - {name: "{{ dfir_iris_intel_settings.on_create }}", value: "{{ dfir_iris_intel_on_create | bool }}"}
+      - {name: "{{ dfir_iris_intel_settings.on_update }}", value: "{{ dfir_iris_intel_on_update | bool }}"}
+  no_log: true
+
+- name: List the product's modules
+  ansible.builtin.include_tasks: enrichment_list.yml
+
+- name: Register the enrichment module when the product does not list it
+  ansible.builtin.include_tasks: probe.yml
+  vars:
+    dfir_iris_probe_path: /manage/modules/add
+    dfir_iris_probe_keyed: true
+    dfir_iris_probe_quiet: true
+    dfir_iris_probe_json: "{{ {'module_name': dfir_iris_intel_module_name} | to_json }}"
+  when: dfir_iris_intel_mod | length == 0
+
+- name: Refuse a registration the product did not accept
+  ansible.builtin.assert:
+    that: dfir_iris_probe_code == '200'
+    fail_msg: >-
+      case-management: the product refused to register {{ dfir_iris_intel_module_name }} (status
+      {{ dfir_iris_probe_code }}); is the module installed in the image?
+  when: dfir_iris_intel_mod | length == 0
+
+- name: List the product's modules again after a registration
+  ansible.builtin.include_tasks: enrichment_list.yml
+  when: dfir_iris_intel_mod | length == 0
+
+- name: Refuse a product that still has no enrichment module
+  ansible.builtin.assert:
+    that: dfir_iris_intel_mod | length > 0
+    fail_msg: >-
+      case-management: the product lists no module named {{ dfir_iris_intel_module_human_name }} after
+      registering {{ dfir_iris_intel_module_name }}
+
+- name: Write each setting that differs
+  ansible.builtin.include_tasks: enrichment_param.yml
+  loop: "{{ dfir_iris_intel_desired }}"
+  loop_control:
+    loop_var: dfir_iris_intel_param
+    label: "{{ dfir_iris_intel_param.name }}"
+
+- name: List the product's modules for the enable decision
+  ansible.builtin.include_tasks: enrichment_list.yml
+
+- name: Enable the module when it is not
+  ansible.builtin.include_tasks: probe.yml
+  vars:
+    dfir_iris_probe_path: "/manage/modules/enable/{{ dfir_iris_intel_mod.id }}"
+    dfir_iris_probe_keyed: true
+    dfir_iris_probe_quiet: true
+    dfir_iris_probe_json: "{}"
+  when: not (dfir_iris_intel_mod.is_active | bool)
+
+- name: Refuse an enable the product did not accept
+  ansible.builtin.assert:
+    that: dfir_iris_probe_code == '200'
+    fail_msg: >-
+      case-management: the product did not enable {{ dfir_iris_intel_module_human_name }} (status
+      {{ dfir_iris_probe_code }}); a mandatory setting of the module may be unset
+  when: not (dfir_iris_intel_mod.is_active | bool)
+
+- name: Record that the module was enabled
+  ansible.builtin.set_fact:
+    dfir_iris_intel_enabled_now: true
+  changed_when: true
+  when: not (dfir_iris_intel_mod.is_active | bool)

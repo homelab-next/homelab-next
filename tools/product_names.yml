@@ -34,6 +34,8 @@ products:
   - {name: vllm, why: an inference server product}
   - {name: agentmetry, why: the agent telemetry product}
 allow:
+  - path: "modules/dfir-iris/roles/dfir_iris/vars/main.yml"
+    reason: "the one file that spells the case-management product's own bundled plug-in for the threat-intel platform (its module name and its setting names, which the product defines); this file spells nothing else, and the role's tasks, defaults, specs and tests reach them by neutral variable names"
   - path: "tests/lake/golden/novelty_finding.*"
     reason: "the novelty_finding table's DDL goldens (ADR-0036), named like every other table's by the engine whose generated DDL each pins (the older tables' goldens are in the baseline); the generator is counted where it lives, homelabnext/lake/ddl.py"
   - path: "tests/generators/tiers/golden/caddy/**"
