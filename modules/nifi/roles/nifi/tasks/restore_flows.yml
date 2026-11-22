@@ -44,7 +44,7 @@
 
 - name: Name each flow and its text
   ansible.builtin.set_fact:
-    nifi_import_items: "{{ nifi_import_items + [{'name': item.item.name, 'text': item.content | b64decode}] }}"
+    nifi_import_items: "{{ nifi_import_items + [{'name': item.item.name, 'text': item.content | b64decode, 'run': (nifi_flow_run[item.item.name] | default(false)) | bool}] }}"
   loop: "{{ nifi_flow_files.results }}"
   loop_control:
     label: "{{ item.item.key }}"
@@ -55,4 +55,15 @@
     nifi_api_command: import-flows
     nifi_api_extra:
       flows: "{{ nifi_import_items }}"
+      service_wait_s: "{{ nifi_health_timeout | int * 4 }}"
   when: nifi_start | bool
+
+# the API task never reports a change itself; this one does, so a second restore reads changed=0
+- name: Report whether the import changed anything
+  ansible.builtin.command: "true"
+  changed_when: >-
+    nifi_api_facts is defined and
+    ((nifi_api_facts.imported | default([])) + (nifi_api_facts.bound | default([])) +
+     (nifi_api_facts.enabled | default([])) + (nifi_api_facts.started | default([]))) | length > 0
+  check_mode: false
+  when: nifi_start | bool and not (ansible_check_mode | bool)
