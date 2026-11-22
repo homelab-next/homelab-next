@@ -194,7 +194,7 @@ first on a `compose_app` module's host.
   device is refused. `group_add` lists supplementary groups by number (the render group's id on
   the host, which does not resolve by name inside an image), never 0. A GPU container still gets
   `cap_drop: [ALL]` and `no-new-privileges`.
-* `tmpfs` is a list of RAM-backed mounts, `[{target, size_bytes, mode}]`, rendered in the compose
+* `tmpfs` is a list of RAM-backed mounts, `[{target, size_bytes, mode, uid, gid, exec}]`, rendered in the compose
   long syntax (`type: tmpfs`, `tmpfs: {size, mode}`) after the service's `volumes`. `target` is an
   absolute, canonical container path (not `/`) that equals, lies inside or contains no other mount
   of the service (a volume's container path, an anonymous volume, another tmpfs); `size_bytes` is an
@@ -207,6 +207,18 @@ first on a `compose_app` module's host.
   live in the container's memory cgroup, so a `mem_limit` must leave room for them, and a full
   tmpfs fails the writer, not the host. This is what lets a service run with `read_only: true`:
   its scratch directories (`/tmp`) are tmpfs mounts. Output is byte-identical without it.
+  `uid` and `gid` (optional, non-negative integers) own the mount and `exec` (optional bool,
+  default false) drops `noexec`; each `uid`/`gid` must equal the service's own `user:` (a numeric
+  `uid:gid`), so a service is never given a mount owned by someone else. Such a mount (and any `exec`
+  one) cannot be written in the long syntax, which has only `size` and `mode`, so it is rendered in
+  the service-level short form (`tmpfs: ["/run:exec,uid=1000,gid=1000,mode=0755,size=16777216"]`);
+  every other mount keeps the long syntax. **Exactly one denied root is opened, `/run`, and only when
+  both `uid` and `gid` are set to the service's own non-zero user:group.** Why: images that start
+  as a non-root `user:` and run an s6-overlay init (LinuxServer.io qbittorrent, nzbget, the \*arr
+  apps) need `/run` writable by that user, while docker mounts it root-owned and they crash-loop
+  with "/run belongs to uid 0". A root service, a service with no numeric `user:`, a mount owned by
+  another id, `/run/<sub>`, `/var/run` and every other denied root stay refused
+  (`compose_app_tmpfs_owned_exact` in `vars/main.yml`, tested in `tests/roles/test_role_render.py`).
 * Ports are always `host_ip:host_port:container_port`; nothing binds all interfaces
   by omission.
 * Secrets never go in `environment` (a secret-looking key is refused unless it ends

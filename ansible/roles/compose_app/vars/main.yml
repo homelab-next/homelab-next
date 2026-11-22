@@ -51,7 +51,7 @@ compose_app_network_mode_pattern: '^service:[a-z0-9][a-z0-9_.-]*\Z'
 # container path of at least one component (never / itself); the size a positive integer of bytes
 # from one page to 1 TiB; the mode a string of three octal digits with an optional leading 0 or 1 (docker's default 1777)
 compose_app_tmpfs_target_pattern: '^(?:/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
-compose_app_tmpfs_keys: [target, size_bytes, mode]
+compose_app_tmpfs_keys: [target, size_bytes, mode, uid, gid, exec]
 compose_app_tmpfs_size_min: 4096
 compose_app_tmpfs_size_max: 1099511627776
 # 3 octal digits, optionally a leading 0 or the sticky bit (1); setuid and setgid (2, 4) cannot be
@@ -62,3 +62,11 @@ compose_app_tmpfs_mode_pattern: '^[01]?[0-7]{3}\Z'
 compose_app_tmpfs_denied_roots:
   [/proc, /sys, /dev, /etc, /bin, /sbin, /lib, /lib32, /lib64, /libx32, /usr, /run, /var/run, /boot]
 compose_app_tmpfs_allowed_exact: [/dev/shm]
+# `uid`/`gid` (digits) own the mount and `exec` (a bool, default false) drops noexec. A tmpfs owned by
+# a uid/gid must be the service's OWN `user:` (a service is never given a mount owned by someone
+# else). Exactly one otherwise-denied path may be mounted, and only owned: /run, which images that
+# start as a non-root `user:` (LinuxServer.io s6-overlay) need writable by that user, and which
+# docker mounts root-owned (they crash-loop "/run belongs to uid 0"). It is allowed only when uid and
+# gid are both set to the service's own non-zero user:group, so a root service, a service with no
+# numeric user, or a mount owned by anyone else keeps /run denied. Nothing else here is loosened.
+compose_app_tmpfs_owned_exact: [/run]

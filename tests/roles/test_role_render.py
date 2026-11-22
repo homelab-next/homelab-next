@@ -693,13 +693,71 @@ DENIED_TARGETS = [
     "/dev/pts",
 ]
 
+_OWN = {"user": "1000:1000"}
+
+
+def _run(**kw):
+    return {"tmpfs": [{"target": "/run", "size_bytes": 16777216, **kw}], **_OWN}
+
+
 TMPFS_REJECTED = {
+    # /run is allowed only owned by the service's own non-root uid:gid
+    "/run without uid and gid": _run(),
+    "/run without uid and gid, exec": _run(exec=True),
+    "/run with only a uid": _run(uid=1000),
+    "/run with only a gid": _run(gid=1000),
+    "/run with a different uid": _run(uid=1001, gid=1000),
+    "/run with a different gid": _run(uid=1000, gid=1001),
+    "/run owned by root": _run(uid=0, gid=0),
+    "/run for a service with no user": {
+        "tmpfs": [{"target": "/run", "size_bytes": 4096, "uid": 1000, "gid": 1000}]
+    },
+    "/run for a service with a user name": {
+        "user": "app:app",
+        "tmpfs": [{"target": "/run", "size_bytes": 4096, "uid": 1000, "gid": 1000}],
+    },
+    "/run for a service with a uid and no gid": {
+        "user": "1000",
+        "tmpfs": [{"target": "/run", "size_bytes": 4096, "uid": 1000, "gid": 1000}],
+    },
+    "/run/sub owned by the service": {
+        "tmpfs": [{"target": "/run/sub", "size_bytes": 4096, "uid": 1000, "gid": 1000}],
+        **_OWN,
+    },
+    "/var/run owned by the service": {
+        "tmpfs": [{"target": "/var/run", "size_bytes": 4096, "uid": 1000, "gid": 1000}],
+        **_OWN,
+    },
+    **{
+        f"{t} owned by the service": {
+            "tmpfs": [{"target": t, "size_bytes": 4096, "uid": 1000, "gid": 1000}],
+            **_OWN,
+        }
+        for t in ("/etc", "/usr", "/proc", "/sys", "/dev", "/boot", "/bin", "/lib64")
+    },
+    "an owner that is not the service's uid": {
+        "tmpfs": [{"target": "/m", "size_bytes": 4096, "uid": 1001}],
+        **_OWN,
+    },
+    "an owner with no user on the service": {
+        "tmpfs": [{"target": "/m", "size_bytes": 4096, "uid": 1000}]
+    },
+    "a negative uid": {"tmpfs": [{"target": "/m", "size_bytes": 4096, "uid": -1}], **_OWN},
+    "a uid that is a bool": {"tmpfs": [{"target": "/m", "size_bytes": 4096, "uid": True}], **_OWN},
+    "a uid with a name": {"tmpfs": [{"target": "/m", "size_bytes": 4096, "uid": "app"}], **_OWN},
+    "a gid that is a float": {
+        "tmpfs": [{"target": "/m", "size_bytes": 4096, "gid": 1000.5}],
+        **_OWN,
+    },
+    "an exec that is a string": {
+        "tmpfs": [{"target": "/m", "size_bytes": 4096, "exec": "false"}],
+    },
     "not a list": {"tmpfs": {"target": "/x", "size_bytes": 4096}},
     "a string": {"tmpfs": "/x"},
     "an entry that is a string": {"tmpfs": ["/x"]},
     "no target": {"tmpfs": [{"size_bytes": 4096}]},
     "no size": {"tmpfs": [{"target": "/x"}]},
-    "an unknown key": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "uid": 0}]},
+    "an unknown key": {"tmpfs": [{"target": "/x", "size_bytes": 4096, "owner": 1000}]},
     "a relative target": {"tmpfs": [{"target": "x", "size_bytes": 4096}]},
     "the root": {"tmpfs": [{"target": "/", "size_bytes": 4096}]},
     "a dot-dot target": {"tmpfs": [{"target": "/a/../b", "size_bytes": 4096}]},
@@ -770,6 +828,66 @@ def test_compose_app_refuses_a_bad_tmpfs_mount(first, case):
     assert r.returncode != 0, r.stdout
     assert "refused tmpfs mount" in r.stdout + r.stderr, r.stdout  # this rule, not another
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def _first_compose_app_refuses_run_for_a_root_service(tmp_path):
+    s = spec(user="0:0", tmpfs=[{"target": "/run", "size_bytes": 4096, "uid": 0, "gid": 0}])
+    return {
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(
+            tmp_path, s, compose_app_validate_with_docker=False, compose_app_allow_root=True
+        ),
+    }
+
+
+@first_run(_first_compose_app_refuses_run_for_a_root_service)
+def test_compose_app_refuses_run_for_a_root_service_even_when_root_is_allowed(first):
+    r, tmp_path = first
+    assert r.returncode != 0, r.stdout
+    assert "refused tmpfs mount" in r.stdout + r.stderr, r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def _first_compose_app_renders_an_owned_run_tmpfs(tmp_path):
+    s = spec(
+        user="1000:1000",
+        read_only=True,
+        tmpfs=[
+            {"target": "/tmp", "size_bytes": 4096, "mode": "1777"},
+            {
+                "target": "/run",
+                "size_bytes": 16777216,
+                "mode": "0755",
+                "uid": "1000",  # a digit string is accepted, as a templated value is
+                "gid": 1000,
+                "exec": True,
+            },
+            {"target": "/owned", "size_bytes": 4096, "uid": 1000},
+            {"target": "/x", "size_bytes": 4096, "exec": False},
+        ],
+    )
+    return {
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    }
+
+
+@first_run(_first_compose_app_renders_an_owned_run_tmpfs)
+def test_compose_app_accepts_run_owned_by_the_services_own_user(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]
+    web = doc["web"]
+    # an owned or exec mount cannot be written in the long syntax: it is the service-level short form
+    assert web["tmpfs"] == [
+        "/run:exec,uid=1000,gid=1000,mode=0755,size=16777216",
+        "/owned:uid=1000,size=4096",
+    ]
+    long_targets = [v["target"] for v in web["volumes"] if isinstance(v, dict)]
+    assert long_targets == ["/tmp", "/x"]  # the others are untouched
+    assert "tmpfs" not in doc["db"]
 
 
 REJECTED = {
