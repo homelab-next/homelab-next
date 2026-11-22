@@ -170,7 +170,7 @@ class Controller:
                 return 200, {"request": {"requestId": "r1", "complete": self.requests["r1"] > 1}}
         if p == "/flow/parameter-contexts":
             return 200, {"parameterContexts": [
-                {"component": {"name": n, "parameters": [
+                {"id": "ctx-" + n, "component": {"name": n, "parameters": [
                     {"parameter": {"name": k, **v}} for k, v in params.items()]}}
                 for n, params in self.contexts.items()]}  # fmt: skip
         # registry clients
@@ -193,11 +193,26 @@ class Controller:
         # process groups
         if p == "/flow/process-groups/root":
             return 200, {"processGroupFlow": {"id": self.root_id}}
+        if p.startswith("/flow/process-groups/") and p.endswith("/controller-services"):
+            g = self.groups[p.split("/")[3]]
+            if method == "PUT":
+                g["svc_calls"] = g.get("svc_calls", 0) + 1
+                for sv in g["services"]:
+                    if not sv.get("invalid"):
+                        sv["state"] = "ENABLING" if sv.get("slow") else doc["state"]
+                return 200, {}
+            for sv in g["services"]:  # a slow one is ENABLED on the poll after it was asked
+                if sv["state"] == "ENABLING":
+                    sv["state"] = "ENABLED"
+            return 200, {"controllerServices": [
+                {"id": sv["id"], "component": {"name": sv["name"], "state": sv["state"]}}
+                for sv in g["services"]]}  # fmt: skip
         if p.startswith("/flow/process-groups/"):
             gid = p.rsplit("/", 1)[1]
             if method == "PUT":
                 for pr in self.groups[gid]["processors"]:
-                    pr["state"] = doc["state"]
+                    if pr["state"] != "DISABLED":
+                        pr["state"] = "RUNNING" if self._can_run(gid, doc["state"]) else "STOPPED"
                 return 200, {}
             if gid == self.root_id:
                 return 200, {
@@ -225,12 +240,41 @@ class Controller:
             flow = json.loads(fields["file"])
             gid = self.nid("pg")
             self.groups[gid] = {"name": fields["groupName"], "definition": fields["file"].encode(),
+                                "context": None, "version": 0,
+                                "services": [dict(sv, id=self.nid("cs"), state="DISABLED") for sv in
+                                             flow["flowContents"].get("controllerServices", [])],
                                 "processors": [{"state": "STOPPED"} for _ in
                                                flow["flowContents"]["processors"]]}  # fmt: skip
             return 201, {"id": gid}
+        if p.startswith("/process-groups/") and p.count("/") == 2:
+            gid = p.rsplit("/", 1)[1]
+            g = self.groups[gid]
+            if method == "PUT":
+                if doc["revision"]["version"] != g["version"]:
+                    return 409, "stale revision"
+                if any(pr["state"] == "RUNNING" for pr in g["processors"]):
+                    return 409, "group is running"
+                cid = doc["component"]["parameterContext"]["id"]
+                g["context"] = cid.removeprefix("ctx-")
+                g["version"] += 1
+            ctx = (
+                {"id": "ctx-" + g["context"], "component": {"name": g["context"]}}
+                if g["context"]
+                else None
+            )
+            return 200, {"revision": {"version": g["version"]},
+                         "component": {"id": gid, "parameterContext": ctx}}  # fmt: skip
         if p.startswith("/process-groups/") and p.endswith("/download"):
             return 200, self.groups[p.split("/")[2]]["definition"]
         return 404, "not found"
+
+    def _can_run(self, gid, state):
+        """A group starts only when it is bound to a context and every controller service is ENABLED
+        (the service's own refusal otherwise: the processors stay stopped)."""
+        g = self.groups[gid]
+        needs = json.loads(g["definition"])["flowContents"].get("requiresContext", False)
+        return (state == "RUNNING" and (g.get("context") is not None or not needs)
+                and all(sv["state"] == "ENABLED" for sv in g.get("services", [])))  # fmt: skip
 
     def _provider(self, i):
         v = self.providers[i]
@@ -277,6 +321,13 @@ def _multipart(body: bytes, ctype: str) -> dict[str, str]:
 
 def smoke_definition(processors=3) -> str:
     return json.dumps({"flowContents": {"name": "hnx-smoke", "processors": [{}] * processors}})
+
+
+def flow_definition(name="feed", *, services=(), requires_context=True, processors=2) -> str:
+    """A flow that needs its parameter context bound and its controller services enabled to run."""
+    return json.dumps({"flowContents": {
+        "name": name, "processors": [{}] * processors, "requiresContext": requires_context,
+        "controllerServices": [dict(sv) for sv in services]}})  # fmt: skip
 
 
 def temp_pki() -> tuple[Path, Path]:
