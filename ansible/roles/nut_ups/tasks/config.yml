@@ -19,6 +19,7 @@
   ansible.builtin.file:
     path: "{{ nut_ups_state_dir }}/upsmon-password"
     mode: "0600"
+  when: not ansible_check_mode
 
 - name: Read the monitor's password
   ansible.builtin.slurp:
@@ -26,6 +27,7 @@
   register: nut_ups_pw
   no_log: true
   check_mode: false
+  failed_when: nut_ups_pw is failed and not ansible_check_mode
 
 - name: nut.conf (netserver mode, the monitor runs beside the driver and upsd)
   ansible.builtin.copy:

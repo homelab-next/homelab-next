@@ -2,7 +2,7 @@
 # Managed by homelabnext (role nut_ups, control ups-protection); local changes are overwritten.
 # This host owns the UPS cable, so it is the primary and its monitor shuts it down: a clean, ordered
 # stop (the hypervisor stops the guests on host shutdown). MINSUPPLIES 1: one UPS powers this host.
-MONITOR {{ nut_ups_name }}@localhost 1 {{ nut_ups_monitor_user }} {{ nut_ups_pw.content | b64decode | trim }} primary
+MONITOR {{ nut_ups_name }}@localhost 1 {{ nut_ups_monitor_user }} {{ (nut_ups_pw.content | default('Y2hlY2s=')) | b64decode | trim }} primary
 MINSUPPLIES 1
 SHUTDOWNCMD "{{ nut_ups_shutdown_cmd }}"
 POLLFREQ 5

@@ -42,7 +42,7 @@ argument_specs:
       nut_ups_textfile_dir:
         type: path
         description: "The node exporter's textfile directory the metrics are written to."
-        default: "/var/lib/homelabnext/textfile"
+        default: "/var/lib/homelabnext-textfile"
       nut_ups_metrics_interval:
         type: str
         description: "systemd OnCalendar of the checker."
@@ -129,7 +129,7 @@ argument_specs:
       nut_ups_textfile_dir:
         type: path
         description: "The node exporter's textfile directory the metrics are written to."
-        default: "/var/lib/homelabnext/textfile"
+        default: "/var/lib/homelabnext-textfile"
       nut_ups_metrics_interval:
         type: str
         description: "systemd OnCalendar of the checker."
@@ -216,7 +216,7 @@ argument_specs:
       nut_ups_textfile_dir:
         type: path
         description: "The node exporter's textfile directory the metrics are written to."
-        default: "/var/lib/homelabnext/textfile"
+        default: "/var/lib/homelabnext-textfile"
       nut_ups_metrics_interval:
         type: str
         description: "systemd OnCalendar of the checker."
@@ -303,7 +303,7 @@ argument_specs:
       nut_ups_textfile_dir:
         type: path
         description: "The node exporter's textfile directory the metrics are written to."
-        default: "/var/lib/homelabnext/textfile"
+        default: "/var/lib/homelabnext-textfile"
       nut_ups_metrics_interval:
         type: str
         description: "systemd OnCalendar of the checker."
@@ -390,7 +390,7 @@ argument_specs:
       nut_ups_textfile_dir:
         type: path
         description: "The node exporter's textfile directory the metrics are written to."
-        default: "/var/lib/homelabnext/textfile"
+        default: "/var/lib/homelabnext-textfile"
       nut_ups_metrics_interval:
         type: str
         description: "systemd OnCalendar of the checker."

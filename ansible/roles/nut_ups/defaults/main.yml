@@ -21,8 +21,8 @@ nut_ups_shutdown_cmd: "/sbin/shutdown -h +0 'UPS low battery: clean shutdown'"
 # Also power the UPS output off after the host halts (upsdrvctl shutdown), so the UPS restarts the
 # host when mains returns. Off: the host stays down until the UPS pack is empty or an operator acts.
 nut_ups_cut_power: false
-# Where the textfile metrics go (the node exporter's textfile directory, control metrics-agent).
-nut_ups_textfile_dir: /var/lib/homelabnext/textfile
+# Where the textfile metrics go (the node exporter's textfile directory, control metrics-agent): NOT under /var/lib/homelabnext, which is 0750 root and the exporter's user could not traverse.
+nut_ups_textfile_dir: /var/lib/homelabnext-textfile
 nut_ups_metrics_interval: "*:*:00,30"
 nut_ups_state_dir: /var/lib/homelabnext/nut_ups
 nut_ups_conf_dir: /etc/nut
