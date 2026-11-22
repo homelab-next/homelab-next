@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests for the intel-ingest script (modules/intel-ingest/roles/intel_ingest/files).
 
 Ported from the old lab's job's own tests (the walk's state machine is unchanged), plus the module's

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Pulls actionable MISP indicators (attributes with to_ids=1) and ingests
 them into Synapse Cortex (the graph store of the module's site) as real Storm graph nodes, tagged #rep.misp -- the first leg
 of making Cortex an actual CTI system of record instead of an empty graph.
