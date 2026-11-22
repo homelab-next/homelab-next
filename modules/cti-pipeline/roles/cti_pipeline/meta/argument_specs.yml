@@ -168,6 +168,10 @@ argument_specs:
         type: str
         description: "The secret holding the lab CA (PEM), written to <config>/lake-ca.pem ({lake_ca}); empty for none."
         default: ""
+      cti_pipeline_synapse_ca_ref:
+        type: str
+        description: "The secret holding the graph store's own certificate (PEM), written to <config>/synapse-ca.pem ({synapse_ca}); empty for none."
+        default: ""
       cti_pipeline_allow_plain_http:
         type: bool
         description: "Accept a gateway over plain http (the key then travels in clear)."

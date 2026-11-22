@@ -54,7 +54,7 @@ wrapper's own decisions only.
 
 Placeholders, replaced whole in every argument and environment value: ``{app}`` (the release's
 app tree), ``{python}`` (the release's venv python), ``{lane_root}``, ``{config}`` and
-``{lake_ca}`` (the lake's CA bundle).  The record ``<lane root>/hnx-runs/<job>.json`` (``ok``,
+``{lake_ca}`` (the lake's CA bundle), ``{synapse_ca}`` (the graph store's own certificate).  The record ``<lane root>/hnx-runs/<job>.json`` (``ok``,
 ``exit``, ``started_at``, ``finished_at``, the run id) is what the health hook's freshness check
 reads.
 """
@@ -87,7 +87,7 @@ ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}\Z")
 JOB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z")
 INSTANCE_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*-(real|shadow)\Z")
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
-PLACEHOLDERS = ("app", "python", "lane_root", "config", "lake_ca")
+PLACEHOLDERS = ("app", "python", "lane_root", "config", "lake_ca", "synapse_ca")
 STAGE_MODE = "stage"
 SHADOW_SUFFIX = "_shadow"
 MAX_RUN_FILE = 256 << 10

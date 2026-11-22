@@ -9,6 +9,7 @@ cti_pipeline_incoming: "{{ cti_pipeline_install_dir }}/.incoming-{{ cti_pipeline
 cti_pipeline_jobs_dir: "{{ cti_pipeline_config_dir }}/jobs"
 cti_pipeline_refs_dir: "{{ cti_pipeline_config_dir }}/credentials"
 cti_pipeline_lake_ca_file: "{{ cti_pipeline_config_dir }}/lake-ca.pem"
+cti_pipeline_synapse_ca_file: "{{ cti_pipeline_config_dir }}/synapse-ca.pem"
 cti_pipeline_export_dir: "{{ cti_pipeline_data_root }}/export"
 cti_pipeline_runs_subdir: hnx-runs
 # each run id the lane consumed (the dispatcher's run file is read once: a replay is refused)
