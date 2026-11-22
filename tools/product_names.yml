@@ -34,6 +34,10 @@ products:
   - {name: vllm, why: an inference server product}
   - {name: agentmetry, why: the agent telemetry product}
 allow:
+  - path: "modules/intel-ingest/roles/intel_ingest/files/hnx_intel_ingest.py"
+    reason: "the ingest's script is the bridge between two products' HTTP APIs (an attribute search on one, a query-language write on the other): their API field names, attribute types and query syntax are the script's content; every other file of the module, the role, its variables and its environment names the two services by slot"
+  - path: "tests/modules/test_intel_ingest_script.py"
+    reason: "the unit tests of that script, which drive its walk against a stand-in for the first product's attribute search"
   - path: "modules/dfir-iris/roles/dfir_iris/vars/main.yml"
     reason: "the one file that spells the case-management product's own bundled plug-in for the threat-intel platform (its module name and its setting names, which the product defines); this file spells nothing else, and the role's tasks, defaults, specs and tests reach them by neutral variable names"
   - path: "tests/lake/golden/novelty_finding.*"

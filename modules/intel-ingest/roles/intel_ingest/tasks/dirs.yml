@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# The account, then the directories, one owner each: the data root is root's, read by the module's
+# group; state/ is the module's user's (the job writes its checkpoints there); export/ is root's
+# (the export, backup and restore hooks run as root). The configuration directory is root's; the
+# credentials directory is root-only.
+- name: Create the module's group
+  ansible.builtin.group:
+    name: "{{ intel_ingest_group }}"
+    system: true
+  when: intel_ingest_manage_accounts | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the module's user (no home, no shell)
+  ansible.builtin.user:
+    name: "{{ intel_ingest_user }}"
+    group: "{{ intel_ingest_group }}"
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+  when: intel_ingest_manage_accounts | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the data root and the export directory (root's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ intel_ingest_owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ intel_ingest_data_root }}", group: "{{ intel_ingest_group }}", mode: "0750"}
+    - {path: "{{ intel_ingest_export_dir }}", group: "{{ intel_ingest_owner_group }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the state directory (the module's user's)
+  ansible.builtin.file:
+    path: "{{ intel_ingest_state_dir }}"
+    state: directory
+    owner: "{{ intel_ingest_user }}"
+    group: "{{ intel_ingest_group }}"
+    mode: "0700"
+  tags: [backup, export, restore, upgrade]

@@ -293,7 +293,7 @@ services:
   # --- notify: ntfy -----------------------------------------------------------------------
   notify:
     <<: [*restart, *hardened]
-    image: binwiederhier/ntfy:v2.37.1@sha256:a1dde1f3210b68ac0c29e53298c96a988d06c320d1201d72f3e8e224d1a546f3
+    image: binwiederhier/ntfy:v2.37.2@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7
     command: ["serve"]
     environment:
       NTFY_BASE_URL: http://notify.svc.example.internal
@@ -363,7 +363,7 @@ services:
     <<: [*restart, *hardened]
     # Prometheus 3: retention lives in prometheus.yml (`storage.tsdb.retention`); the
     # --storage.tsdb.retention.time flag is deprecated and --storage.tsdb.retention is gone.
-    image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
+    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus

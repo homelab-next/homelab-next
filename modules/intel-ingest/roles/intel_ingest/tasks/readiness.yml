@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless every dependency is there before anything is written: systemd and python3 on the host
+# and every secret in its form.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Look for systemd on the host
+      ansible.builtin.stat:
+        path: /run/systemd/system
+      register: intel_ingest_systemd_stat
+    - name: The host runs systemd
+      ansible.builtin.assert:
+        that: intel_ingest_systemd_stat.stat.isdir | default(false)
+        fail_msg: "intel-ingest: the host does not run systemd (the job is a unit and a timer)"
+    - name: The interpreter the unit runs is there
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "import json, ssl, urllib.request"]
+      changed_when: false
+  tags: [readiness]

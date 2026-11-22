@@ -127,6 +127,12 @@ def test_the_template_unit_is_the_dispatchers_interface_and_hardened(site):
     assert "[Install]" not in unit and not any(x.startswith("ReadWritePaths=") for x in lines)
 
 
+def test_the_job_unit_keeps_the_sandbox_that_refuses_a_setgid_chmod():
+    # read as plain text (no jinja needed): the handoff sets no setgid bit because this stays on
+    text = (ROLE / "templates" / "job.service.j2").read_text()
+    assert "RestrictSUIDSGID=yes" in text.splitlines()
+
+
 def test_the_lanes_are_kept_apart_and_the_shadow_lane_never_publishes(site):
     ctx, inst = site
     shadow = render("job-lane.conf.j2", ctx, inst["fresh-shadow"])
