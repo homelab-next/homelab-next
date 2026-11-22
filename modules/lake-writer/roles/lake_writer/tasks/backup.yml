@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's
+# paths). The lake is the permanent copy of every committed row and the object store holds the staged
+# batches: what a backup adds is the checkpoints and the last-run records. A lost checkpoint is
+# harmless (the lake's own mark and the rows' content key stop a replay adding anything); the copy
+# saves the replay. The configuration directory is not listed: it holds the credentials and is
+# re-rendered by the install from the secret store. The export runs first.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Export the state
+      ansible.builtin.include_tasks: export.yml
+    - name: Write the backup manifest
+      ansible.builtin.copy:
+        dest: "{{ lake_writer_data_root }}/backup-manifest.json"
+        content: "{{ {'service': lake_writer_logical_id,
+                      'paths': [lake_writer_data_root],
+                      'restore_from': lake_writer_export_dir,
+                      'note': 'the configuration directory is not listed: it holds the credentials and is re-rendered by the install; the rows are the lake and the staged batches the object store; state/ holds each table checkpoint and last-run record, export/ a copy'} | to_nice_json }}\n"
+        owner: "{{ lake_writer_owner }}"
+        group: "{{ lake_writer_group }}"
+        mode: "0640"
+  tags: [backup]

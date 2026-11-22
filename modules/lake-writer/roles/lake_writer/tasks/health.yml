@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the script, the schemas, the environment and the logins are in place, every table's
+# timer is armed, and (the script's own judgement, nothing is written) every table has run, its last
+# run succeeded and is recent, its staged backlog is small, and the soc tables exist with exactly the
+# pinned columns. A pipeline that stages nothing is a finding of the source census, not of this hook.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Resolve the services' URLs
+      ansible.builtin.include_tasks: resolve.yml
+    - name: Look for the script, the environment, the logins and the runtime interpreter
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: lake_writer_files
+      loop: "{{ [lake_writer_script, lake_writer_env_file, lake_writer_login_env_file, lake_writer_schema_dir, lake_writer_runtime_python] }}"
+    - name: They are all there
+      ansible.builtin.assert:
+        that: lake_writer_files.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: "lake-writer: missing {{ lake_writer_files.results | rejectattr('stat.exists') | map(attribute='item') | list }} (run the install)"
+    - name: Ask systemd about the timers
+      ansible.builtin.command:
+        argv: "{{ [lake_writer_systemctl_cli, 'is-active'] + lake_writer_timers }}"
+      register: lake_writer_active
+      changed_when: false
+      failed_when: false
+    - name: Every table's timer is armed
+      ansible.builtin.assert:
+        that: lake_writer_active.rc == 0
+        fail_msg: "lake-writer: a timer is not active ({{ lake_writer_active.stdout_lines | join(', ') }})"
+    - name: The soc tables exist with the pinned columns
+      ansible.builtin.command:
+        argv: ["{{ lake_writer_runtime_python }}", -I, "{{ lake_writer_script }}", schema-check]
+      environment: "{{ lake_writer_script_env }}"
+      no_log: true
+      register: lake_writer_schema
+      changed_when: false
+      failed_when: false
+    - name: The tables are the contract's
+      ansible.builtin.assert:
+        that: lake_writer_schema.rc == 0
+        fail_msg: "lake-writer: a soc table is missing or differs from its pinned columns: {{ lake_writer_schema.stdout | default('') | truncate(500) }} {{ lake_writer_schema.stderr | default('') | truncate(300) }}"
+    - name: Judge every table's last run and backlog
+      ansible.builtin.command:
+        argv:
+          - "{{ lake_writer_runtime_python }}"
+          - -I
+          - "{{ lake_writer_script }}"
+          - status
+          - --max-pending
+          - "{{ lake_writer_health_max_pending | int }}"
+          - --max-age-s
+          - "{{ lake_writer_health_max_age_s | int }}"
+      environment: "{{ lake_writer_script_env }}"
+      no_log: true
+      register: lake_writer_status
+      changed_when: false
+      failed_when: false
+    - name: Every table ran lately, succeeded and has no backlog
+      ansible.builtin.assert:
+        that: lake_writer_status.rc == 0
+        fail_msg: "lake-writer: {{ lake_writer_status.stderr | default('') | truncate(800) }} (journalctl -u 'hnx-{{ lake_writer_logical_id }}@*')"
+  tags: [health]

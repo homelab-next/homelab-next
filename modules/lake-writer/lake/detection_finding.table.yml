@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The platform/lake_table record of soc.detection_finding, owned by lake-writer (the sole writer; docs/log-pipeline.md).
+id: table:soc.detection_finding
+owner: lake-writer
+schema_id: https://schemas.example.internal/homelabnext/ocsf/detection_finding/1.1
+retention_days: 365
+maintenance:
+  compact: true
+  expire_snapshots_days: 7
+freshness:
+  cadence: continuous
+  stale_after_s: 3600

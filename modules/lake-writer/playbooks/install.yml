@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the lake writer on the guest the site placed the module's `writer` role on.
+# The apply path (docs/modules/apply.md) renders its own modules.yml from the selection and does not
+# import this file; it is the module's own entry point, for a lab that runs one module by hand:
+#   ansible-playbook -i <inventory with --selection> modules/lake-writer/playbooks/install.yml
+# The readiness hook refuses to go on without every secret, the three services' registry rows or the
+# runtime release.
+- name: Install the lake writer
+  hosts: mod_lake_writer_writer
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: lake_writer
+        tasks_from: readiness
+      tags: [mod_lake_writer]
+  roles:
+    - role: lake_writer
+      tags: [mod_lake_writer]

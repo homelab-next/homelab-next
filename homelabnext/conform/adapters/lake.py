@@ -148,10 +148,18 @@ def make_lake(
     *,
     namespace: str = "auto",
     trino_catalog: str = "iceberg",
+    schemas: Any = None,
+    ensure: bool = True,
     **clients: Any,
 ) -> TrinoRestLake:
     """The lake of the registry's ``lake-query`` and ``lake-catalog`` endpoints: ``clients`` are
-    :func:`make_clients`' keywords (``domain``, ``warehouse``, ``user``, ``credential``, ...)."""
+    :func:`make_clients`' keywords (``domain``, ``warehouse``, ``user``, ``credential``, ...).
+
+    ``schemas`` are the tables the lake knows (default: the core's pinned OCSF subsets) and
+    ``ensure`` says whether building it creates the namespace and any missing table (default: it
+    does; ``False`` creates and alters nothing, so a reader or a checker never makes a table)."""
     engine, catalog = make_clients(**clients)
     ns = f"hnx_conform_{run_token()}" if namespace == "auto" else namespace
-    return TrinoRestLake(engine, catalog, namespace=ns, trino_catalog=trino_catalog)
+    return TrinoRestLake(
+        engine, catalog, namespace=ns, trino_catalog=trino_catalog, schemas=schemas, ensure=ensure
+    )
