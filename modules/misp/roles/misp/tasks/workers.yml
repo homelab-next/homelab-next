@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# Start the application's background workers. The image ships every job-processing program with
+# autostart=false (so the cache's permissions can be fixed first) and nothing in the image ever
+# starts them: with only the scheduler running, jobs queue forever at "Starting..." while every
+# container reports healthy (LL-386, nine days of silently stale feeds). `start` on a program that
+# runs is a no-op, so this runs after every container lifetime.
+- name: Wait for the application's supervisor to answer
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, SUPERVISOR_USERNAME, -e, SUPERVISOR_PASSWORD, misp-core, sh, -c, "{{ misp_supervisor_script }}", sh, status]
+    expand_argument_vars: false  # the script holds $NAME for the container's shell: never the controller's
+  environment: "{{ misp_supervisor_env }}"
+  register: misp_sup_ready
+  # supervisorctl's exit status follows the programs' states (a stopped one is non-zero); only a
+  # refused connection is "not up yet"
+  until: "'refused' not in (misp_sup_ready.stdout ~ misp_sup_ready.stderr) and 'ProtocolError' not in (misp_sup_ready.stdout ~ misp_sup_ready.stderr) and 'no such file' not in (misp_sup_ready.stdout ~ misp_sup_ready.stderr)"
+  retries: "{{ ((misp_ready_timeout | int) / 5) | int }}"
+  delay: 5
+  failed_when: false
+  changed_when: false
+
+- name: Start the job-processing workers (autostart is off in the image, every container lifetime)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, SUPERVISOR_USERNAME, -e, SUPERVISOR_PASSWORD, misp-core, sh, -c, "{{ misp_supervisor_script }}", sh, start, "{{ misp_workers_program }}"]
+    expand_argument_vars: false
+  environment: "{{ misp_supervisor_env }}"
+  register: misp_workers_start
+  changed_when: "'started' in misp_workers_start.stdout and 'already started' not in misp_workers_start.stdout"
+  failed_when: >-
+    (misp_workers_start.stdout_lines | select('search', 'ERROR') | reject('search', 'already started') | list | length) > 0
+    or 'ProtocolError' in misp_workers_start.stdout or 'refused' in misp_workers_start.stdout
+
+- name: Every worker is running
+  ansible.builtin.include_tasks: workers_check.yml

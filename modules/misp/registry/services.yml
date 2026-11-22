@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes, keyed by the slot and renamed to
+# the instance the site selects; version is product.version, host is the module's host role. The lab
+# registry must carry it exactly as bound (hnx modules check, docs/modules/registry-rows.md).
+# auth: own - the product's local accounts and per-user API keys. The application serves HTTPS on
+# its own port with a certificate it generates (tls: internal); a site that fronts it with its
+# edge proxy adds a public_hostname and the grant itself. The health path answers without a
+# credential.
+services:
+  threat-intel:
+    capability: threat-intel
+    impl: misp
+    host: server
+    protocol: https
+    port: 443
+    health: {kind: http, path: /users/heartbeat, expect_status: 200}
+    owner: operator
+    tls: internal
+    auth: own
+    tags: [cti, feeds]
+    description: The threat-intelligence platform with its own accounts, per-user API keys and scheduled feed jobs. No public route.

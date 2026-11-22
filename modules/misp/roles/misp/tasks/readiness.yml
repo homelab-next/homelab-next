@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# The provider's dependencies are the container engine (docker_engine, applied to the guest before
+# this module), zstd (the dump's format) and its credentials in the secret store; it calls no other
+# service.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Find zstd (the export and import hooks stream the dump through it)
+      ansible.builtin.command:
+        argv: [which, zstd]
+      register: misp_zstd
+      changed_when: false
+      failed_when: false
+    - name: Refuse a guest without zstd
+      ansible.builtin.assert:
+        that: misp_zstd.rc == 0
+        fail_msg: "misp: zstd is not installed on the guest (the export and import hooks need it; add the package to the guest's baseline)"
+  tags: [readiness]
