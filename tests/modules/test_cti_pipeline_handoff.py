@@ -513,8 +513,7 @@ def test_handoff_dirs_get_their_mode_at_creation_never_via_a_directory_chmod(tmp
 def test_an_existing_handoff_dir_with_another_mode_fails_loudly_and_is_not_rechmodded(tmp_path):
     _p, body, root, dest = _with_handoff(tmp_path)
     _item(root, "site", "b1", {"index.html": "<p>x</p>"})
-    (dest / "site").mkdir(mode=0o755)
-    os.chmod(dest / "site", 0o755)
+    (dest / "site").mkdir(mode=0o700)
     with pytest.raises(run.HandoffError):
         _hand(body)
-    assert oct((dest / "site").stat().st_mode & 0o7777) == "0o755"
+    assert oct((dest / "site").stat().st_mode & 0o7777) == "0o700"
