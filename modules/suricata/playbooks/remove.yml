@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Remove: stop and disable the sensor and its rule-update timer, and take the managed files off.
+# Remove: stop and disable the sensor and take the managed files off.
 # The package, the rule data under /var/lib/suricata and the eve logs are kept (the logs are a
 # rotating buffer, the package may serve another use); safe to run again, or on a half-removed
 # host. The decommission audit (module.yml lifecycle.remove.audit) checks nothing still names
@@ -13,15 +13,13 @@
         name: "{{ item }}"
         state: stopped
         enabled: false
-      loop: [suricata.service, hnx-suricata-update.timer]
+      loop: [suricata.service]
       failed_when: false
     - name: Delete the files the module manages
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       loop:
-        - /etc/systemd/system/hnx-suricata-update.timer
-        - /etc/systemd/system/hnx-suricata-update.service
         - /etc/logrotate.d/hnx-suricata
         - /etc/suricata/hnx-address-groups.yaml
         - /etc/suricata/suricata.yaml.hnx

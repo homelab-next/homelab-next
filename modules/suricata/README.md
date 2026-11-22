@@ -12,9 +12,19 @@ guest. It is not a container: a capture needs the host's NICs and raw sockets, w
 | `suricata.yaml` | `af-packet` on every capture interface; two eve logs; HOME_NET included from the generated file. |
 | HOME_NET | The existing `suricata_enroll` role (called by this role) renders every address of every enrolled guest, extra addresses and IPv6 included, and tests it with the whole configuration before it goes live. |
 | Deploy gate | A full `suricata -T` of the live configuration and ruleset before any restart (LL-281). A failed gate restores the previous configuration and stops the run; the running sensor is untouched. |
-| Rules | `suricata-update enable-source` for each configured source (it ships with none enabled, so a never-enabled feed loads only the decoder rules and nothing says so), one fetch at install, then a daily calendar-based timer that hot-reloads (`reload-rules`). |
-| Logs | `eve.json` (pipeline) and `eve-alert.json` (alerts only, SIEM agent). Both rotate by size, checked hourly (LL-145: an unbounded eve log reached 131 GB). |
+| Rules | `suricata-update enable-source` for each configured source (it ships with none enabled, so a never-enabled feed loads only the decoder rules and nothing says so), one fetch at install (a scheduled update is not in this module yet, see below). |
+| Logs | `eve.json` (pipeline) and `eve-alert.json` (alerts only, SIEM agent). Both rotate through the distribution's daily logrotate with a `maxsize` bound (LL-145: an unbounded eve log reached 131 GB; an hourly check needs a catalogued fleet unit, below). |
 | Health | Service active, **capture running** (kernel packets > 0), **kernel drops under a bound** (default 5 % of captured), **eve output growing** (a stats heartbeat is written every `suricata_stats_interval`, so a quiet network still writes). |
+
+## Not in this module yet
+
+* **Scheduled rule update and hourly rotation check.** A timer in this repo must be a catalogued fleet
+  unit (script header, last-run records; CI's `scripts reality` refuses a bare timer). Until that is
+  added, rules are fetched at install and each time the module is first applied to a host; run
+  `suricata-update` then `suricatasc -c reload-rules` by hand or by the site's own job. Tracked as the
+  follow-up to this module.
+* **Absorbing `suricata_enroll`** (moving the role and clearing its product-name baseline entries): this
+  module calls the existing role.
 
 ## Shipping (who reads what)
 
@@ -28,7 +38,7 @@ guest. It is not a container: a capture needs the host's NICs and raw sockets, w
   (its own marked `<ossec_config>` section, which the agent merges) when `/var/ossec/etc/ossec.conf`
   exists, and says so in the run when it does not. It never installs the agent.
 * The lab's own sensor rules are native rules in the overlay's `lab/modules/wazuh/detections/native/`
-  (decision 2), not content of this module. Upstream rules are product content, updated by the timer.
+  (decision 2), not content of this module. Upstream rules are product content.
 
 ## What the overlay adds
 
@@ -63,7 +73,7 @@ buffer).
 5. **Verify** with the role's `health` hook (capture, drops, growth), then confirm alerts arrive: an
    ET test signature from a guest through the mirror produces a line in `eve-alert.json` and, once
    the pipeline modules are live, an alert in the SIEM.
-6. **Rollback:** `systemctl disable --now suricata hnx-suricata-update.timer`, and start the old
+6. **Rollback:** `systemctl disable --now suricata`, and start the old
    container again (`docker compose up -d` in its project directory, untouched). The module keeps the
    previous `suricata.yaml` beside the live one (`.hnx-prev`).
 

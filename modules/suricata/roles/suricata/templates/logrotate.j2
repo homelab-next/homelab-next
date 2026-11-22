@@ -1,8 +1,9 @@
 {# SPDX-License-Identifier: Apache-2.0 -#}
 # Managed by Ansible (module suricata); do not edit. An unbounded eve log once reached 131 GB with
-# no symptom (LL-145): rotate by size, keep a few, and tell Suricata to reopen its files.
+# no symptom (LL-145): rotate when a log outgrows its bound at the daily check, keep a few, and tell Suricata to reopen its files.
 {{ suricata_log_dir }}/{{ suricata_eve_file }} {{ suricata_log_dir }}/{{ suricata_eve_alert_file }} {
-    size {{ suricata_logrotate_max_size }}
+    daily
+    maxsize {{ suricata_logrotate_max_size }}
     rotate {{ suricata_logrotate_keep }}
     compress
     delaycompress

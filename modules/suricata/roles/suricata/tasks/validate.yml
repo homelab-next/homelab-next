@@ -22,7 +22,7 @@
       - suricata_logrotate_max_size is match('^[1-9][0-9]{0,3}[MG]\Z')
       - suricata_logrotate_keep | int >= 1
       - >-
-        [suricata_config_dir, suricata_log_dir, suricata_lib_dir, suricata_systemd_unit_dir, suricata_logrotate_dir, suricata_siem_agent_conf]
+        [suricata_config_dir, suricata_log_dir, suricata_lib_dir, suricata_logrotate_dir, suricata_siem_agent_conf]
         | reject('match', suricata_path_pattern) | list | length == 0
     fail_msg: >-
       suricata: a registry id, one or more distinct capture interface names (Linux names of at most

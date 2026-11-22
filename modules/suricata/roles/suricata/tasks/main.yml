@@ -106,7 +106,7 @@
   ansible.builtin.include_tasks: siem.yml
   when: suricata_siem_agent_manage | bool
 
-- name: Rotation and the rule-update timers
+- name: Rotation rule
   ansible.builtin.include_tasks: units.yml
 
 - name: Start the sensor, or restart it only when its configuration changed

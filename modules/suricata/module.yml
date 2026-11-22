@@ -11,7 +11,7 @@ id: suricata
 kind: provider
 title: A network sensor on Suricata
 description: Fills the network-sensor slot with Suricata from the OS package on a capture host,
-  with HOME_NET rendered from the enrolled guests, upstream rules updated on a timer, a bounded
+  with HOME_NET rendered from the enrolled guests, upstream rules fetched at install, a bounded
   eve log, an alert-only log for the SIEM agent, and a health hook that fails a stopped capture,
   kernel drops over a bound or an eve log that stopped growing.
 owner: operator

@@ -11,7 +11,6 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
-import time
 from pathlib import Path
 
 import pytest
@@ -87,12 +86,10 @@ def sv(tmp: Path, **kw) -> dict:
         "config_dir": str(tmp / "etc"),
         "log_dir": str(tmp / "log"),
         "lib_dir": str(tmp / "lib"),
-        "systemd_unit_dir": str(tmp / "units"),
         "logrotate_dir": str(tmp / "logrotate"),
         "siem_agent_conf": str(tmp / "ossec" / "ossec.conf"),
         "install_packages": False,
         "service_manage": False,
-        "update_enable": False,
     }
     v.update(kw)
     return {P + k: x for k, x in v.items()}
@@ -137,24 +134,19 @@ def test_main_renders_the_sensor_and_a_second_run_changes_nothing(first):
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-def _first_main_writes_rotation_and_update_units_without_starting_anything(tmp_path):
-    return case(tmp_path, logrotate_max_size="1G", update_oncalendar="*-*-* 05:00:00")
+def _first_main_writes_the_rotation_rule_and_starts_nothing(tmp_path):
+    return case(tmp_path, logrotate_max_size="1G")
 
 
-@first_run(_first_main_writes_rotation_and_update_units_without_starting_anything)
-def test_main_writes_rotation_and_update_units_without_starting_anything(first):
+@first_run(_first_main_writes_the_rotation_rule_and_starts_nothing)
+def test_main_writes_the_rotation_rule_and_starts_nothing(first):
     r, tmp = first
     assert r.returncode == 0, r.stdout + r.stderr
     rot = (tmp / "logrotate" / f"hnx-{MID}").read_text()
     assert f"{tmp}/log/eve.json" in rot and f"{tmp}/log/eve-alert.json" in rot
-    assert "size 1G" in rot and "reopen-log-files" in rot
-    assert "OnCalendar=*:07:00" in (tmp / "units" / f"hnx-{MID}-rotate.timer").read_text()
-    timer = (tmp / "units" / f"hnx-{MID}-update.timer").read_text()
-    assert "OnCalendar=*-*-* 05:00:00" in timer and "OnBootSec" not in timer
-    svc = (tmp / "units" / f"hnx-{MID}-update.service").read_text()
-    assert f"{MID}sc -c reload-rules" in svc
-    log = (tmp / "calls.log").read_text()
-    assert "systemctl" not in log  # service_manage is false: nothing started
+    assert "maxsize 1G" in rot and "reopen-log-files" in rot
+    assert not list((tmp / "units").iterdir())  # no unit of its own: nothing a timer must catalogue
+    assert "systemctl" not in (tmp / "calls.log").read_text()  # service_manage is false
 
 
 @pytest.mark.parametrize(
@@ -223,7 +215,7 @@ def _health(tmp: Path, counters=None, active=True, eve_age=0, **kw):
     prepare(tmp)
     eve = tmp / "log" / "eve.json"
     eve.write_text("{}\n")
-    t = time.time() - eve_age
+    t = eve.stat().st_mtime - eve_age
     os.utime(eve, (t, t))
     return run_role(tmp, ROLE, "health", sv(tmp, **kw), env=setup_fakes(tmp, counters, active))
 

@@ -24,15 +24,10 @@ suricata_stats_interval: 60
 suricata_cluster_id_base: 99
 suricata_af_packet_buffer_bytes: 536870912
 # ruleset: sources are enabled once (suricata-update lists none by default; LL: a rule feed that was
-# never enabled loads only the bundled decoder rules), updated by a timer, hot-reloaded
+# never enabled loads only the bundled decoder rules), fetched at install
 suricata_rule_sources: [et/open]
 suricata_update_cli: suricata-update
-suricata_update_oncalendar: "*-*-* 04:20:00"
-suricata_update_random_delay: 1800
-suricata_update_enable: true
-suricata_systemd_unit_dir: /etc/systemd/system
 suricata_logrotate_dir: /etc/logrotate.d
-suricata_logrotate_apply: true
 suricata_logrotate_max_size: 2G
 suricata_logrotate_keep: 3
 suricata_systemctl_cli: systemctl
