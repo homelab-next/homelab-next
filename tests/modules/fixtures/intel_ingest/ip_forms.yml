@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Address-type indicator VALUES (data under test, not endpoints) and the graph form each routes to.
+# Documentation ranges only (RFC 5737, RFC 3849).
+cases:
+  - {type: ip-src, value: "192.0.2.4", form: "inet:ipv4"}
+  - {type: ip-src, value: "2001:db8::1", form: "inet:ipv6"}
+  - {type: ip-dst, value: "198.51.100.0/24", form: "inet:cidr4"}
+  - {type: ip-dst, value: "2001:db8::/32", form: "inet:cidr6"}

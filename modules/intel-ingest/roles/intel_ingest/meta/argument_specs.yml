@@ -1,0 +1,132 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the threat-intel indicator ingest (the script, the units and the credentials).
+    options: &opts
+      intel_ingest_logical_id:
+        type: str
+        description: The instance's id (the unit set's name), e.g. intel-ingest.
+        required: true
+      intel_ingest_threat_intel_url:
+        type: str
+        description: https base URL of the threat-intel platform (an internal DNS name).
+        required: true
+      intel_ingest_graph_url:
+        type: str
+        description: https base URL of the graph store's HTTPS API.
+        required: true
+      intel_ingest_config_dir:
+        type: path
+        description: Where the environment file, the credentials directory and the CA bundle are written.
+        default: /etc/hnx/{{ intel_ingest_logical_id }}
+      intel_ingest_data_root:
+        type: path
+        description: 'The module''s data root on the host: state/ and export/.'
+        default: /var/lib/hnx-modules/{{ intel_ingest_logical_id }}
+      intel_ingest_bin_dir:
+        type: path
+        description: Where the script is installed (its unit's ExecStart names it).
+        default: /usr/local/libexec/homelabnext
+      intel_ingest_owner:
+        type: str
+        description: Owner of the install and config directories and the credential files.
+        default: root
+      intel_ingest_owner_group:
+        type: str
+        description: Group of the install and config directories, the credential files and export/.
+        default: root
+      intel_ingest_user:
+        type: str
+        description: The unprivileged account the job runs as.
+        default: hnx-{{ intel_ingest_logical_id }}
+      intel_ingest_group:
+        type: str
+        description: The group of that account; it owns the state directory.
+        default: hnx-{{ intel_ingest_logical_id }}
+      intel_ingest_manage_accounts:
+        type: bool
+        description: Create the group and the user.
+        default: true
+      intel_ingest_threat_intel_key_ref:
+        type: str
+        description: 'secret: reference of the DEDICATED platform account''s API key (40 letters and digits).'
+        default: secret:intel-ingest/threat-intel-key
+      intel_ingest_threat_intel_ca_ref:
+        type: str
+        description: 'secret: reference of the CA certificate (PEM) the platform is verified with; required.'
+        default: secret:intel-ingest/ca
+      intel_ingest_graph_user:
+        type: str
+        description: The graph store account the job writes with.
+        default: intel-ingest
+      intel_ingest_graph_login_ref:
+        type: str
+        description: 'secret: reference of that account''s password.'
+        default: secret:intel-ingest/graph-login
+      intel_ingest_graph_pin_sha256:
+        type: str
+        description: The graph store's certificate SHA-256 fingerprint (64 lower-case hex) to pin; required
+          unless a graph CA is given.
+        default: ''
+      intel_ingest_graph_ca_ref:
+        type: str
+        description: 'secret: reference of a CA certificate (PEM) that signed the graph store''s certificate;
+          empty when pinned.'
+        default: ''
+      intel_ingest_oncalendar:
+        type: str
+        description: The daily run's systemd calendar expression.
+        default: '*-*-* 13:00:00 UTC'
+      intel_ingest_randomized_delay_s:
+        type: int
+        description: Random delay added to the run, in seconds.
+        default: 600
+      intel_ingest_max_runtime_s:
+        type: int
+        description: Per-run wall-clock cap in seconds; a run that cannot finish pauses on its checkpoint
+          and the next run resumes.
+        default: 7200
+      intel_ingest_state_seed_file:
+        type: str
+        description: 'A walk state installed ONLY when the state directory holds none (create-only); empty:
+          none.'
+        default: ''
+      intel_ingest_restore_source:
+        type: str
+        description: The directory a prior export wrote (state.json); the restore hook REPLACES the live state
+          with it.
+        default: ''
+      intel_ingest_start:
+        type: bool
+        description: Enable and start the timer (false for a render-only converge).
+        default: true
+      intel_ingest_unit_dir:
+        type: path
+        description: Where the units are written.
+        default: /etc/systemd/system
+      intel_ingest_systemctl_cli:
+        type: str
+        description: The systemctl command the hooks use.
+        default: systemctl
+      intel_ingest_health_timeout:
+        type: int
+        description: Seconds a health probe may wait.
+        default: 10
+  health:
+    short_description: Fail unless the script, the credentials, the timer and the walk's state are healthy now.
+    options: *opts
+  readiness:
+    short_description: Fail unless every dependency is there before anything is written.
+    options: *opts
+  backup:
+    short_description: Declare what a backup must capture.
+    options: *opts
+  restore:
+    short_description: Restore the walk's state from an export.
+    options: *opts
+  upgrade:
+    short_description: Validate the module's own re-converge (no pinned artefact).
+    options: *opts
+  export:
+    short_description: Write the open-format exit copy of the walk's state.
+    options: *opts

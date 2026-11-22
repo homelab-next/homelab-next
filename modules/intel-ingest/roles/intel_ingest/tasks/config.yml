@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Create the script, configuration and credentials directories (root's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ intel_ingest_owner }}"
+    group: "{{ intel_ingest_owner_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ intel_ingest_bin_dir }}", mode: "0755"}
+    - {path: "{{ intel_ingest_config_dir }}", mode: "0755"}
+    - {path: "{{ intel_ingest_auth_dir }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the script
+  ansible.builtin.copy:
+    src: hnx_intel_ingest.py
+    dest: "{{ intel_ingest_script }}"
+    owner: "{{ intel_ingest_owner }}"
+    group: "{{ intel_ingest_owner_group }}"
+    mode: "0755"
+  register: intel_ingest_script_copy
+
+- name: Write the CA bundle the two services are verified with (certificates, no key)
+  ansible.builtin.copy:
+    content: >-
+      {{ (lookup('hnx_secret', intel_ingest_threat_intel_ca_ref) | trim ~ '\n')
+         ~ ((lookup('hnx_secret', intel_ingest_graph_ca_ref) | trim ~ '\n') if intel_ingest_graph_ca_ref != '' else '') }}
+    dest: "{{ intel_ingest_ca_bundle_file }}"
+    owner: "{{ intel_ingest_owner }}"
+    group: "{{ intel_ingest_owner_group }}"
+    mode: "0644"
+  no_log: true
+  register: intel_ingest_ca_copy
+
+- name: Write the environment (no secret in it)
+  ansible.builtin.template:
+    src: intel-ingest.env.j2
+    dest: "{{ intel_ingest_env_file }}"
+    owner: "{{ intel_ingest_owner }}"
+    group: "{{ intel_ingest_owner_group }}"
+    mode: "0644"
+  register: intel_ingest_env
+
+- name: Write the two logins for the unit (an environment file, root-only; systemd reads it as root)
+  ansible.builtin.copy:
+    content: |
+      INGEST_SOURCE_KEY={{ lookup('hnx_secret', intel_ingest_threat_intel_key_ref) }}
+      INGEST_GRAPH_PASSWORD={{ lookup('hnx_secret', intel_ingest_graph_login_ref) }}
+    dest: "{{ intel_ingest_login_env_file }}"
+    owner: "{{ intel_ingest_owner }}"
+    group: "{{ intel_ingest_owner_group }}"
+    mode: "0600"
+  no_log: true
+
+# create-only: a live state is never replaced by a seed (restore is the explicit way to replace it)
+- name: Look for the walk's state
+  ansible.builtin.stat:
+    path: "{{ intel_ingest_state_file }}"
+  register: intel_ingest_state_stat
+
+- name: Read the seed, when there is one to install
+  ansible.builtin.slurp:
+    src: "{{ intel_ingest_state_seed_file }}"
+  register: intel_ingest_seed
+  when: intel_ingest_state_seed_file != '' and not intel_ingest_state_stat.stat.exists
+
+- name: Check the seed is this module's form
+  ansible.builtin.include_tasks: state_check.yml
+  vars:
+    intel_ingest_state_text: "{{ intel_ingest_seed.content | b64decode }}"
+  when: intel_ingest_state_seed_file != '' and not intel_ingest_state_stat.stat.exists
+
+- name: Install the seed as the walk's state
+  ansible.builtin.copy:
+    content: "{{ intel_ingest_seed.content | b64decode | trim }}\n"
+    dest: "{{ intel_ingest_state_file }}"
+    owner: "{{ intel_ingest_user }}"
+    group: "{{ intel_ingest_group }}"
+    mode: "0600"
+    force: false
+  when: intel_ingest_state_seed_file != '' and not intel_ingest_state_stat.stat.exists
+  no_log: true
+
+- name: Write the units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ intel_ingest_unit_dir }}/{{ item.dest }}"
+    owner: "{{ intel_ingest_owner }}"
+    group: "{{ intel_ingest_owner_group }}"
+    mode: "0644"
+  loop:
+    - {src: intel-ingest.service.j2, dest: "{{ intel_ingest_unit }}"}
+    - {src: intel-ingest.timer.j2, dest: "{{ intel_ingest_timer }}"}
+  loop_control:
+    label: "{{ item.dest }}"
+  register: intel_ingest_units
+
+- name: Reload systemd after a unit changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: intel_ingest_units.changed | bool and not ansible_check_mode and intel_ingest_start | bool
+
+- name: Enable the timer (a run in progress is never restarted)
+  ansible.builtin.systemd_service:
+    name: "{{ intel_ingest_timer }}"
+    enabled: true
+    state: "{{ 'restarted' if intel_ingest_units.changed else 'started' }}"
+  when: not ansible_check_mode and intel_ingest_start | bool

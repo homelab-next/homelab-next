@@ -1,0 +1,16 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ intel_ingest_marker }}, instance {{ intel_ingest_logical_id }}); local changes are overwritten.
+# On the calendar, never an interval (OnBootSec plus OnUnitActiveSec can stop firing for good after a
+# reboot at the wrong moment). The walk is id-based, so a run before or after the platform's own
+# daily feed fetch just picks up whatever is new next time.
+[Unit]
+Description=intel-ingest {{ intel_ingest_logical_id }}: daily
+
+[Timer]
+OnCalendar={{ intel_ingest_oncalendar }}
+RandomizedDelaySec={{ intel_ingest_randomized_delay_s | int }}
+Persistent=true
+Unit={{ intel_ingest_unit }}
+
+[Install]
+WantedBy=timers.target

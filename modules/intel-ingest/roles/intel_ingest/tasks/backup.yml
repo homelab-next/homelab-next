@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's
+# paths). What it adds to the services' own backups is the walk's state: without it a restored guest
+# re-pages the whole attribute table. The configuration directory is not listed: it holds the
+# credentials and is re-rendered by the install from the secret store. The export runs first.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Export the state
+      ansible.builtin.include_tasks: export.yml
+    - name: Write the backup manifest
+      ansible.builtin.copy:
+        dest: "{{ intel_ingest_data_root }}/backup-manifest.json"
+        content: "{{ {'service': intel_ingest_logical_id,
+                      'paths': [intel_ingest_data_root],
+                      'restore_from': intel_ingest_export_dir,
+                      'note': 'the configuration directory is not listed: it holds the credentials and is re-rendered by the install; the indicators are the two services own data; state/ holds the walk checkpoint, export/ a copy of it'} | to_nice_json }}\n"
+        owner: "{{ intel_ingest_owner }}"
+        group: "{{ intel_ingest_group }}"
+        mode: "0640"
+  tags: [backup]

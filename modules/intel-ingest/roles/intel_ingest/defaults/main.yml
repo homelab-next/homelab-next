@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# The threat-intel -> graph-store indicator ingest as one module role (modules/intel-ingest): a
+# stdlib script and a daily timer. It pulls the actionable indicators (to_ids attributes) of the
+# threat-intel platform per type, id-descending and page by page, and writes them as graph nodes
+# tagged by their source; its state is a per-type watermark plus an in-progress page checkpoint,
+# written atomically after every page, so a run that is stopped (the wall-clock cap, a signal, a
+# restart of either service) resumes where it stopped instead of re-paging a 41-million-row table.
+# Nothing here is a lab value: the two services' URLs, every secret reference and the guest are the
+# site's.
+# intel_ingest_logical_id (required): the instance id, e.g. intel-ingest
+# intel_ingest_threat_intel_url (required): https base URL of the threat-intel platform
+# intel_ingest_graph_url (required): https base URL of the graph store's HTTPS API
+intel_ingest_config_dir: "/etc/hnx/{{ intel_ingest_logical_id }}"
+# the module's data root (docs/modules/data.md): state/ (the walk's state), export/
+intel_ingest_data_root: "/var/lib/hnx-modules/{{ intel_ingest_logical_id }}"
+# where the script is installed (a fixed path the unit's ExecStart names)
+intel_ingest_bin_dir: /usr/local/libexec/homelabnext
+intel_ingest_owner: root
+intel_ingest_owner_group: root
+intel_ingest_user: "hnx-{{ intel_ingest_logical_id }}"
+intel_ingest_group: "hnx-{{ intel_ingest_logical_id }}"
+intel_ingest_manage_accounts: true
+
+# the threat-intel platform: reached over https and verified against the lab CA (empty: the system roots
+# are not used, the ingest refuses a host with no CA and no pin). The key is a DEDICATED account's.
+intel_ingest_threat_intel_key_ref: secret:intel-ingest/threat-intel-key
+intel_ingest_threat_intel_ca_ref: secret:intel-ingest/ca
+# the graph store: an account of the site's (the graph store's own users), its password by reference.
+# The graph store makes its own self-signed certificate and keeps it in its data: pin its exact
+# SHA-256 fingerprint (64 lower-case hex) here, or give a CA that signed it. One of the two is required.
+intel_ingest_graph_user: intel-ingest
+intel_ingest_graph_login_ref: secret:intel-ingest/graph-login
+intel_ingest_graph_pin_sha256: ""
+intel_ingest_graph_ca_ref: ""
+
+# the daily run (a calendar, never an interval) and the per-run wall-clock cap in seconds: a run that
+# cannot finish pauses on its checkpoint (the script exits 2, which the unit accepts) and the next
+# run resumes
+intel_ingest_oncalendar: "*-*-* 13:00:00 UTC"
+intel_ingest_randomized_delay_s: 600
+intel_ingest_max_runtime_s: 7200
+# an existing walk state (the old lab's state.json, or an export's) installed ONLY when the state
+# directory holds none: create-only, never replaces a live state. It must be this module's form.
+intel_ingest_state_seed_file: ""
+# restore: the directory a prior export wrote (state.json)
+intel_ingest_restore_source: ""
+
+intel_ingest_start: true
+intel_ingest_unit_dir: /etc/systemd/system
+intel_ingest_systemctl_cli: systemctl
+intel_ingest_health_timeout: 10

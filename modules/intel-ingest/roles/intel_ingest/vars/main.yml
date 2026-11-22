@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Derived, not configurable: the names every task and template shares.
+intel_ingest_marker: "managed by homelab-next (modules/intel-ingest)"
+intel_ingest_script: "{{ intel_ingest_bin_dir }}/hnx-intel-ingest"
+intel_ingest_env_file: "{{ intel_ingest_config_dir }}/intel-ingest.env"
+intel_ingest_auth_dir: "{{ intel_ingest_config_dir }}/credentials"
+intel_ingest_login_env_file: "{{ intel_ingest_auth_dir }}/login.env"
+intel_ingest_ti_ca_file: "{{ intel_ingest_config_dir }}/threat-intel-ca.pem"
+intel_ingest_graph_ca_file: "{{ intel_ingest_config_dir }}/graph-ca.pem"
+intel_ingest_ca_bundle_file: "{{ intel_ingest_config_dir }}/ca-bundle.pem"
+intel_ingest_state_dir: "{{ intel_ingest_data_root }}/state"
+intel_ingest_state_file: "{{ intel_ingest_state_dir }}/state.json"
+intel_ingest_export_dir: "{{ intel_ingest_data_root }}/export"
+intel_ingest_unit: "hnx-{{ intel_ingest_logical_id }}.service"
+intel_ingest_timer: "hnx-{{ intel_ingest_logical_id }}.timer"
+# the walk's attribute types (the script's TYPE_MAP keys): a state file may name only these
+intel_ingest_types: [ip-src, ip-dst, domain, hostname, url, md5, sha1, sha256, email-src, email-dst]
+intel_ingest_forms:
+  key: '^[A-Za-z0-9]{40}\Z'
+  login: '^[A-Za-z0-9._~+/=:@%^-]{8,512}\Z'
