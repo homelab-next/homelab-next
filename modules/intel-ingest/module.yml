@@ -4,7 +4,7 @@
 # indicators per type and writes them as graph nodes, with a resumable, atomically checkpointed walk.
 # It names the two slots, and the script's own source is the one place that names the two products
 # (the product-names allowlist says so). Every real value (the guest, the two URLs, the account, the
-# secret values, the graph store's pinned fingerprint) is the site's: the overlay's lab/modules.yml,
+# secret values, the name its certificate carries) is the site's: the overlay's lab/modules.yml,
 # group variables and secret store.
 manifest_version: "1.0"
 id: intel-ingest
@@ -63,6 +63,11 @@ config:
     type: secret
     description: the password of the graph store account the job writes with, in the same root-only environment file (intel_ingest_graph_login_ref)
     default: secret:intel-ingest/graph-login
+    overlay: optional
+  graph_ca:
+    type: secret
+    description: the CA certificate (PEM) that signed the graph store's certificate, or that exact self-signed certificate, trusted for the graph store (intel_ingest_graph_ca_ref)
+    default: secret:intel-ingest/graph-ca
     overlay: optional
   threat_intel_ca:
     type: secret

@@ -63,16 +63,11 @@ argument_specs:
         type: str
         description: 'secret: reference of that account''s password.'
         default: secret:intel-ingest/graph-login
-      intel_ingest_graph_pin_sha256:
-        type: str
-        description: The graph store's certificate SHA-256 fingerprint (64 lower-case hex) to pin; required
-          unless a graph CA is given.
-        default: ''
       intel_ingest_graph_ca_ref:
         type: str
-        description: 'secret: reference of a CA certificate (PEM) that signed the graph store''s certificate;
-          empty when pinned.'
-        default: ''
+        description: 'secret: reference of the CA certificate (PEM) that signed the graph store''s certificate,
+          or of that exact self-signed certificate; required (hostname checking is on).'
+        default: secret:intel-ingest/graph-ca
       intel_ingest_oncalendar:
         type: str
         description: The daily run's systemd calendar expression.

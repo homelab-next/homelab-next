@@ -13,12 +13,11 @@ right (type, value) pairs.
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
-import json
 import pathlib
 import socket
 import ssl
+import subprocess
 import sys
 import threading
 
@@ -310,17 +309,23 @@ def test_full_resync_flag_deletes_state_before_run(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# TLS: a pin per host or a CA file, never unverified.
+# TLS: ordinary verification against a CA file, hostname checking on, never unverified.
 # ---------------------------------------------------------------------------
-
-
 sys.path.insert(0, str(ROOT / "tests" / "roles"))
 from forge_front import LOOPBACK, make_pki
 
 
-@pytest.fixture
-def tls_server(tmp_path):
-    chain, key, _ca = make_pki(tmp_path, "localhost")
+def _selfsigned(directory, name):
+    """A self-signed certificate (no CA flag) for ``name`` and its key: what a service that makes its own has."""
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", f"/CN={name}",
+         "-addext", f"subjectAltName=DNS:{name}", "-keyout", "ss.key", "-out", "ss.pem"],
+        check=True, capture_output=True, cwd=directory,
+    )  # fmt: skip
+    return (directory / "ss.pem").read_text(), (directory / "ss.key").read_text()
+
+
+def _serve(tmp_path, chain, key):
     (tmp_path / "chain.pem").write_text(chain)
     (tmp_path / "key.pem").write_text(key)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -344,45 +349,82 @@ def tls_server(tmp_path):
                 pass
 
     threading.Thread(target=serve, daemon=True).start()
-    leaf = ssl.PEM_cert_to_DER_cert(
-        chain.split("-----END CERTIFICATE-----")[0] + "-----END CERTIFICATE-----\n"
-    )
-    yield srv.getsockname()[1], hashlib.sha256(leaf).hexdigest(), tmp_path / "ca.pem"
-    stop.set()
-    srv.close()
+    return srv, stop
+
+
+def _handshake(ctx, port, name):
+    with (
+        socket.create_connection((LOOPBACK, port), timeout=5) as sock,
+        ctx.wrap_socket(sock, server_hostname=name),
+    ):
+        return True
 
 
 @pytest.fixture(autouse=True)
 def _fresh_tls_cache(monkeypatch):
     monkeypatch.setattr(mod, "_PINNED_CTX_CACHE", {})
-    for name in ("INGEST_TLS_PINS", "INGEST_CA_FILE"):
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("INGEST_CA_FILE", raising=False)
 
 
-def test_a_host_with_no_pin_and_no_ca_file_is_refused():
-    with pytest.raises(RuntimeError, match="unverified"):
+def test_a_host_with_no_ca_file_is_refused():
+    with pytest.raises(RuntimeError, match="without verifying"):
         mod._pinned_ctx_for("https://graph.example.internal")
 
 
-@pytest.mark.parametrize("pin", ["", "ABC", "g" * 64, "A" * 64, "a" * 63])
-def test_a_malformed_pin_is_refused(monkeypatch, pin):
-    monkeypatch.setenv("INGEST_TLS_PINS", json.dumps({"graph.example.internal": pin}))
-    with pytest.raises(RuntimeError, match="SHA-256"):
-        mod._pinned_ctx_for("https://graph.example.internal")
-
-
-def test_the_pinned_certificate_is_accepted_and_another_is_refused(monkeypatch, tls_server):
-    port, fingerprint, _ = tls_server
-    monkeypatch.setenv("INGEST_TLS_PINS", json.dumps({LOOPBACK: fingerprint}))
-    assert isinstance(mod._pinned_ctx_for(f"https://{LOOPBACK}:{port}"), ssl.SSLContext)
-    monkeypatch.setattr(mod, "_PINNED_CTX_CACHE", {})
-    monkeypatch.setenv("INGEST_TLS_PINS", json.dumps({LOOPBACK: "0" * 64}))
-    with pytest.raises(ssl.SSLCertVerificationError, match="pinned-cert mismatch"):
-        mod._pinned_ctx_for(f"https://{LOOPBACK}:{port}")
-
-
-def test_a_ca_file_gives_a_verifying_context(monkeypatch, tls_server):
-    _, _, ca = tls_server
-    monkeypatch.setenv("INGEST_CA_FILE", str(ca))
-    ctx = mod._pinned_ctx_for("https://threat-intel.example.internal")
+def test_the_context_verifies_the_certificate_and_the_host_name(monkeypatch, tmp_path):
+    chain, key, ca = make_pki(tmp_path, "svc.example.internal")
+    (tmp_path / "ca.pem").write_text(ca)
+    monkeypatch.setenv("INGEST_CA_FILE", str(tmp_path / "ca.pem"))
+    ctx = mod._pinned_ctx_for("https://svc.example.internal")
     assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname is True
+    srv, stop = _serve(tmp_path, chain, key)
+    try:
+        port = srv.getsockname()[1]
+        assert _handshake(ctx, port, "svc.example.internal")
+        with pytest.raises(ssl.SSLCertVerificationError):  # right certificate, wrong name
+            _handshake(ctx, port, "other.example.internal")
+    finally:
+        stop.set()
+        srv.close()
+
+
+def test_a_certificate_from_another_ca_is_rejected(monkeypatch, tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    chain, key, _ca = make_pki(tmp_path / "a", "svc.example.internal")
+    _c, _k, other_ca = make_pki(tmp_path / "b", "svc.example.internal")
+    (tmp_path / "other-ca.pem").write_text(other_ca)
+    monkeypatch.setenv("INGEST_CA_FILE", str(tmp_path / "other-ca.pem"))
+    ctx = mod._pinned_ctx_for("https://svc.example.internal")
+    srv, stop = _serve(tmp_path, chain, key)
+    try:
+        with pytest.raises(ssl.SSLCertVerificationError):
+            _handshake(ctx, srv.getsockname()[1], "svc.example.internal")
+    finally:
+        stop.set()
+        srv.close()
+
+
+def test_a_self_signed_certificate_is_trusted_only_as_that_exact_certificate(monkeypatch, tmp_path):
+    (tmp_path / "x").mkdir()
+    (tmp_path / "y").mkdir()
+    cert, key = _selfsigned(tmp_path / "x", "graph")
+    other_cert, _ = _selfsigned(tmp_path / "y", "graph")  # same name, a different certificate
+    (tmp_path / "trust.pem").write_text(cert)
+    monkeypatch.setenv("INGEST_CA_FILE", str(tmp_path / "trust.pem"))
+    ctx = mod._pinned_ctx_for("https://graph")
+    srv, stop = _serve(tmp_path, cert, key)
+    try:
+        assert _handshake(ctx, srv.getsockname()[1], "graph")
+    finally:
+        stop.set()
+        srv.close()
+    # the service now presents another certificate with the same name: rejected
+    other_key = (tmp_path / "y" / "ss.key").read_text()
+    srv, stop = _serve(tmp_path, other_cert, other_key)
+    try:
+        with pytest.raises(ssl.SSLCertVerificationError):
+            _handshake(ctx, srv.getsockname()[1], "graph")
+    finally:
+        stop.set()
+        srv.close()

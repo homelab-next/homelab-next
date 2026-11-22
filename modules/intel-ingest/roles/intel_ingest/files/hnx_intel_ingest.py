@@ -52,11 +52,9 @@ also where the STATE_FILE pattern itself is borrowed from.
 """
 
 import argparse
-import hashlib
 import json
 import os
 import signal
-import socket
 import ssl
 import sys
 import time
@@ -138,63 +136,26 @@ MISP_LEAN_PARAMS = {
     "includeTag": 0,
 }
 
-# TLS to the two services. The threat-intel platform is verified against the lab CA
-# (INGEST_CA_FILE) like any client of an internal service. The graph store makes its own
-# self-signed certificate (kept in its data, so a restored graph keeps it): its exact SHA-256
-# fingerprint is pinned, per host, from INGEST_TLS_PINS (JSON {"host": "<64 hex>"}). A host with
-# neither a pin nor a CA file is refused: no fallback to unverified TLS, ever (a blanket
-# verify-off would trust any certificate any host presents). The handshake-based pin check runs
-# once per process per host, cached.
+# TLS to the two services: ordinary verification, hostname checking on, against INGEST_CA_FILE (a
+# bundle of the certificates to trust: the lab CA for the platform, and for the graph store either
+# the CA that signed its certificate or, when it keeps its own self-signed one, that exact
+# certificate). No pin, no unverified fallback: without a CA file the call is refused. The URL's
+# host must be a name the certificate carries.
 _PINNED_CTX_CACHE: dict[tuple[str, int], ssl.SSLContext] = {}
-
-
-def _tls_pins() -> dict:
-    raw = os.environ.get("INGEST_TLS_PINS", "")
-    pins = json.loads(raw) if raw else {}
-    for host, fp in pins.items():
-        if not (isinstance(fp, str) and len(fp) == 64 and all(c in "0123456789abcdef" for c in fp)):
-            raise RuntimeError(
-                f"INGEST_TLS_PINS: the pin for {host!r} is not a lower-case SHA-256 hex digest"
-            )
-    return pins
 
 
 def _pinned_ctx_for(url: str, timeout: int = 10) -> ssl.SSLContext:
     parsed = urlparse(url)
-    host, port = parsed.hostname, parsed.port or 443
-    cache_key = (host, port)
+    cache_key = (parsed.hostname, parsed.port or 443)
     if cache_key in _PINNED_CTX_CACHE:
         return _PINNED_CTX_CACHE[cache_key]
-    expected = _tls_pins().get(host)
-    if expected is None:
-        ca_file = os.environ.get("INGEST_CA_FILE", "")
-        if not ca_file:
-            raise RuntimeError(
-                f"no pinned certificate fingerprint (INGEST_TLS_PINS) and no CA file (INGEST_CA_FILE) "
-                f"for {host!r} -- refusing to fall back to unverified TLS"
-            )
-        ctx = ssl.create_default_context(cafile=ca_file)
-        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        _PINNED_CTX_CACHE[cache_key] = ctx
-        return ctx
-    probe = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    probe.check_hostname = False
-    probe.verify_mode = ssl.CERT_NONE
-    with (
-        socket.create_connection((host, port), timeout=timeout) as sock,
-        probe.wrap_socket(sock, server_hostname=host) as ssock,
-    ):
-        der = ssock.getpeercert(binary_form=True)
-    fp = hashlib.sha256(der).hexdigest()
-    if fp != expected:
-        raise ssl.SSLCertVerificationError(
-            f"pinned-cert mismatch for {host}:{port}: presented {fp}, expected {expected} -- "
-            "possible MITM, or the host's cert was legitimately rotated and this pin needs "
-            "updating (re-verify out of band before doing so)"
+    ca_file = os.environ.get("INGEST_CA_FILE", "")
+    if not ca_file:
+        raise RuntimeError(
+            f"no CA file (INGEST_CA_FILE) for {parsed.hostname!r} -- refusing to connect without verifying"
         )
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = ssl.create_default_context(cafile=ca_file)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     _PINNED_CTX_CACHE[cache_key] = ctx
     return ctx
 

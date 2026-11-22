@@ -28,14 +28,16 @@ The walk pages by offset, so a cold type is expensive (that is what the checkpoi
 for, and why this state is worth keeping). **Do not start a cold walk of the big types on a
 guest that is also importing**: the platform's database is the shared bottleneck.
 
-## TLS: verified, never unverified
+## TLS: ordinary verification, both services
 
-The platform is verified against the lab CA (`intel_ingest_threat_intel_ca_ref`). The graph store
-makes its own self-signed certificate and keeps it in its data; pin its SHA-256 fingerprint
-(`intel_ingest_graph_pin_sha256`) or give the CA that signed it (`intel_ingest_graph_ca_ref`). A
-host with neither is refused by the script and the role refuses to install without one. Read the
-fingerprint over the wire and compare it out of band; a restored graph keeps its certificate, a fresh
-one makes a new one and the pin must be updated.
+Both services are verified with normal TLS verification, hostname checking on, against one CA bundle
+the role writes from two secrets: the lab CA for the platform, and `intel_ingest_graph_ca_ref` for
+the graph store. If the graph store's certificate is signed by the lab CA, give the lab CA. If it
+keeps its own self-signed certificate (it makes one on first start, keeps it in its data, and a
+restored graph brings it along), give **that exact certificate** (PEM): it becomes the trust anchor
+for that one service, so any other certificate is rejected. The graph URL's host must be a name the
+certificate carries (check its subject alternative names; connect by that name, resolved on the
+guest). There is no pin and no unverified path: the script refuses to connect without a CA file.
 
 ## Variables
 

@@ -28,11 +28,11 @@ KEY = "a" * 20 + "7" * 20  # 40 letters and digits, built here
 LOGIN = "q" * 24
 CA = "-----BEGIN " + "CERTIFICATE-----\n" + "x" * 20 + "\n-----END " + "CERTIFICATE-----"
 GRAPH_CA = CA.replace("x" * 20, "y" * 20)
-PIN = "ab" * 32
 SECRETS = {
     "HNX_SECRET_INTEL_INGEST_THREAT_INTEL_KEY": KEY,
     "HNX_SECRET_INTEL_INGEST_GRAPH_LOGIN": LOGIN,
     "HNX_SECRET_INTEL_INGEST_CA": CA,
+    "HNX_SECRET_INTEL_INGEST_GRAPH_CA": GRAPH_CA,
 }
 STATE = {
     "domain": {"watermark_id": 0, "in_progress": {"page": 24, "newest_id": 5763486}},
@@ -46,7 +46,6 @@ def pv(tmp_path: Path, **kw) -> dict:
         "logical_id": "ingest",
         "threat_intel_url": "https://threat-intel.example.internal",
         "graph_url": "https://graph.example.internal",
-        "graph_pin_sha256": PIN,
         "config_dir": str(tmp_path / "etc"),
         "data_root": str(tmp_path / "data"),
         "bin_dir": str(tmp_path / "bin"),
@@ -83,16 +82,14 @@ def test_main_installs_the_job_with_no_secret_in_any_world_readable_file(first):
     assert "INGEST_GRAPH_URL=https://graph.example.internal" in env
     assert f"INGEST_STATE_FILE={tmp_path}/data/state/state.json" in env
     assert f"INGEST_CA_FILE={tmp_path}/etc/ca-bundle.pem" in env
-    assert json.loads(env.split("INGEST_TLS_PINS=")[1].splitlines()[0]) == {
-        "graph.example.internal": PIN
-    }
+    assert "INGEST_TLS_PINS" not in env
     for secret in (KEY, LOGIN):
         assert secret not in env and secret not in r.stdout + r.stderr
     logins = tmp_path / "etc" / "credentials" / "login.env"
     assert oct(logins.stat().st_mode & 0o777) == "0o600"
     assert f"INGEST_SOURCE_KEY={KEY}" in logins.read_text()
     assert f"INGEST_GRAPH_PASSWORD={LOGIN}" in logins.read_text()
-    assert (tmp_path / "etc" / "ca-bundle.pem").read_text().count("BEGIN CERTIFICATE") == 1
+    assert (tmp_path / "etc" / "ca-bundle.pem").read_text().count("BEGIN CERTIFICATE") == 2
     script = tmp_path / "bin" / "hnx-intel-ingest"
     assert oct(script.stat().st_mode & 0o777) == "0o755"
     service = (tmp_path / "units" / "hnx-ingest.service").read_text()
@@ -158,9 +155,7 @@ def _first_main_refuses_a_bad_input(tmp_path, over, env):
         ({"threat_intel_url": "http://threat-intel.example.internal"}, {}),
         ({"graph_url": "http://graph.example.internal"}, {}),
         ({"logical_id": "Ingest"}, {}),
-        ({"graph_pin_sha256": "", "graph_ca_ref": ""}, {}),  # neither a pin nor a CA
-        ({"graph_pin_sha256": "AB" * 32}, {}),
-        ({"graph_pin_sha256": "ab" * 31}, {}),
+        ({"graph_ca_ref": ""}, {}),  # no CA for the graph store
         ({"threat_intel_ca_ref": ""}, {}),
         ({"threat_intel_key_ref": "secret:intel-ingest/graph-login"}, {}),
         ({"max_runtime_s": 5}, {}),
@@ -171,6 +166,7 @@ def _first_main_refuses_a_bad_input(tmp_path, over, env):
         ({}, {"HNX_SECRET_INTEL_INGEST_GRAPH_LOGIN": "has a space in it 0123456"}),
         ({}, {"HNX_SECRET_INTEL_INGEST_GRAPH_LOGIN": KEY}),  # the same value as the key
         ({}, {"HNX_SECRET_INTEL_INGEST_CA": "not a certificate"}),
+        ({}, {"HNX_SECRET_INTEL_INGEST_GRAPH_CA": "not a certificate"}),
     ],
 )  # fmt: skip
 @first_run(_first_main_refuses_a_bad_input)
@@ -193,7 +189,12 @@ def _first_main_refuses_an_unset_secret_naming_it(tmp_path, name, ref):
 
 @pytest.mark.parametrize(
     "name, ref",
-    [("THREAT_INTEL_KEY", "threat-intel-key"), ("GRAPH_LOGIN", "graph-login"), ("CA", "ca")],
+    [
+        ("THREAT_INTEL_KEY", "threat-intel-key"),
+        ("GRAPH_LOGIN", "graph-login"),
+        ("CA", "ca"),
+        ("GRAPH_CA", "graph-ca"),
+    ],
 )
 @first_run(_first_main_refuses_an_unset_secret_naming_it)
 def test_main_refuses_an_unset_secret_naming_the_reference(first, name, ref):
