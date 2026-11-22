@@ -204,6 +204,18 @@ def test_the_library_is_writable_at_the_same_path_with_downloads_inside_it(tmp_p
     assert f"{tmp_path}/cache:/temp" in svc["tdarr"]["volumes"]
 
 
+def test_only_the_non_root_s6_apps_get_a_run_tmpfs_owned_by_their_own_user(tmp_path):
+    main_ok(tmp_path)
+    svc = compose(tmp_path)
+    run = f"/run:exec,uid={os.getuid()},gid={os.getgid()},mode=0755,size=16777216"
+    owned = ("qbittorrent", "nzbget", "prowlarr", P, "radarr", "lidarr")
+    for name in owned:
+        assert svc[name]["tmpfs"] == [run], name
+        assert svc[name]["user"] == f"{os.getuid()}:{os.getgid()}", name  # its own, never another
+    for name in set(svc) - set(owned):  # the request app, tdarr (root + PUID), the VPN client, ...
+        assert "tmpfs" not in svc[name], name
+
+
 def test_the_apps_run_as_the_configured_ids_and_the_request_app_as_its_own_as_documented(tmp_path):
     main_ok(tmp_path)  # the ids are the unprivileged test's own: it can chown to no other
     ids = f"{os.getuid()}:{os.getgid()}"

@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Enable IPv4 forwarding and advertise the listed networks through the remote-access client.
+    options:
+      subnet_router_cli:
+        type: str
+        description: The remote-access client's command (the site names it; it must already be joined).
+        required: true
+      subnet_router_advertise_routes: &routes
+        type: list
+        elements: str
+        description: IPv4 CIDRs (/8 to /32) to advertise; at least one.
+        required: true
+      subnet_router_accept_dns:
+        type: bool
+        description: "Whether the client takes the gateway's DNS settings (false: the host keeps its own resolver)."
+        default: false
+      subnet_router_sysctl_file:
+        type: path
+        description: Where IP forwarding is persisted.
+        default: /etc/sysctl.d/99-hnx-subnet-router.conf
+      subnet_router_forward_file: &fwd
+        type: path
+        description: The kernel's IPv4 forwarding switch.
+        default: /proc/sys/net/ipv4/ip_forward
+      subnet_router_sysctl_cli:
+        type: str
+        description: The sysctl command.
+        default: sysctl
+  health:
+    short_description: Fail unless the client advertises exactly the listed networks and forwarding is on.
+    options:
+      subnet_router_cli: &cli
+        type: str
+        description: The remote-access client's command.
+        required: true
+      subnet_router_advertise_routes: *routes
+      subnet_router_forward_file: *fwd
+  readiness:
+    short_description: Fail unless the remote-access client answers.
+    options:
+      subnet_router_cli: *cli
+  backup:
+    short_description: Nothing to back up; the settings are re-applied by main.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main applies the settings.
+    options: {}
+  upgrade:
+    short_description: Nothing to upgrade; the role pins no version.
+    options: {}
+  export:
+    short_description: Nothing to export; the role holds no data.
+    options: {}

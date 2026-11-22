@@ -56,6 +56,11 @@
             volumes:
               - "{{ media_automation_data_root }}/config/qbittorrent:/config"
               - "{{ media_automation_library_path }}:{{ media_automation_library_path }}"
+            # the image's s6-overlay init runs as this `user:` and needs /run writable by it (docker's own
+            # /run is root-owned: "/run belongs to uid 0" crash loop); compose_app allows /run only owned by
+            # the service's own non-root user, see docs/role-interface.md section 6
+            tmpfs:
+              - {target: /run, size_bytes: 16777216, mode: "0755", uid: "{{ media_automation_uid | int }}", gid: "{{ media_automation_gid | int }}", exec: true}
             healthcheck:
               test: [CMD, curl, -sS, -o, /dev/null, --max-time, "5", "http://localhost:{{ media_automation_container_ports.qbittorrent }}/"]
               interval: 30s
@@ -73,6 +78,11 @@
             volumes:
               - "{{ media_automation_data_root }}/config/nzbget:/config"
               - "{{ media_automation_library_path }}:{{ media_automation_library_path }}"
+            # the image's s6-overlay init runs as this `user:` and needs /run writable by it (docker's own
+            # /run is root-owned: "/run belongs to uid 0" crash loop); compose_app allows /run only owned by
+            # the service's own non-root user, see docs/role-interface.md section 6
+            tmpfs:
+              - {target: /run, size_bytes: 16777216, mode: "0755", uid: "{{ media_automation_uid | int }}", gid: "{{ media_automation_gid | int }}", exec: true}
             healthcheck:
               test: [CMD, curl, -sS, -o, /dev/null, --max-time, "5", "http://localhost:{{ media_automation_container_ports.nzbget }}/"]
               interval: 30s
@@ -88,6 +98,11 @@
             ports: ["{{ media_automation_bind }}:{{ media_automation_prowlarr_port | int }}:9696"]
             volumes:
               - "{{ media_automation_data_root }}/config/prowlarr:/config"
+            # the image's s6-overlay init runs as this `user:` and needs /run writable by it (docker's own
+            # /run is root-owned: "/run belongs to uid 0" crash loop); compose_app allows /run only owned by
+            # the service's own non-root user, see docs/role-interface.md section 6
+            tmpfs:
+              - {target: /run, size_bytes: 16777216, mode: "0755", uid: "{{ media_automation_uid | int }}", gid: "{{ media_automation_gid | int }}", exec: true}
             healthcheck:
               test: [CMD, curl, -fsS, "http://localhost:{{ media_automation_container_ports.prowlarr }}/ping"]
               interval: 30s
@@ -104,6 +119,11 @@
             volumes:
               - "{{ media_automation_data_root }}/config/sonarr:/config"
               - "{{ media_automation_library_path }}:{{ media_automation_library_path }}"
+            # the image's s6-overlay init runs as this `user:` and needs /run writable by it (docker's own
+            # /run is root-owned: "/run belongs to uid 0" crash loop); compose_app allows /run only owned by
+            # the service's own non-root user, see docs/role-interface.md section 6
+            tmpfs:
+              - {target: /run, size_bytes: 16777216, mode: "0755", uid: "{{ media_automation_uid | int }}", gid: "{{ media_automation_gid | int }}", exec: true}
             healthcheck:
               test: [CMD, curl, -fsS, "http://localhost:{{ media_automation_container_ports.sonarr }}/ping"]
               interval: 30s
@@ -120,6 +140,11 @@
             volumes:
               - "{{ media_automation_data_root }}/config/radarr:/config"
               - "{{ media_automation_library_path }}:{{ media_automation_library_path }}"
+            # the image's s6-overlay init runs as this `user:` and needs /run writable by it (docker's own
+            # /run is root-owned: "/run belongs to uid 0" crash loop); compose_app allows /run only owned by
+            # the service's own non-root user, see docs/role-interface.md section 6
+            tmpfs:
+              - {target: /run, size_bytes: 16777216, mode: "0755", uid: "{{ media_automation_uid | int }}", gid: "{{ media_automation_gid | int }}", exec: true}
             healthcheck:
               test: [CMD, curl, -fsS, "http://localhost:{{ media_automation_container_ports.radarr }}/ping"]
               interval: 30s
@@ -136,6 +161,11 @@
             volumes:
               - "{{ media_automation_data_root }}/config/lidarr:/config"
               - "{{ media_automation_library_path }}:{{ media_automation_library_path }}"
+            # the image's s6-overlay init runs as this `user:` and needs /run writable by it (docker's own
+            # /run is root-owned: "/run belongs to uid 0" crash loop); compose_app allows /run only owned by
+            # the service's own non-root user, see docs/role-interface.md section 6
+            tmpfs:
+              - {target: /run, size_bytes: 16777216, mode: "0755", uid: "{{ media_automation_uid | int }}", gid: "{{ media_automation_gid | int }}", exec: true}
             healthcheck:
               test: [CMD, curl, -fsS, "http://localhost:{{ media_automation_container_ports.lidarr }}/ping"]
               interval: 30s

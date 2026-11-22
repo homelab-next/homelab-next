@@ -187,12 +187,19 @@
       {%-   endfor -%}
       {%- endfor -%}
       {{ out | join(', ') }}
+    _compose_app_tmpfs_own_uid: "{{ (item.value.user | default('') | string).split(':')[0] | int(-1) }}"
+    _compose_app_tmpfs_own_gid: "{{ ((item.value.user | default('') | string).split(':')[1:] + ['-1'])[0] | int(-1) }}"
     _compose_app_tmpfs_denied: >-
-      {%- set ts = (_compose_app_tmpfs | selectattr('target', 'defined') | map(attribute='target') | map('string') | list)
-            if _compose_app_tmpfs is sequence and _compose_app_tmpfs is not string and _compose_app_tmpfs is not mapping else [] -%}
       {%- set out = [] -%}
-      {%- for t in ts -%}
-      {%-   if t not in compose_app_tmpfs_allowed_exact -%}
+      {%- set ids = (item.value.user | default('') | string).split(':') -%}
+      {%- set own_uid = ids[0] | int(-1) if ids[0] is match('^[1-9][0-9]*\Z') else -1 -%}
+      {%- set own_gid = ids[1] | int(-1) if ids | length > 1 and ids[1] is match('^[1-9][0-9]*\Z') else -1 -%}
+      {%- for e in _compose_app_tmpfs if e is mapping and e.target is defined -%}
+      {%-   set t = e.target | string -%}
+      {%-   set owned = e.uid is defined and e.gid is defined and own_uid > 0 and own_gid > 0
+                        and (e.uid | string) is match('^[0-9]{1,10}\Z') and (e.gid | string) is match('^[0-9]{1,10}\Z')
+                        and (e.uid | string | int) == own_uid and (e.gid | string | int) == own_gid -%}
+      {%-   if t not in compose_app_tmpfs_allowed_exact and not (t in compose_app_tmpfs_owned_exact and owned) -%}
       {%-     for r in compose_app_tmpfs_denied_roots -%}
       {%-       if t == r or t.startswith(r ~ '/') -%}{%- set _ = out.append(t) -%}{%- endif -%}
       {%-     endfor -%}
@@ -216,15 +223,23 @@
       - _compose_app_tmpfs | selectattr('mode', 'defined') | map(attribute='mode') | reject('match', compose_app_tmpfs_mode_pattern) | list | length == 0
       - _compose_app_tmpfs_overlap | length == 0
       - _compose_app_tmpfs_denied | length == 0
+      # an owner is a number, and only the service's own: `user: uid:gid` is the one identity it may
+      # chown a mount to; `exec` is a real bool (a quoted "false" would be truthy)
+      - _compose_app_tmpfs | selectattr('uid', 'defined') | map(attribute='uid') | map('string') | reject('match', '^[0-9]{1,10}\Z') | list | length == 0
+      - _compose_app_tmpfs | selectattr('gid', 'defined') | map(attribute='gid') | map('string') | reject('match', '^[0-9]{1,10}\Z') | list | length == 0
+      - _compose_app_tmpfs | selectattr('uid', 'defined') | map(attribute='uid') | map('string') | map('int') | reject('equalto', _compose_app_tmpfs_own_uid | int) | list | length == 0
+      - _compose_app_tmpfs | selectattr('gid', 'defined') | map(attribute='gid') | map('string') | map('int') | reject('equalto', _compose_app_tmpfs_own_gid | int) | list | length == 0
+      - _compose_app_tmpfs | selectattr('exec', 'defined') | map(attribute='exec') | reject('boolean') | list | length == 0
       # the permission digits (the last three) may not all be 0: nobody could use the mount
       - _compose_app_tmpfs | selectattr('mode', 'defined') | map(attribute='mode') | map('string') | select('match', '^[01]?000\Z') | list | length == 0
     fail_msg: >-
       service '{{ item.key }}' has a refused tmpfs mount ({{ _compose_app_tmpfs_overlap | default('') }}{{ _compose_app_tmpfs_denied | default('') }}): tmpfs is a list of
-      {target, size_bytes, mode}; target an absolute canonical container path (not /), size_bytes an
+      {target, size_bytes, mode, uid, gid, exec}; target an absolute canonical container path (not /), size_bytes an
       integer from {{ compose_app_tmpfs_size_min }} to {{ compose_app_tmpfs_size_max }} bytes, mode (optional) a quoted
       string of three octal digits with an optional leading 0 or 1 (sticky) such as "1777" or "0700", never
       setuid or setgid and never 000, a target never one of {{ compose_app_tmpfs_denied_roots }} or under them (/dev/shm
-      itself is allowed), and no target may equal or lie inside or
+      itself is allowed; /run only with uid and gid both set to the service's own non-root user:group), uid and gid
+      (optional) digits equal to the service's own user, exec (optional) a bool, and no target may equal or lie inside or
       above another mount of the service (a volume's container path or another tmpfs)
   loop: "{{ compose_app_spec.services | dict2items }}"
   loop_control:

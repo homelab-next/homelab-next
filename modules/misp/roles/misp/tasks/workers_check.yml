@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# The workers are "misp-workers:<name>" programs; the five job-processing ones (default, prio, email,
+# cache, update) must each be RUNNING. A container reported healthy with none of them running is the
+# failure this exists to name.
+- name: Read the supervisor's view of the workers
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, SUPERVISOR_USERNAME, -e, SUPERVISOR_PASSWORD, misp-core, sh, -c, "{{ misp_supervisor_script }}", sh, status, "{{ misp_workers_program }}"]
+    expand_argument_vars: false
+  environment: "{{ misp_supervisor_env }}"
+  register: misp_workers_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: At least five workers are running and none is stopped or failed
+  ansible.builtin.assert:
+    that:
+      - misp_workers_status.stdout_lines | select('match', '^misp-workers:') | list | length >= 5
+      - misp_workers_status.stdout_lines | select('match', '^misp-workers:') | reject('search', ' RUNNING ') | list | length == 0
+    fail_msg: >-
+      misp: the background workers are not all running ({{ misp_workers_status.stdout_lines | select('match', '^misp-workers:') | map('split') | map('first') | zip(misp_workers_status.stdout_lines | select('match', '^misp-workers:') | map('split') | map(attribute=1)) | map('join', '=') | join(', ') }});
+      jobs would queue and never run (LL-386)

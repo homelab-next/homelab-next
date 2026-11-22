@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Set every account's API key from its secret: the administrator's and each consumer's. The
+# application keeps only a hash of a key, so a key can never be read back; the role asks the API
+# whether the account already accepts the secret's value and sets it only when it does not (a
+# second run is changed=0). The key and the address travel in the environment of the one command.
+- name: Set one account's key when the account does not accept it
+  ansible.builtin.include_tasks: key_one.yml
+  loop: "{{ misp_accounts }}"
+  loop_control:
+    loop_var: misp_acct
+    index_var: misp_i
+    label: "account {{ misp_i }}"

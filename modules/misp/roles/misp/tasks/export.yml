@@ -1,0 +1,145 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (object-tree, docs/modules/data.md): <data root>/export/latest/ holds dump.sql.zst
+# (the application database as a mysqldump, every table but the audit log, which is own-system
+# telemetry and 60 % of the database), manifest.json (the format, the row counts, the number of
+# tables and the dump's size and sha256) and listing.jsonl (each file's size and sha256). The
+# application container is STOPPED for the length of the dump (the counts in the manifest are then
+# the dump's own: a feed job cannot add a row between the two) and started again whatever happened.
+# It is built in export/.new and renamed into place only when the dump is whole: it decompresses,
+# ends with the dump's completion line, and the database holds at least the counts the site expects.
+# A failure leaves the previous latest in place.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Look at the build directory an earlier run may have left
+      ansible.builtin.stat:
+        path: "{{ misp_data_root }}/export/.new"
+        follow: false
+      register: misp_export_new
+    - name: Refuse a build directory that is not a plain directory
+      ansible.builtin.assert:
+        that: not misp_export_new.stat.exists or (misp_export_new.stat.isdir and not misp_export_new.stat.islnk)
+        fail_msg: "misp: {{ misp_data_root }}/export/.new is not a directory; move it away"
+    - name: Clear it (a fixed path inside the data root's export directory)
+      ansible.builtin.file:
+        path: "{{ misp_data_root }}/export/.new"
+        state: absent
+    - name: Create the build directory
+      ansible.builtin.file:
+        path: "{{ misp_data_root }}/export/.new"
+        state: directory
+        owner: "{{ misp_owner }}"
+        group: "{{ misp_group }}"
+        mode: "0700"
+    - name: Stop the application (the dump and the counts are then one state)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", stop, misp-core]
+      changed_when: true
+    - name: Dump the database (then prove the dump decompresses whole and ends with its completion line)
+      ansible.builtin.include_tasks: helper.yml
+      vars:
+        misp_helper_cmd: dump
+        misp_helper_input:
+          compose: "{{ misp_dir }}/docker-compose.yml"
+          out: "{{ misp_data_root }}/export/.new/dump.sql.zst"
+        misp_helper_async: "{{ misp_import_timeout }}"
+    - name: Read the row counts and the number of tables
+      ansible.builtin.include_tasks: counts.yml
+    - name: Count the tables
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", exec, -T, -e, MYSQL_PWD, db,
+               mariadb, --user=root, --batch, --skip-column-names, misp, -e,
+               "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'misp'"]
+      environment:
+        MYSQL_PWD: "{{ lookup('hnx_secret', misp_db_root_login_ref) }}"
+      register: misp_tables
+      changed_when: false
+      failed_when: misp_tables.rc != 0 or (misp_tables.stdout | trim) is not match('^[0-9]+\Z')
+      no_log: true
+    - name: The copy is whole and the database holds what the site expects
+      ansible.builtin.assert:
+        that:
+          - misp_tables.stdout | trim | int >= 90
+          - misp_counts[item.key] | int >= item.value | int
+        fail_msg: "misp: the export is not whole ({{ misp_tables.stdout | trim }} tables; {{ item.key }} {{ misp_counts[item.key] }} against at least {{ item.value }} expected); the previous export was left in place"
+      loop: "{{ ({'users': 0} | combine(misp_expected_min_counts)) | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+    - name: Read the dump (size, sha256)
+      ansible.builtin.stat:
+        path: "{{ misp_data_root }}/export/.new/dump.sql.zst"
+        checksum_algorithm: sha256
+      register: misp_export_dump
+    - name: Refuse a dump that is not there or is empty
+      ansible.builtin.assert:
+        that:
+          - misp_export_dump.stat.exists
+          - misp_export_dump.stat.size | int > 0
+        fail_msg: "misp: the dump is missing or empty"
+    - name: Write the manifest
+      ansible.builtin.copy:
+        dest: "{{ misp_data_root }}/export/.new/manifest.json"
+        content: >-
+          {{ {'format': 'misp-export-1', 'version': misp_core_tag[1:], 'excluded_tables': ['audit_logs'],
+              'tables': misp_tables.stdout | trim | int, 'counts': misp_counts,
+              'dump': {'file': 'dump.sql.zst', 'size': misp_export_dump.stat.size, 'sha256': misp_export_dump.stat.checksum}}
+             | to_nice_json(sort_keys=true) }}
+        owner: "{{ misp_owner }}"
+        group: "{{ misp_group }}"
+        mode: "0600"
+    - name: Read the manifest (size, sha256)
+      ansible.builtin.stat:
+        path: "{{ misp_data_root }}/export/.new/manifest.json"
+        checksum_algorithm: sha256
+      register: misp_export_manifest
+    - name: Write the listing
+      vars:
+        newline: "\n"
+      ansible.builtin.copy:
+        dest: "{{ misp_data_root }}/export/.new/listing.jsonl"
+        content: >-
+          {{ ([{'key': 'dump.sql.zst', 'size': misp_export_dump.stat.size, 'sha256': misp_export_dump.stat.checksum},
+               {'key': 'manifest.json', 'size': misp_export_manifest.stat.size, 'sha256': misp_export_manifest.stat.checksum}]
+              | map('to_json', sort_keys=True) | join(newline)) ~ newline }}
+        owner: "{{ misp_owner }}"
+        group: "{{ misp_group }}"
+        mode: "0600"
+    - name: Look at the copy in place
+      ansible.builtin.stat:
+        path: "{{ misp_data_root }}/export/latest"
+        follow: false
+      register: misp_export_old
+    - name: Refuse a previous copy that is not a plain directory
+      ansible.builtin.assert:
+        that: not misp_export_old.stat.exists or (misp_export_old.stat.isdir and not misp_export_old.stat.islnk)
+        fail_msg: "misp: {{ misp_data_root }}/export/latest is not a directory; move it away"
+    - name: Set the previous copy aside
+      ansible.builtin.command:
+        argv: [mv, -T, "{{ misp_data_root }}/export/latest", "{{ misp_data_root }}/export/.previous"]
+      changed_when: true
+      when: misp_export_old.stat.exists
+    - name: Put the new copy in place
+      ansible.builtin.command:
+        argv: [mv, -T, "{{ misp_data_root }}/export/.new", "{{ misp_data_root }}/export/latest"]
+      changed_when: true
+    - name: Remove the previous copy (a fixed path inside the data root's export directory)
+      ansible.builtin.file:
+        path: "{{ misp_data_root }}/export/.previous"
+        state: absent
+  always:
+    - name: Start the application again (whatever happened)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ misp_dir }}/docker-compose.yml", up, -d, --wait, misp-core]
+      changed_when: true
+      when: misp_start | bool
+    - name: Settle the application (its start finishes; restarted once when it came up broken)
+      ansible.builtin.include_tasks: settle.yml
+      when: misp_start | bool
+    - name: Start the background workers again (autostart is off in the image, LL-386)
+      ansible.builtin.include_tasks: workers.yml
+      when: misp_start | bool
+  tags: [export]

@@ -109,3 +109,7 @@ nifi_health_timeout: 30
 # a restore (nifi_restore_source, required there: the directory of an export) restores state (the
 # archive, with the service stopped) or flows (the portable flow definitions, imported by name when absent)
 nifi_restore_mode: state
+# flows mode, per imported flow name: true starts the group (after its parameter context is bound and its
+# controller services are ENABLED); absent or false leaves it as it is (stopped when new). The context
+# (nifi_parameter_context) and the services are converged for every named flow either way.
+nifi_flow_run: {}

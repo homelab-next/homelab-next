@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+misp_core_repository: "{{ misp_core_image.split('@')[0].rsplit(':', 1)[0] }}"
+misp_core_tag: "{{ misp_core_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+misp_core_digest: "{{ misp_core_image.split('@')[1] | default('') }}"
+misp_modules_repository: "{{ misp_modules_image.split('@')[0].rsplit(':', 1)[0] }}"
+misp_modules_tag: "{{ misp_modules_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+misp_modules_digest: "{{ misp_modules_image.split('@')[1] | default('') }}"
+misp_db_repository: "{{ misp_db_image.split('@')[0].rsplit(':', 1)[0] }}"
+misp_db_tag: "{{ misp_db_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+misp_db_digest: "{{ misp_db_image.split('@')[1] | default('') }}"
+misp_redis_repository: "{{ misp_redis_image.split('@')[0].rsplit(':', 1)[0] }}"
+misp_redis_tag: "{{ misp_redis_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+misp_redis_digest: "{{ misp_redis_image.split('@')[1] | default('') }}"
+misp_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+# the application's and the modules service's tags are versions with a leading v; the database's and
+# the cache's are plain versions
+misp_v_version_pattern: '^v[0-9]+\.[0-9]+\.[0-9]+\Z'
+misp_version_pattern: '^[0-9]+\.[0-9]+\.[0-9]+\Z'
+misp_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+misp_ref_pattern: '^secret:[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)+\Z'
+misp_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+misp_url_pattern: '^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?\Z'
+misp_email_pattern: '^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,200}\Z'
+misp_org_pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}\Z'
+misp_sha256_pattern: '^[0-9a-f]{64}\Z'
+# a password or key: characters a shell, an environment variable, an ini value and a SQL string all
+# carry literally
+misp_passphrase_pattern: '^[A-Za-z0-9._~-]{16,128}\Z'
+misp_user_key_pattern: '^[A-Za-z0-9]{40}\Z'
+misp_size_pattern: '^[1-9][0-9]{0,4}[MG]\Z'
+misp_mem_pattern: '^[1-9][0-9]{0,5}[kmg]\Z'
+misp_count_keys: [events, attributes, objects, galaxy_clusters, feeds, users]
+# the table each count reads: fixed, never built from input
+misp_count_tables: {events: events, attributes: attributes, objects: objects, galaxy_clusters: galaxy_clusters, feeds: feeds, users: users}
+# the container paths
+misp_container_configs: /var/www/MISP/app/Config
+misp_container_logs: /var/www/MISP/app/tmp/logs
+misp_container_files: /var/www/MISP/app/files
+misp_container_gnupg: /var/www/MISP/.gnupg
+misp_container_ssl: /etc/nginx/certs
+misp_container_export: /hnx-export
+# the consumers' accounts, administrator first
+misp_accounts: >-
+  {{ [{'email': misp_admin_email, 'key_ref': misp_admin_key_ref}] + (misp_consumers | default([])) }}
+# the TLS pair, when the site gives one (both or neither)
+misp_tls_refs: "{{ [misp_tls_cert_ref, misp_tls_key_ref] | select | list }}"
+# every reference the role reads
+misp_refs: >-
+  {{ [misp_admin_login_ref, misp_admin_key_ref, misp_db_login_ref, misp_db_root_login_ref,
+      misp_cache_login_ref, misp_encryption_key_ref, misp_gpg_passphrase_ref]
+     + (misp_consumers | default([]) | map(attribute='key_ref') | list) + misp_tls_refs }}
+# the background programs the application's supervisor must be running (autostart=false in the
+# image: nothing runs a job until something starts them, LL-386)
+misp_workers_program: "misp-workers:*"
+# the scripts the role runs in the application container. Every value arrives in the environment of
+# the one command (an API key is never an argument and never in a file); the paths are fixed by the
+# caller. api_status prints the HTTP status the application answers a call with (no key: an empty
+# Authorization header, which curl drops). The page the people sign in on is asked for as a page
+# (HNX_ACCEPT): with a JSON Accept the same address is an API answer and refuses an anonymous caller.
+misp_api_status_script: |
+  set -eu
+  { if [ -n "${HNX_KEY:-}" ]; then printf 'header = "Authorization: %s"\n' "$HNX_KEY"; fi; printf 'header = "Accept: %s"\n' "${HNX_ACCEPT:-application/json}"; } | curl -ks --max-time 60 -o /dev/null -w '%{http_code}' -K - "https://localhost${HNX_PATH}"
+misp_api_body_script: |
+  set -eu
+  { if [ -n "${HNX_KEY:-}" ]; then printf 'header = "Authorization: %s"\n' "$HNX_KEY"; fi; printf 'header = "Accept: application/json"\n'; } | curl -ksf --max-time 60 -K - "https://localhost${HNX_PATH}"
+misp_api_post_script: |
+  set -eu
+  { if [ -n "${HNX_KEY:-}" ]; then printf 'header = "Authorization: %s"\n' "$HNX_KEY"; fi; printf 'header = "Accept: application/json"\nheader = "Content-Type: application/json"\n'; } | curl -ks --max-time 120 -X POST -d '{}' -o /dev/null -w '%{http_code}' -K - "https://localhost${HNX_PATH}"
+# set one account's API key from the environment (the account must exist). The key is never an
+# argument: the console command takes its arguments from argv, so a wrapper builds them from the
+# environment inside the interpreter (a process's argv is readable by every user of the container)
+misp_set_key_script: |
+  set -eu
+  exec php -r '$a = ["cake.php", "-working", "/var/www/MISP/app", "user", "change_authkey", getenv("HNX_EMAIL"), getenv("HNX_KEY")]; $_SERVER["argv"] = $argv = $a; $_SERVER["argc"] = $argc = count($a); require "/var/www/MISP/app/Lib/cakephp/lib/Cake/Console/cake.php";' >/dev/null
+# the application's supervisor: its background workers. supervisorctl talks to the container's own
+# unix socket and reads the credentials the image's entrypoint sets for its own supervisor (the
+# image's fixed defaults, local to the container, never a secret of the lab's) from the environment
+# of the command, which an exec does not inherit from the entrypoint.
+misp_supervisor_script: |
+  set -u
+  exec supervisorctl "$@"
+misp_supervisor_env: {SUPERVISOR_USERNAME: supervisor, SUPERVISOR_PASSWORD: supervisor}
+# the row counts, one line per name: "<name><TAB><count>", read in the database container (the root
+# password in the environment of the one command)
+misp_counts_sql: >-
+  {%- set parts = [] -%}
+  {%- for k in misp_count_keys -%}{%- set _ = parts.append("SELECT '" ~ k ~ "', COUNT(*) FROM " ~ misp_count_tables[k]) -%}{%- endfor -%}
+  {{ parts | join(' UNION ALL ') }}
