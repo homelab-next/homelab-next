@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# suricata, the network sensor (modules/suricata): the OS package on a capture host.
+# suricata_logical_id (required): the instance's registry id, e.g. sensor
+# suricata_capture_interfaces (required): the NICs to capture on (af-packet), e.g. the router-mirror
+#   NIC and a second NIC or GRE tap carrying a hypervisor's guest mirror; none may hold an address
+# suricata_guests (required for main): the enrolled guests (see suricata_enroll) whose addresses are HOME_NET
+suricata_package_version: "1:7.0.10-1+deb13u4"
+suricata_install_packages: true
+suricata_service_manage: true
+suricata_config_dir: /etc/suricata
+suricata_config_file: suricata.yaml
+# the generated address-groups file (written by suricata_enroll, included by the main configuration)
+suricata_groups_file: hnx-address-groups.yaml
+suricata_log_dir: /var/log/suricata
+suricata_lib_dir: /var/lib/suricata
+# eve.json carries every event type the pipeline wants (flow-level protocol logs, a stats
+# heartbeat); eve-alert.json carries alerts only and is what the SIEM agent reads, so its
+# per-event field budget and volume stay small
+suricata_eve_file: eve.json
+suricata_eve_alert_file: eve-alert.json
+suricata_eve_types: [alert, anomaly, http, tls, ssh, files, flow]
+suricata_stats_interval: 60
+# a capture NIC that is a bond or bridge port, or holds an IPv4 address, would be a path for traffic
+suricata_cluster_id_base: 99
+suricata_af_packet_buffer_bytes: 536870912
+# ruleset: sources are enabled once (suricata-update lists none by default; LL: a rule feed that was
+# never enabled loads only the bundled decoder rules), updated by a timer, hot-reloaded
+suricata_rule_sources: [et/open]
+suricata_update_cli: suricata-update
+suricata_update_oncalendar: "*-*-* 04:20:00"
+suricata_update_random_delay: 1800
+suricata_update_enable: true
+suricata_systemd_unit_dir: /etc/systemd/system
+suricata_logrotate_dir: /etc/logrotate.d
+suricata_logrotate_apply: true
+suricata_logrotate_max_size: 2G
+suricata_logrotate_keep: 3
+suricata_systemctl_cli: systemctl
+suricata_cli: suricata
+suricata_suricatasc_cli: suricatasc
+# the SIEM agent reads the alert-only log: the role writes the localfile block when the agent's
+# configuration file exists (the agent is its own control); it never installs the agent
+suricata_siem_agent_conf: /var/ossec/etc/ossec.conf
+suricata_siem_agent_manage: true
+# the agent's systemd unit, restarted when the localfile block is added (empty: restart it yourself;
+# the unit's name is the agent module's, so the site sets it)
+suricata_siem_agent_unit: ""
+# health bounds: kernel drops under this fraction of captured packets; the eve log written within
+# this many seconds (the stats heartbeat guarantees an event every suricata_stats_interval)
+suricata_max_drop_ratio: 0.05
+suricata_eve_max_age_seconds: 300
+suricata_health_timeout: 20
+suricata_reload: true

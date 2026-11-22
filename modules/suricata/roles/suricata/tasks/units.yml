@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Install the rotation and rule-update units and the rotation rule
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - {src: logrotate.j2, dest: "{{ suricata_logrotate_dir }}/hnx-suricata"}
+    - {src: rotate.service.j2, dest: "{{ suricata_systemd_unit_dir }}/hnx-suricata-rotate.service"}
+    - {src: rotate.timer.j2, dest: "{{ suricata_systemd_unit_dir }}/hnx-suricata-rotate.timer"}
+    - {src: update.service.j2, dest: "{{ suricata_systemd_unit_dir }}/hnx-suricata-update.service"}
+    - {src: update.timer.j2, dest: "{{ suricata_systemd_unit_dir }}/hnx-suricata-update.timer"}
+  register: suricata_units
+
+- name: Enable the timers
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: "{{ suricata_units is changed }}"
+  loop: [hnx-suricata-rotate.timer, hnx-suricata-update.timer]
+  when: suricata_service_manage | bool and suricata_update_enable | bool

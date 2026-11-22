@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# The network-sensor provider on Suricata (docs/modules.md; README.md beside this file): the
+# intrusion-detection engine installed from the OS package on a capture host (a physical sensor or
+# a guest), one role, no container: a capture needs the host's NICs and raw sockets, which the
+# compose_app guardrails refuse. HOME_NET comes from the site model through the existing
+# suricata_enroll role (ADR-0049 decision 4); eve output is shipped by the log pipeline and the
+# alert-only file by the SIEM agent. Every real value (the host, the capture NICs, the guest
+# list) is the site's: the overlay's lab/modules.yml, lab/services.yml and secret store.
+manifest_version: "1.0"
+id: suricata
+kind: provider
+title: A network sensor on Suricata
+description: Fills the network-sensor slot with Suricata from the OS package on a capture host,
+  with HOME_NET rendered from the enrolled guests, upstream rules updated on a timer, a bounded
+  eve log, an alert-only log for the SIEM agent, and a health hook that fails a stopped capture,
+  kernel drops over a bound or an eve log that stopped growing.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: suricata
+  version: 7.0.10
+licence:
+  kind: open-source
+  spdx: GPL-2.0-only
+credentials: []
+identifiers:
+  - {kind: service-name, name: suricata, on_remove: keep}
+requires:
+  hosts:
+    - role: sensor
+      kind: host
+      footprint: {cpu: 2, memory_mb: 4096, disk_gb: 40}
+      roles: [role:suricata]
+      purpose: the capture host (the router-mirror NIC, and a second capture NIC or tunnel for a hypervisor's guest mirror); Suricata, the rule updater and the eve log live here
+provides:
+  slots:
+    network-sensor:
+      adapter: homelabnext.conform.adapters.network_sensor:make
+      provisional: true
+      reason: network-sensor has no contract yet; the observable is the capture's own health (running, kernel drops under a bound, the eve log growing), which the role's health hook proves
+egress:
+  - host: sensor
+    to: [internet]
+    purpose: the upstream rule feed (suricata-update fetches the open ruleset; every rule is untrusted input until suricata -T loads it)
+contributes:
+  roles:
+    - file: roles/suricata
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:suricata, hook: readiness}
+  docs:
+    - file: README.md
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned package bump (suricata_target_version): the role's upgrade hook validates it, then it converges; the configuration is tested with suricata -T before the service restarts"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: false
+    discard_reason: the sensor keeps no data of its own (the eve log is a rotating buffer the pipeline ships; rules are re-fetched; HOME_NET is regenerated from the site model)
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

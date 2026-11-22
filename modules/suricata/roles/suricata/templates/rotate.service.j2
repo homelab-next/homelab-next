@@ -1,0 +1,8 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (module suricata); do not edit.
+[Unit]
+Description=Rotate the Suricata eve logs by size
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/logrotate {{ suricata_logrotate_dir }}/hnx-suricata

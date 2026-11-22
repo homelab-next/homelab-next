@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# The sensor's dependencies: the capture NICs exist and hold no address (an address on a capture NIC
+# is a path for traffic and breaks the passive-tap assumption), and the enrolled guest list is
+# present. It calls no service of the lab.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The enrolled guests are given (HOME_NET cannot be empty)
+      ansible.builtin.assert:
+        that: suricata_guests | default([]) | length > 0
+        fail_msg: "suricata: suricata_guests is empty; HOME_NET is every address of every enrolled guest, so the sensor refuses to run without any"
+    - name: Look at each capture interface (read-only)
+      ansible.builtin.command:
+        argv: [ip, -j, addr, show, dev, "{{ item }}"]
+      loop: "{{ suricata_capture_interfaces }}"
+      register: suricata_iface_state
+      changed_when: false
+      check_mode: false
+      when: suricata_iface_check | default(true) | bool
+    - name: No capture interface holds an IPv4 address
+      ansible.builtin.assert:
+        that:
+          - >-
+            (item.stdout | from_json | map(attribute='addr_info') | flatten
+             | selectattr('family', 'equalto', 'inet') | list | length) == 0
+        fail_msg: "suricata: capture interface {{ item.item }} holds an IPv4 address; a capture NIC carries nothing else"
+      loop: "{{ suricata_iface_state.results | default([]) }}"
+      loop_control: {label: "{{ item.item }}"}
+      when: suricata_iface_check | default(true) | bool
+  tags: [readiness]
