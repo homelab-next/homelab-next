@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# What the agent watches, as one managed <ossec_config> block appended to the agent's configuration
+# (the file takes several roots; the vendor's own sections stay untouched). Sets the fact
+# siem_agent_watch_changed so the role that includes this one restarts the agent once.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Look for the audit daemon
+  ansible.builtin.stat:
+    path: "{{ siem_agent_watch_auditd_binary }}"
+  register: auditd_binary
+
+- name: Decide whether the audit log is a source
+  ansible.builtin.set_fact:
+    siem_agent_watch_audit_log_on: >-
+      {{ siem_agent_watch_auditd == 'enabled'
+         or (siem_agent_watch_auditd == 'auto'
+             and auditd_binary.stat.exists
+             and (ansible_facts['virtualization_type'] | default('')) not in siem_agent_watch_container_types) }}
+
+- name: Write the managed configuration block
+  ansible.builtin.blockinfile:
+    path: "{{ siem_agent_watch_config_file }}"
+    marker: "<!-- {mark} homelabnext siem-agent -->"
+    block: "{{ lookup('ansible.builtin.template', 'ossec-extra.xml.j2') }}"
+  register: conf_block
+
+# The manager cannot run a command on the host: both switches default to 0, and are pinned so a
+# later edit cannot turn them on unnoticed.
+- name: Never let the manager run commands on this host
+  ansible.builtin.lineinfile:
+    path: "{{ siem_agent_watch_local_options_file }}"
+    regexp: "^{{ item | regex_escape }}="
+    line: "{{ item }}=0"
+    create: true
+    mode: "0640"
+  loop: "{{ siem_agent_watch_remote_command_switches }}"
+  register: local_options
+
+- name: Tell the including role whether the agent must restart
+  ansible.builtin.set_fact:
+    siem_agent_watch_changed: "{{ conf_block.changed or local_options.changed }}"

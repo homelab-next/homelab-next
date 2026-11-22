@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Add file-integrity paths and the audit log to the agent's configuration and switch its remote-command features off.
+    options:
+      siem_agent_watch_fim_realtime_paths: &realtime
+        type: list
+        elements: str
+        description: Absolute paths watched in real time for changes, in addition to the vendor's scheduled defaults.
+        default: [/etc/ssh, /etc/pam.d, /etc/sudoers.d, /etc/audit/rules.d, /etc/cron.d]
+      siem_agent_watch_fim_paths: &sched
+        type: list
+        elements: str
+        description: Absolute paths watched on the agent's schedule, in addition to the vendor's defaults.
+        default: [/usr/local/bin, /usr/local/sbin]
+      siem_agent_watch_auditd: &auditd
+        type: str
+        choices: [auto, enabled, disabled]
+        description: Read the kernel audit log; auto = when the audit daemon is installed and the host is not a container.
+        required: true
+      siem_agent_watch_audit_log: &auditlog
+        type: path
+        description: The audit log the agent reads.
+        default: /var/log/audit/audit.log
+      siem_agent_watch_manifest_dir: &manifest
+        type: path
+        description: Where the backup and upgrade hooks write their records.
+        default: /var/lib/homelabnext/siem-agent-watch
+  health:
+    short_description: Fail unless the managed block is in the agent's configuration, the audit log is a source exactly when it should be, and the remote-command switches are 0.
+    options:
+      siem_agent_watch_auditd: *auditd
+      siem_agent_watch_audit_log: *auditlog
+  readiness:
+    short_description: Fail unless the agent's configuration file exists.
+    options: {}
+  backup:
+    short_description: Record that the role keeps no data of its own (the configuration is rendered again by main).
+    options:
+      siem_agent_watch_manifest_dir: *manifest
+  restore:
+    short_description: Nothing to restore; re-running main renders the configuration again.
+    options: {}
+  upgrade:
+    short_description: Nothing to upgrade; the role has no version.
+    options: {}
+  export:
+    short_description: Nothing to export.
+    options: {}

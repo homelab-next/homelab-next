@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Ensure the manifest directory exists
+      ansible.builtin.file:
+        path: "{{ siem_agent_watch_manifest_dir }}"
+        state: directory
+        mode: "0750"
+    - name: Write the backup manifest (nothing to keep; main renders the configuration again)
+      ansible.builtin.copy:
+        dest: "{{ siem_agent_watch_manifest_dir }}/backup-manifest.json"
+        content: "{{ {'service': 'siem_agent_watch', 'paths': [], 'note': 'the configuration is rendered again by main'} | to_nice_json }}\n"
+        mode: "0640"
+  tags: [backup]

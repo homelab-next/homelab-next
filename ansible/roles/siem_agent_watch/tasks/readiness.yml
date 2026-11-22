@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Fail unless the agent's configuration file exists
+  ansible.builtin.stat:
+    path: "{{ siem_agent_watch_config_file }}"
+  register: conf
+  failed_when: not conf.stat.exists
+  tags: [readiness]
