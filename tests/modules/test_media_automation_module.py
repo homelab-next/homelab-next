@@ -132,7 +132,10 @@ def overlay(tmp: Path) -> Path:
             ]
         },
         "incumbents": incumbents,
-        "grants": {"egress": {"media-automation": {"server": ["internet"]}}},
+        "grants": {
+            "egress": {"media-automation": {"server": ["internet"]}},
+            "public_routes": {"media-automation": ["media-automation"]},
+        },
     }
     (lab / "modules.yml").write_text(_dump(sel))
     return tmp
@@ -180,9 +183,9 @@ def test_the_manifest_names_exactly_the_four_secrets_the_deploy_seeds_and_asks_f
     assert defaults["media_automation_vpn_server_hostnames"] == ""
 
 
-def test_the_row_is_internal_only_with_its_own_login():
+def test_the_row_is_the_request_app_with_its_own_login_and_the_sites_public_name():
     row = ld.load_yaml(MODULE / "registry" / "services.yml")["services"]["media-automation"]
-    assert row["auth"] == "own" and row["port"] == 5055 and "public_hostname" not in row
+    assert row["auth"] == "own" and row["port"] == 5055 and "public_hostname" in row
     assert "version" not in row  # a provider's row takes product.version
 
 
@@ -245,13 +248,13 @@ def test_a_registry_row_that_differs_is_named(tmp_path, capsys):
     assert code == 1 and "registry: services.media-requests.auth" in out, out
 
 
-def test_a_public_route_the_row_does_not_declare_is_refused(tmp_path, capsys):
+def test_a_public_row_without_its_route_grant_is_refused(tmp_path, capsys):
     ov = overlay(tmp_path)
-    reg = ld.load_yaml(ov / "lab" / "services.yml")
-    reg["services"]["media-requests"]["public_hostname"] = "requests.lab.example.internal"
-    (ov / "lab" / "services.yml").write_text(_dump(reg))
+    sel = ld.load_yaml(ov / "lab" / "modules.yml")
+    del sel["grants"]["public_routes"]
+    (ov / "lab" / "modules.yml").write_text(_dump(sel))
     code, out = _check(ov, capsys)
-    assert code == 1 and "public_hostname" in out, out
+    assert code == 1 and "public_routes" in out, out
 
 
 def test_an_ungranted_egress_is_refused_throughout(tmp_path, capsys):
