@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The platform/lake_table record of soc.raw_archive, owned by lake-writer (the sole writer; docs/log-pipeline.md).
+id: table:soc.raw_archive
+owner: lake-writer
+schema: roles/lake_writer/files/schemas/raw_archive.v1.json
+retention_days: 90
+maintenance:
+  compact: true
+  expire_snapshots_days: 7
+freshness:
+  cadence: continuous
+  stale_after_s: 3600

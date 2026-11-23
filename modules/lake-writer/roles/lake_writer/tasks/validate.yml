@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# Refuse a bad input before anything is read or written: the names that end up in unit names, bucket
+# names and paths are checked here, so no later task has to trust them. The namespace is derived (soc),
+# never an input, and is asserted anyway: a changed derivation fails here as well as in the script.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - lake_writer_namespace == 'soc'
+      - lake_writer_logical_id is match('^[a-z][a-z0-9-]{0,30}\Z')
+      - lake_writer_tables | length > 0
+      - lake_writer_tables | unique | length == lake_writer_tables | length
+      - lake_writer_tables | difference(lake_writer_known_tables) | length == 0
+      - lake_writer_staging_bucket is match('^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\Z')
+      - lake_writer_staging_prefix is match('^([a-z0-9][a-z0-9._-]*/)+\Z')
+      - lake_writer_lake_user is match('^[A-Za-z][A-Za-z0-9_.:-]{0,62}\Z')
+      - lake_writer_lake_warehouse is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}\Z')
+      - lake_writer_s3_region is match('^[a-z0-9][a-z0-9-]{0,30}\Z')
+      - lake_writer_lake_login_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - lake_writer_s3_id_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - lake_writer_s3_key_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - lake_writer_s3_id_ref != lake_writer_s3_key_ref
+      - lake_writer_catalog_bearer_ref == '' or lake_writer_catalog_bearer_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - lake_writer_lake_ca_ref == '' or lake_writer_lake_ca_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - lake_writer_lake_query_url == '' or lake_writer_lake_query_url is match('^https://[^ ]+\Z')
+      - lake_writer_lake_catalog_url == '' or lake_writer_lake_catalog_url is match('^https://[^ ]+\Z')
+      - lake_writer_object_store_url == '' or lake_writer_object_store_url is match('^https?://[^ ]+\Z')
+      - lake_writer_lake_query_url != '' or lake_writer_lake_query_id != ''
+      - lake_writer_lake_catalog_url != '' or lake_writer_lake_catalog_id != ''
+      - lake_writer_object_store_url != '' or lake_writer_object_store_id != ''
+      - lake_writer_oncalendar is match('^[A-Za-z0-9 *:/,.-]{3,80}\Z')
+      - lake_writer_max_attempts | int >= 1 and lake_writer_max_attempts | int <= 20
+      - lake_writer_max_batches | int >= 0
+      - lake_writer_health_max_age_s | int >= 60
+      - lake_writer_health_max_pending | int >= 1
+      - >-
+        [lake_writer_config_dir, lake_writer_data_root]
+        | reject('match', '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z') | list | length == 0
+    fail_msg: >-
+      lake-writer: an input is invalid (the instance id, the table list (known OCSF tables and the raw
+      archive, each once), the staging bucket, the lake account and warehouse names, the object store's region, secret
+      references, the three services' registry rows or urls (the lake over https), the schedule, the
+      attempt and batch bounds and absolute paths of at least two components are all checked; the
+      namespace is not an input)
+  tags: [readiness, health, backup, export, restore, upgrade]

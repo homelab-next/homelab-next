@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the state first (lifecycle.remove.export_first), stop and disable every table's timer,
+# then remove the units, the credentials, the schemas and the script, and reload systemd. The data
+# root (the checkpoints and the exports) is kept for the operator to archive or delete; the lake's soc
+# tables and the staged batches are never touched. The decommission audit (module.yml
+# lifecycle.remove.audit) checks nothing still names the module.
+- name: Remove the lake writer
+  hosts: mod_lake_writer_writer
+  become: true
+  tasks:
+    - name: Export the state first
+      ansible.builtin.include_role:
+        name: lake_writer
+        tasks_from: export
+    - name: Stop and disable every table's timer (a no-op when one is not there)
+      ansible.builtin.systemd_service:
+        name: "hnx-{{ lake_writer_logical_id }}@{{ item }}.timer"
+        state: stopped
+        enabled: false
+      loop: "{{ lake_writer_tables }}"
+      failed_when: false
+    - name: Remove the units, the credentials, the schemas and the script
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/etc/systemd/system/hnx-{{ lake_writer_logical_id }}@.service"
+        - "/etc/systemd/system/hnx-{{ lake_writer_logical_id }}@.timer"
+        - "{{ lake_writer_config_dir | default('/etc/hnx/' ~ lake_writer_logical_id) }}/credentials"
+        - "{{ lake_writer_config_dir | default('/etc/hnx/' ~ lake_writer_logical_id) }}/schemas"
+        - /usr/local/libexec/homelabnext/hnx-lake-writer
+    - name: Reload systemd
+      ansible.builtin.command:
+        argv: [systemctl, daemon-reload]
+      changed_when: true

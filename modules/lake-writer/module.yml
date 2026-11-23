@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: Apache-2.0
+# The log pipeline's lake writer as a feature module (docs/modules.md; README.md beside this file):
+# one timer per table commits the OCSF batches the log pipeline stages in the object store to the
+# FRESH tables of the lake's soc namespace (the per-class OCSF tables and the raw archive), through
+# the platform's idempotent write, commit then checkpoint, one writer per table. It names slots and
+# the lake, never a product: which object store, catalog and query service carry any of it is the
+# site's selection, and every real value (the warehouse and account names, the secrets, the
+# registry rows, the placement) is the overlay's. It writes the namespace soc and no other: the
+# imported and migrated namespaces are never its input.
+manifest_version: "1.0"
+id: lake-writer
+kind: feature
+title: The log pipeline's lake writer (soc OCSF tables and raw archive)
+description: Commits the OCSF batches the log pipeline stages in the object store to the fresh soc tables of the lake, one writer per table, commit then checkpoint, each row's tlp taken from the pipeline's label and never from the event (an unlabelled event is refused). Refuses any namespace but soc; health judges every table's last run, backlog and pinned columns.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+bundle: {id: soc, group: lake}
+identifiers:
+  - {kind: secret-name, name: lake-writer, on_remove: keep}
+  - {kind: lake-namespace, name: soc, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the lake password, the object store key pair and the optional catalog token and CA are read by name at deploy time
+    - cap: cap:object-store
+      version: "1.0"
+      purpose: the staging bucket the log pipeline leaves its batches in; the writer lists, reads and deletes there
+    - cap: cap:lake-catalog
+      version: "1.0"
+      purpose: the catalog the soc namespace's tables are created in and committed through, and where each commit's batch ledger is kept
+    - cap: cap:lake-query
+      version: "1.0"
+      purpose: the engine the writer signs in to and INSERTs through, and the health hook's reads
+  hosts:
+    - role: writer
+      kind: vm
+      footprint: {cpu: 2, memory_mb: 2048, disk_gb: 10}
+      guest:
+        baselines: [base]
+      roles: [role:lake_writer]
+      purpose: runs one timer per table and holds the checkpoints; place it where the object store and the lake answer (the lake guest is the natural one)
+prefers:
+  capabilities:
+    - cap: cap:log-pipeline
+      version: "1.0"
+      purpose: the pipeline stages the labelled OCSF batches this module commits; it sets the TLP label of every event
+      fallback:
+        behaviour: no batch arrives, nothing is written and health is green on an empty backlog; the source census reports every class dark. A site with no pipeline sets no label, and this writer refuses an unlabelled event, so it never invents one
+egress: none
+contributes:
+  roles:
+    - file: roles/lake_writer
+  lake_tables:
+    - file: lake/authentication.table.yml
+    - file: lake/compliance_finding.table.yml
+    - file: lake/detection_finding.table.yml
+    - file: lake/dns_activity.table.yml
+    - file: lake/file_activity.table.yml
+    - file: lake/http_activity.table.yml
+    - file: lake/network_activity.table.yml
+    - file: lake/process_activity.table.yml
+    - file: lake/raw_archive.table.yml
+    - file: lake/vulnerability_finding.table.yml
+  preflight:
+    - {role: role:lake_writer, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: staging
+    kind: object-prefix
+    prefix: lake-writer/staging/
+    via: {cap: cap:object-store}
+    description: "Staged batches, <table>/<name>: one labelled OCSF event per line. Deleted once committed; what stays is the uncommitted and, under <table>/_rejected/, refused lines with the reason."
+    tlp: red
+    export: {formats: [object-tree], via: role:lake_writer}
+    import: {formats: [object-tree], via: role:lake_writer}
+    retention: {days: 30}
+  - id: state
+    kind: state
+    description: "Each table's checkpoint and last-run record under state/<table>/. A lost checkpoint is harmless: the lake's own mark and the rows' content key stop a replay adding a row."
+    export: {formats: [object-tree], via: role:lake_writer}
+    import: {formats: [object-tree], via: role:lake_writer}
+    retention: {keep: forever}
+config:
+  lake_password:
+    type: secret
+    description: the engine account's password the writers sign in with, in a root-only environment file the units load (lake_writer_lake_login_ref)
+    default: secret:lake-writer/lake-password
+    overlay: optional
+  s3_access_key:
+    type: secret
+    description: the object store key id that may read, list and delete in the staging bucket and nothing else (lake_writer_s3_id_ref)
+    default: secret:lake-writer/s3-access-key
+    overlay: optional
+  s3_secret_key:
+    type: secret
+    description: that key id's secret (lake_writer_s3_key_ref)
+    default: secret:lake-writer/s3-secret-key
+    overlay: optional
+lifecycle:
+  install: {playbook: playbooks/install.yml, note: "the tables are fresh: the first install creates the soc namespace and its tables (lake_writer_ensure_tables); no old data is imported, and the imported namespaces are never named"}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "no pinned artefact: a validated re-converge that first checks every soc table is its pinned columns"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

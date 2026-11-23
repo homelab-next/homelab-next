@@ -1,0 +1,48 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ lake_writer_marker }}, instance {{ lake_writer_logical_id }}); local changes are overwritten.
+# One table's writer (the instance is the table): commits its staged batches, commit then
+# checkpoint. The script takes the table's lock without waiting, so two runs never write one table.
+[Unit]
+Description=lake-writer {{ lake_writer_logical_id }}: commit the staged %i batches to the lake
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ lake_writer_user }}
+Group={{ lake_writer_group }}
+EnvironmentFile={{ lake_writer_env_file }}
+EnvironmentFile={{ lake_writer_login_env_file }}
+# the timer's runs are reported to the shared last-run record (the writer runs privileged: +)
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ lake_writer_last_run_dir }} --group {{ lake_writer_last_run_group }} --job timer:lake_writer/commit --unit %n --calendar "{{ lake_writer_oncalendar }}" --delay 0
+ExecStart=/usr/local/libexec/homelabnext/hnx-lake-writer commit --table %i
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ lake_writer_last_run_dir }} --group {{ lake_writer_last_run_group }} --job timer:lake_writer/commit --unit %n --calendar "{{ lake_writer_oncalendar }}" --delay 0
+TimeoutStartSec=30min
+Nice=10
+{% if hnx_module_slice | default('') %}
+Slice={{ hnx_module_slice }}
+{% endif %}
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths={{ lake_writer_state_dir }}
+MemoryMax=2G
