@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless the host can run the census, before anything is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The runtime release's hnx command
+      ansible.builtin.stat:
+        path: "{{ source_census_hnx_bin }}"
+      register: source_census_hnx_stat
+    - name: It is installed
+      ansible.builtin.assert:
+        that: source_census_hnx_stat.stat.exists and source_census_hnx_stat.stat.executable | default(false)
+        fail_msg: >-
+          source-census: {{ source_census_hnx_bin }} is missing. The census is `hnx lake source-census`, from
+          the homelab-next runtime release: apply the hnx_runtime role (ansible/roles/hnx_runtime) to this
+          guest first; no module installs it
+    - name: The runtime has the census command
+      ansible.builtin.command:
+        argv: ["{{ source_census_hnx_bin }}", lake, source-census, --help]
+      register: source_census_hnx_help
+      changed_when: false
+      check_mode: false
+      failed_when: false
+    - name: It answers
+      ansible.builtin.assert:
+        that: source_census_hnx_help.rc == 0
+        fail_msg: >-
+          source-census: `{{ source_census_hnx_bin }} lake source-census --help` failed (exit
+          {{ source_census_hnx_help.rc }}): the installed runtime release does not carry the census; bump
+          the hnx_runtime pin to a release that does
+    - name: Start the credential verdicts empty (this file runs again from every hook)
+      ansible.builtin.set_fact:
+        source_census_cred_state: {}
+    - name: Is each credential set (only the verdict is kept, never a value)
+      ansible.builtin.set_fact:
+        source_census_cred_state: >-
+          {{ source_census_cred_state | combine({item.ref: ((lookup('hnx_secret', item.ref, errors='ignore') or '') | string | length > 0)}) }}
+      loop: "{{ source_census_credentials }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+    - name: Every credential is set
+      ansible.builtin.assert:
+        that: source_census_cred_state.values() | select | list | length == source_census_cred_state | length
+        fail_msg: >-
+          source-census: not set in the secret store: {{ source_census_cred_state | dict2items | rejectattr('value') | map(attribute='key') | sort | join(', ') }}
+  tags: [readiness]

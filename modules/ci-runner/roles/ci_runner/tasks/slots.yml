@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Slots 0..N-1 enabled and running; a slot beyond N (the count was lowered) is stopped and disabled
+# (its VM is killed: lower the count when the pool is idle).
+- name: Enable and start the slots
+  ansible.builtin.systemd_service:
+    name: "hnx-{{ ci_runner_logical_id }}-slot@{{ item }}.service"
+    state: started
+    enabled: true
+  loop: "{{ range(ci_runner_slots | int) | list }}"
+  when: not ansible_check_mode
+
+- name: List the slot units
+  ansible.builtin.command:
+    argv: [systemctl, list-units, --all, --plain, --no-legend, "hnx-{{ ci_runner_logical_id }}-slot@*.service"]
+  register: ci_runner_slot_units
+  changed_when: false
+
+- name: Stop and disable the slots beyond the count
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: >-
+    {{ ci_runner_slot_units.stdout_lines | map('split') | map('first')
+       | select('match', '^hnx-' ~ ci_runner_logical_id ~ '-slot@[0-9]+\.service$')
+       | reject('in', range(ci_runner_slots | int) | map('regex_replace', '^(.*)$', 'hnx-' ~ ci_runner_logical_id ~ '-slot@\1.service') | list)
+       | list }}

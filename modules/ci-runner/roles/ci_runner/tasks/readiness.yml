@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless the host can run the pool before anything is written: valid inputs, systemd, and
+# hardware virtualisation exposed to this guest (the job VMs are KVM guests of it).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Look for systemd and the KVM device
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: ci_runner_ready_paths
+      loop: [/run/systemd/system, /dev/kvm]
+    - name: The host runs systemd and exposes KVM
+      ansible.builtin.assert:
+        that: ci_runner_ready_paths.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: >-
+          ci-runner: missing {{ ci_runner_ready_paths.results | rejectattr('stat.exists') | map(attribute='item') | list }}:
+          the job VMs need /dev/kvm (nested virtualisation on the hypervisor and a host-passthrough CPU on this guest)
+    - name: The host has enough memory for every slot at once
+      ansible.builtin.assert:
+        that: (ansible_facts.memtotal_mb | int) >= (ci_runner_slots | int) * (ci_runner_slot_memory_mb | int) + 2048
+        fail_msg: >-
+          ci-runner: {{ ci_runner_slots }} slots of {{ ci_runner_slot_memory_mb }} MB need
+          {{ (ci_runner_slots | int) * (ci_runner_slot_memory_mb | int) + 2048 }} MB; the host has {{ ansible_facts.memtotal_mb }}
+      when: ansible_facts.memtotal_mb is defined
+  tags: [readiness]

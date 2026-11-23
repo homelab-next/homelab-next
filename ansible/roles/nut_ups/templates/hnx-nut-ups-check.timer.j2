@@ -1,0 +1,11 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role nut_ups, control ups-protection); local changes are overwritten.
+[Unit]
+Description=homelabnext UPS check every minute (control ups-protection)
+
+[Timer]
+OnCalendar={{ nut_ups_metrics_interval }}
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

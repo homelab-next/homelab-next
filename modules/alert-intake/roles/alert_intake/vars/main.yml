@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Derived, not configurable: the names every task and template shares.
+alert_intake_marker: "managed by homelab-next (modules/alert-intake)"
+alert_intake_script: "{{ alert_intake_bin_dir }}/hnx-alert-intake"
+alert_intake_env_file: "{{ alert_intake_config_dir }}/alert-intake.env"
+alert_intake_auth_dir: "{{ alert_intake_config_dir }}/credentials"
+alert_intake_logins_env_file: "{{ alert_intake_auth_dir }}/logins.env"
+alert_intake_cases_config_file: "{{ alert_intake_config_dir }}/cases.json"
+alert_intake_cases_ca_file: "{{ alert_intake_config_dir }}/cases-ca.pem"
+alert_intake_notify_ca_file: "{{ alert_intake_config_dir }}/notify-ca.pem"
+alert_intake_adapter_dir: "{{ alert_intake_lib_dir }}/adapters"
+alert_intake_shared_dir: "{{ alert_intake_lib_dir }}/lib"
+# the shared-library files the script imports (homelabnext notify, state and their helpers); a test computes this
+# set from the script's real imports and fails when it drifts
+alert_intake_shared_files:
+  - __init__.py
+  - _http.py
+  - _version.py
+  - tlp.py
+  - tlp_egress.py
+  - notify/__init__.py
+  - notify/ceiling.py
+  - notify/core.py
+  - notify/senders.py
+  - state/__init__.py
+  - state/keyed.py
+  - state/store.py
+alert_intake_state_dir: "{{ alert_intake_data_root }}/state"
+alert_intake_state_file: "{{ alert_intake_state_dir }}/state.json"
+alert_intake_export_dir: "{{ alert_intake_data_root }}/export"
+alert_intake_unit: "hnx-{{ alert_intake_logical_id }}.service"
+# the environment variable the adapter reads the case store's key from (secret_env_name of the reference)
+alert_intake_cases_env_name: "HNX_SECRET_{{ alert_intake_cases_key_ref | regex_replace('^secret:', '') | regex_replace('[^A-Za-z0-9]', '_') | upper }}"
+alert_intake_severities: [info, low, medium, high, critical]
+alert_intake_forms:
+  hook: '^[A-Za-z0-9._~+/=-]{24,256}\Z'
+  # a credential for the case store: one line, no space or quote (it is written into an environment file)
+  store: '^[A-Za-z0-9._~+/=:@%^-]{8,512}\Z'

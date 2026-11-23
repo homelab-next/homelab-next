@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the state first (lifecycle.remove.export_first), stop and disable the service, then remove
+# the unit, the credentials, the adapter and the script, and reload systemd. The data root (the state and the
+# exports) is kept for the operator to archive or delete; the case store's data is not touched. The
+# decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the module.
+- name: Remove the alert webhook
+  hosts: mod_alert_intake_server
+  become: true
+  tasks:
+    - name: Export the state first
+      ansible.builtin.include_role:
+        name: alert_intake
+        tasks_from: export
+    - name: Stop and disable the service (a no-op when it is not there)
+      ansible.builtin.systemd_service:
+        name: "hnx-{{ alert_intake_logical_id }}.service"
+        state: stopped
+        enabled: false
+      failed_when: false
+    - name: Remove the unit, the credentials, the adapter and the script
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/etc/systemd/system/hnx-{{ alert_intake_logical_id }}.service"
+        - "{{ alert_intake_config_dir | default('/etc/hnx/' ~ alert_intake_logical_id) }}/credentials"
+        - "{{ alert_intake_lib_dir | default('/usr/local/lib/hnx-modules/' ~ alert_intake_logical_id) }}"
+        - /usr/local/libexec/homelabnext/hnx-alert-intake
+    - name: Reload systemd
+      ansible.builtin.command:
+        argv: [systemctl, daemon-reload]
+      changed_when: true

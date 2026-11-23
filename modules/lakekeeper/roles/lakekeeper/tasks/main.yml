@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+# The secrets reach only the env_files (0600). POSTGRES_PASSWORD sets the role's password when the
+# cluster is first created and is ignored afterwards. The encryption key protects the warehouse's stored
+# credential: it is create-only and must never change (README, "Secrets").
+- name: Read the passwords and the encryption key
+  ansible.builtin.set_fact:
+    lakekeeper_secret_env:
+      postgres:
+        POSTGRES_PASSWORD: "{{ lookup('hnx_secret', lakekeeper_db_login_ref) }}"
+      lakekeeper:
+        LAKEKEEPER__PG_DATABASE_URL_READ: "postgresql://{{ lakekeeper_db_user }}:{{ lookup('hnx_secret', lakekeeper_db_login_ref) }}@postgres:5432/{{ lakekeeper_db_name }}"
+        LAKEKEEPER__PG_DATABASE_URL_WRITE: "postgresql://{{ lakekeeper_db_user }}:{{ lookup('hnx_secret', lakekeeper_db_login_ref) }}@postgres:5432/{{ lakekeeper_db_name }}"
+        LAKEKEEPER__PG_ENCRYPTION_KEY: "{{ lookup('hnx_secret', lakekeeper_encryption_key_ref) }}"
+  no_log: true
+
+- name: Refuse a malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+# Render only: the schema migration runs between the database and the first start of this image (an
+# image bump included), because the server refuses a database its binary has not migrated.
+- name: Render the project
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ lakekeeper_app.compose_app_name }}"
+    compose_app_dir: "{{ lakekeeper_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ lakekeeper_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ lakekeeper_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ lakekeeper_app.compose_app_owner }}"
+    compose_app_group: "{{ lakekeeper_app.compose_app_group }}"
+    compose_app_start: false
+    compose_app_validate_with_docker: "{{ lakekeeper_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ lakekeeper_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ lakekeeper_secret_env }}"
+    compose_app_bind_roots: ["{{ lakekeeper_dir }}", "{{ lakekeeper_data_root }}"]
+  no_log: true
+
+- name: Migrate the catalog database, then start
+  when: lakekeeper_start | bool
+  block:
+    - name: Start the database and wait until it is healthy
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ lakekeeper_dir }}/docker-compose.yml", up, -d, --wait, postgres]
+      changed_when: false
+    - name: Ask whether the database is migrated to this binary
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ lakekeeper_dir }}/docker-compose.yml", run, --rm, --no-deps, lakekeeper,
+               wait-for-db, -m, -r, "1", -b, "1"]
+      register: lakekeeper_migrated
+      failed_when: false
+      changed_when: false
+    - name: Run the migration (one way, the dump is the way back)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ lakekeeper_dir }}/docker-compose.yml", run, --rm, --no-deps, lakekeeper, migrate]
+      when: lakekeeper_migrated.rc != 0
+      changed_when: true
+    - name: Start the catalog
+      ansible.builtin.include_role:
+        name: compose_app
+      vars:
+        compose_app_name: "{{ lakekeeper_app.compose_app_name }}"
+        compose_app_dir: "{{ lakekeeper_app.compose_app_dir }}"
+        compose_app_data_dir: "{{ lakekeeper_app.compose_app_data_dir }}"
+        compose_app_export_dir: "{{ lakekeeper_app.compose_app_export_dir }}"
+        compose_app_owner: "{{ lakekeeper_app.compose_app_owner }}"
+        compose_app_group: "{{ lakekeeper_app.compose_app_group }}"
+        compose_app_start: true
+        compose_app_validate_with_docker: "{{ lakekeeper_app.compose_app_validate_with_docker }}"
+        compose_app_spec: "{{ lakekeeper_app.compose_app_spec }}"
+        compose_app_secret_env: "{{ lakekeeper_secret_env }}"
+        compose_app_bind_roots: ["{{ lakekeeper_dir }}", "{{ lakekeeper_data_root }}"]
+      no_log: true
+    - name: Bootstrap the catalog and create the warehouse
+      ansible.builtin.include_tasks: converge.yml
