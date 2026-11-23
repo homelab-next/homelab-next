@@ -636,7 +636,9 @@ HANG_GUARD_S = 120
 
 
 def _get(host, port, route):
-    with urllib.request.urlopen(f"http://{host}:{port}{route}", timeout=HANG_GUARD_S) as r:  # loopback
+    with urllib.request.urlopen(
+        f"http://{host}:{port}{route}", timeout=HANG_GUARD_S
+    ) as r:  # loopback
         return r.headers, r.read().decode()
 
 
@@ -666,7 +668,9 @@ def test_serve_routes_the_maps():
         assert headers["Content-Type"].startswith("text/javascript") and js == assets.js()
         assert headers["X-Content-Type-Options"] == "nosniff"
         with pytest.raises(urllib.error.HTTPError):
-            urllib.request.urlopen(f"http://{host}:{port}/topology", timeout=HANG_GUARD_S)  # loopback
+            urllib.request.urlopen(
+                f"http://{host}:{port}/topology", timeout=HANG_GUARD_S
+            )  # loopback
     finally:
         srv.shutdown()
         srv.server_close()
