@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Restart nut
+  ansible.builtin.command:
+    argv: ["{{ nut_ups_systemctl_cli }}", restart, nut-driver.target, nut-server.service]
+  changed_when: true
+  listen: Restart nut
+
+- name: Restart nut monitor
+  ansible.builtin.command:
+    argv: ["{{ nut_ups_systemctl_cli }}", restart, nut-monitor.service]
+  changed_when: true
+  listen: Restart nut monitor

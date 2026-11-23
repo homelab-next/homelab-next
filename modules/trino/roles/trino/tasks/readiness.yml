@@ -12,7 +12,7 @@
       ansible.builtin.include_tasks: endpoint.yml
     - name: The catalog answers its config
       ansible.builtin.uri:
-        url: "{{ trino_catalog_endpoint }}/v1/config"
+        url: "{{ trino_catalog_endpoint }}{{ trino_catalog_path }}/v1/config?warehouse={{ trino_warehouse | urlencode }}"
         status_code: 200
         timeout: "{{ trino_health_timeout | int }}"
       changed_when: false

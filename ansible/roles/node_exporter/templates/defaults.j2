@@ -1,3 +1,3 @@
 {# SPDX-License-Identifier: Apache-2.0 -#}
 # Managed by homelabnext (role node_exporter, control metrics-agent); local changes are overwritten.
-ARGS="--web.listen-address={{ node_exporter_bind }}:{{ node_exporter_port | int }} --collector.filesystem.fs-types-exclude={{ node_exporter_fs_types_exclude | quote }} --no-collector.textfile"
+ARGS="--web.listen-address={{ node_exporter_bind }}:{{ node_exporter_port | int }} --collector.filesystem.fs-types-exclude={{ node_exporter_fs_types_exclude | quote }}{% if node_exporter_textfile_dir | length > 0 %} --collector.textfile.directory={{ node_exporter_textfile_dir | quote }}{% else %} --no-collector.textfile{% endif %}"

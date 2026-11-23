@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the state from an export (alert_intake_restore_source: <export>/ holding state.json). The source
+# is checked first (this module's form); the service is stopped for the copy because it rewrites the state
+# on every event. This REPLACES the live state: it is the explicit way to move it.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: A restore source is named, and is an absolute directory of its own
+      ansible.builtin.assert:
+        that:
+          - alert_intake_restore_source is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z')
+          - alert_intake_restore_source is not match('^' ~ (alert_intake_state_dir | regex_escape) ~ '(/|\Z)')
+        fail_msg: "alert-intake: alert_intake_restore_source must be an absolute path of at least two components, outside the live state directory"
+    - name: Read the exported state
+      ansible.builtin.slurp:
+        src: "{{ alert_intake_restore_source }}/state.json"
+      register: alert_intake_restore_state
+    - name: The exported state is this module's form
+      ansible.builtin.include_tasks: state_check.yml
+      vars:
+        alert_intake_state_text: "{{ alert_intake_restore_state.content | b64decode }}"
+    - name: Stop the service while the state is replaced
+      ansible.builtin.systemd_service:
+        name: "{{ alert_intake_unit }}"
+        state: stopped
+      when: not ansible_check_mode and alert_intake_start | bool
+    - name: Install the state
+      ansible.builtin.copy:
+        content: "{{ (alert_intake_restore_state.content | b64decode | trim) ~ '\n' }}"
+        dest: "{{ alert_intake_state_file }}"
+        owner: "{{ alert_intake_user }}"
+        group: "{{ alert_intake_group }}"
+        mode: "0600"
+      no_log: true
+    - name: Start the service again
+      ansible.builtin.systemd_service:
+        name: "{{ alert_intake_unit }}"
+        state: started
+      when: not ansible_check_mode and alert_intake_start | bool
+  tags: [restore]

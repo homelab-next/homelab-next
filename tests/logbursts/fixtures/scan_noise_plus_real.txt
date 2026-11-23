@@ -1,0 +1,17 @@
+2026/07/31 21:30:00 authd: ERROR: Invalid request for new agent from: scanner-host-7
+2026/07/31 21:30:01 remoted: ERROR: Too big message size from socket [42]
+2026/07/31 21:30:05 authd: ERROR: Invalid request for new agent from: scanner-host-7
+2026/07/31 21:30:06 remoted: ERROR: Too big message size from socket [42]
+2026/07/31 21:30:10 authd: ERROR: Invalid request for new agent from: scanner-host-7
+2026/07/31 21:30:11 remoted: ERROR: Too big message size from socket [42]
+2026/07/31 21:30:15 authd: ERROR: Invalid request for new agent from: scanner-host-7
+2026/07/31 21:30:16 remoted: ERROR: Too big message size from socket [42]
+2026/07/31 21:30:20 authd: ERROR: Invalid request for new agent from: scanner-host-7
+2026/07/31 21:30:21 remoted: ERROR: Too big message size from socket [42]
+2026/07/31 21:30:25 authd: ERROR: Invalid request for new agent from: scanner-host-7
+2026/07/31 21:30:26 remoted: ERROR: Too big message size from socket [42]
+2026/07/31 21:30:30 authd: ERROR: Invalid request for new agent from: scanner-host-7
+2026/07/31 21:30:31 remoted: ERROR: Too big message size from socket [42]
+2026/07/31 21:30:35 authd: ERROR: Invalid request for new agent from: scanner-host-7
+2026/07/31 21:30:36 remoted: ERROR: Too big message size from socket [42]
+2026/07/31 21:58:00 authd: ERROR: Invalid request for new agent from: other-host-9
