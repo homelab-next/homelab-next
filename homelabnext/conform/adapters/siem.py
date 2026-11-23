@@ -12,7 +12,6 @@ CA), never with verification off.
 
 from __future__ import annotations
 
-import socket
 import ssl
 import urllib.error
 import urllib.parse
@@ -20,6 +19,7 @@ import urllib.request
 from typing import Any
 
 from homelabnext.conform.adapters._env import resolve
+from homelabnext.conform.adapters.network_sensor import NetworkSensorProbe
 
 __all__ = ["HotIndexProbe", "SiemSourceProbe", "make_hot_index", "make_siem_source"]
 
@@ -31,21 +31,11 @@ def _hostport(url: str, default_port: int) -> tuple[str, int]:
     return parts.hostname, parts.port or default_port
 
 
-class SiemSourceProbe:
+class SiemSourceProbe(NetworkSensorProbe):
+    """The event port accepts a TCP connection (the plain port probe, with the wider default wait)."""
+
     def __init__(self, host: str, port: int, timeout: float = 10.0) -> None:
-        self._addr = (host, port)
-        self._timeout = timeout
-
-    def health(self) -> bool:
-        """The event port accepts a TCP connection."""
-        try:
-            with socket.create_connection(self._addr, timeout=self._timeout):
-                return True
-        except OSError:
-            return False
-
-    def close(self) -> None:  # the harness's teardown; nothing is held
-        return None
+        super().__init__(host, port, timeout)
 
 
 class HotIndexProbe:
