@@ -646,6 +646,23 @@ def test_this_suite_is_configured():
     assert (Path(ROOT) / "conftest.py").read_text().count("tests.suite_policy") == 1
 
 
+def test_the_budgets_absorb_runner_noise_and_still_catch_a_runaway_suite():
+    """The budgets are a tripwire (operator 2026-11-23): the figures seen on green and red runs of
+    main (roles 8112-10543 s) and a pool runner's ~27% slower cores pass, a suite that doubles
+    fails.  Raising a figure without the evidence that it was too tight breaks the second half."""
+    import tomllib
+
+    ini = tomllib.loads((Path(ROOT) / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]
+    budgets = sp.parse_budgets(ini["suite_budgets"])
+    seen = {  # the largest total seen over recent hosted runs, seconds (2026-11-23)
+        "tests/roles": 10543.0, "tests/modules": 340.1, "tests/conform_sweeps": 181.4,
+        "tests/conform": 135.6, "tests/graph": 127.5, "tests/schemas": 84.0, "tests/agent": 54.0,
+    }  # fmt: skip
+    for suite, worst in seen.items():
+        assert worst * 1.27 <= budgets[suite], (suite, "a pool runner would break it")
+        assert worst * 2 > budgets[suite], (suite, "a doubled suite would pass")
+
+
 @pytest.mark.parametrize("text", ["0/3", "4/3", "1/0", "3", "a/b", "1/2/3", ""])
 def test_parse_shard_refuses(text):
     with pytest.raises(ValueError):

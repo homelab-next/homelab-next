@@ -30,10 +30,11 @@ env:
   GO_VERSION: "1.27.4"
 
 # Where jobs run (operator 2026-11-22 22:41, "use both local and cloud"): the jobs whose runs-on is the POOL expression below
-# go to the lab's ephemeral pool (modules/ci-runner: one throwaway VM per job, public egress only) while the 24 test shards,
+# go to the lab's ephemeral pool (modules/ci-runner: one throwaway VM per job, public egress only) while the 3.12 test shards,
 # their aggregators, go, lab-in-a-box (it must equal the nightly's), experimental, coverage and CodeQL stay hosted, so the
-# two run side by side. The shards stay hosted because their suite budgets (pyproject.toml) are set on hosted runners' speed:
-# a pool job VM (nested virtualisation, a slower core) ran tests/roles 27% slower, over its budget. The pool is used only for
+# two run side by side. The 3.12 shards stay hosted so each run uses both queues: the 3.11 shards go to the pool.
+# A pool job VM (nested virtualisation, a slower core) runs tests/roles ~27% slower; the suite budgets (pyproject.toml)
+# carry 1.4x headroom over the largest hosted total, so that no longer fails them (operator 2026-11-23 06:51). The pool is used only for
 # a push to main or a pull request from a branch of THIS repository, and only while the repository variable HNX_CI_POOL is
 # `on` (the pool's feeder sets it off when the pool stops answering; the lead may set it off by hand); a fork's pull request,
 # or the variable anything but `on`, runs everything hosted. This is the one runs-on that may name a self-hosted runner
@@ -73,8 +74,11 @@ jobs:
   # timeout is a backstop only.  Roles' first runs are prefetched per shard, so nothing repeats.
   test:
     name: test (${{ matrix.python.version }}, ${{ matrix.shard }}/12)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30  # backstop: a twelfth of the suite takes 8-14 min, see above
+    # The 3.11 leg's twelve shards go to the pool and the 3.12 leg's stay hosted (matrix.python.pool), so the two halves
+    # of one run draw on two queues and finish sooner when the hosted one is busy; the expression is the pool one
+    # above with `matrix.python.pool &&` in front, word for word (tests/overlay/test_private_overlay_example.py)
+    runs-on: ${{ matrix.python.pool && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
+    timeout-minutes: 45  # backstop: a twelfth of the suite takes 8-14 min hosted, 19-23 on the pool's slower cores
     strategy:
       fail-fast: false
       matrix:
@@ -87,12 +91,14 @@ jobs:
           - version: "3.12"
             extras: "test,lake,mcp,ansible"
             go: true
+            pool: false
             require-modules: "duckdb,pyarrow,pyiceberg,sqlalchemy,mcp,ansible"
             require-tools: "ansible-playbook"
           # the extras absent: proves the lake and MCP SDK tests skip cleanly instead of failing
           - version: "3.11"
             extras: "test"
             go: false
+            pool: true
             require-modules: ""
             require-tools: ""
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]  # --shard below names the 12: change both together
