@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's; etc/ and datastore/ belong to the container's user (the
+# server writes its configuration and its state there), the client configuration and the hunt
+# results to the groups that read them. Nothing here is ever removed by the role.
+- name: Create the data root and its directories
+  ansible.builtin.file:
+    path: "{{ velociraptor_server_data_root }}{{ '/' ~ item.key if item.key else '' }}"
+    state: directory
+    owner: "{{ velociraptor_server_uid | int if item.value.own == 'container' else velociraptor_server_owner }}"
+    group: >-
+      {{ velociraptor_server_gid | int if item.value.own == 'container'
+         else (velociraptor_server_client_config_group if item.value.own == 'client'
+               else (velociraptor_server_results_group if item.value.own == 'results'
+                     else velociraptor_server_group)) }}
+    mode: "{{ item.value.mode }}"
+  loop: "{{ {'': {'mode': '0750', 'own': 'root'}} | combine(velociraptor_server_dirs) | dict2items }}"
+  loop_control:
+    label: "{{ item.key | default('(root)', true) }}"
+  tags: [backup, export, restore]

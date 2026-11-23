@@ -1,0 +1,111 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Generate the private CA and the node certificates
+  ansible.builtin.include_tasks: certs.yml
+
+- name: Render the configuration
+  ansible.builtin.include_tasks: config.yml
+
+- name: Read the credentials the containers are given
+  ansible.builtin.set_fact:
+    wazuh_secret_env:
+      manager:
+        INDEXER_PASSWORD: "{{ lookup('hnx_secret', wazuh_indexer_admin_ref) }}"
+        API_PASSWORD: "{{ lookup('hnx_secret', wazuh_api_login_ref) }}"
+      dashboard:
+        DASHBOARD_PASSWORD: "{{ lookup('hnx_secret', wazuh_dashboard_login_ref) }}"
+        API_PASSWORD: "{{ lookup('hnx_secret', wazuh_api_login_ref) }}"
+  no_log: true
+
+- name: Render and start the service
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ wazuh_app.compose_app_name }}"
+    compose_app_dir: "{{ wazuh_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ wazuh_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ wazuh_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ wazuh_app.compose_app_owner }}"
+    compose_app_group: "{{ wazuh_app.compose_app_group }}"
+    compose_app_start: "{{ wazuh_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ wazuh_app.compose_app_validate_with_docker }}"
+    compose_app_network_subnet: "{{ wazuh_app.compose_app_network_subnet }}"
+    compose_app_spec: "{{ wazuh_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ wazuh_secret_env }}"
+    compose_app_bind_roots: ["{{ wazuh_dir }}", "{{ wazuh_data_root }}"]
+  no_log: true
+
+# A mounted file is read at start: a change takes a restart of the service that mounts it. Only
+# when the stack was already installed: on a first install the containers were just created.
+- name: Restart the services whose mounted configuration changed
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ wazuh_dir }}/docker-compose.yml", restart, "{{ item }}"]
+  loop: "{{ wazuh_restart_services }}"
+  changed_when: true
+  when: wazuh_start | bool and wazuh_installed.stat.exists and not ansible_check_mode
+
+- name: Wait for the indexer (it refuses a caller with no account)
+  ansible.builtin.include_tasks: probe.yml
+  vars:
+    wazuh_probe_service: indexer
+    wazuh_probe_url: "https://localhost:{{ wazuh_container_indexer_port }}/"
+    wazuh_probe_wait: true
+    wazuh_probe_expect: ['401']
+  when: wazuh_start | bool and not ansible_check_mode
+
+- name: Apply a changed account password to an initialised indexer
+  ansible.builtin.include_tasks: security_apply.yml
+  when: wazuh_start | bool and not ansible_check_mode and wazuh_users_written is changed and wazuh_installed.stat.exists
+
+- name: Wait for the manager's API to accept its account
+  ansible.builtin.include_tasks: probe.yml
+  vars:
+    wazuh_probe_service: manager
+    wazuh_probe_url: "https://localhost:{{ wazuh_container_api_port }}/security/user/authenticate?raw=true"
+    wazuh_probe_method: POST
+    wazuh_probe_user: "{{ wazuh_api_login_ref }}"
+    wazuh_probe_user_name: "{{ wazuh_api_user }}"
+    wazuh_probe_wait: true
+  when: wazuh_start | bool and not ansible_check_mode
+
+- name: Refuse a manager that never answered
+  ansible.builtin.assert:
+    that: wazuh_probe_code | default('0') == '200'
+    fail_msg: >-
+      siem: the manager's API did not accept {{ wazuh_api_login_ref }} within {{ wazuh_ready_timeout }}
+      seconds (last status {{ wazuh_probe_code | default('0') }}, curl exit {{ wazuh_probe_curl_rc | default('?') }})
+  when: wazuh_start | bool and not ansible_check_mode
+
+# The manager is up and its directories are filled by the product's init: the rules, the integration
+# and the retention policy go in now, and the manager restarts once when any of them changed.
+- name: Load the native rules and the alert integration, test them and restart the manager's daemons
+  ansible.builtin.include_tasks: rules.yml
+  when: wazuh_start | bool and not ansible_check_mode
+
+- name: Set the hot index's retention
+  ansible.builtin.include_tasks: retention.yml
+  when: wazuh_start | bool and not ansible_check_mode
+
+- name: Wait for the dashboard to serve its sign-in page
+  ansible.builtin.uri:
+    url: "http://{{ wazuh_bind }}:{{ wazuh_dashboard_port }}/app/login"
+    status_code: 200
+    timeout: "{{ wazuh_health_timeout }}"
+  register: wazuh_dash
+  until: wazuh_dash.status | default(0) == 200
+  retries: "{{ ((wazuh_ready_timeout | int) / 5) | int }}"
+  delay: 5
+  changed_when: false
+  check_mode: false
+  when: wazuh_start | bool and not ansible_check_mode

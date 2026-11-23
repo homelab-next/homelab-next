@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the server's configuration (the certificate authority in it) and datastore from an
+# export: the source is checked first without writing (a listing that names exactly the files
+# present, each of its size and sha256, no link); then the server is stopped, each tree is built
+# beside its target and renamed into place, and a populated target is renamed aside, never deleted.
+# The restored authority becomes the recorded one (it is the one the clients that enrolled with the
+# exported server trust). The server is started again whatever happened.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Check the export before changing anything
+      ansible.builtin.command:
+        argv: ["{{ velociraptor_server_script }}", check-export, --src, "{{ velociraptor_server_restore_source }}"]
+      changed_when: false
+    - name: Replace the server state with the server stopped
+      block:
+        - name: Stop the server
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ velociraptor_server_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Install the listed trees (a populated target is moved aside)
+          ansible.builtin.command:
+            argv:
+              - "{{ velociraptor_server_script }}"
+              - import
+              - --src
+              - "{{ velociraptor_server_restore_source }}"
+              - --etc
+              - "{{ velociraptor_server_data_root }}/etc"
+              - --datastore
+              - "{{ velociraptor_server_data_root }}/datastore"
+              - --uid
+              - "{{ velociraptor_server_uid | int }}"
+              - --gid
+              - "{{ velociraptor_server_gid | int }}"
+          changed_when: true
+        - name: Record the restored authority
+          ansible.builtin.include_tasks: ca.yml
+          vars:
+            velociraptor_server_ca_force_record: true
+      always:
+        - name: Start the server again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ velociraptor_server_dir }}/docker-compose.yml", up, -d]
+          changed_when: true
+  tags: [restore]

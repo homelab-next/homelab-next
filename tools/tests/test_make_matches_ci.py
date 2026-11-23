@@ -68,9 +68,10 @@ def ci_pytest_args():
         w for w in runs if w[:3] == ["python", "-m", "pytest"] and any("not live" in x for x in w)
     ]
     assert len(runs) == 1, runs
-    # less the shard flags: each CI job runs a shard of what make test runs whole
+    # less the shard flags (each CI job runs a shard of what make test runs whole) and the xdist
+    # flags (the workers a job runs its shard on)
     words = runs[0][3:]
-    for flag in ("--shard", "--shard-report"):
+    for flag in ("--shard", "--shard-report", "-n", "--dist"):
         if flag in words:
             del words[words.index(flag) : words.index(flag) + 2]
     return words
@@ -146,9 +147,11 @@ def _commands(lines) -> set[str]:
 
 def _as_make_runs_it(cmd: str) -> str:
     """A CI command less what only CI adds: the base it compares with (``--ci-base``,
-    ``--base REV``) and the test shard (``--shard``, ``--shard-report``)."""
+    ``--base REV``), the test shard (``--shard``, ``--shard-report``) and the xdist workers (``-n``,
+    ``--dist``)."""
     cmd = re.sub(r" --ci-base\b", "", cmd)
-    return re.sub(r' --(?:base|shard|shard-report) (?:"[^"]*"|\S+)', "", cmd)
+    cmd = re.sub(r' -n (?:"[^"]*"|\S+)', "", cmd)
+    return re.sub(r' --(?:base|shard|shard-report|dist) (?:"[^"]*"|\S+)', "", cmd)
 
 
 def _ci_commands(ci) -> set[str]:

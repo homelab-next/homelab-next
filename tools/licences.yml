@@ -43,6 +43,7 @@ python:
   cyclonedx-python-lib: {spdx: Apache-2.0, kind: linked}
   defusedxml: {spdx: PSF-2.0, kind: linked}
   duckdb: {spdx: MIT, kind: linked}
+  execnet: {spdx: MIT, kind: linked}
   filelock: {spdx: MIT, kind: linked}
   fqdn: {spdx: MPL-2.0, kind: linked}
   fsspec: {spdx: BSD-3-Clause, kind: linked}
@@ -91,6 +92,7 @@ python:
   pyroaring: {spdx: MIT, kind: linked}
   pytest: {spdx: MIT, kind: linked}
   pytest-cov: {spdx: MIT, kind: linked}
+  pytest-xdist: {spdx: MIT, kind: linked}
   python-dateutil: {spdx: Apache-2.0 AND BSD-3-Clause, kind: linked}
   python-multipart: {spdx: Apache-2.0, kind: linked}
   pywin32: {spdx: PSF-2.0, kind: linked}

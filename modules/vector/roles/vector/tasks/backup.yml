@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's
+# paths); the export first writes a copy of the file checkpoints into it (export/), so a restore
+# never depends on the live files being caught mid-write. The disk buffers are not exported: what
+# they hold is replayed or already staged, and a replayed row is a no-op in the lake.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Copy the checkpoints (the export)
+      ansible.builtin.include_tasks: copy_out.yml
+    - name: Delegate to compose_app (the backup manifest names the data root)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: backup
+      vars:
+        compose_app_name: vector
+        compose_app_dir: "{{ vector_app.compose_app_dir }}"
+        compose_app_data_dir: "{{ vector_app.compose_app_data_dir }}"
+        compose_app_export_dir: "{{ vector_app.compose_app_export_dir }}"
+        compose_app_owner: "{{ vector_app.compose_app_owner }}"
+        compose_app_group: "{{ vector_app.compose_app_group }}"
+        compose_app_spec: "{{ vector_app.compose_app_spec }}"
+  tags: [backup]

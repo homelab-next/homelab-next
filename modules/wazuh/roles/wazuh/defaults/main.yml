@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# The SIEM provider (modules/wazuh): three compose_app containers in the module's slice, the
+# manager, the indexer and the dashboard. The manager publishes the agents' event port and the
+# enrolment port on the guest's own address; the indexer's API and the manager's API are published
+# on it too (the hypervisor's per-VM firewall admits the named consumers alone); the dashboard is
+# plain http, reached through the edge. The stack's internal TLS comes from a private CA the role
+# generates once under the data root (create-only, so a re-run never rotates it).
+# Required, with no default (the site's): wazuh_logical_id (the instance's registry id).
+# The three images are one release: the same tag (the product's version), each pinned by digest.
+wazuh_manager_image: "docker.io/wazuh/wazuh-manager:4.14.9@sha256:9d07740f780024600101d759ddab9a4413bdcb3412ccb81dccc143b3cdc702a2"
+wazuh_indexer_image: "docker.io/wazuh/wazuh-indexer:4.14.9@sha256:08a8d5a0f0416bdd97ca421b1b72fae97224c8fd99a143500b28b536ff6ac98c"
+wazuh_dashboard_image: "docker.io/wazuh/wazuh-dashboard:4.14.9@sha256:8c003c6e08151d962e2ed541a6a1a86ac723f01b5d5678fc53dcbe544e739e7a"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces
+wazuh_bind: "{{ ansible_host }}"
+wazuh_agent_port: 1514
+wazuh_enrollment_port: 1515
+wazuh_api_port: 55000
+wazuh_indexer_port: 9200
+wazuh_dashboard_port: 5601
+wazuh_dir: /opt/compose/wazuh
+wazuh_owner: root
+wazuh_group: root
+# the module's data root (docs/modules/data.md): manager/ (the manager's state; logs/ holds the
+# alert and archive streams the log pipeline tails), indexer/ (the hot index), certs/ (the private
+# CA and the node certificates), config/ (what the role renders) and export/
+wazuh_data_root: /var/lib/hnx-modules/wazuh
+# The indexer runs as the image's user; the manager's daemons run as the product's service account
+# inside the container, whose group the log pipeline joins to read the streams (group_add).
+wazuh_indexer_uid: 1000
+wazuh_indexer_gid: 1000
+wazuh_dashboard_uid: 1000
+wazuh_dashboard_gid: 1000
+wazuh_manager_gid: 999
+# memory: the indexer's heap is half its container limit (the product default of 1 GiB starved it
+# on a much bigger host); the manager and the dashboard have their own limits
+wazuh_indexer_heap: 8g
+wazuh_indexer_mem_limit: 16g
+wazuh_manager_mem_limit: 6g
+wazuh_dashboard_mem_limit: 2g
+wazuh_enrollment_ref: secret:wazuh/enrollment-password
+wazuh_indexer_admin_ref: secret:wazuh/indexer-admin-password
+wazuh_dashboard_login_ref: secret:wazuh/dashboard-password
+wazuh_api_login_ref: secret:wazuh/api-password
+wazuh_alert_auth_ref: secret:wazuh/alert-forwarder-auth
+# extra names and addresses the indexer's certificate carries beside its own (the guest's address:
+# a consumer of the hot-index row verifies the certificate for the address it connects to)
+wazuh_indexer_cert_names: ["{{ wazuh_bind }}"]
+# a pinned compose network (so the syslog allowed-source below stays valid across recreates); empty:
+# docker picks one
+wazuh_network_subnet: ""
+# the manager's syslog input (the log pipeline forwards the router's and the appliances' syslog to
+# it, on the loopback of the guest): the addresses it accepts, as the manager sees them (the
+# network's gateway when the pipeline is on the guest). Empty: no syslog listener.
+wazuh_syslog_allowed_ips: []
+# true: the manager does not load the product's generic JSON decoder file (0006-json_decoders.xml), so a site's own decoders for
+# JSON log lines (the Zeek sensors' logs) get first refusal instead of the generic one claiming every line that starts with "{"
+# (it answers rule 1002 and no rule keyed on the site's decoder fires). The site then ships replacements for the two decoders the
+# file holds (json, json-msgraph) in its native decoders, which load as hnx-<name>.xml. Default false: the product's behaviour.
+wazuh_json_decoder_excluded: false
+wazuh_syslog_port: 5514
+# the rules (README, "Native rules"): a directory on the controller holding rules/*.xml and
+# decoders/*.xml, loaded into the manager as hnx-<name>.xml after the manager's own configuration
+# test passes; the previous set is put back when the test or the restart fails. Empty: none.
+wazuh_native_dir: ""
+# the detection a rule number belongs to ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
+# here is raised as det:wazuh-rule-<number>
+wazuh_detection_ids: {}
+# the alert integration (README, "The alert webhook"): the events forwarder's ingest URL; empty:
+# no integration. Alerts at or above the level are posted as homelabnext.alert.created.
+wazuh_alert_forward_url: ""
+wazuh_alert_forward_level: 12
+wazuh_alert_source: "svc:{{ wazuh_logical_id }}"
+# the TLP label the manager's own events carry (ADR-0033 decision 5): never taken from the event
+wazuh_alert_tlp: red
+# index lifecycle: the hot index keeps this many days (the lake holds the history)
+wazuh_index_retention_days: 30
+# the manager's own logs (alert and archive streams, rotated daily) are kept this many days
+wazuh_logs_keep_days: 14
+wazuh_start: true
+wazuh_validate_with_docker: true
+wazuh_health_timeout: 15
+# seconds main waits for the indexer, the manager's API and the dashboard after a start
+wazuh_ready_timeout: 600

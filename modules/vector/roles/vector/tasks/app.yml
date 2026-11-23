@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app): two services,
+# the aggregator and the sidecar, in one project and one slice. The listeners are published on the
+# guest's own address only; the sockets between the two live in <data root>/run, which both mount.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    vector_app:
+      compose_app_name: vector
+      compose_app_dir: "{{ vector_dir }}"
+      compose_app_data_dir: "{{ vector_data_root }}"
+      compose_app_export_dir: "{{ vector_export_dir }}"
+      compose_app_owner: "{{ vector_owner }}"
+      compose_app_group: "{{ vector_group }}"
+      compose_app_start: "{{ vector_start }}"
+      compose_app_validate_with_docker: "{{ vector_validate_with_docker }}"
+      compose_app_bind_extra:
+        - {path: "{{ vector_siem_logs_dir }}", reason: "the manager's alert and archive files, read-only: the stream this pipeline tails"}
+      compose_app_spec:
+        services:
+          vector:
+            image: "{{ vector_repository }}"
+            tag: "{{ vector_tag }}"
+            digest: "{{ vector_digest }}"
+            command: [--config, /etc/vector/vector.yaml]
+            user: "{{ vector_uid | int }}:{{ vector_gid | int }}"
+            group_add: >-
+              {{ [vector_siem_logs_gid | string] if vector_siem_logs_gid | int > 0 else [] }}
+            read_only: true
+            environment:
+              VECTOR_LOG: info
+            ports:
+              - "{{ vector_bind }}:{{ vector_syslog_udp_port | int }}:{{ vector_container_syslog_udp_port }}/udp"
+              - "{{ vector_bind }}:{{ vector_syslog_tls_port | int }}:{{ vector_container_syslog_tls_port }}"
+              - "{{ vector_bind }}:{{ vector_sensor_port | int }}:{{ vector_container_sensor_port }}"
+            volumes:
+              - "{{ vector_data_root }}/config/vector.yaml:/etc/vector/vector.yaml:ro"
+              - "{{ vector_data_root }}/tls:{{ vector_container_tls_dir }}:ro"
+              - "{{ vector_data_root }}/state:/var/lib/vector"
+              - "{{ vector_data_root }}/run:{{ vector_run_dir }}"
+              - "{{ vector_siem_logs_dir }}:{{ vector_siem_mount }}:ro"
+            mem_limit: "{{ vector_mem_limit }}"
+            healthcheck:
+              test: [CMD, bash, -c, "exec 3<>/dev/tcp/0.0.0.0/8686 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3"]
+              interval: 30s
+              timeout: 5s
+              retries: 5
+              start_period: 20s
+          sidecar:
+            image: "{{ vector_sidecar_repository }}"
+            tag: "{{ vector_sidecar_tag }}"
+            digest: "{{ vector_sidecar_digest }}"
+            command: [python, -m, hnx_modules.vector.sidecar, --tables, "{{ vector_tables_dir }}"]
+            user: "{{ vector_uid | int }}:{{ vector_gid | int }}"
+            read_only: true
+            environment:
+              PYTHONPATH: /opt/hnx/lib:/opt/hnx/code
+              PYTHONDONTWRITEBYTECODE: "1"
+              PYTHONUNBUFFERED: "1"
+            volumes:
+              - "{{ vector_data_root }}/lib:/opt/hnx/lib:ro"
+              - "{{ vector_data_root }}/code:/opt/hnx/code:ro"
+              - "{{ vector_data_root }}/tables:{{ vector_tables_dir }}:ro"
+              - "{{ vector_data_root }}/run:{{ vector_run_dir }}"
+            mem_limit: "{{ vector_sidecar_mem_limit }}"
+            healthcheck:
+              test: [CMD, python, -m, hnx_modules.vector.sidecar, --healthcheck]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 20s
+  tags: [health, backup, restore, export, upgrade]

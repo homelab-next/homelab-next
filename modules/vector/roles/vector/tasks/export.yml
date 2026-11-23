@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data state, object-tree): <export dir>/checkpoints/<component>/checkpoints.json
+# for each file source, with listing.jsonl (key, size, sha256).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Copy the checkpoints
+      ansible.builtin.include_tasks: copy_out.yml
+  tags: [export]

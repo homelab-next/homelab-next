@@ -92,3 +92,18 @@ prometheus_state_dir: /var/lib/homelabnext/prometheus
 # per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
 prometheus_last_run_dir: /var/lib/homelabnext/last-run
 prometheus_last_run_group: root
+# HTTP(S) up/down probes (the Kuma function). Off by default; on, the role runs a blackbox exporter
+# beside the service (a second container of the same compose project, pinned by digest), renders
+# the probe target list from the registry (every row published at the edge, or declaring an http
+# health endpoint, less prometheus_probe_exclude: a row published at the edge is probed by its edge
+# name, any other by the name it answers by) and a ProbeDown rule that goes through the same
+# state-diffed forwarder as every other alert. An edge answer of 2xx, 3xx, 401 or 403 is "up"
+# (a login redirect is the edge working); a 5xx, a refused connection, a bad certificate or no
+# answer in prometheus_probe_timeout is "down".
+prometheus_probes_enabled: false
+prometheus_probe_exclude: []
+prometheus_probe_interval: 60s
+prometheus_probe_timeout: 10s
+prometheus_alert_probe_down_for: 5m
+prometheus_blackbox_image: "docker.io/prom/blackbox-exporter:v0.28.0@sha256:e753ff9f3fc458d02cca5eddab5a77e1c175eee484a8925ac7d524f04366c2fc"
+prometheus_blackbox_mem_limit: 128m

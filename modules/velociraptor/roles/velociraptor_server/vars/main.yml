@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+velociraptor_server_container_frontend_port: 8000
+velociraptor_server_container_gui_port: 8889
+velociraptor_server_container_etc: /etc/velociraptor
+velociraptor_server_container_datastore: /datastore
+velociraptor_server_container_artifacts: /custom_artifacts
+velociraptor_server_config_name: server.config.yaml
+velociraptor_server_api_config_name: hunt.api.config.yaml
+velociraptor_server_config_path: /etc/velociraptor/server.config.yaml
+velociraptor_server_api_config_path: /etc/velociraptor/hunt.api.config.yaml
+# LL-087: the image's stock entrypoint regenerates the server configuration, and with it the
+# certificate authority every enrolled client pinned, on EVERY start. It runs only when there is no
+# configuration yet; otherwise the frontend is started directly and the configuration is never
+# touched, so a restart (or a recreate) cannot rotate the authority.
+velociraptor_server_command:
+  - /bin/sh
+  - -c
+  - >-
+    if [ -s /etc/velociraptor/server.config.yaml ];
+    then exec /bin/velociraptor --config /etc/velociraptor/server.config.yaml frontend -v;
+    else exec /bin/sh /bin/entrypoint; fi
+# NO_INITIALIZE: the first start downloads no tools (the module declares no egress), and the hunt
+# principal can collect no artifact that needs one
+velociraptor_server_fixed_env:
+  VELOCIRAPTOR_FRONTEND_PORT: "8000"
+  VELOCIRAPTOR_GUI_PORT: "8889"
+  VELOCIRAPTOR_DATASTORE_PATH: /datastore/
+  VELOCIRAPTOR_CONFIG_PATH: /etc/velociraptor/server.config.yaml
+  VELOCIRAPTOR_NO_INITIALIZE: "true"
+# the most the hunt principal may be granted (the catalog's list must be inside it); the catalog is
+# a human-approve file and the script refuses a list outside this set too
+velociraptor_server_grantable: [ANY_QUERY, COLLECT_CLIENT, READ_RESULTS, START_HUNT]
+velociraptor_server_repository: "{{ velociraptor_server_image.split('@')[0].rsplit(':', 1)[0] }}"
+velociraptor_server_tag: "{{ velociraptor_server_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+velociraptor_server_digest: "{{ velociraptor_server_image.split('@')[1] | default('') }}"
+velociraptor_server_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+velociraptor_server_name_pattern: '^[a-z][a-z0-9-]{0,40}\Z'
+velociraptor_server_host_pattern: '^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\Z'
+# the host files the module installs (fixed, so a script catalog and a unit can name them)
+velociraptor_server_script: /usr/local/libexec/homelabnext/hnx-velociraptor
+velociraptor_server_check_script: /usr/local/libexec/homelabnext/hnx-velociraptor-check
+velociraptor_server_config_dir: /etc/homelabnext
+velociraptor_server_config_file: /etc/homelabnext/velociraptor.json
+velociraptor_server_catalog_file: /etc/homelabnext/velociraptor-baseline-artifacts.yml
+velociraptor_server_schedules:
+  "*-*-* *:0/2:00 UTC": 2
+  "*-*-* *:0/5:00 UTC": 5
+  "*-*-* *:0/10:00 UTC": 10
+  "*-*-* *:0/15:00 UTC": 15
+velociraptor_server_interval_minutes: "{{ velociraptor_server_schedules[velociraptor_server_schedule] }}"
+# the cycle's status is judged stale (the criteria cannot measure) after three missed runs
+velociraptor_server_max_status_age_minutes: "{{ (velociraptor_server_interval_minutes | int) * 3 }}"
+# the data root's layout (the container's: etc and datastore; the host's: the rest)
+velociraptor_server_dirs:
+  etc: {mode: "0700", own: container}
+  datastore: {mode: "0700", own: container}
+  custom_artifacts: {mode: "0755", own: root}
+  client: {mode: "0750", own: client}
+  # setgid: the files the cycle writes inherit the results group, which the log pipeline's agent reads
+  results: {mode: "2750", own: results}
+  "results/hunts": {mode: "2750", own: results}
+  status: {mode: "0755", own: root}
+  state: {mode: "0700", own: root}
+  export: {mode: "0700", own: root}
+velociraptor_server_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
