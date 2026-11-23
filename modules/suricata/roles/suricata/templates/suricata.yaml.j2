@@ -1,0 +1,108 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+%YAML 1.1
+---
+# Managed by Ansible (module suricata); do not edit. HOME_NET and the other address groups are the
+# generated file below (role suricata_enroll), tested with the whole configuration before it goes live.
+vars:
+  address-groups:
+    include: {{ suricata_groups_file }}
+  port-groups:
+    HTTP_PORTS: "80"
+    SHELLCODE_PORTS: "!80"
+    ORACLE_PORTS: 1521
+    SSH_PORTS: 22
+    DNP3_PORTS: 20000
+    MODBUS_PORTS: 502
+    FILE_DATA_PORTS: "[$HTTP_PORTS,110,143]"
+    FTP_PORTS: 21
+    GENEVE_PORTS: 6081
+    VXLAN_PORTS: 4789
+    TEREDO_PORTS: 3544
+
+default-log-dir: {{ suricata_log_dir }}
+
+stats:
+  enabled: yes
+  interval: {{ suricata_stats_interval }}
+
+outputs:
+  # everything the pipeline wants; the stats heartbeat is what proves the log is alive
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: {{ suricata_eve_file }}
+      community-id: true
+      types:
+{% for t in suricata_eve_types %}
+        - {{ t }}
+{% endfor %}
+        - stats:
+            totals: yes
+            threads: no
+            deltas: no
+  # alerts only, for the SIEM agent
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: {{ suricata_eve_alert_file }}
+      community-id: true
+      types:
+        - alert:
+            metadata: yes
+            tagged-packets: no
+
+logging:
+  default-log-level: notice
+  outputs:
+    - console:
+        enabled: no
+    - file:
+        enabled: yes
+        level: info
+        filename: suricata.log
+
+af-packet:
+{% for iface in suricata_capture_interfaces %}
+  - interface: {{ iface }}
+    cluster-id: {{ suricata_cluster_id_base | int + loop.index }}
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes
+    buffer-size: 32768
+    ring-size: 4096
+{% endfor %}
+
+app-layer:
+  protocols:
+    tls:
+      enabled: yes
+      ja3-fingerprints: auto
+    http:
+      enabled: yes
+    ssh:
+      enabled: yes
+    dns:
+      tcp:
+        enabled: yes
+      udp:
+        enabled: yes
+    smb:
+      enabled: yes
+      detection-ports:
+        dp: 139, 445
+
+detect:
+  profile: medium
+
+default-rule-path: {{ suricata_lib_dir }}/rules
+rule-files:
+  - suricata.rules
+
+classification-file: /etc/suricata/classification.config
+reference-config-file: /etc/suricata/reference.config
+threshold-file: /etc/suricata/threshold.config
+
+unix-command:
+  enabled: yes
+  filename: /run/suricata/suricata-command.socket
