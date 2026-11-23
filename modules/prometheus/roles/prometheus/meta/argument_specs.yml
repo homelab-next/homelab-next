@@ -97,6 +97,35 @@ argument_specs:
         elements: str
         description: "Registry hosts that run no host exporter, left out of the host target list."
         default: []
+      prometheus_probes_enabled: &probes_enabled
+        type: bool
+        description: "Run HTTP(S) up/down probes: a blackbox exporter beside the service, a probe target list generated from the registry (every row published at the edge or declaring an http health endpoint) and the ProbeDown rule."
+        default: false
+      prometheus_probe_exclude: &probe_exclude
+        type: list
+        elements: str
+        description: "Service rows (by name) not to probe."
+        default: []
+      prometheus_probe_interval: &probe_interval
+        type: str
+        description: "How often each target is probed (a number and s or m)."
+        default: "60s"
+      prometheus_probe_timeout: &probe_timeout
+        type: str
+        description: "Whole seconds after which a probe has failed (shorter than the interval)."
+        default: "10s"
+      prometheus_alert_probe_down_for: &alert_probe_down_for
+        type: str
+        description: "How long a probe must keep failing before ProbeDown fires."
+        default: "5m"
+      prometheus_blackbox_image: &blackbox_image
+        type: str
+        description: "repository:tag@sha256:<digest> of the probe exporter image."
+        default: "docker.io/prom/blackbox-exporter:v0.28.0@sha256:e753ff9f3fc458d02cca5eddab5a77e1c175eee484a8925ac7d524f04366c2fc"
+      prometheus_blackbox_mem_limit: &blackbox_mem_limit
+        type: str
+        description: "The probe exporter container's memory limit."
+        default: "128m"
       prometheus_alert_target_down_for: &alert_target_down_for
         type: str
         description: "How long a target must be down before TargetDown fires."
@@ -217,6 +246,13 @@ argument_specs:
       prometheus_health_timeout: *health_timeout
       prometheus_hnx_cli: *hnx_cli
       prometheus_node_exporter_exclude: *node_exporter_exclude
+      prometheus_probes_enabled: *probes_enabled
+      prometheus_probe_exclude: *probe_exclude
+      prometheus_probe_interval: *probe_interval
+      prometheus_probe_timeout: *probe_timeout
+      prometheus_alert_probe_down_for: *alert_probe_down_for
+      prometheus_blackbox_image: *blackbox_image
+      prometheus_blackbox_mem_limit: *blackbox_mem_limit
       prometheus_alert_target_down_for: *alert_target_down_for
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
@@ -263,6 +299,13 @@ argument_specs:
       prometheus_health_timeout: *health_timeout
       prometheus_hnx_cli: *hnx_cli
       prometheus_node_exporter_exclude: *node_exporter_exclude
+      prometheus_probes_enabled: *probes_enabled
+      prometheus_probe_exclude: *probe_exclude
+      prometheus_probe_interval: *probe_interval
+      prometheus_probe_timeout: *probe_timeout
+      prometheus_alert_probe_down_for: *alert_probe_down_for
+      prometheus_blackbox_image: *blackbox_image
+      prometheus_blackbox_mem_limit: *blackbox_mem_limit
       prometheus_alert_target_down_for: *alert_target_down_for
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
@@ -307,6 +350,13 @@ argument_specs:
       prometheus_health_timeout: *health_timeout
       prometheus_hnx_cli: *hnx_cli
       prometheus_node_exporter_exclude: *node_exporter_exclude
+      prometheus_probes_enabled: *probes_enabled
+      prometheus_probe_exclude: *probe_exclude
+      prometheus_probe_interval: *probe_interval
+      prometheus_probe_timeout: *probe_timeout
+      prometheus_alert_probe_down_for: *alert_probe_down_for
+      prometheus_blackbox_image: *blackbox_image
+      prometheus_blackbox_mem_limit: *blackbox_mem_limit
       prometheus_alert_target_down_for: *alert_target_down_for
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
@@ -356,6 +406,13 @@ argument_specs:
       prometheus_health_timeout: *health_timeout
       prometheus_hnx_cli: *hnx_cli
       prometheus_node_exporter_exclude: *node_exporter_exclude
+      prometheus_probes_enabled: *probes_enabled
+      prometheus_probe_exclude: *probe_exclude
+      prometheus_probe_interval: *probe_interval
+      prometheus_probe_timeout: *probe_timeout
+      prometheus_alert_probe_down_for: *alert_probe_down_for
+      prometheus_blackbox_image: *blackbox_image
+      prometheus_blackbox_mem_limit: *blackbox_mem_limit
       prometheus_alert_target_down_for: *alert_target_down_for
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
