@@ -167,3 +167,13 @@ def test_the_package_is_installed_without_recommends():
     apt = [t["ansible.builtin.apt"] for t in tasks if "ansible.builtin.apt" in t]
     assert apt, "the role installs the package with ansible.builtin.apt"
     assert all(a.get("install_recommends") is False for a in apt)
+
+
+def test_a_textfile_directory_turns_the_collector_on_and_empty_keeps_it_off(tmp_path):
+    v = _vars(tmp_path, node_exporter_textfile_dir=str(tmp_path / "tf"))
+    r = run_role(tmp_path, "node_exporter", "config", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (tmp_path / "prometheus-node-exporter").read_text()
+    assert f"--collector.textfile.directory={tmp_path / 'tf'}" in text
+    assert "--no-collector.textfile" not in text and "0.0.0.0" not in text
+    assert (tmp_path / "tf").is_dir()

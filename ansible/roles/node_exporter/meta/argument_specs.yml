@@ -35,6 +35,10 @@ argument_specs:
         type: int
         description: "Seconds for the health request."
         default: 10
+      node_exporter_textfile_dir: &textfile
+        type: str
+        description: "Directory of the textfile collector (other roles drop .prom files there); empty keeps the collector off."
+        default: ""
       node_exporter_state_dir: &state
         type: path
         description: "Where the role keeps its restart-pending marker and hook records."
@@ -50,6 +54,7 @@ argument_specs:
       node_exporter_systemctl_cli: *systemctl
       node_exporter_restart: *restart
       node_exporter_health_timeout: *timeout
+      node_exporter_textfile_dir: *textfile
       node_exporter_state_dir: *state
   health:
     short_description: Fail unless /metrics answers and exposes the families the default alert rules read.
@@ -60,6 +65,7 @@ argument_specs:
       node_exporter_defaults_file: *defaults
       node_exporter_service: *service
       node_exporter_health_timeout: *timeout
+      node_exporter_textfile_dir: *textfile
       node_exporter_state_dir: *state
   readiness:
     short_description: Fail unless the settings are well formed.
@@ -70,10 +76,12 @@ argument_specs:
       node_exporter_defaults_file: *defaults
       node_exporter_service: *service
       node_exporter_health_timeout: *timeout
+      node_exporter_textfile_dir: *textfile
       node_exporter_state_dir: *state
   backup:
     short_description: Record that the exporter holds no data a backup must keep.
     options:
+      node_exporter_textfile_dir: *textfile
       node_exporter_state_dir: *state
   restore:
     short_description: Nothing to restore; re-running main renders the arguments again.

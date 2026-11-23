@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: UPS protection for a host with a USB UPS - driver, local upsd, a shutdown monitor and metrics for the metrics service.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []
