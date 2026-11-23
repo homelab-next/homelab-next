@@ -62,16 +62,22 @@ DEPLOY_LABEL = "hnx-deploy"
 #: the one other self-hosted runs-on (operator-approved 2026-11-22 22:41): homelab-next's own ci.yml may send a job to the
 #: lab's ephemeral CI pool (modules/ci-runner, label hnx-ci: one throwaway VM per job, public egress only), word for word
 #: this expression: a push (to main) or a pull request whose head is a branch of this repository, only while the
-#: repository variable is `on`, and only the 3.11 leg of the test matrix (the 3.12 leg stays hosted); a fork's pull request always gets the hosted runner. Nothing else in the job may name a
+#: repository variable is `on`, and only on the jobs POOL_JOBS names (never the suite-budgeted test shards, go or the lab); a fork's pull request always gets the hosted runner. Nothing else in the job may name a
 #: self-hosted runner, no other workflow may use it, and the overlay templates may not.
 POOL_LABEL = "hnx-ci"
 POOL_RUNS_ON = (
     "${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)"
-    " && vars.HNX_CI_POOL == 'on' && matrix.python.version == '3.11'"
+    " && vars.HNX_CI_POOL == 'on'"
     ' && fromJSON(\'["self-hosted","linux","x64","hnx-ci"]\')'
     " || 'ubuntu-latest' }}"
 )
 POOL_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+#: the ci.yml jobs that run on the pool: none of them carries a suite time budget set on hosted runners' speed
+POOL_JOBS = frozenset({
+    "dco", "external-tools", "gateway-conformance", "go-modules", "hygiene", "invariants", "lab-gateway",
+    "lab-paths", "leak-scan", "lint", "markdown-links", "orchestration-conformance", "packaging", "pip-audit",
+    "real-tools", "register-ids", "regression-tests", "schemas", "secret-scan", "trusted-gates",
+})  # fmt: skip
 HOOK = SKELETON / "runner" / "job-started.sh"
 
 
@@ -107,7 +113,9 @@ def lint_workflow(path: Path) -> list[str]:
     jobs = (doc.get("jobs") or {}).values()
     if path.name != "deploy.yml":
         for name, job in (doc.get("jobs") or {}).items():
-            pool = path == POOL_WORKFLOW and job.get("runs-on") == POOL_RUNS_ON
+            pool = (
+                path == POOL_WORKFLOW and name in POOL_JOBS and job.get("runs-on") == POOL_RUNS_ON
+            )
             rest = {k: v for k, v in job.items() if not (pool and k == "runs-on")}
             blob = json.dumps(rest)  # runs-on, and a matrix or expression that could feed it
             if DEPLOY_LABEL in blob or "self-hosted" in blob or POOL_LABEL in blob:
@@ -181,8 +189,11 @@ def test_ci_yml_may_send_a_job_to_the_pool_with_the_exact_expression_only(tmp_pa
     exact expression in any other workflow, and anything else in the job naming a self-hosted runner."""
     ci = tmp_path / "ci.yml"
     monkeypatch.setattr(sys.modules[__name__], "POOL_WORKFLOW", ci)
-    ci.write_text(_pool_job(POOL_RUNS_ON))
+    ci.write_text(_pool_job(POOL_RUNS_ON).replace("  test:", "  lint:"))
     assert lint_workflow(ci) == []
+    # the exact expression on a job the list does not name (the suite-budgeted shards) fails
+    ci.write_text(_pool_job(POOL_RUNS_ON))
+    assert any("only deploy.yml may" in p for p in lint_workflow(ci))
     fork_open = POOL_RUNS_ON.replace(
         "(github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && ",
         "",
@@ -190,7 +201,6 @@ def test_ci_yml_may_send_a_job_to_the_pool_with_the_exact_expression_only(tmp_pa
     variants = [
         fork_open,  # a fork's pull request would reach the pool
         POOL_RUNS_ON.replace(" && vars.HNX_CI_POOL == 'on'", ""),  # no off switch
-        POOL_RUNS_ON.replace(" && matrix.python.version == '3.11'", ""),  # every shard to the pool
         POOL_RUNS_ON.replace(
             "head.repo.full_name == github.repository", "head.repo.fork == false || true"
         ),
@@ -200,23 +210,35 @@ def test_ci_yml_may_send_a_job_to_the_pool_with_the_exact_expression_only(tmp_pa
     ]
     for v in variants:
         assert v != POOL_RUNS_ON
-        ci.write_text(_pool_job(v))
+        ci.write_text(_pool_job(v).replace("  test:", "  lint:"))
         assert any("only deploy.yml may" in p for p in lint_workflow(ci)), v
     # the exact expression, but something else in the job names a self-hosted runner
-    ci.write_text(_pool_job(POOL_RUNS_ON, "    env: {R: self-hosted}\n"))
+    ci.write_text(
+        _pool_job(POOL_RUNS_ON, "    env: {R: self-hosted}\n").replace("  test:", "  lint:")
+    )
     assert any("only deploy.yml may" in p for p in lint_workflow(ci))
     # the exact expression in any other workflow, the overlay templates' included
     for other in ("checks.yml", "nightly.yml", "codeql.yml"):
         f = tmp_path / other
-        f.write_text(_pool_job(POOL_RUNS_ON))
+        f.write_text(_pool_job(POOL_RUNS_ON).replace("  test:", "  lint:"))
         assert any("only deploy.yml may" in p for p in lint_workflow(f)), other
 
 
-def test_the_real_ci_yml_sends_only_the_test_shards_to_the_pool():
+def test_the_real_ci_yml_pools_exactly_the_listed_jobs_and_keeps_the_rest_hosted():
     jobs = yaml.safe_load(POOL_WORKFLOW.read_text())["jobs"]
-    pooled = sorted(n for n, j in jobs.items() if j.get("runs-on") == POOL_RUNS_ON)
-    assert pooled == ["test"]
-    assert jobs["go"]["runs-on"] == "ubuntu-latest"
+    pooled = {n for n, j in jobs.items() if j.get("runs-on") == POOL_RUNS_ON}
+    assert pooled == POOL_JOBS
+    for name in (
+        "test",
+        "test-ok",
+        "go",
+        "go-ok",
+        "lab-in-a-box",
+        "lab-ok",
+        "experimental",
+        "coverage",
+    ):
+        assert jobs[name]["runs-on"] == "ubuntu-latest", name
     for path in OWN:
         if path != POOL_WORKFLOW:
             assert POOL_LABEL not in path.read_text(), path.name
