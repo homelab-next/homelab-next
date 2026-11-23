@@ -36,6 +36,8 @@ ci_runner_refused_v4:
   - "{{ '%d.%d.%d.%d/%d' | format(198, 51, 100, 0, 24) }}"
   - "{{ '%d.%d.%d.%d/%d' | format(203, 0, 113, 0, 24) }}"
   - "{{ '%d.%d.%d.%d/%d' | format(224, 0, 0, 0, 3) }}"
+# the host's stub resolver (systemd-resolved): the one loopback address the VMs' DNS may reach
+ci_runner_dns_stub: "{{ '%d.%d.%d.%d' | format(127, 0, 0, 53) }}"
 ci_runner_build_id: "{{ ((ci_runner_base_image_sha256 ~ ci_runner_agent_sha256 ~ lookup('ansible.builtin.template', 'build-user-data.j2')) | hash('sha256'))[:16] }}"
 ci_runner_golden: "golden-{{ ci_runner_build_id }}.qcow2"
 ci_runner_base_image: "{{ ci_runner_images_dir }}/base-{{ ci_runner_base_image_sha256[:16] }}.img"

@@ -107,6 +107,16 @@ def test_the_egress_table_holds_the_slots_user_and_ends_in_a_deny():
              ("hnx-ci-no-ipv6", "hnx-ci-dns", "hnx-ci-refused-destination", "hnx-ci-internet-tcp",
               "hnx-ci-default-deny")]  # fmt: skip
     assert order == sorted(order)
+    # the one loopback exception is the stub resolver's port 53
+    stub = [ln for ln in lines if "ci_runner_dns_stub" in ln]
+    assert stub == [
+        "ip daddr {{ ci_runner_dns_stub }} meta l4proto { tcp, udp } th dport 53 accept"
+        ' comment "hnx-ci-dns-stub"'
+    ]
+    nums = [
+        int(x) for x in re.search(r"format\(([\d, ]+)\)", VARS["ci_runner_dns_stub"])[1].split(",")
+    ]
+    assert ipaddress.ip_address("{}.{}.{}.{}".format(*nums)).is_loopback
     assert lines[-3] == 'counter drop comment "hnx-ci-default-deny"'
     assert (
         "policy accept" in lines[1]
