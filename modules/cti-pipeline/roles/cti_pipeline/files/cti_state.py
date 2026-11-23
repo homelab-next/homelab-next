@@ -565,7 +565,37 @@ def freshness(runs_dir: str, jobs: dict[str, int], now: float) -> dict:
         except (OSError, ValueError):
             out[job] = {"fresh": False, "why": "never ran (no record)"}
             continue
-        finished = rec.get("finished_at") if isinstance(rec, dict) else None
+        running = False
+        if isinstance(rec, dict) and rec.get("state") == "running":
+            # an in-progress run is judged by the last FINISHED run it carries, never as a failure
+            running = True
+            run_rec = rec
+            rec = rec.get("last_finished")
+            if not isinstance(rec, dict):
+                # no finished run on record (a first run, or a record from before the wrapper kept
+                # one): nothing shows a failure, so it is stale only once the run itself is overdue
+                try:
+                    began = calendar.timegm(
+                        time.strptime(run_rec.get("started_at"), "%Y-%m-%dT%H:%M:%SZ")
+                    )
+                except (TypeError, ValueError):
+                    out[job] = {
+                        "fresh": False,
+                        "why": "in progress, no finished run and no start time",
+                    }
+                    continue
+                age = int(now - began)
+                out[job] = {"fresh": age <= max_age, "in_progress": True, "age_s": age, "max_age_s": max_age,
+                            "why": "in progress, no finished run on record yet"}  # fmt: skip
+                if age > max_age:
+                    out[job]["why"] = (
+                        f"in progress for {age} s with no finished run, over {max_age} s"
+                    )
+                continue
+        if not isinstance(rec, dict):
+            out[job] = {"fresh": False, "why": "unreadable run record"}
+            continue
+        finished = rec.get("finished_at")
         if not rec.get("ok") or not isinstance(finished, str):
             out[job] = {
                 "fresh": False,
@@ -584,6 +614,8 @@ def freshness(runs_dir: str, jobs: dict[str, int], now: float) -> dict:
             "max_age_s": max_age,
             "run_id": rec.get("run_id"),
         }
+        if running:
+            out[job]["in_progress"] = True
         if age > max_age:
             out[job]["why"] = f"the last success is {age} s old, over {max_age} s"
     return {"ok": all(v["fresh"] for v in out.values()), "jobs": out}
@@ -604,6 +636,8 @@ def handoff_health(runs_dir: str) -> dict:
             rec = load_json(os.path.join(runs_dir, name))
         except (OSError, ValueError):
             continue
+        if isinstance(rec, dict) and rec.get("state") == "running":
+            rec = rec.get("last_finished")  # judge the last finished run, as freshness does
         if not isinstance(rec, dict):
             continue
         bad = {k: rec[k] for k in ("handoff_conflicts", "handoff_refused") if rec.get(k)}
