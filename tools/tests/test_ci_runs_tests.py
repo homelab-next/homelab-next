@@ -42,7 +42,13 @@ PR_DEFAULT_TYPES = {"opened", "synchronize", "reopened"}
 #: the flag-value pairs of CI's pytest selection: the tests of the experimental and frozen
 #: components (tools/experimental.yml) run in the non-blocking experimental job instead
 #: (tools/tests/test_experimental.py holds that job and the marker to the list)
-PAIRS = {("-m", "not live and not experimental"), ("--deselect", FLOOR_TEST)}
+#: and the xdist workers the shard runs on (how many, and which tests a worker takes together)
+PAIRS = {
+    ("-m", "not live and not experimental"),
+    ("--deselect", FLOOR_TEST),
+    ("-n", "auto"),
+    ("--dist", "loadfile"),
+}
 #: the shard flags: which shard (the job's own, of N) and where its report goes
 SHARD = re.compile(r"^\$SHARD/([1-9][0-9]*)$")
 #: what the test job's full run starts with: the suite runs as the runner user in a network
