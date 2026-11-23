@@ -60,8 +60,21 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="hnx detections")
     ap.add_argument("--root", default="detections", type=Path)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("lint")
-    sub.add_parser("run")
+    lp = sub.add_parser("lint")
+    lp.add_argument(
+        "--native", action="store_true", help="lint the native rules (ADR-0049 decision 2)"
+    )
+    rp = sub.add_parser("run")
+    rp.add_argument(
+        "--native",
+        action="store_true",
+        help="send the native fixtures through the engine's rule tester",
+    )
+    rp.add_argument("--manager-url", help="the manager API (https://host:port); with --native")
+    rp.add_argument(
+        "--ca", help="the manager's certificate (verification is never off); with --native"
+    )
+    rp.add_argument("--user", help="the manager API account; with --native")
     mp = sub.add_parser("map")
     mp.add_argument("--check", action="store_true")
     cv = sub.add_parser("coverage", help="ATT&CK coverage from rules whose fixtures pass (D-04)")
@@ -89,6 +102,28 @@ def main(argv: list[str] | None = None) -> int:
     root: Path = a.root
     mapfile = root / "det_map.yml"
 
+    if a.cmd == "lint" and a.native:
+        from . import native
+
+        sigma = {r.det_id for r in load_rules(root)} if (root / "sigma").is_dir() else set()
+        probs = native.lint_native(root, sigma)
+        print("\n".join(probs) or "native lint ok")
+        return 1 if probs else 0
+    if a.cmd == "run" and a.native:
+        import os
+
+        from . import native
+
+        pw = os.environ.get("HNX_MANAGER_API_PASSWORD", "")
+        if not (a.manager_url and a.ca and a.user and pw):
+            print(
+                "run --native needs --manager-url, --ca, --user and HNX_MANAGER_API_PASSWORD",
+                file=sys.stderr,
+            )
+            return 2
+        probs, ran = native.run_native(root, native.ManagerLogtest(a.manager_url, a.user, pw, a.ca))
+        print("\n".join(probs) or f"native fixtures ok ({ran} through the engine)")
+        return 1 if probs or ran == 0 else 0
     if a.cmd == "lint":
         probs = lint.lint_rules(root)
         print("\n".join(probs) or "lint ok")

@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate and record an image bump (compose_app upgrade) for one image: the manager
+# (wazuh_target_manager_image), the indexer (wazuh_target_indexer_image) or the dashboard
+# (wazuh_target_dashboard_image). The three are one release of the product, so a target must keep the
+# repository and must NOT be older than the one running; the playbook exports first, then converges with
+# the new pin (set all three images in the overlay: the role refuses a mixed set).
+- block:
+    - name: Name the target
+      ansible.builtin.set_fact:
+        wazuh_up_manager: "{{ wazuh_target_manager_image | default('') }}"
+        wazuh_up_indexer: "{{ wazuh_target_indexer_image | default('') }}"
+        wazuh_up_dashboard: "{{ wazuh_target_dashboard_image | default('') }}"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Refuse a target that is not pinned, is another repository or is older than the running image
+      ansible.builtin.assert:
+        that:
+          - >-
+            [wazuh_up_manager, wazuh_up_indexer, wazuh_up_dashboard] | select('ne', '') | list | length == 1
+          - >-
+            wazuh_up_manager | length == 0 or (wazuh_up_manager is match(wazuh_pinned_ref_pattern)
+            and wazuh_up_manager.split('@')[0].rsplit(':', 1)[0] == wazuh_manager_repository
+            and wazuh_up_manager.split('@')[0].rsplit(':', 1)[1] is match(wazuh_tag_pattern)
+            and wazuh_up_manager.split('@')[0].rsplit(':', 1)[1] is version(wazuh_manager_tag, '>='))
+          - >-
+            wazuh_up_indexer | length == 0 or (wazuh_up_indexer is match(wazuh_pinned_ref_pattern)
+            and wazuh_up_indexer.split('@')[0].rsplit(':', 1)[0] == wazuh_indexer_repository
+            and wazuh_up_indexer.split('@')[0].rsplit(':', 1)[1] is match(wazuh_tag_pattern)
+            and wazuh_up_indexer.split('@')[0].rsplit(':', 1)[1] is version(wazuh_indexer_tag, '>='))
+          - >-
+            wazuh_up_dashboard | length == 0 or (wazuh_up_dashboard is match(wazuh_pinned_ref_pattern)
+            and wazuh_up_dashboard.split('@')[0].rsplit(':', 1)[0] == wazuh_dashboard_repository
+            and wazuh_up_dashboard.split('@')[0].rsplit(':', 1)[1] is match(wazuh_tag_pattern)
+            and wazuh_up_dashboard.split('@')[0].rsplit(':', 1)[1] is version(wazuh_dashboard_tag, '>='))
+        fail_msg: >-
+          siem: name one target, {{ wazuh_manager_repository }}:X.Y.Z@sha256:<64 hex> (not older than
+          {{ wazuh_manager_tag }}), or the same for the indexer ({{ wazuh_indexer_repository }}) or the
+          dashboard ({{ wazuh_dashboard_repository }})
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        wazuh_target: "{{ wazuh_up_manager | default('', true) or wazuh_up_indexer | default('', true) or wazuh_up_dashboard }}"
+        compose_app_name: wazuh
+        compose_app_dir: "{{ wazuh_app.compose_app_dir }}"
+        compose_app_owner: "{{ wazuh_app.compose_app_owner }}"
+        compose_app_group: "{{ wazuh_app.compose_app_group }}"
+        compose_app_spec: "{{ wazuh_app.compose_app_spec }}"
+        compose_app_upgrade_service: >-
+          {{ 'manager' if wazuh_up_manager | length > 0 else ('indexer' if wazuh_up_indexer | length > 0 else 'dashboard') }}
+        compose_app_upgrade_tag: "{{ wazuh_target.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ wazuh_target.split('@')[1] }}"
+  tags: [upgrade]
