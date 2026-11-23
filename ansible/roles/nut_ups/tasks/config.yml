@@ -86,12 +86,20 @@
     dest: "{{ nut_ups_libexec_dir }}/nut-ups-check"
     mode: "0755"
 
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ nut_ups_last_run_dir }}"
+    last_run_group: "{{ nut_ups_last_run_group }}"
+    last_run_writer: "{{ nut_ups_last_run_writer }}"
+
 - name: Install the checker's service and timer
   ansible.builtin.template:
-    src: "{{ item }}.j2"
-    dest: "{{ nut_ups_systemd_dir }}/{{ item }}"
+    src: "hnx-nut-ups-check.{{ item }}.j2"
+    dest: "{{ nut_ups_systemd_dir }}/hnx-nut-ups-check.{{ item }}"
     mode: "0644"
-  loop: [hnx-nut-ups-check.service, hnx-nut-ups-check.timer]
+  loop: [service, timer]
   register: nut_ups_units
 
 - name: Reload systemd when a unit changed

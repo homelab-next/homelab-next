@@ -6,5 +6,9 @@ After=nut-server.service
 
 [Service]
 Type=oneshot
-ExecStart={{ nut_ups_libexec_dir }}/nut-ups-check
+# the job's last-run record (role last_run), written on start and again on stop, whatever
+# the outcome; a writer problem never changes the job's own result (the - prefix)
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ nut_ups_last_run_dir }} --group {{ nut_ups_last_run_group }} --job timer:nut_ups/hnx-nut-ups-check --unit %n --calendar "{{ nut_ups_metrics_interval }}" --delay 0
+ExecStart=/usr/local/libexec/homelabnext/nut-ups-check
 Nice=10
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ nut_ups_last_run_dir }} --group {{ nut_ups_last_run_group }} --job timer:nut_ups/hnx-nut-ups-check --unit %n --calendar "{{ nut_ups_metrics_interval }}" --delay 0

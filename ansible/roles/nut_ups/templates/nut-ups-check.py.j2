@@ -5,7 +5,7 @@
 #   kind: job
 #   purpose: Write the UPS and shutdown-monitor state as node-exporter textfile metrics, and force a clean shutdown when on battery under the charge floor.
 #   owner: platform
-#   trigger: [timer:hnx-nut-ups-check, role:nut_ups]
+#   trigger: [timer:nut_ups/hnx-nut-ups-check, role:nut_ups]
 #   inputs: upsc output for the UPS; systemctl is-active nut-monitor
 #   outputs: nut_ups.prom in the textfile directory (atomic); on the charge floor, upsmon -c fsd
 #   installs_to: /usr/local/libexec/homelabnext/nut-ups-check

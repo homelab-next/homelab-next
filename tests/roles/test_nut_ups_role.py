@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from rolerun import calls, fake, logging_fake, run_cases, run_role
+from rolerun import calls, fake, last_run_vars, logging_fake, run_cases, run_role
 
 jinja2 = pytest.importorskip("jinja2")
 pytestmark = pytest.mark.requires_tool("ansible-playbook")
@@ -27,6 +27,7 @@ GROUP = grp.getgrgid(os.getgid()).gr_name
 
 def _vars(tmp_path, **kw):
     d = {
+        **last_run_vars(tmp_path, "nut_ups"),
         "nut_ups_name": "pm-ups",
         "nut_ups_vendorid": "075d",
         "nut_ups_productid": "0300",
