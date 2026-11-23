@@ -151,7 +151,8 @@ def test_the_build_seed_pins_the_agent_by_digest_and_resets_cloud_init():
     assert "HNX-CI-BUILD-OK {{ ci_runner_base_image_sha256[:16] }}" in text
     assert "SuccessAction=poweroff-force" in text and "FailureAction=poweroff-force" in text
     tasks = yaml.safe_load((ROLE / "tasks" / "image.yml").read_text())
-    fetch = next(t for t in tasks if "ansible.builtin.get_url" in t)
+    flat = [s for t in tasks for s in t.get("block", [t])]
+    fetch = next(t for t in flat if "ansible.builtin.get_url" in t)
     assert (
         fetch["ansible.builtin.get_url"]["checksum"] == "sha256:{{ ci_runner_base_image_sha256 }}"
     )
