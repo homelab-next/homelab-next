@@ -28,7 +28,7 @@ class SingleModelServer:
         *,
         metric_prefix: str = "engine",
         loading: bool = False,
-        loading_for: float = 0.0,
+        loading_polls: int = 0,
         metrics: bool = True,
         reports_ctx: bool = True,
         reply_tokens: int = 3,
@@ -39,9 +39,10 @@ class SingleModelServer:
         self.n_ctx = n_ctx
         self.metric_prefix = metric_prefix
         self.loading = loading
-        # seconds after the server starts that /health still answers 503 (a model still loading)
-        self.loading_for = loading_for
-        self._started = time.monotonic()
+        # how many /health polls answer 503 before the first 200 (a model still loading): counted
+        # in requests, not seconds, so a slow runner that starts the caller late still sees them
+        self.loading_polls = loading_polls
+        self._health_polls = 0
         self.metrics = metrics
         self.reports_ctx = reports_ctx
         self.reply_tokens = reply_tokens
@@ -63,7 +64,6 @@ class SingleModelServer:
         return int(self._httpd.server_address[1])
 
     def __enter__(self) -> SingleModelServer:
-        self._started = time.monotonic()
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
         )
@@ -94,7 +94,8 @@ class SingleModelServer:
             def do_GET(self) -> None:
                 srv.requests.append(("GET", self.path))
                 if self.path == "/health":
-                    if srv.loading or time.monotonic() - srv._started < srv.loading_for:
+                    srv._health_polls += 1
+                    if srv.loading or srv._health_polls <= srv.loading_polls:
                         self._send(503, {"error": {"code": 503, "message": "Loading model"}})
                     else:
                         self._send(200, {"status": "ok"})

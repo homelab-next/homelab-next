@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# Refuse a bad input before anything is read or written: names that end up in unit names, paths,
+# the egress table and the build seed are checked here, so no later task has to trust them.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - ci_runner_logical_id is match('^[a-z][a-z0-9-]{0,30}\Z')
+      - ci_runner_user is match('^[a-z][a-z0-9-]{0,31}\Z')
+      - ci_runner_group is match('^[a-z][a-z0-9-]{0,31}\Z')
+      - ci_runner_feed_ssh_group is match('^[a-z][a-z0-9-]{0,31}\Z')
+      - ci_runner_base_image_url is match('^https://[^\s\x27"]+\Z')
+      - ci_runner_agent_url is match('^https://[^\s\x27"]+\Z')
+      - ci_runner_base_image_sha256 is match('^[0-9a-f]{64}\Z')
+      - ci_runner_agent_sha256 is match('^[0-9a-f]{64}\Z')
+      - ci_runner_feed_pubkey is match('^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]{40,800}( [^\n\r"]{0,80})?\Z')
+      - ci_runner_resolvers | length >= 1
+      - ci_runner_resolvers | map('regex_search', '^([0-9]{1,3}\.){3}[0-9]{1,3}\Z') | select('none') | list | length == 0
+      - ci_runner_slots | int >= 1 and ci_runner_slots | int <= 256
+      - ci_runner_slot_vcpus | int >= 1
+      - ci_runner_slot_memory_mb | int >= 2048
+      - ci_runner_slot_disk_gb | int >= ci_runner_build_disk_gb | int
+      - ci_runner_job_timeout_s | int >= 600
+      - ci_runner_claim_wait_s | int >= 5
+      - ci_runner_console_keep_bytes | int >= 0
+      - ci_runner_build_vcpus | int >= 1
+      - ci_runner_build_memory_mb | int >= 2048
+      - ci_runner_build_disk_gb | int >= 10
+      - ci_runner_build_timeout_s | int >= 300
+      - ci_runner_hosted_os_name is match('^[a-z0-9]{1,20}\Z')
+      - ci_runner_extra_packages | reject('match', '^[a-z0-9][a-z0-9.+-]{0,80}\Z') | list | length == 0
+      - (ci_runner_go_url == '' and ci_runner_go_sha256 == '') or (ci_runner_go_url is match('^https://[^\s\x27"]+\Z') and ci_runner_go_sha256 is match('^[0-9a-f]{64}\Z'))
+      - ci_runner_pipx_packages | reject('match', '^[A-Za-z0-9][A-Za-z0-9._-]{0,80}(==[A-Za-z0-9.+!-]{1,40})?\Z') | list | length == 0
+      - ci_runner_egress_tcp_ports | length >= 1
+      - (ci_runner_egress_tcp_ports + ci_runner_egress_udp_ports) | map('int') | select('lt', 1) | list | length == 0
+      - (ci_runner_egress_tcp_ports + ci_runner_egress_udp_ports) | map('int') | select('gt', 65535) | list | length == 0
+      - ci_runner_health_max_waiting_s | int >= 0
+      - >-
+        [ci_runner_config_dir, ci_runner_data_root]
+        | reject('match', '^/[^/.][^/]*(/[^/.][^/]*){2,}\Z') | list | length == 0
+    fail_msg: >-
+      ci-runner: an input is invalid (the instance and account names, the https locations and
+      sha256 digests of the base image and the agent, the feeder's public key, the resolver
+      addresses, the slot sizes and limits, the package names, the egress ports and absolute
+      paths of at least three components are all checked)
+  tags: [readiness, health, backup, export, restore, upgrade]

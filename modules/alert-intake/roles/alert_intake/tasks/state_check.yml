@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Refuse a state file that is not this module's form before it is installed anywhere: the shared state
+# store's JSON document {"schema_version": 1, "data": {<event id>: {"digest": 64 hex, "done": bool, ...}}}.
+# An unknown shape is an error, never a quiet empty start (an empty state would let a redelivered event be
+# counted twice).
+# Input: alert_intake_state_text (the file's text).
+- name: Parse the state
+  ansible.builtin.set_fact:
+    alert_intake_state_doc: "{{ alert_intake_state_text | from_json }}"
+
+- name: The state is this module's form
+  ansible.builtin.assert:
+    that:
+      - alert_intake_state_doc is mapping
+      - alert_intake_state_doc.keys() | sort | list == ['data', 'schema_version']
+      - alert_intake_state_doc.schema_version == 1
+      - alert_intake_state_doc.data is mapping
+      - alert_intake_state_doc.data.values() | reject('mapping') | list | length == 0
+      - alert_intake_state_doc.data.values() | map(attribute='digest', default='') | reject('match', '^[0-9a-f]{64}\Z') | list | length == 0
+      - alert_intake_state_doc.data.keys() | reject('match', '^[A-Za-z0-9._:-]{1,128}\Z') | list | length == 0
+    fail_msg: >-
+      alert-intake: the state is not this module's form: {"schema_version": 1, "data": {<event id>:
+      {"digest": <64 hex>, "done": <bool>, ...}}}
+  no_log: true

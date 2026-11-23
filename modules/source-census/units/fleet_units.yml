@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# fleet_units spec (homelabnext.generators.fleet_units): the daily census, both criteria in one run.
+# Its name is bound to the module id. It runs as the module's own service user (the role creates it;
+# its credential files are its own, 0600) under the generator's full hardening block, never root, and
+# pages only through the notify slot (the settings' notify block and the module's recovery pair), and
+# only on a NEWLY flagged set: a standing set is never sent again. A daily cadence is the old audit's
+# morning check; an hourly one is an overlay choice (the unit's calendar is the one thing to change).
+- name: source-census-run
+  description: Daily source census and all-classes-dark check, paging a newly flagged set only
+  exec: /opt/hnx/bin/hnx lake source-census --config /etc/hnx-modules/source-census/census.yml
+  user: hnx-source-census
+  on_calendar: "*-*-* 07:15:00 UTC"
+  randomized_delay_sec: 600
+  persistent: true
+  timeout_start_sec: 600
+  read_write_paths:
+    - /var/lib/hnx-modules/source-census/state
+  pages_directly: false

@@ -48,6 +48,13 @@ names a real host, address, VM id or secret value; those live only in the privat
   | `DiskAlmostFull` | a filesystem is over 90 % used | 10m | warning |
   | `FilesystemReadOnly` | `node_filesystem_readonly == 1`, less the mount points of `prometheus_alert_readonly_ignore` (deliberate read-only mounts) | 2m | critical |
   | `MemoryPressure` | under 10 % of memory available | 10m | warning |
+  | `UpsOnBattery` | `nut_ups_on_battery == 1` (a host with a UPS, control ups-protection, lost mains) | 1m | critical |
+  | `UpsLowBattery` | `nut_ups_low_battery == 1` (the host is shutting down) | 0 | critical |
+  | `UpsMonitorDown` | `nut_monitor_active == 0` (no automatic shutdown on power loss) | 5m | critical |
+  | `UpsUnreadable` | `nut_ups_up == 0` (driver or USB cable) | 5m | warning |
+  | `UpsCheckStale` | the UPS check has written no metrics for 5 minutes | 5m | warning |
+
+  A host with no UPS exposes none of the `nut_*` families, so the five UPS rules never fire there.
 
   The rules are proved with the product's own `promtool test rules` against series that should
   and should not fire them (`tests/roles/test_prometheus_role.py`).

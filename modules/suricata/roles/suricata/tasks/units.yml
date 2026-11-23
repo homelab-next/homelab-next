@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# Rotation by size through the distribution's own logrotate timer (daily; `maxsize` rotates a log
+# that outgrew its bound at that check; LL-145). The scheduled rule update is owed as a catalogued
+# fleet unit (README, "Not in this module yet"); until then rules are fetched at install and on
+# every converge.
+- name: Install the rotation rule
+  ansible.builtin.template:
+    src: logrotate.j2
+    dest: "{{ suricata_logrotate_dir }}/hnx-suricata"
+    mode: "0644"

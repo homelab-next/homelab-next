@@ -1,0 +1,47 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ ci_runner_marker }}, instance {{ ci_runner_logical_id }}); local changes are overwritten.
+# One CI job slot: each run claims one single-use registration, boots one throwaway VM from the
+# golden image with it, waits for the VM to power off after its job and destroys its files; then
+# systemd starts the next run. The VM's traffic leaves as {{ ci_runner_user }}, which the egress
+# table ({{ ci_runner_egress_unit }}) holds to DNS and public addresses.
+[Unit]
+Description=CI runner {{ ci_runner_logical_id }} job slot %i
+After=network-online.target {{ ci_runner_egress_unit }}
+Wants=network-online.target {{ ci_runner_egress_unit }}
+
+[Service]
+User={{ ci_runner_user }}
+Group={{ ci_runner_group }}
+SupplementaryGroups=kvm
+Environment=HNX_CI_CONFIG={{ ci_runner_slot_config }} PYTHONSAFEPATH=1 PYTHONNOUSERSITE=1
+# fail closed: no VM starts while the egress table is not loaded
+ExecStartPre=+/usr/sbin/nft list table inet {{ ci_runner_egress_table }}
+ExecStart={{ ci_runner_slot_script }} run --slot %i
+Restart=always
+RestartSec=3
+{% if hnx_module_slice | default('') %}
+Slice={{ hnx_module_slice }}
+{% endif %}
+KillMode=control-group
+TimeoutStopSec=30
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+# one writable mount for the data root: a claim renames spool/<x>.jit into slots/<n>/ (EXDEV across two mounts)
+ReadWritePaths={{ ci_runner_data_root }}
+ReadOnlyPaths={{ ci_runner_images_dir }}
+
+[Install]
+WantedBy=multi-user.target

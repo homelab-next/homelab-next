@@ -56,6 +56,52 @@ groups:
 {% raw %}
           summary: "{{ $labels.instance }} has under {% endraw %}{{ prometheus_alert_memory_available_percent | int }}{% raw %}% of its memory available"
 {% endraw %}
+      # UPS protection (control ups-protection, role nut_ups): the textfile metrics of a host with a USB UPS.
+      # A host with no UPS exposes none of these, so none of them fires there.
+      - alert: UpsOnBattery
+        expr: nut_ups_on_battery == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} is running on UPS battery (mains lost); a clean shutdown follows at low battery"
+{% endraw %}
+      - alert: UpsLowBattery
+        expr: nut_ups_low_battery == 1
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} UPS reports low battery: the host is shutting down"
+{% endraw %}
+      - alert: UpsMonitorDown
+        expr: nut_monitor_active == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} nut-monitor (the UPS shutdown controller) is not running: no automatic shutdown on power loss"
+{% endraw %}
+      - alert: UpsUnreadable
+        expr: nut_ups_up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} the UPS does not answer (driver or USB cable)"
+{% endraw %}
+      - alert: UpsCheckStale
+        expr: time() - nut_ups_check_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} the UPS check has not written metrics for over 5 minutes"
+{% endraw %}
 {% if prometheus_probes_enabled | bool %}
   - name: hnx-probes
     rules:

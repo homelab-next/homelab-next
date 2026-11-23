@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# The SIEM agent reads the alert-only log. The agent is its own control (the siem-agent baseline);
+# this only adds a localfile block when the agent's configuration exists, as its own top-level
+# section (the agent merges several), and says so when it does not.
+- name: Is the SIEM agent installed
+  ansible.builtin.stat:
+    path: "{{ suricata_siem_agent_conf }}"
+  register: suricata_siem_conf
+
+- name: Say so when the agent is not there (alerts then reach the pipeline through the eve log only)
+  ansible.builtin.debug:
+    msg: "suricata: {{ suricata_siem_agent_conf }} not found; the alert-only log is written but no SIEM agent reads it yet (apply the siem-agent control to this host)"
+  when: not suricata_siem_conf.stat.exists
+
+- name: Add the alert-only log as a localfile
+  ansible.builtin.blockinfile:
+    path: "{{ suricata_siem_agent_conf }}"
+    marker: "<!-- {mark} {{ suricata_siem_marker }} -->"
+    block: "{{ lookup('ansible.builtin.template', 'siem-localfile.xml.j2') }}"
+  register: suricata_siem_written
+  when: suricata_siem_conf.stat.exists
+
+- name: Restart the agent to read it
+  ansible.builtin.systemd:
+    name: "{{ suricata_siem_agent_unit }}"
+    state: restarted
+  when: >-
+    suricata_siem_conf.stat.exists and suricata_siem_written is changed and
+    suricata_siem_agent_unit | length > 0 and suricata_service_manage | bool

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "suricata, the network sensor: the OS package on a capture host, HOME_NET from the site model, upstream rules, a bounded eve log and an alert-only log, and a capture-health hook."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []
