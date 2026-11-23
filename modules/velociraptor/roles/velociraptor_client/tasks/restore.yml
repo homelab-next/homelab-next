@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Refuse a restore the role has nothing to restore from
+  ansible.builtin.fail:
+    msg: "velociraptor client: nothing to restore. Run the role (main) to install the binary and the configuration; the client enrols again as a new client."
+  tags: [restore]
