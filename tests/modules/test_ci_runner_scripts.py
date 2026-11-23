@@ -89,6 +89,7 @@ def test_a_slot_run_boots_one_vm_with_one_registration_and_leaves_nothing(cfg):
     d = Path(cfg["data_root"]) / "slots" / "0"
     assert sorted(p.name for p in d.iterdir()) == ["state.json"]
     assert json.loads((d / "state.json").read_text())["state"] == "done"
+    assert d.stat().st_mode & 0o777 == 0o750  # the feed account reads the state through the group
     assert not list((Path(cfg["data_root"]) / "spool").iterdir())
     assert (Path(cfg["data_root"]) / "slots" / "0.last.log").read_bytes() == b"booted\n"
 
@@ -303,6 +304,8 @@ def test_it_mints_one_per_idle_slot_plus_the_buffer_never_more_than_the_pool():
     assert feeder.wanted(_status(["waiting", "done", "running", "running"]), 1) == 3
     assert feeder.wanted(_status(["waiting", "waiting"], spooled=["a", "b"]), 2) == 0
     assert feeder.wanted(_status(["waiting"] * 3), 5) == 3
+    # a slot whose state cannot be read is not idle: an unreadable slot directory mints nothing
+    assert feeder.wanted(_status(["unknown"] * 4), 2) == 2
 
 
 def test_an_orphan_is_offline_idle_prefixed_and_held_by_no_slot():

@@ -43,6 +43,7 @@ import urllib.request
 API = "https://api.github.com"
 PREFIX = "hnx-ci-"
 LIVE = {"booting", "running"}
+IDLE = {"waiting", "done"}
 
 
 class Forge:
@@ -137,7 +138,9 @@ def wanted(status: dict, buffer: int) -> int:
     """How many registrations to mint now: one per slot waiting for one, plus a small buffer,
     less what is already spooled; never more than the slots in total."""
     states = [s.get("state") for s in status.get("slots", {}).values()]
-    idle = sum(1 for s in states if s not in LIVE)
+    # only a slot that says it waits (or just finished) is idle: one whose state cannot be read is
+    # never counted, so an unreadable slot directory cannot make the feeder mint for every slot
+    idle = sum(1 for s in states if s in IDLE)
     target = min(status.get("slots_total", 0), idle + buffer)
     return max(0, target - len(status.get("spooled", [])))
 

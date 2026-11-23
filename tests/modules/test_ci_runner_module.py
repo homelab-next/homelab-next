@@ -150,6 +150,9 @@ def test_the_build_seed_pins_the_agent_by_digest_and_resets_cloud_init():
     assert "cloud-init clean --logs --machine-id" in text
     assert "HNX-CI-BUILD-OK {{ ci_runner_base_image_sha256[:16] }}" in text
     assert "SuccessAction=poweroff-force" in text and "FailureAction=poweroff-force" in text
+    # the VM powers off once the agent returns, whatever the job left running
+    job = text[text.index("hnx-ci-job\n") :]
+    assert job.index("./run.sh --jitconfig") < job.index("systemctl poweroff --force --force")
     tasks = yaml.safe_load((ROLE / "tasks" / "image.yml").read_text())
     flat = [s for t in tasks for s in t.get("block", [t])]
     fetch = next(t for t in flat if "ansible.builtin.get_url" in t)

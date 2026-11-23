@@ -65,11 +65,16 @@ write_files:
       #!/bin/bash
       # The job VM's one job: the single-use registration the seed carried, then the agent until
       # its job ends. The unit powers the VM off whatever the outcome.
-      set -euo pipefail
+      set -uo pipefail
       jit=$(cat /run/hnx-ci/jit)
       rm -f /run/hnx-ci/jit
       cd /home/runner/actions-runner
-      exec runuser -u runner -- env HOME=/home/runner ./run.sh --jitconfig "$jit"
+      echo "hnx-ci-job: agent starting" > /dev/ttyS0
+      runuser -u runner -- env HOME=/home/runner ./run.sh --jitconfig "$jit"
+      rc=$?
+      echo "hnx-ci-job: agent exited $rc, powering off" > /dev/ttyS0
+      # whatever the agent left running (a job's background process, a container), the VM ends here
+      systemctl poweroff --force --force
   - path: /etc/systemd/system/hnx-ci-job.service
     content: |
       [Unit]
@@ -82,5 +87,7 @@ write_files:
       SuccessAction=poweroff-force
       FailureAction=poweroff-force
       TimeoutStartSec=0
+      StandardOutput=journal+console
+      StandardError=journal+console
 runcmd:
   - [sh, -c, "/usr/local/sbin/hnx-ci-build && echo 'HNX-CI-BUILD-OK {{ ci_runner_base_image_sha256[:16] }}' > /dev/ttyS0; systemctl poweroff"]

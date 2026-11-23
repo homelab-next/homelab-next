@@ -121,7 +121,8 @@ def empty_dir(path: Path, parent: Path) -> None:
         raise Refused(f"refusing to empty {path}: it is a link")
     if path.exists():
         shutil.rmtree(path)
-    path.mkdir(mode=0o700)
+    path.mkdir(mode=0o750)
+    os.chmod(path, 0o750)
 
 
 def golden_image(cfg: dict) -> Path:
