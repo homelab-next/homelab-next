@@ -114,6 +114,11 @@ def _run_one(job):
 
 MAX_WORKERS = 8  # first runs started at once: enough for CI's runners, gentle on a large box
 
+#: how many pytest-xdist workers share this machine (1: not under xdist).  An xdist worker
+#: collects every test but runs only the files the scheduler (``--dist loadfile``) hands it, so it
+#: starts the first runs of its current module's tests only, and takes its share of the CPUs.
+XDIST_WORKERS = 1
+
 
 def workers(env=None, cpus=None) -> int:
     """How many first runs start at once: ``HNX_ROLERUN_WORKERS`` (a positive integer of up to
@@ -126,7 +131,7 @@ def workers(env=None, cpus=None) -> int:
             raise ValueError(f"HNX_ROLERUN_WORKERS is a positive integer, not {raw!r}")
         return int(raw)
     cpus = len(os.sched_getaffinity(0)) if cpus is None else cpus
-    return max(1, min(cpus, MAX_WORKERS))
+    return max(1, min(cpus // XDIST_WORKERS, MAX_WORKERS))
 
 
 def _raise(e):
@@ -154,6 +159,8 @@ def prefetch_first_runs(request, tmp_path_factory):
             if (case is None or item.nodeid in _FIRST_RUNS
                     or not (item is node or _will_run(item))):  # fmt: skip
                 continue
+            if XDIST_WORKERS > 1 and getattr(item, "path", None) != getattr(node, "path", None):
+                continue  # another worker runs that file: starting its first runs here is waste
             # named as tmp_path names a test's directory (30 characters: gpg's agent socket
             # path under it must stay short)
             tmp = tmp_path_factory.mktemp(re.sub(r"[\W]", "_", item.name)[:30], numbered=True)
