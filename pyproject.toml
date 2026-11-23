@@ -136,6 +136,9 @@ suite_budget_default = "90"  # 60 until 2026-11-23: the suites near it (maps, re
 suite_shared_budget_default = "15"
 suite_shared_budgets = [
   "tests/roles = 30",  # 18.8 s measured, about 1.6x
+  # 2026-11-23: under pytest-xdist a shard's workers build their fixtures side by side on the runner's cores, so the figure
+  # swells (packaging 16.6 s against 7.9 s serial, 3.11 shard 2/12); a tripwire for a runaway fixture, per the operator
+  "tests/packaging = 40",
 ]
 suite_budgets = [
   # 2026-11-23 (operator, "I dont care about limits ... the end goal is things getting done"; GATE EDIT):
