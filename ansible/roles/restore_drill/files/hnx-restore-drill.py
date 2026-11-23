@@ -39,6 +39,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -142,8 +143,13 @@ def load_records(path):
     return doc
 
 
-def atomic_write(path, text, mode=0o640):
-    """Write text to path through a sibling temp file created at its final mode, then rename."""
+def atomic_write(path, text):
+    """Write text to path through a sibling temp file created at its final mode, then rename.
+    A file that exists keeps its mode (the role sets who may read the records); a new one is 0600."""
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        mode = 0o600
     tmp = os.path.join(os.path.dirname(path), f".drills-{os.getpid()}-{os.urandom(4).hex()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
