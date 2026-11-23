@@ -48,8 +48,6 @@ egress:
 contributes:
   roles:
     - file: roles/zeek
-  services:
-    - file: registry/services.yml
   preflight:
     - {role: role:zeek, hook: readiness}
   docs:
