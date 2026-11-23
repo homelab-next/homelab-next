@@ -589,7 +589,7 @@ change until its ADR is accepted):
 | `status/observation` | 1.0 | `schemas/status/observation.schema.json` | stable |
 | `status/orchestration_export` | 1.2 | `schemas/status/orchestration_export.schema.json` | stable |
 | `status/roster` | 1.0 | `schemas/status/roster.schema.json` | stable |
-| `status/views` | 1.10 | `schemas/status/views.schema.json` | stable |
+| `status/views` | 1.11 | `schemas/status/views.schema.json` | stable |
 | `strategy/doctrine` | 1.1 | `schemas/strategy/doctrine.schema.json` | stable |
 | `strategy/measure` | 2.0 | `schemas/strategy/measure.schema.json` | stable |
 | `strategy/objective` | 2.0 | `schemas/strategy/objective.schema.json` | stable |
