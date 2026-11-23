@@ -87,6 +87,12 @@ _STATE = pytest.StashKey[dict]()
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini("suite_budget_default", "default per-suite time budget, seconds", default="120")
     parser.addini(
+        "suite_budget_xdist_scale",
+        "factor on every budget when the run uses pytest-xdist workers (a test's own clock "
+        "stretches while they share the cores)",
+        default="1",
+    )
+    parser.addini(
         "suite_budgets", "per-suite budgets: '<suite> = <seconds>' lines", type="linelist"
     )
     parser.addini(
@@ -187,6 +193,8 @@ def pytest_configure(config: pytest.Config) -> None:
         raise pytest.UsageError(str(exc)) from None
     default = float(config.getini("suite_budget_default"))
     scale = float(os.environ.get("HNX_SUITE_BUDGET_SCALE", "1") or "1")
+    if getattr(config.option, "numprocesses", None) or is_xdist_worker(config):
+        scale *= float(config.getini("suite_budget_xdist_scale"))
     config.stash[_STATE] = {
         "default": default,
         "budgets": parse_budgets(config.getini("suite_budgets")),

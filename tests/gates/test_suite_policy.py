@@ -1035,3 +1035,13 @@ def test_a_worker_that_collected_other_tests_fails_the_run():
     assert sorted(st["selected"]) == ["a", "b"] and not st.get("collected_disagree")
     sp.merge_worker_state(st, two)
     assert st["collected_disagree"] is True
+
+
+def test_this_repos_budgets_are_scaled_only_for_runs_on_xdist_workers():
+    import tomllib
+
+    with open(Path(ROOT) / "pyproject.toml", "rb") as f:
+        ini = tomllib.load(f)["tool"]["pytest"]["ini_options"]
+    assert float(ini["suite_budget_xdist_scale"]) == 1.5
+    src = (Path(ROOT) / "tests" / "suite_policy.py").read_text()
+    assert 'getattr(config.option, "numprocesses", None) or is_xdist_worker(config)' in src
