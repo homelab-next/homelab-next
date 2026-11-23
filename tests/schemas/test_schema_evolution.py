@@ -22,6 +22,7 @@ SCHEMAS = [
 #: no frozen baseline, free to change until their ADR is accepted; joining or leaving this set is
 #: a reviewed change
 DRAFTS = {
+    "registers/cutover_row.schema.json",
     "platform/module.schema.json",
     "platform/lake_table.schema.json",
     "platform/module_selection.schema.json",

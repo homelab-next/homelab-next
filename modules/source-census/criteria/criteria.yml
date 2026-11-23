@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# Criteria of the source-census module (registers/invariant 1.1 ids, <module id>/<slug>). Both run the
+# census once with --no-notify: the daily unit is what pages, so an ad-hoc run (hnx invariants, a
+# person) never pages or touches the paging state. Exit 0 is a pass (a source still learning passes
+# and the evidence says so), 1 a fail, 100 could not measure.
+criteria:
+  - id: source-census/sources-flowing
+    statement: Every source in the raw-archive table arrived within a multiple of its own cadence, learned from the last 8 days; a source still learning passes with a warning, and a flagged source fails unless an unexpired acknowledgement covers it.
+    evidence: auto
+    observable: /opt/hnx/bin/hnx lake source-census --config /etc/hnx-modules/source-census/census.yml --criterion sources-flowing --no-notify
+    expected: exit 0; the evidence names every source still learning
+    timeout: 300
+    remediation: >-
+      Find out why the named source went quiet: the producer, its agent, the pipeline stage that
+      carries it. A blind spot does not announce itself, and this is the only check that notices a
+      source that simply stopped. If the silence is deliberate, add an acknowledgement to the
+      overlay's census settings with an owner, a reason and an expiry, rather than widening the
+      cadence for everyone.
+  - id: source-census/all-classes-dark
+    statement: At least one event table has a row in its last 24 hours; no event of any class means the pipeline is down, and this never learns.
+    evidence: auto
+    observable: /opt/hnx/bin/hnx lake source-census --config /etc/hnx-modules/source-census/census.yml --criterion all-classes-dark --no-notify
+    expected: exit 0
+    timeout: 300
+    remediation: >-
+      Nothing is arriving at all: check the collector, the log pipeline and the lake writer from the
+      source end towards the lake (docs/log-pipeline.md), and the lake-query endpoint itself. A
+      census that cannot read the table is exit 100, a failure of the check rather than of the
+      pipeline.

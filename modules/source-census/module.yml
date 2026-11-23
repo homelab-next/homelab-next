@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: Apache-2.0
+# The source census (docs/modules.md; README.md beside this file; ADR-0049 decisions 8 and 9): the
+# daily check that every log source is still arriving, judged by its own cadence, and that the lake
+# is not dark. It replaces the old lab's daily ingest audit, as two generic criteria over the
+# lake-query slot plus a burst clusterer (`hnx logbursts`) that the SIEM module's manager-errors
+# criterion calls. It reads counts and hours only, pages through the notify slot on a NEWLY flagged
+# set only, and keeps no copy of any event. Every real value (the guest, the lake domain, the
+# acknowledged-quiet list, the secrets) is the site's: the overlay's lab/modules.yml and secret store.
+manifest_version: "1.0"
+id: source-census
+kind: feature
+title: Source census
+description: Daily criteria over the lake-query slot that flag a log source silent past its own
+  learned cadence (sources-flowing) or an event table that has gone dark (all-classes-dark), with a
+  visible learning window for new sources, an owner-and-expiry acknowledged-quiet list, and a
+  state-diffed page through the notify slot; ships the burst clusterer and the manager-log benign
+  list that the manager-errors criterion uses.
+owner: platform-team
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+requires:
+  capabilities:
+    - cap: cap:lake-query
+      version: "1.0"
+      purpose: the census groups the raw-archive table by its source columns and the UTC hour (counts and last-seen hours only, no row content)
+    - cap: cap:lake-catalog
+      version: "1.0"
+      purpose: its endpoint is resolved by the shared lake client the census reads through; nothing is sent to it
+    - cap: cap:notify
+      version: "1.0"
+      purpose: pages once when a source or the dark state is newly flagged, once when the set empties
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the reader's engine password and the notify publish token are read by name at deploy time
+  hosts:
+    - role: checker
+      kind: any
+      footprint: {cpu: 0.5, memory_mb: 256, disk_gb: 2}
+      roles: [role:source_census]
+      purpose: runs the daily census as its own unprivileged user (the runtime release, role hnx_runtime, is applied first)
+egress: none
+contributes:
+  roles:
+    - file: roles/source_census
+  notify_pairs:
+    - problem: 'Source census: source(s) flagged'
+      recovery: 'Source census: all sources flowing'
+  scheduler_jobs:
+    - file: units/fleet_units.yml
+  invariants:
+    - file: criteria/criteria.yml
+  preflight:
+    - {role: role:source_census, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: state
+    kind: state
+    description: The paging state, the set of items flagged at the last run (state.json); losing it re-pages a standing set once.
+    export: {formats: [object-tree], via: role:source_census}
+    import: {formats: [object-tree], via: role:source_census}
+    retention: {keep: transient}
+config:
+  lake_domain:
+    type: string
+    description: the registry domain the lake-query endpoint resolves under
+    overlay: required
+  lake_warehouse:
+    type: string
+    description: the lake catalog's warehouse name (needed to build the shared lake client)
+    overlay: required
+  lake_catalog:
+    type: string
+    description: the query engine's catalog name the namespace lives in
+    overlay: required
+  lake_namespace:
+    type: string
+    description: the lake namespace of the raw-archive table (a fresh SOC namespace, never a migrated one)
+    default: soc
+    overlay: optional
+  census_table:
+    type: string
+    description: the raw-archive table the census groups
+    default: raw_archive
+    overlay: optional
+  reader_password:
+    type: secret
+    description: the lake-query login's password of the reader analyzer:source-census (declared in the site's tlp_readers at red, read access to the census table only)
+    default: secret:source-census/reader-password
+    overlay: required
+  notify_token:
+    type: secret
+    description: the notify slot's publish token the page is sent with
+    default: secret:source-census/notify-token
+    overlay: required
+  notify_ceiling:
+    type: enum
+    description: the notify channel's TLP ceiling (ADR-0033 decision 6); a page above it is withheld and replaced by a fixed notice. Source names are lab data, red by default
+    values: [clear, green, amber, amber+strict, red]
+    default: red
+    overlay: optional
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "the census is code in the runtime release (hnx lake source-census): the role's upgrade hook proves the installed release answers it and records the release; the settings converge on the next install"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, secret-names, contributions]

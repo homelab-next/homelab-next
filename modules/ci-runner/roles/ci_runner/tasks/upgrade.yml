@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# An upgrade is a new pinned base image or agent (url and sha256 together): validated here; the
+# install then builds the new golden image beside the old one and re-points the slots, each at its
+# next run, so no running job is interrupted.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Record the pins the next build uses
+      ansible.builtin.debug:
+        msg: "ci-runner: base {{ ci_runner_base_image_sha256[:16] }}, agent {{ ci_runner_agent_sha256[:16] }}, golden {{ ci_runner_golden }}"
+  tags: [upgrade]

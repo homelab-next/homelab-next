@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.include_tasks:
+    file: validate.yml
+    apply:
+      tags: [readiness]
+  tags: [readiness]

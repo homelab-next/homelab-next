@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# The open-format exit copy: the paging state (JSON), byte for byte, plus its sha256.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The export directory
+      ansible.builtin.file:
+        path: "{{ source_census_export_dir }}"
+        state: directory
+        owner: "{{ source_census_user }}"
+        group: "{{ source_census_group }}"
+        mode: "0750"
+    - name: Hash the live state
+      ansible.builtin.stat:
+        path: "{{ source_census_state_dir }}/state.json"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: source_census_state_stat
+    - name: Copy it out (before the first run there is nothing to copy)
+      ansible.builtin.copy:
+        src: "{{ source_census_state_dir }}/state.json"
+        dest: "{{ source_census_export_dir }}/state.json"
+        remote_src: true
+        owner: "{{ source_census_user }}"
+        group: "{{ source_census_group }}"
+        mode: "0640"
+      when: source_census_state_stat.stat.exists
+    - name: Record its sha256
+      ansible.builtin.copy:
+        dest: "{{ source_census_export_dir }}/state.sha256"
+        content: "{{ source_census_state_stat.stat.checksum }}  state.json\n"
+        owner: "{{ source_census_user }}"
+        group: "{{ source_census_group }}"
+        mode: "0640"
+      when: source_census_state_stat.stat.exists
+  tags: [export]

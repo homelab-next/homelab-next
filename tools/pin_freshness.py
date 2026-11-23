@@ -92,6 +92,11 @@ SOURCES: dict[str, tuple[str, str]] = {
         "NVIDIA/nvidia-container-toolkit",
     ),
     "role:events_bus/events_bus_version": ("github", "nats-io/nats-server"),
+    "role:suricata/suricata_package_version": (
+        "none",
+        "an OS package version (Debian security updates move the +debNuN suffix): compare with the "
+        "distribution's package tracker by hand; the upstream project is OISF/suricata",
+    ),
     "role:example_service/example_service_version": ("none", "a fictitious example package"),
     "role:publishing_gate/publishing_gate_wrangler_version": (
         "none",
@@ -148,6 +153,12 @@ SOURCES: dict[str, tuple[str, str]] = {
     ),
     "role:keycloak/keycloak_image": ("github", "keycloak/keycloak"),
     "role:keycloak/keycloak_postgres_image": (
+        "none",
+        "the Docker official image (docker.io/library/postgres): compare its tags with the "
+        "PostgreSQL release page by hand, within the pinned major version",
+    ),
+    "role:lakekeeper/lakekeeper_image": ("github", "lakekeeper/lakekeeper"),
+    "role:lakekeeper/lakekeeper_postgres_image": (
         "none",
         "the Docker official image (docker.io/library/postgres): compare its tags with the "
         "PostgreSQL release page by hand, within the pinned major version",
@@ -313,6 +324,15 @@ NOTES: dict[str, str] = {
     ),
     "role:keycloak/keycloak_postgres_image": (
         "an image (modules/keycloak): the tag and its digest together, a minor version only "
+        "(a major one is a dump and a restore)"
+    ),
+    "role:lakekeeper/lakekeeper_image": (
+        "an image (modules/lakekeeper): bump the tag and its digest together, with product.version in "
+        "modules/lakekeeper/module.yml and the lab registry's version; the upgrade playbook dumps the "
+        "database first, because the schema migration a newer version runs is one way"
+    ),
+    "role:lakekeeper/lakekeeper_postgres_image": (
+        "an image (modules/lakekeeper): the tag and its digest together, a minor version only "
         "(a major one is a dump and a restore)"
     ),
     "role:media_automation/media_automation_gluetun_image": (

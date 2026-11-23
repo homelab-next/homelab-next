@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control ups-protection: the UPS's driver, a loopback upsd and a shutdown monitor that has a MONITOR line.
+- name: Refuse a host that is not Debian-family (the role installs the distribution's NUT)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "nut_ups supports Debian-family hosts only (got {{ ansible_facts['os_family'] }})"
+
+- name: Validate the settings
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Install NUT (server, client and the USB driver; no recommends)
+  ansible.builtin.apt:
+    name: [nut-server, nut-client]
+    state: present
+    install_recommends: false
+
+- name: Write the configuration, the checker and its timer
+  ansible.builtin.include_tasks: config.yml
+
+- name: Re-trigger udev (a UPS plugged in before the package keeps root-only ownership of its device node)
+  ansible.builtin.command:
+    argv: [udevadm, trigger, --subsystem-match=usb, --action=add]
+  changed_when: false
+  failed_when: false
+
+- name: Enable and start the driver, the server, the monitor and the checker timer
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: [nut-driver.target, nut-server.service, nut-monitor.service, hnx-nut-ups-check.timer]

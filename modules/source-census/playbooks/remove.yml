@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the paging state (export_first), stop and disable the timer, delete the units, the
+# settings and the credential files. The data root (with the export in it) is kept for the operator
+# to archive or delete.
+- name: Remove the source census
+  hosts: mod_source_census_checker
+  become: true
+  tasks:
+    - name: Export the paging state first
+      ansible.builtin.include_role:
+        name: source_census
+        tasks_from: export
+    - name: Stop and disable the timer (a no-op when there never was one)
+      ansible.builtin.systemd_service:
+        name: hnx-source-census-run.timer
+        state: stopped
+        enabled: false
+      failed_when: false
+    - name: Remove the units, the settings and the credentials
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/hnx-source-census-run.timer
+        - /etc/systemd/system/hnx-source-census-run.service
+        - /etc/hnx-modules/source-census/census.yml
+        - /etc/hnx-modules/source-census/credentials
+    - name: Reload systemd
+      ansible.builtin.command:
+        argv: [systemctl, daemon-reload]
+      changed_when: true
