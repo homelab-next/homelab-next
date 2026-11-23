@@ -87,8 +87,8 @@ def test_a_slot_run_boots_one_vm_with_one_registration_and_leaves_nothing(cfg):
     qemu = [c for c in run.calls if c[0] == "qemu"]
     assert len(qemu) == 1 and "user,id=n0,ipv6=off" in qemu[0]
     d = Path(cfg["data_root"]) / "slots" / "0"
-    assert sorted(p.name for p in d.iterdir()) == ["state.json"]
-    assert json.loads((d / "state.json").read_text())["state"] == "done"
+    assert list(d.iterdir()) == []
+    assert slot.slot_state(d)["state"] == "waiting"
     assert d.stat().st_mode & 0o777 == 0o750  # the feed account reads the state through the group
     assert not list((Path(cfg["data_root"]) / "spool").iterdir())
     assert (Path(cfg["data_root"]) / "slots" / "0.last.log").read_bytes() == b"booted\n"
@@ -108,7 +108,7 @@ def test_the_next_job_in_a_slot_sees_none_of_the_previous_job_s_files(cfg):
             return super().__call__(argv, **kw)
 
     slot.run_slot(cfg, 0, runner=Peek())
-    assert seen == ["disk.qcow2", "runner", "seed", "seed.iso", "state.json"]  # nothing of job one
+    assert seen == ["disk.qcow2", "runner", "seed", "seed.iso"]  # nothing of job one
 
 
 def test_the_seed_carries_the_registration_and_the_jit_file_is_gone_before_boot(cfg):
@@ -132,15 +132,24 @@ def test_a_vm_past_the_time_limit_is_killed_and_the_slot_still_emptied(cfg):
     _spool(cfg, "hnx-ci-a")
     assert slot.run_slot(cfg, 0, runner=FakeRun(timeout=True)) == 0
     d = Path(cfg["data_root"]) / "slots" / "0"
-    assert sorted(p.name for p in d.iterdir()) == ["state.json"]
+    assert list(d.iterdir()) == []
 
 
 def test_with_nothing_spooled_the_run_ends_waiting_and_boots_nothing(cfg):
     run = FakeRun()
     assert slot.run_slot(cfg, 1, runner=run, sleep=lambda s: None) == 0
     assert run.calls == []
-    st = json.loads((Path(cfg["data_root"]) / "slots" / "1" / "state.json").read_text())
-    assert st["state"] == "waiting"
+    assert slot.slot_state(Path(cfg["data_root"]) / "slots" / "1")["state"] == "waiting"
+
+
+def test_a_slot_s_state_is_read_from_what_its_directory_holds(cfg, tmp_path):
+    d = Path(cfg["data_root"]) / "slots" / "0"
+    assert slot.slot_state(d)["state"] == "unknown"  # not there
+    d.mkdir()
+    (d / "runner").write_text("hnx-ci-a\n")
+    assert slot.slot_state(d) | {"at": 0} == {"state": "booting", "runner": "hnx-ci-a", "at": 0}
+    (d / "disk.qcow2").write_bytes(b"x")
+    assert slot.slot_state(d)["state"] == "running"
 
 
 def test_two_slots_never_claim_the_same_registration(cfg):

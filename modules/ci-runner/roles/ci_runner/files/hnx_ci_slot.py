@@ -7,7 +7,7 @@
 #   owner: platform
 #   trigger: [role:ci_runner]
 #   inputs: the JSON config named by HNX_CI_CONFIG (slot.json); the spool directory; SSH_ORIGINAL_COMMAND for the feed side
-#   outputs: one VM run per slot run; the slot's state.json; the last console log per slot; spool files (feed side)
+#   outputs: one VM run per slot run; the slot directory's contents (its state); the last console log per slot; spool files (feed side)
 #   installs_to: /usr/local/libexec/homelabnext/hnx-ci-slot
 #   exit:
 #     "0": the slot ran one VM to its end, or found no registration and waits for the next start
@@ -179,12 +179,23 @@ def user_data(jit: str) -> str:
     )
 
 
-def write_state(d: Path, **state) -> None:
-    state["at"] = int(time.time())
-    tmp = d / ".state.json.tmp"
-    tmp.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o640)
-    os.replace(tmp, d / "state.json")
+def slot_state(d: Path) -> dict:
+    """A slot's state is what its directory holds (nothing is written for it): ``running`` with a
+    disk (the VM is up), ``booting`` with a claimed registration and no disk yet, ``waiting`` when
+    empty, ``unknown`` when the directory cannot be read."""
+    try:
+        names = {e.name for e in os.scandir(d)}
+        at = int(d.stat().st_mtime)
+    except OSError:
+        return {"state": "unknown", "runner": None, "at": None}
+    runner = None
+    if "runner" in names:
+        try:
+            runner = (d / "runner").read_text(encoding="utf-8").strip() or None
+        except OSError:
+            runner = None
+    state = "running" if "disk.qcow2" in names else "booting" if "runner" in names else "waiting"
+    return {"state": state, "runner": runner, "at": at}
 
 
 def qemu_argv(cfg: dict, d: Path) -> list[str]:
@@ -225,7 +236,6 @@ def run_slot(cfg: dict, slot: int, runner=subprocess.run, sleep=time.sleep) -> i
     p = _paths(cfg)
     d = slot_dir(cfg, slot)
     empty_dir(d, p["slots"])
-    write_state(d, state="waiting")  # the feeder counts a waiting slot as one to supply
     golden = golden_image(cfg)
     name = None
     deadline = time.monotonic() + cfg["claim_wait_s"]
@@ -233,10 +243,8 @@ def run_slot(cfg: dict, slot: int, runner=subprocess.run, sleep=time.sleep) -> i
         name = claim(cfg, d)
         if name is None:
             if time.monotonic() >= deadline:
-                write_state(d, state="waiting")
                 return 0
             sleep(2)
-    write_state(d, state="booting", runner=name)
     try:
         jit = (d / "jit").read_text(encoding="utf-8").strip()
         seed = d / "seed"
@@ -256,7 +264,6 @@ def run_slot(cfg: dict, slot: int, runner=subprocess.run, sleep=time.sleep) -> i
              "-b", str(golden), str(d / "disk.qcow2"), f"{cfg['disk_gb']}G"],
             check=True,
         )  # fmt: skip
-        write_state(d, state="running", runner=name)
         try:
             r = runner(qemu_argv(cfg, d), timeout=cfg["job_timeout_s"], check=False)
             outcome = f"exit {r.returncode}"
@@ -266,7 +273,6 @@ def run_slot(cfg: dict, slot: int, runner=subprocess.run, sleep=time.sleep) -> i
     finally:
         _keep_console(d, p["slots"] / f"{slot}.last.log", cfg["console_keep_bytes"])
         empty_dir(d, p["slots"])
-        write_state(d, state="done", runner=name)
     return 0
 
 
@@ -405,11 +411,7 @@ def feed_status(cfg: dict) -> dict:
     )
     slots = {}
     for n in range(cfg["slots"]):
-        try:
-            st = json.loads((p["slots"] / str(n) / "state.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            st = {"state": "unknown"}
-        slots[str(n)] = {k: st.get(k) for k in ("state", "runner", "at")}
+        slots[str(n)] = slot_state(p["slots"] / str(n))
     try:
         golden = golden_image(cfg).name
     except Refused:
