@@ -303,8 +303,24 @@ class BoundedHTTPServer(ThreadingHTTPServer):
             why = "client certificate outside the pin (its name, or its source address)"
         except (OSError, ValueError) as exc:
             why = getattr(exc, "reason", None) or type(exc).__name__
+            if isinstance(exc, ssl.SSLError):
+                self._linger(request)
         self._refusal(why)
         return False
+
+    @staticmethod
+    def _linger(request) -> None:
+        """After a TLS refusal (its alert already sent), read what the peer still sends until it
+        closes, for at most a second: closing a socket that holds unread bytes resets the
+        connection, and a TLS 1.3 client that sends its request before it reads the alert would
+        see that reset (a broken pipe) instead of the alert, depending only on timing."""
+        try:
+            request.settimeout(1.0)
+            request.shutdown(socket.SHUT_WR)
+            while request.recv(65536):
+                pass
+        except (OSError, ValueError):
+            pass
 
     def _refusal(self, why: str) -> None:
         """Count a refused TLS connection; say so on stderr at most once a minute (the count
