@@ -657,11 +657,12 @@ def test_the_budgets_absorb_runner_noise_and_still_catch_a_runaway_suite():
     ]
     budgets = sp.parse_budgets(ini["suite_budgets"])
     seen = {  # the largest total seen over recent hosted runs, seconds (2026-11-23)
-        "tests/roles": 10543.0, "tests/modules": 340.1, "tests/conform_sweeps": 181.4,
-        "tests/conform": 135.6, "tests/graph": 127.5, "tests/schemas": 84.0, "tests/agent": 54.0,
+        "tests/roles": 10558.8, "tests/modules": 372.1, "tests/conform_sweeps": 190.7,
+        "tests/conform": 135.6, "tests/graph": 138.7, "tests/schemas": 108.3, "tests/agent": 60.8,
+        "tools/tests": 301.9, "tests/mcp": 81.2, "tests/gates": 66.9, "tests/compute": 62.6,
     }  # fmt: skip
     for suite, worst in seen.items():
-        assert worst * 1.27 <= budgets[suite], (suite, "a pool runner would break it")
+        assert worst * 1.35 <= budgets[suite], (suite, "too tight for a slow runner")
         assert worst * 2 > budgets[suite], (suite, "a doubled suite would pass")
 
 
