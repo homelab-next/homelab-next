@@ -9,12 +9,12 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 # the timer's runs are reported to the shared last-run record (the writer runs privileged: +)
-ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ lab_checks_last_run_dir }} --group {{ lab_checks_last_run_group }} --job timer:lab_checks/{{ lab_checks_logical_id }} --unit %n --calendar "{{ lab_checks_oncalendar }}" --delay 0
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ lab_checks_last_run_dir }} --group {{ lab_checks_last_run_group }} --job timer:lab_checks/lab-checks --unit %n --calendar "{{ lab_checks_oncalendar }}" --delay 0
 ExecStart=/opt/hnx/bin/hnx invariants run {{ lab_checks_register_file }} --root {{ lab_checks_data_root }} --out {{ lab_checks_results_file }} --state {{ lab_checks_state_file }} --notify-cmd "{{ lab_checks_notify_script }} --config {{ lab_checks_notify_config }}" --notify-ceiling {{ lab_checks_notify_ceiling }}
 # the runner exits 1 when a criterion is red and 100 when one could not be measured: the page is the signal, and the
 # unit itself did its job (a failed unit would also hide a real fault of the runner behind a standing red)
 SuccessExitStatus=1 100
-ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ lab_checks_last_run_dir }} --group {{ lab_checks_last_run_group }} --job timer:lab_checks/{{ lab_checks_logical_id }} --unit %n --calendar "{{ lab_checks_oncalendar }}" --delay 0
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ lab_checks_last_run_dir }} --group {{ lab_checks_last_run_group }} --job timer:lab_checks/lab-checks --unit %n --calendar "{{ lab_checks_oncalendar }}" --delay 0
 TimeoutStartSec={{ lab_checks_max_runtime_s }}
 Nice=10
 # the criteria's observables run under bash and name the probes by their short names

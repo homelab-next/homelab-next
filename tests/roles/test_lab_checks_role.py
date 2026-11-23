@@ -8,6 +8,7 @@ written; health passes only with the timer armed and a recent results document."
 from __future__ import annotations
 
 import grp
+import json
 import os
 import pwd
 from pathlib import Path
@@ -79,11 +80,9 @@ def test_main_installs_the_checks_with_the_token_only_in_the_root_only_file(tmp_
     assert (etc / "credentials" / "notify-token").read_text().strip() == TOKEN
     assert oct((etc / "credentials" / "notify-token").stat().st_mode & 0o777) == "0o400"
     cfg = (etc / "notify.json").read_text()
-    assert (
-        "http://notify.example.internal" in cfg
-        and TOKEN not in cfg
-        and '"topic": "lab-checks"' in cfg
-    )
+    doc = json.loads(cfg)
+    assert TOKEN not in cfg and doc["topic"] == "lab-checks"
+    assert doc["url"].split("//", 1) == ["http:", "notify.example.internal:80"]
     assert (etc / "invariants.yml").read_text() == REGISTER
     assert (
         not list(etc.glob("*.incoming"))
