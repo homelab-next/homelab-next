@@ -51,6 +51,17 @@ CLASSES: dict[str, tuple[int, int]] = {
     "process_activity": (1007, 1),
     "vulnerability_finding": (2002, 2),
 }
+#: the staging layout, one definition: ``<prefix><table>/dt=%Y-%m-%d/hour=%H/`` (strftime of the write
+#: time, UTC); the object store key is this plus ``<id>.ndjson.gz``.  The aggregator's sink renders
+#: the same text (a test pins it) and the lake writer reads it.
+STAGING_LAYOUT = "{prefix}{table}/dt=%Y-%m-%d/hour=%H/"
+
+
+def staging_prefix(prefix: str, table: str) -> str:
+    """The key prefix under which ``table``'s staged batches are written."""
+    return STAGING_LAYOUT.format(prefix=prefix, table=table)
+
+
 #: the table of the labelled raw event (every event, whatever its class)
 RAW_TABLE = "raw_archive"
 #: the classes the lake pins today (the rest are staged unpinned)

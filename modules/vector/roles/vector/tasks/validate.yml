@@ -21,8 +21,8 @@
       - vector_sensor_ca_ref == '' or vector_sensor_ca_ref is match(vector_ref_pattern)
       - >-
         [vector_dir, vector_data_root, vector_siem_logs_dir] | reject('match', vector_path_pattern) | list | length == 0
-      - vector_siem_alerts_file is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z')
-      - vector_siem_archives_file is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z')
+      - vector_siem_alerts_file is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(/[A-Za-z0-9][A-Za-z0-9_.-]{0,63}){0,2}\Z')
+      - vector_siem_archives_file is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(/[A-Za-z0-9][A-Za-z0-9_.-]{0,63}){0,2}\Z')
       - vector_siem_alerts_file != vector_siem_archives_file
       - >-
         [vector_route_syslog_udp, vector_route_syslog_tls, vector_route_sensors,

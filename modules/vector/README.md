@@ -32,7 +32,7 @@ live only in the private overlay.
 
 1. **Receive** (Vector). Syslog on 514/udp (the router sends UDP only, decision D4), syslog over TLS
    on 6514/tcp, the sensors' vector protocol on 6000/tcp (TLS, optionally mutual), and the manager's
-   `alerts.json` and `archives.json`, tailed with checkpoints from the start of each file. Every
+   `alerts/alerts.json` and `archives/archives.json` under the manager's `logs` directory (mounted read-only, supplementary group 999, followed by inode across the daily rotation), tailed with checkpoints from the start of each file. Every
    listener is published on the guest's own address only; the guest's firewall file admits each
    one's senders and no one else.
 2. **Stamp** (Vector, one `remap` per input). Each event becomes an envelope
@@ -137,7 +137,7 @@ and the rule number stays in `finding_uid`: a detection id is never an engine ru
 
 ## Staging contract (for the lake writer and the source census)
 
-- Bucket `vector_s3_bucket`, prefix `vector_s3_prefix` (default `ocsf/`); key
+- Bucket `vector_s3_bucket`, prefix `vector_s3_prefix` (default `lake-writer/staging/`); key
   `<prefix><table>/dt=%Y-%m-%d/hour=%H/<id>.ndjson.gz`. `dt` and `hour` are the **write** time (UTC),
   not the event's; the row's `time` is the event's.
 - A line is one JSON object: the row. Each row has `labels` (`hnx_tlp`, and `hnx_runtime` when set).
@@ -187,7 +187,7 @@ and the rule number stays in `finding_uid`: a detection id is never an engine ru
 
 - `lab/modules.yml`: `log-pipeline: [{provider: vector, instance: log-pipeline, placement: {aggregator: <host>}}]`.
 - `lab/services.yml`: the row exactly as bound (`host` the guest, `version` 0.46.1), `impl: vector-aggregator`.
-- Group variables: `vector_s3_region`, `vector_siem_logs_dir` (the SIEM module's stream directory on the
+- Group variables: `vector_s3_region`, `vector_siem_logs_dir` (the manager's `logs` directory on the
   same guest), `vector_siem_syslog_host`/`port` (the manager's syslog input: **not** 514, which the
   listener holds), `vector_runtime_labels_src`, `vector_tlp_sources_src`, `vector_trusted_recorders`
   (the router's address), `vector_detection_ids`, and the SIEM routes

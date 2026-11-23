@@ -309,7 +309,7 @@ def test_the_raw_syslog_goes_on_unchanged_to_the_managers_input():
 
 def test_the_staging_sink_writes_one_prefix_per_table_gzipped_and_drops_its_routing_field():
     stage = render_config()["sinks"]["stage"]
-    assert stage["key_prefix"] == "ocsf/{{ _hnx_table }}/dt=%Y-%m-%d/hour=%H/"
+    assert stage["key_prefix"] == "lake-writer/staging/{{ _hnx_table }}/dt=%Y-%m-%d/hour=%H/"
     assert stage["compression"] == "gzip" and stage["encoding"]["except_fields"] == ["_hnx_table"]
     assert stage["buffer"]["when_full"] == "block"  # it never drops
 
@@ -322,3 +322,27 @@ def test_the_sensor_listener_asks_for_a_client_certificate_only_when_given_a_ca(
     ]
     assert mtls["verify_certificate"] is True and mtls["ca_file"].endswith("sensor-ca.pem")
     assert "tls" not in render_config(vector_sensor_tls=False)["sources"]["sensors"]
+
+
+def test_the_manager_contract_defaults_are_pinned():
+    d = ld.load_yaml(ROLE / "defaults" / "main.yml")
+    assert d["vector_siem_logs_gid"] == 999  # the manager's group
+    assert d["vector_siem_alerts_file"] == "alerts/alerts.json"
+    assert d["vector_siem_archives_file"] == "archives/archives.json"
+    assert d["vector_siem_syslog_port"] == 5514 and d["vector_siem_syslog_protocol"] == "udp"
+    assert d["vector_siem_logs_dir"] == ""  # the site names the manager's logs directory
+    cfg = render_config()
+    inc = cfg["sources"]["siem_alerts"]["include"] + cfg["sources"]["siem_archives"]["include"]
+    assert inc == ["/var/siem-logs/alerts/alerts.json", "/var/siem-logs/archives/archives.json"]
+
+
+def test_the_staging_layout_is_one_helper_and_the_sink_renders_it():
+    from hnx_modules.vector import ocsf
+
+    d = ld.load_yaml(ROLE / "defaults" / "main.yml")
+    assert (d["vector_s3_bucket"], d["vector_s3_prefix"]) == ("soc-staging", "lake-writer/staging/")
+    assert ocsf.staging_prefix(d["vector_s3_prefix"], "detection_finding") == (
+        "lake-writer/staging/detection_finding/dt=%Y-%m-%d/hour=%H/"
+    )
+    sink = render_config(vector_s3_prefix=d["vector_s3_prefix"])["sinks"]["stage"]["key_prefix"]
+    assert sink == ocsf.staging_prefix(d["vector_s3_prefix"], "{{ _hnx_table }}")

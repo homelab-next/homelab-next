@@ -28,9 +28,9 @@ vector_gid: 61005
 # the manager's alert and archive files (the SIEM module's stream directory on this guest, read-only; the site names it)
 # and the group that can read them inside the container
 vector_siem_logs_dir: ""
-vector_siem_logs_gid: 0
-vector_siem_alerts_file: alerts.json
-vector_siem_archives_file: archives.json
+vector_siem_logs_gid: 999
+vector_siem_alerts_file: alerts/alerts.json
+vector_siem_archives_file: archives/archives.json
 # where the raw syslog goes on: the manager's syslog input (the module's address, never the 514 the
 # listener uses), over udp or tcp
 vector_siem_syslog_host: "{{ vector_bind }}"
@@ -54,8 +54,8 @@ vector_route_siem_archives: vector/siem-archives
 vector_detection_ids: {}
 # the staging bucket and prefix the lake writer reads (the object store's registry id; its url is
 # resolved from the registry unless vector_s3_url is set: scheme://host:port)
-vector_s3_bucket: hnx-soc-staging
-vector_s3_prefix: ocsf/
+vector_s3_bucket: soc-staging
+vector_s3_prefix: lake-writer/staging/
 vector_s3_region: ""
 vector_object_store_id: object-store
 vector_s3_url: ""

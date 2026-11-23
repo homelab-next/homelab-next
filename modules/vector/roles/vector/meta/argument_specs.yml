@@ -69,20 +69,20 @@ argument_specs:
         default: 61005
       vector_siem_logs_dir:
         type: path
-        description: "The manager's stream directory on this guest (alerts.json, archives.json), mounted read-only."
+        description: "The manager's stream directory on this guest (the manager's logs directory, the parent of the two stream files), mounted read-only."
         default: ''
       vector_siem_logs_gid:
         type: int
         description: 'A supplementary group number that can read the manager files inside the container (0: none added).'
-        default: 0
+        default: 999
       vector_siem_alerts_file:
         type: str
         description: "The manager's alert stream file name."
-        default: alerts.json
+        default: alerts/alerts.json
       vector_siem_archives_file:
         type: str
         description: "The manager's archive stream file name."
-        default: archives.json
+        default: archives/archives.json
       vector_siem_syslog_host:
         type: str
         description: "The manager's syslog input address (the module's own address, never the 514 the listener uses)."
@@ -135,11 +135,11 @@ argument_specs:
       vector_s3_bucket:
         type: str
         description: 'The staging bucket the lake writer reads.'
-        default: hnx-soc-staging
+        default: soc-staging
       vector_s3_prefix:
         type: str
         description: 'The key prefix (ending in /) under which each table has its own directory.'
-        default: ocsf/
+        default: lake-writer/staging/
       vector_s3_region:
         type: str
         description: "The object store's region name."
