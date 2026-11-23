@@ -329,7 +329,7 @@ def write_status(
         **extra,
     }
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)  # its final mode, at creation
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # its final mode, at creation
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(doc, f, sort_keys=True)
     os.replace(tmp, path)
