@@ -4,7 +4,7 @@
 #   kind: tool
 #   purpose: Remap one labelled event into the rows of its OCSF classes for the sidecar.
 #   owner: platform
-#   trigger: [manual]
+#   trigger: [role:vector]
 #   inputs: a labelled event, its kind and a seed
 #   outputs: rows per OCSF table
 #   exit:

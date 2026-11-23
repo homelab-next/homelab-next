@@ -29,7 +29,9 @@ import pytest
 import yaml
 from jinja2 import sandbox
 
-MODULE_CODE = Path(__file__).resolve().parents[2] / "modules" / "vector" / "python"
+MODULE_CODE = (
+    Path(__file__).resolve().parents[2] / "modules" / "vector" / "roles" / "vector" / "files"
+)
 sys.path.insert(0, str(MODULE_CODE))  # the module's own package, as the deployment puts it
 
 from conformance.suites import log_pipeline as suite
@@ -143,8 +145,10 @@ def test_the_public_tree_loads_clean(capsys):
 
 def test_roles_holds_only_the_contributed_role_and_the_code_tree_only_its_package():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["vector"]
-    assert sorted(p.name for p in (MODULE / "python").iterdir()) == ["hnx_modules"]
-    assert sorted(p.name for p in (MODULE / "python" / "hnx_modules").iterdir()) == ["vector"]
+    assert not (MODULE / "python").exists()  # the code ships in the role, where its caller is found
+    files = MODULE / "roles" / "vector" / "files"
+    assert sorted(p.name for p in files.iterdir()) == ["hnx_modules"]
+    assert sorted(p.name for p in (files / "hnx_modules").iterdir()) == ["vector"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
     assert [c["file"] for c in manifest()["contributes"]["roles"]] == ["roles/vector"]
 

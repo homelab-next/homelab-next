@@ -72,7 +72,7 @@ vector_mem_limit: 1g
 vector_sidecar_mem_limit: 256m
 # the sources of the code the sidecar runs: the module's own package and the core's label rules,
 # both copied verbatim from the checkout the role runs from
-vector_code_src: "{{ role_path }}/../../python/hnx_modules/vector"
+vector_code_src: "{{ role_path }}/files/hnx_modules/vector"
 vector_lib_src: "{{ role_path }}/../../../../homelabnext"
 vector_start: true
 vector_validate_with_docker: true

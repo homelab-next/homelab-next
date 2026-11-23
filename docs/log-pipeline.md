@@ -209,7 +209,7 @@ beside a sidecar that runs this document's rules as the library's own files (cop
 guest, and proved byte-identical and complete by a test), not as a port. Its adapter,
 `hnx_modules.vector.log_pipeline:make`, drives the sidecar's labelling path, and
 `hnx conform run log-pipeline --target modules/vector/conformance/target.yml` (with
-`PYTHONPATH=modules/vector/python`) runs the suite through it. Where the contract says the collector
+`PYTHONPATH=modules/vector/roles/vector/files`) runs the suite through it. Where the contract says the collector
 supplies the observed address, the provider's per-route policy is: the peer of the connection, the
 address the SIEM manager recorded for an agent, or, from a trusted recorder only (the router), the client
 it recorded; never a field the event body wrote.

@@ -191,7 +191,7 @@ argument_specs:
       vector_code_src:
         type: str
         description: "The module's own package directory the sidecar's code is copied from."
-        default: '{{ role_path }}/../../python/hnx_modules/vector'
+        default: '{{ role_path }}/files/hnx_modules/vector'
       vector_lib_src:
         type: str
         description: "The core's homelabnext directory the label rules are copied from (verbatim)."

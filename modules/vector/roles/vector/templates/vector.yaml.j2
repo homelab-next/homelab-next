@@ -2,7 +2,7 @@
 # Managed by Ansible (role vector). Do not edit.
 # The Vector aggregator (modules/vector). Transport only: the listeners, the files it tails, the disk
 # buffers, the raw forward to the manager and the staging writes. The two label rules and the OCSF
-# remap run in the sidecar (modules/vector/python), which every event passes through. Each input's
+# remap run in the sidecar (modules/vector/roles/vector/files/hnx_modules/vector), which every event passes through. Each input's
 # `stamp` below writes only constants and fields its SOURCE component set (the socket's peer), never
 # a field of the event body: that is what the sidecar's observed-address policy reads.
 data_dir: /var/lib/vector

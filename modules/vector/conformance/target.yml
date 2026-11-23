@@ -3,8 +3,8 @@
 # through the module's own adapter, which labels with the sidecar's code path (the core library's
 # rules) from the tables the suite hands it.
 #   hnx conform run log-pipeline --target modules/vector/conformance/target.yml
-# The adapter lives in the module's own package (modules/vector/python), so the run puts it on the
-# import path:  PYTHONPATH=modules/vector/python hnx conform run log-pipeline --target ...
+# The adapter lives in the module's own package (modules/vector/roles/vector/files), so the run puts it on the
+# import path:  PYTHONPATH=modules/vector/roles/vector/files hnx conform run log-pipeline --target ...
 name: vector
 capabilities:
   log-pipeline:

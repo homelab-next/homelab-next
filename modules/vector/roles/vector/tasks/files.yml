@@ -29,7 +29,7 @@
     owner: "{{ vector_owner }}"
     group: "{{ vector_group }}"
     mode: "0644"
-  loop: "{{ vector_code_files }}"
+  loop: [__init__.py, log_pipeline.py, ocsf.py, sidecar.py]
   register: vector_sidecar_files_2
 
 - name: The rendered label tables (the sidecar reloads a changed file itself)

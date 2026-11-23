@@ -4,7 +4,7 @@
 #   kind: tool
 #   purpose: Mark the vector module's package, the directory the sidecar and its remap are imported from on the guest.
 #   owner: platform
-#   trigger: [manual]
+#   trigger: [role:vector]
 #   inputs: nothing (imported, never run)
 #   outputs: nothing
 #   exit:

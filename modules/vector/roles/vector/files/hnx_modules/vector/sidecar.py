@@ -4,7 +4,7 @@
 #   kind: service
 #   purpose: Label and remap every event the Vector aggregator hands over, with the core library's own label rules, and forward the rows.
 #   owner: platform
-#   trigger: [manual]
+#   trigger: [role:vector]
 #   inputs: the aggregator's events on a local socket and the rendered label tables
 #   outputs: labelled OCSF rows on the forward socket and a status file
 #   exit:
@@ -328,10 +328,18 @@ def write_status(
         "counters": counters,
         **extra,
     }
+    _publish(path, json.dumps(doc, sort_keys=True))
+
+
+def _publish(path: Path, text: str) -> None:
+    """Replace the status file whole (the health check reads a file that is never half-written).
+    The sidecar's container has no homelabnext package beyond the label rules, so the shared
+    state store is not importable here; the file is a liveness document the health check
+    compares with the deployed tables, not checker state."""
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # its final mode, at creation
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(doc, f, sort_keys=True)
+        f.write(text)
     os.replace(tmp, path)
 
 

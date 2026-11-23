@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The log-pipeline provider's code (modules/vector/python): the enrichment sidecar and the OCSF
+"""The log-pipeline provider's code (modules/vector/roles/vector/files): the enrichment sidecar and the OCSF
 remap, proved without any container.
 
 * The label rules the sidecar runs are the core's own files: the role copies exactly the closure of
@@ -33,7 +33,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-MODULE_CODE = Path(__file__).resolve().parents[2] / "modules" / "vector" / "python"
+MODULE_CODE = (
+    Path(__file__).resolve().parents[2] / "modules" / "vector" / "roles" / "vector" / "files"
+)
 sys.path.insert(0, str(MODULE_CODE))  # the module's own package, as the deployment puts it
 
 from hnx_modules.vector import log_pipeline as adapter
@@ -154,6 +156,16 @@ def _stdlib_only(path: Path) -> list[str]:
     return bad
 
 
+CODE = MODULE / "roles" / "vector" / "files" / "hnx_modules" / "vector"
+
+
+def _code_files() -> list[str]:
+    """The files the role's task copies to the guest, read from the task's own loop."""
+    tasks = yaml.safe_load((MODULE / "roles" / "vector" / "tasks" / "files.yml").read_text())
+    (task,) = [t for t in tasks if t["name"] == "The module's own sidecar and remap code"]
+    return list(task["loop"])
+
+
 def _role_vars() -> dict:
     return yaml.safe_load((MODULE / "roles" / "vector" / "vars" / "main.yml").read_text())
 
@@ -170,11 +182,11 @@ def test_the_role_copies_exactly_the_closure_of_the_label_rules():
 
 
 def test_the_sidecar_and_the_remap_need_only_the_standard_library_and_the_rules():
-    for name in _role_vars()["vector_code_files"]:
-        assert _stdlib_only(MODULE / "python" / "hnx_modules" / "vector" / name) == [], name
-    # and the role copies every file the sidecar imports from its own package
-    own = {p.name for p in (MODULE / "python" / "hnx_modules" / "vector").glob("*.py")}
-    assert set(_role_vars()["vector_code_files"]) == own - {"log_pipeline.py"}
+    for name in _code_files():
+        assert _stdlib_only(CODE / name) == [], name
+    # and the role copies every file of the package (a caller found for each, M-02)
+    own = {p.name for p in CODE.glob("*.py")}
+    assert set(_code_files()) == own
 
 
 CORPUS = [
@@ -205,10 +217,8 @@ def test_a_layout_built_from_the_copies_labels_exactly_like_the_core(tmp_path):
         (lib / rel).write_bytes((ROOT / "homelabnext" / rel).read_bytes())
     code = tmp_path / "code" / "hnx_modules" / "vector"
     code.mkdir(parents=True)
-    for name in _role_vars()["vector_code_files"]:
-        (code / name).write_bytes(
-            (MODULE / "python" / "hnx_modules" / "vector" / name).read_bytes()
-        )
+    for name in _code_files():
+        (code / name).write_bytes((CODE / name).read_bytes())
     rt = tables()[0]
     (tmp_path / "rt.json").write_text(json.dumps(table_doc(ROWS)))
     (tmp_path / "st.json").write_text(

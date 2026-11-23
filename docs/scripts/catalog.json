@@ -2003,11 +2003,11 @@
       "language": "python",
       "outputs": "the suite's verdict inputs",
       "owner": "platform",
-      "path": "modules/vector/python/hnx_modules/vector/log_pipeline.py",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/log_pipeline.py",
       "purpose": "Drive the sidecar's labelling path for the log-pipeline conformance suite.",
       "status": "active",
       "trigger": [
-        "manual"
+        "role:vector"
       ]
     },
     {
@@ -2020,11 +2020,11 @@
       "language": "python",
       "outputs": "rows per OCSF table",
       "owner": "platform",
-      "path": "modules/vector/python/hnx_modules/vector/ocsf.py",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/ocsf.py",
       "purpose": "Remap one labelled event into the rows of its OCSF classes for the sidecar.",
       "status": "active",
       "trigger": [
-        "manual"
+        "role:vector"
       ]
     },
     {
@@ -2037,11 +2037,11 @@
       "language": "python",
       "outputs": "nothing",
       "owner": "platform",
-      "path": "modules/vector/python/hnx_modules/vector/__init__.py",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/__init__.py",
       "purpose": "Mark the vector module's package, the directory the sidecar and its remap are imported from on the guest.",
       "status": "active",
       "trigger": [
-        "manual"
+        "role:vector"
       ]
     },
     {
@@ -2054,11 +2054,11 @@
       "language": "python",
       "outputs": "labelled OCSF rows on the forward socket and a status file",
       "owner": "platform",
-      "path": "modules/vector/python/hnx_modules/vector/sidecar.py",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/sidecar.py",
       "purpose": "Label and remap every event the Vector aggregator hands over, with the core library's own label rules, and forward the rows.",
       "status": "active",
       "trigger": [
-        "manual"
+        "role:vector"
       ]
     },
     {

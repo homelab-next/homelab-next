@@ -29,7 +29,6 @@ vector_lib_files:
   - logpipeline/__init__.py
   - logpipeline/runtime_labels.py
   - logpipeline/tlp_labels.py
-vector_code_files: [__init__.py, ocsf.py, sidecar.py]
 vector_checkpoint_dir: file_checkpoints
 # the ports inside the container (the host's are the settings): unprivileged, so every capability stays dropped
 vector_container_syslog_udp_port: 5514

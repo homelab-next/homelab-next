@@ -4,7 +4,7 @@
 #   kind: tool
 #   purpose: Drive the sidecar's labelling path for the log-pipeline conformance suite.
 #   owner: platform
-#   trigger: [manual]
+#   trigger: [role:vector]
 #   inputs: the suite's observed addresses and events
 #   outputs: the suite's verdict inputs
 #   exit:

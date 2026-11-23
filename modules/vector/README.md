@@ -12,7 +12,7 @@ live only in the private overlay.
 | | |
 |---|---|
 | Slot | `log-pipeline` (contract `conformance/protocols/log_pipeline.py`, [log pipeline](../../docs/log-pipeline.md)), stateless |
-| Adapter | the module's own `hnx_modules.vector.log_pipeline:make` (`python/hnx_modules/vector/`) |
+| Adapter | the module's own `hnx_modules.vector.log_pipeline:make` (`roles/vector/files/hnx_modules/vector/`) |
 | Product | Vector 0.46.1 (`docker.io/timberio/vector`, debian build), pinned by tag and digest |
 | Host role | `aggregator`: kind `vm`, baseline `base`, footprint 1 vCPU, 1536 MB, 10 GB |
 | Role | `vector` (role interface v1), a wrapper of the core `compose_app` with two services |
@@ -39,7 +39,7 @@ live only in the private overlay.
    `{route, peer, line}` (or `{route, event}` for a sensor event that arrives structured). The route
    is a constant of the configuration; the peer is the socket source's own field; the line is the
    raw text. The stamp reads **no field of the event body** (a test holds every stamp to that).
-3. **Label and remap** (the sidecar, `python/hnx_modules/vector/sidecar.py` and `ocsf.py`).
+3. **Label and remap** (the sidecar, `roles/vector/files/hnx_modules/vector/sidecar.py` and `ocsf.py`).
    - `labels.hnx_runtime` and `labels.hnx_tlp` are set by the core library's own rules,
      `homelabnext.logpipeline.enrich` and `enrich_tlp`, from the rendered `runtime-labels.json` and
      `tlp-sources.json` (see below). The role copies the library's files **verbatim**
@@ -216,7 +216,7 @@ and the rule number stays in `finding_uid`: a detection id is never an engine ru
 ## Conformance
 
 ```text
-PYTHONPATH=modules/vector/python hnx conform run log-pipeline --target modules/vector/conformance/target.yml
+PYTHONPATH=modules/vector/roles/vector/files hnx conform run log-pipeline --target modules/vector/conformance/target.yml
 ```
 
 The adapter drives the sidecar's own labelling path (`observed_for`, then `label_event`, which composes
