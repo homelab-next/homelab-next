@@ -1186,7 +1186,7 @@
         "2": "misconfiguration"
       },
       "id": "leak-scan",
-      "inputs": "paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file",
+      "inputs": "paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file, optional --exemptions FILE",
       "invariant": [
         "F-05",
         "F-18",
