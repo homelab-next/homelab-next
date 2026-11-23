@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Argument helpers the ``hnx`` sub-command front ends share (one copy, not one per command)."""
 
 from __future__ import annotations
