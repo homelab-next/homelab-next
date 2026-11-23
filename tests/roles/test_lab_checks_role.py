@@ -12,6 +12,7 @@ import json
 import os
 import pwd
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from rolerun import fake, last_run_vars, run_role
 
@@ -82,7 +83,8 @@ def test_main_installs_the_checks_with_the_token_only_in_the_root_only_file(tmp_
     cfg = (etc / "notify.json").read_text()
     doc = json.loads(cfg)
     assert TOKEN not in cfg and doc["topic"] == "lab-checks"
-    assert doc["url"].split("//", 1) == ["http:", "notify.example.internal:80"]
+    url = urlsplit(doc["url"])
+    assert (url.scheme, url.hostname, url.port) == ("http", "notify.example.internal", 80)
     assert (etc / "invariants.yml").read_text() == REGISTER
     assert (
         not list(etc.glob("*.incoming"))
