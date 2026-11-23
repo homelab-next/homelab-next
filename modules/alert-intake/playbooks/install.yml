@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the alert webhook on the guest the site placed the module's `server` role on. The
+# apply path (docs/modules/apply.md) renders its own modules.yml from the selection and does not import this
+# file; it is the module's own entry point, for a lab that runs one module by hand:
+#   ansible-playbook -i <inventory with --selection> modules/alert-intake/playbooks/install.yml
+# The readiness hook refuses to go on without every secret in its form.
+- name: Install the alert webhook
+  hosts: mod_alert_intake_server
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: alert_intake
+        tasks_from: readiness
+      tags: [mod_alert_intake]
+  roles:
+    - role: alert_intake
+      tags: [mod_alert_intake]

@@ -199,6 +199,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "per-guest teardown audit: check|plan NAME (read-only, all planes)",
         lambda a: importlib.import_module("homelabnext.decommission.cli").main(a),
     ),
+    "cutover": (
+        "the cutover ledger (ADR-0043): check|render|gate LEDGER_DIR",
+        lambda a: importlib.import_module("homelabnext.cutover.cli").main(a),
+    ),
     "docs": (
         "generate/check docs: systems (one SOP page per service), capabilities (contract reference), index (docs/README.md descriptions from page summaries), facts (counts, tool classes, schema versions in the pages)",
         lambda a: importlib.import_module("homelabnext.sop.cli").main(a),

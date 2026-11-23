@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# Derived, not configurable: the names every task and template shares.
+ci_runner_marker: "managed by homelab-next (modules/ci-runner)"
+ci_runner_bin_dir: /usr/local/libexec/homelabnext
+ci_runner_slot_script: "{{ ci_runner_bin_dir }}/hnx-ci-slot"
+ci_runner_feeder_script: "{{ ci_runner_bin_dir }}/hnx-ci-feeder"
+ci_runner_slot_config: "{{ ci_runner_config_dir }}/slot.json"
+ci_runner_build_dir: "{{ ci_runner_config_dir }}/build"
+ci_runner_images_dir: "{{ ci_runner_data_root }}/images"
+ci_runner_spool_dir: "{{ ci_runner_data_root }}/spool"
+ci_runner_slots_dir: "{{ ci_runner_data_root }}/slots"
+ci_runner_unit_dir: /etc/systemd/system
+ci_runner_slot_unit: "hnx-{{ ci_runner_logical_id }}-slot@.service"
+ci_runner_egress_unit: "hnx-{{ ci_runner_logical_id }}-egress.service"
+ci_runner_egress_file: "{{ ci_runner_config_dir }}/egress.nft"
+ci_runner_egress_table: hnx_ci_egress
+ci_runner_qemu: /usr/bin/qemu-system-x86_64
+ci_runner_qemu_img: /usr/bin/qemu-img
+ci_runner_iso_tool: /usr/bin/genisoimage
+ci_runner_packages: [qemu-system-x86, qemu-utils, genisoimage, nftables, python3]
+# never reached by a job VM (spelled with format(), as nftables_host's refused list is, so the
+# address rule keeps meaning "no site address in a role"): private, shared, loopback, link-local, documentation,
+# benchmark, multicast and reserved space
+ci_runner_refused_v4:
+  - "{{ '%d.%d.%d.%d/%d' | format(0, 0, 0, 0, 8) }}"
+  - "{{ '%d.%d.%d.%d/%d' | format(10, 0, 0, 0, 8) }}"
+  - "{{ '%d.%d.%d.%d/%d' | format(100, 64, 0, 0, 10) }}"
+  - "{{ '%d.%d.%d.%d/%d' | format(127, 0, 0, 0, 8) }}"
+  - "{{ '%d.%d.%d.%d/%d' | format(169, 254, 0, 0, 16) }}"
+  - "{{ '%d.%d.%d.%d/%d' | format(172, 16, 0, 0, 12) }}"
+  - "{{ '%d.%d.%d.%d/%d' | format(192, 0, 0, 0, 24) }}"
+  - "{{ '%d.%d.%d.%d/%d' | format(192, 0, 2, 0, 24) }}"
+  - "{{ '%d.%d.%d.%d/%d' | format(192, 168, 0, 0, 16) }}"
+  - "{{ '%d.%d.%d.%d/%d' | format(198, 18, 0, 0, 15) }}"
+  - "{{ '%d.%d.%d.%d/%d' | format(198, 51, 100, 0, 24) }}"
+  - "{{ '%d.%d.%d.%d/%d' | format(203, 0, 113, 0, 24) }}"
+  - "{{ '%d.%d.%d.%d/%d' | format(224, 0, 0, 0, 3) }}"
+# the host's stub resolver (systemd-resolved): the one loopback address the VMs' DNS may reach
+ci_runner_dns_stub: "{{ '%d.%d.%d.%d' | format(127, 0, 0, 53) }}"
+ci_runner_build_id: "{{ ((ci_runner_base_image_sha256 ~ ci_runner_agent_sha256 ~ lookup('ansible.builtin.template', 'build-user-data.j2')) | hash('sha256'))[:16] }}"
+ci_runner_golden: "golden-{{ ci_runner_build_id }}.qcow2"
+ci_runner_base_image: "{{ ci_runner_images_dir }}/base-{{ ci_runner_base_image_sha256[:16] }}.img"

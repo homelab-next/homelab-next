@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# suricata-update ships with no source enabled: a feed that was never enabled leaves only the
+# bundled decoder rules loaded and nothing says so. Enable each source once, then fetch.
+- name: List the enabled rule sources
+  ansible.builtin.command:
+    argv: ["{{ suricata_update_cli }}", list-enabled-sources]
+  register: suricata_enabled_sources
+  changed_when: false
+  check_mode: false
+
+- name: Enable a source that is not enabled
+  ansible.builtin.command:
+    argv: ["{{ suricata_update_cli }}", enable-source, "{{ item }}"]
+  loop: "{{ suricata_rule_sources }}"
+  when: (suricata_enabled_sources.stdout ~ suricata_enabled_sources.stderr) is not search('(^|[^A-Za-z0-9._/-])' ~ (item | regex_escape) ~ '($|[^A-Za-z0-9._/-])')
+  changed_when: true
+
+- name: Is a ruleset on disk
+  ansible.builtin.stat:
+    path: "{{ suricata_lib_dir }}/rules/suricata.rules"
+  register: suricata_rules_file
+
+- name: Fetch the rules once, so the gate loads a real ruleset
+  ansible.builtin.command:
+    argv: ["{{ suricata_update_cli }}", --suricata-conf, "{{ suricata_config_dir }}/{{ suricata_config_file }}"]
+  when: not suricata_rules_file.stat.exists
+  changed_when: true

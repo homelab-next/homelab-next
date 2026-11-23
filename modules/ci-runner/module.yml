@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+# An ephemeral CI runner pool as a feature module (docs/modules.md; README.md beside this file):
+# a host that keeps N job slots, each slot one throwaway VM per job, booted from a golden image
+# built from a pinned base image and a pinned runner agent, given one single-use runner
+# registration and destroyed after its one job. The host holds no forge credential: a feeder on
+# the trusted side mints the registrations and pushes them through an SSH key forced to one
+# command. Every real value (the guest, the pins' locations, the feeder's key, the resolvers) is
+# the overlay's.
+manifest_version: "1.0"
+id: ci-runner
+kind: feature
+title: Ephemeral CI runner pool
+description: Keeps N CI job slots on one host; each job runs in a fresh VM from a pinned golden
+  image with one single-use runner registration and is destroyed after it, behind a host egress
+  table that lets the VMs reach DNS and public addresses only; health judges the table, the image,
+  the slots and the feeder.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+requires:
+  hosts:
+    - role: runner
+      kind: vm
+      footprint: {cpu: 8, memory_mb: 16384, disk_gb: 120}
+      guest:
+        baselines: [base]
+      roles: [role:ci_runner]
+      purpose: runs the job slots (KVM guests of this VM, so it needs nested virtualisation), holds the base and golden images and the registration spool
+egress:
+  - host: runner
+    to: [internet]
+    purpose: the job VMs and the image build fetch code, actions, packages and images from public hosts and reach the forge's job service; no private address is reachable
+contributes:
+  roles:
+    - file: roles/ci_runner
+  preflight:
+    - {role: role:ci_runner, hook: readiness}
+  docs:
+    - file: README.md
+lifecycle:
+  install: {playbook: playbooks/install.yml, note: "the feeder (on the trusted side, with the forge credential) is started by the site; the pool idles until it supplies registrations"}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a new pinned base image or agent: a new golden image is built beside the old one; each slot takes it at its next job"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: false
+    discard_reason: the pool owns no data; its images are rebuilt from their pinned digests and every job VM is already gone
+    audit: [inventory, playbooks, live-refs, monitoring, contributions]
