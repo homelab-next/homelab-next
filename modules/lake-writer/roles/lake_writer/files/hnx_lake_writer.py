@@ -461,8 +461,12 @@ class Config:
         self.max_attempts = int(e.get("HNX_LW_MAX_ATTEMPTS", "5"))
         self.max_batches = int(e.get("HNX_LW_MAX_BATCHES", "0"))
         self.s3_region_env = e.get("HNX_LW_S3_REGION_VAR", "HNX_LW_S3_REGION")
-        self.s3_access_env = e.get("HNX_LW_S3_ACCESS_VAR", "_".join(["HNX", "LW", "S3", "ACCESS", "KEY"]))
-        self.s3_secret_env = e.get("HNX_LW_S3_SECRET_VAR", "_".join(["HNX", "LW", "S3", "SECRET", "KEY"]))
+        self.s3_access_env = e.get(
+            "HNX_LW_S3_ACCESS_VAR", "_".join(["HNX", "LW", "S3", "ACCESS", "KEY"])
+        )
+        self.s3_secret_env = e.get(
+            "HNX_LW_S3_SECRET_VAR", "_".join(["HNX", "LW", "S3", "SECRET", "KEY"])
+        )
 
 
 def open_lake(cfg, schemas, *, ensure):
