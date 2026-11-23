@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned server image bump (velociraptor_server_target_image, tag and
+# digest), export the server state first, then converge with the new pin (set velociraptor_server_image
+# to the target in the overlay) and move the endpoints to the same release (velociraptor_client_version,
+# with its pinned checksum in the client role):
+#   ansible-playbook -i <inventory> modules/velociraptor/playbooks/upgrade.yml \
+#     -e velociraptor_server_target_image=<ref> -e velociraptor_client_target_version=<release>
+- name: Upgrade the endpoint-forensics server
+  hosts: mod_velociraptor_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: velociraptor_server
+        tasks_from: upgrade
+    - name: Export the server state before the new image opens it
+      ansible.builtin.include_role:
+        name: velociraptor_server
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: velociraptor_server
+      vars:
+        velociraptor_server_image: "{{ velociraptor_server_target_image }}"
+
+- name: Move the endpoints to the same release
+  hosts: mod_velociraptor_endpoint
+  become: true
+  tasks:
+    - name: Validate the release against the role's pinned checksums
+      ansible.builtin.include_role:
+        name: velociraptor_client
+        tasks_from: upgrade
+    - name: Converge on the new release
+      ansible.builtin.include_role:
+        name: velociraptor_client
+      vars:
+        velociraptor_client_version: "{{ velociraptor_client_target_version }}"

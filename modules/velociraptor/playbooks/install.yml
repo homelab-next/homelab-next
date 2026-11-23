@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the endpoint-forensics provider: the server on the guests the site placed
+# the module's `server` role on, then the client baseline on the `endpoint` role's guests. The
+# apply path (docs/modules/apply.md) renders its own modules.yml from the selection and does not
+# import this file; it is the module's own entry point, for a lab that runs one module by hand:
+#   ansible-playbook -i <inventory with --selection> modules/velociraptor/playbooks/install.yml
+# docker_engine is applied to the server's guest first (a compose_app module's host); the roles'
+# readiness hooks refuse to go on without it, without the secrets, and (the client) without a real
+# client configuration. The server is converged first: the client configuration it generates is
+# what the endpoints install, so a first install is run twice, the second time after the operator
+# put client/client.config.yaml in the secret store (README.md, "Enrolment").
+- name: Install the endpoint-forensics server
+  hosts: mod_velociraptor_server
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: velociraptor_server
+        tasks_from: readiness
+      tags: [mod_velociraptor]
+  roles:
+    - role: velociraptor_server
+      tags: [mod_velociraptor]
+
+- name: Install the endpoint-forensics client baseline
+  hosts: mod_velociraptor_endpoint
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: velociraptor_client
+        tasks_from: readiness
+      tags: [mod_velociraptor]
+  roles:
+    - role: velociraptor_client
+      tags: [mod_velociraptor]

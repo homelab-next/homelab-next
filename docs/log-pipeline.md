@@ -1,6 +1,6 @@
 ---
 summary: 'The log-pipeline contract: hnx_runtime from the guest model by the address the collector saw, hnx_tlp from the route''s declaration; never the event.'
-summary_of: outline:sha256:7543602e919b4903
+summary_of: outline:sha256:038f067c33711f19
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The log pipeline and its labels
@@ -222,3 +222,15 @@ by the [`source-census`](../modules/source-census/README.md) module (ADR-0049 de
 
 Both read counts and times only. The label machinery above is not involved: they do not move or
 copy an event, so they add no egress.
+
+## The vector provider
+
+`modules/vector` ([README](../modules/vector/README.md)) is the in-tree provider: a Vector aggregator
+beside a sidecar that runs this document's rules as the library's own files (copied verbatim to the
+guest, and proved byte-identical and complete by a test), not as a port. Its adapter,
+`hnx_modules.vector.log_pipeline:make`, drives the sidecar's labelling path, and
+`hnx conform run log-pipeline --target modules/vector/conformance/target.yml` (with
+`PYTHONPATH=modules/vector/roles/vector/files`) runs the suite through it. Where the contract says the collector
+supplies the observed address, the provider's per-route policy is: the peer of the connection, the
+address the SIEM manager recorded for an agent, or, from a trusted recorder only (the router), the client
+it recorded; never a field the event body wrote.

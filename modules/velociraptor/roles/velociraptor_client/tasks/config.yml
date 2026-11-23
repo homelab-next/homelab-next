@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# The client configuration is read (from the secret store or a controller file) and judged before
+# anything is installed: it must be the real thing the server generated. A placeholder, an empty
+# file, text that is not a client configuration and any configuration that carries a private key (the
+# server's own configuration, the hunt principal's API credential) are refused, and the verdicts,
+# never the text, leave the no_log task.
+- name: Read the client configuration
+  ansible.builtin.set_fact:
+    velociraptor_client_config_text: >-
+      {{ lookup('ansible.builtin.file', velociraptor_client_config_file)
+         if velociraptor_client_config_file | length > 0
+         else lookup('hnx_secret', velociraptor_client_config_ref) }}
+  no_log: true
+  tags: [readiness]
+
+- name: Judge it
+  ansible.builtin.set_fact:
+    velociraptor_client_config_forms:
+      parses: "{{ (velociraptor_client_config_text | from_yaml) is mapping }}"
+      has_urls: >-
+        {{ ((velociraptor_client_config_text | from_yaml).Client.server_urls | default([])) | length > 0 }}
+      urls_ok: >-
+        {{ ((velociraptor_client_config_text | from_yaml).Client.server_urls | default([]))
+           | reject('match', '^(https|wss)://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?/\Z') | list | length == 0 }}
+      has_authority: >-
+        {{ ((velociraptor_client_config_text | from_yaml).Client.ca_certificate | default(''))
+           is match('(?s)^\s*-----BEGIN CERTIFICATE-----\s+[A-Za-z0-9+/=\s]{200,}-----END CERTIFICATE-----\s*\Z') }}
+      has_nonce: "{{ ((velociraptor_client_config_text | from_yaml).Client.nonce | default('')) | length >= 4 }}"
+      placeholder: >-
+        {{ velociraptor_client_placeholders | select('in', velociraptor_client_config_text) | list | length > 0 }}
+      private_key: "{{ 'PRIVATE KEY' in velociraptor_client_config_text }}"
+  no_log: true
+  tags: [readiness]
+
+- name: The configuration is a real client configuration
+  ansible.builtin.assert:
+    that:
+      - velociraptor_client_config_forms.parses | bool
+      - velociraptor_client_config_forms.has_urls | bool
+      - velociraptor_client_config_forms.urls_ok | bool
+      - velociraptor_client_config_forms.has_authority | bool
+      - velociraptor_client_config_forms.has_nonce | bool
+      - not velociraptor_client_config_forms.placeholder | bool
+      - not velociraptor_client_config_forms.private_key | bool
+    fail_msg: >-
+      velociraptor client: the configuration from {{ velociraptor_client_config_file or velociraptor_client_config_ref }}
+      is not the server's generated client configuration (an empty file, a placeholder, text without server
+      URLs, a certificate authority or a nonce, or one carrying a private key); forms:
+      {{ velociraptor_client_config_forms }}
+  tags: [readiness]

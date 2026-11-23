@@ -1,0 +1,14 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role velociraptor_client); local changes are overwritten.
+[Unit]
+Description=Velociraptor client (endpoint forensics)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart={{ velociraptor_client_install_path }} --config {{ velociraptor_client_config_path }} client
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

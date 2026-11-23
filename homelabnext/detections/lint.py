@@ -50,6 +50,9 @@ def lint_rules(root: Path) -> list[str]:
     except RuleError as exc:
         return [str(exc)]
     slugs = {r.slug for r in rules}
+    from .native import load_index  # the native rules' fixtures are not orphans
+
+    slugs |= {e.get("slug") for e in ((load_index(root) or {}).get("rules") or [])}
     sigma_dir = root / "sigma"
     if sigma_dir.is_dir():
         for f in sorted(p for p in sigma_dir.rglob("*") if p.is_file()):

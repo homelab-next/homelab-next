@@ -114,6 +114,17 @@ SOURCES: dict[str, tuple[str, str]] = {
         "Garage is released from git.deuxfleurs.fr (no GitHub release feed): compare its tags "
         "(docker.io/dxflrs/garage) with the project's release page by hand, within the pinned major version",
     ),
+    "role:vector/vector_image": (
+        "none",
+        "the aggregator's image is released from vectordotdev/vector with -debian tags the GitHub "
+        "release parse does not read: compare its tags with the project's release page by hand, "
+        "and move only to a release at least 14 days old (playbooks/upgrade.yml)",
+    ),
+    "role:vector/vector_sidecar_image": (
+        "none",
+        "the Docker official python image (docker.io/library/python), the same pin as the repository's "
+        "own container images: compare its tags with the release page by hand, within the pinned minor version",
+    ),
     "role:iceberg_rest/iceberg_rest_image": (
         "none",
         "a build of the Apache Iceberg main branch the project published only as :latest (pinned by "
@@ -154,6 +165,8 @@ SOURCES: dict[str, tuple[str, str]] = {
         "PostgreSQL release page by hand, within the pinned major version",
     ),
     "role:media/media_image": ("github", "jellyfin/jellyfin"),
+    "role:velociraptor_server/velociraptor_server_image": ("github", "Velocidex/velociraptor"),
+    "role:velociraptor_client/velociraptor_client_version": ("github", "Velocidex/velociraptor"),
     "role:misp/misp_core_image": ("github", "MISP/MISP"),
     "role:misp/misp_modules_image": ("github", "MISP/misp-modules"),
     "role:misp/misp_db_image": (
@@ -215,6 +228,9 @@ SOURCES: dict[str, tuple[str, str]] = {
         "module's (one image, one pin: tools/tests/test_pin_consistency.py), so move both together; "
         "compare its tags with the RabbitMQ release notes by hand",
     ),
+    "role:wazuh/wazuh_manager_image": ("github", "wazuh/wazuh"),
+    "role:wazuh/wazuh_indexer_image": ("github", "wazuh/wazuh"),
+    "role:wazuh/wazuh_dashboard_image": ("github", "wazuh/wazuh"),
     "role:openproject/openproject_image": ("github", "opf/openproject"),
     "role:openproject/openproject_postgres_image": (
         "none",
@@ -227,6 +243,7 @@ SOURCES: dict[str, tuple[str, str]] = {
         "memcached release notes by hand",
     ),
     "role:prometheus/prometheus_image": ("github", "prometheus/prometheus"),
+    "role:prometheus/prometheus_blackbox_image": ("github", "prometheus/blackbox_exporter"),
     "role:stackstorm/stackstorm_mongo_image": (
         "none",
         "the Docker official image (docker.io/library/mongo), held on the 4.4 line the pinned "
@@ -399,6 +416,19 @@ NOTES: dict[str, str] = {
         "an image (modules/misp): the tag and its digest together, within the pinned 7.2 series; the "
         "cache holds queued jobs and sessions only, nothing to migrate"
     ),
+    "role:velociraptor_server/velociraptor_server_image": (
+        "an image (modules/velociraptor): bump the tag and its digest together, with product.version in "
+        "modules/velociraptor/module.yml, the lab registry's version AND the endpoint role's "
+        "velociraptor_client_version and its pinned sha256 in velociraptor_client_checksums (the server "
+        "and its clients must be the same release); the same or a newer version only. The start guard "
+        "keeps the configuration and its certificate authority, so a bump cannot rotate it (LL-087); "
+        "export the server state first (the upgrade playbook does)"
+    ),
+    "role:velociraptor_client/velociraptor_client_version": (
+        "a release (modules/velociraptor): bump it together with the server image "
+        "(role:velociraptor_server/velociraptor_server_image) and add the linux amd64 binary's sha256 to "
+        "velociraptor_client_checksums in the same change; the server and its clients must be the same release"
+    ),
     "role:synapse_cortex/synapse_cortex_image": (
         "an image (modules/synapse-cortex): bump the tag and its digest together, with product.version in "
         "modules/synapse-cortex/module.yml and the lab's registry version; the same or a newer version only "
@@ -415,6 +445,16 @@ NOTES: dict[str, str] = {
     "role:garage/garage_image": (
         "an image (modules/garage): bump the tag and its digest together, with product.version in "
         "modules/garage/module.yml and the lab registry's version; the same major version only"
+    ),
+    "role:vector/vector_image": (
+        "an image (modules/vector): bump the tag and its digest together, with product.version in "
+        "modules/vector/module.yml and the lab registry's version; read the release notes of every "
+        "version crossed (a changed socket, file or object-store sink option stops the aggregator "
+        "at start, and the role validates the configuration with the new image first)"
+    ),
+    "role:vector/vector_sidecar_image": (
+        "an image (modules/vector): the interpreter the sidecar runs on; bump the tag and its digest "
+        "together within the pinned minor version (the sidecar uses the standard library only)"
     ),
     "role:iceberg_rest/iceberg_rest_image": (
         "an image (modules/iceberg-rest): pinned by digest, the tag labels the build; bump the tag "
@@ -476,6 +516,21 @@ NOTES: dict[str, str] = {
         "an image (modules/dfir-iris): the tag and its digest together, within the pinned major "
         "version (the worker's queue holds nothing that must survive)"
     ),
+    "role:wazuh/wazuh_manager_image": (
+        "an image (modules/wazuh): bump the tag and its digest together, with the indexer and the "
+        "dashboard images (one release), product.version in modules/wazuh/module.yml, the agent "
+        "role's version (an agent is never newer than its manager: move the manager first) and the "
+        "lab registry's version; the upgrade playbook exports first and refuses a target older "
+        "than the running image"
+    ),
+    "role:wazuh/wazuh_indexer_image": (
+        "an image (modules/wazuh): the tag and its digest together, the same release as the manager "
+        "image (a newer indexer migrates its data forward as it starts: export first)"
+    ),
+    "role:wazuh/wazuh_dashboard_image": (
+        "an image (modules/wazuh): the tag and its digest together, the same release as the manager "
+        "image"
+    ),
     "role:openproject/openproject_image": (
         "an image (modules/openproject, the -slim variant): bump the tag and its digest together, "
         "with product.version in modules/openproject/module.yml and the lab registry's version; "
@@ -504,6 +559,9 @@ NOTES: dict[str, str] = {
     "role:stackstorm/stackstorm_python_version": (
         "a CPython 3.11 patch (modules/stackstorm): the pack's virtualenv is rebuilt from it on the "
         "next run"
+    ),
+    "role:prometheus/prometheus_blackbox_image": (
+        "an image (modules/prometheus): bump the tag and its digest together; the probe config format is stable across 0.x minors"
     ),
     "role:prometheus/prometheus_image": (
         "an image (modules/prometheus): bump the tag and its digest together, with product.version "

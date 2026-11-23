@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The endpoint-forensics client baseline control: the pinned release binary (checksummed), the client configuration the server generated (a placeholder, an empty file or one carrying a private key is refused), a systemd unit and an enrolment check."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

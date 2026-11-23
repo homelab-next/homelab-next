@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - velociraptor_server_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - velociraptor_server_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - velociraptor_server_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - velociraptor_server_bind != '0.0.0.0'
+      - velociraptor_server_frontend_port | int >= 1 and velociraptor_server_frontend_port | int <= 65535
+      - velociraptor_server_gui_port | int >= 1 and velociraptor_server_gui_port | int <= 65535
+      - velociraptor_server_frontend_port | int != velociraptor_server_gui_port | int
+      # the name the clients dial goes into every client configuration: a host name or an address,
+      # never a URL, a path or an empty value
+      - velociraptor_server_frontend_hostname is string
+      - velociraptor_server_frontend_hostname is match(velociraptor_server_host_pattern)
+      - velociraptor_server_uid | int >= 1000 and velociraptor_server_gid | int >= 1000
+      - velociraptor_server_hunt_principal is match(velociraptor_server_name_pattern)
+      - velociraptor_server_hunt_principal != 'admin'
+      - velociraptor_server_admin_login_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - >-
+        [velociraptor_server_dir, velociraptor_server_data_root] | reject('match', velociraptor_server_path_pattern) | list | length == 0
+      - velociraptor_server_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - velociraptor_server_ready_timeout | int >= 10 and velociraptor_server_ready_timeout | int <= 3600
+      - velociraptor_server_schedule in velociraptor_server_schedules
+      - velociraptor_server_hunt_interval_hours | int >= 1 and velociraptor_server_hunt_interval_hours | int <= 720
+      - velociraptor_server_collect_after_minutes | int >= 5 and velociraptor_server_collect_after_minutes | int <= 1440
+      - velociraptor_server_stale_after_minutes | int >= 2 * (velociraptor_server_interval_minutes | int)
+      - velociraptor_server_min_clients | int >= 1
+      - velociraptor_server_client_config_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - velociraptor_server_results_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - velociraptor_server_accept_new_ca is boolean
+    fail_msg: >-
+      velociraptor: a registry id, an image pinned by tag and digest, the guest's IPv4 address to
+      publish on (not all interfaces), two distinct ports, the host name or address the clients dial
+      (no URL), a container uid and gid of 1000 or more, a hunt principal that is not the
+      administrator, one secret: reference, absolute canonical directories, a memory limit like 2g, a
+      schedule the role knows and sane hunt and freshness bounds
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+# The allow-list is the hunt principal's whole authority: it is read and judged here, before
+# anything is rendered or granted. The principal holds exactly the catalog's permissions, which
+# must be inside the grantable set, and no artifact may need a permission the principal lacks.
+- name: Read the allow-list catalog
+  ansible.builtin.set_fact:
+    velociraptor_server_catalog: "{{ lookup('ansible.builtin.file', 'baseline-artifacts.yml') | from_yaml }}"
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: The allow-list gives the hunt principal only collect rights
+  ansible.builtin.assert:
+    that:
+      - velociraptor_server_catalog.schema == 'hnx-velociraptor-catalog/1'
+      - velociraptor_server_catalog.principal.permissions | length > 0
+      - velociraptor_server_catalog.principal.permissions | difference(velociraptor_server_grantable) | length == 0
+      - velociraptor_server_catalog.artifacts | length > 0
+      - velociraptor_server_catalog.artifacts | map(attribute='name') | unique | list | length == velociraptor_server_catalog.artifacts | length
+      - velociraptor_server_catalog.artifacts | map(attribute='name') | reject('match', '^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z0-9_]+)+\Z') | list | length == 0
+      - velociraptor_server_catalog.artifacts | map(attribute='required_permissions') | flatten | difference(velociraptor_server_grantable) | length == 0
+    fail_msg: >-
+      velociraptor: the artifact allow-list must name unique plain artifacts, give the hunt principal
+      only {{ velociraptor_server_grantable }} (never EXECVE, FILESYSTEM_WRITE, ARTIFACT_WRITER or
+      SERVER_ADMIN) and list no artifact that needs more
+  tags: [health, backup, restore, export, upgrade, readiness]

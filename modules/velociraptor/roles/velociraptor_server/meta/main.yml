@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The endpoint-forensics server: one compose_app container with its generated configuration and certificate authority kept on a data volume and never regenerated, a hunt principal that can only collect an allow-listed artifact set, and a timer that runs the baseline hunt and writes JSONL for the log pipeline."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

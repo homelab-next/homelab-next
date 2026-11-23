@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the log-pipeline suite runs
+# through the module's own adapter, which labels with the sidecar's code path (the core library's
+# rules) from the tables the suite hands it.
+#   hnx conform run log-pipeline --target modules/vector/conformance/target.yml
+# The adapter lives in the module's own package (modules/vector/roles/vector/files), so the run puts it on the
+# import path:  PYTHONPATH=modules/vector/roles/vector/files hnx conform run log-pipeline --target ...
+name: vector
+capabilities:
+  log-pipeline:
+    adapter: hnx_modules.vector.log_pipeline:make
+    config: {}
