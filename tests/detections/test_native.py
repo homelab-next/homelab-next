@@ -213,20 +213,22 @@ class _Limited(http.server.BaseHTTPRequestHandler):
             return
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(json.dumps({"data": {"token": "s", "output": {"rule": {"id": "900200"}}}}).encode())
+        self.wfile.write(
+            json.dumps({"data": {"token": "s", "output": {"rule": {"id": "900200"}}}}).encode()
+        )
 
     def log_message(self, *a):
         return None
 
 
 def _serve(handler):
-    srv = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    srv = http.server.HTTPServer((LOOPBACK, 0), handler)
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     return srv
 
 
 def _runner(srv, tmp_path, **kw):
-    t = native.ManagerLogtest(f"http://127.0.0.1:{srv.server_address[1]}", "u", "p", "", **kw)
+    t = native.ManagerLogtest(f"http://{LOOPBACK}:{srv.server_address[1]}", "u", "p", "", **kw)
     return t, native.Fixture("s", "must_fire", tmp_path, "e", "/x", "syslog", 900200)
 
 
@@ -262,7 +264,9 @@ def test_the_runner_stays_under_its_own_per_minute_budget(tmp_path):
     srv = _serve(_Limited)
     try:
         t, fx = _runner(srv, tmp_path, max_per_minute=5, clock=lambda: now[0], sleep=sleep)
-        for _ in range(12):  # 1 auth + 12 calls, 5 per minute: it must wait for the window, never 429
+        for _ in range(
+            12
+        ):  # 1 auth + 12 calls, 5 per minute: it must wait for the window, never 429
             t(fx)
     finally:
         srv.shutdown()
