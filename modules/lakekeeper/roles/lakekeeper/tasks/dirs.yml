@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root and export/ are root's; pgdata/ (the database volume) and export/db/ (where pg_dump
+# writes in the container) belong to the database's user.
+- name: Create the data root, the database's and the export directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ lakekeeper_data_root }}", owner: "{{ lakekeeper_owner }}", group: "{{ lakekeeper_group }}", mode: "0750"}
+    - {path: "{{ lakekeeper_data_root }}/pgdata", owner: "{{ lakekeeper_db_uid | int }}", group: "{{ lakekeeper_db_gid | int }}", mode: "0700"}
+    - {path: "{{ lakekeeper_data_root }}/export", owner: "{{ lakekeeper_owner }}", group: "{{ lakekeeper_group }}", mode: "0700"}
+    - {path: "{{ lakekeeper_data_root }}/export/db", owner: "{{ lakekeeper_db_uid | int }}", group: "{{ lakekeeper_db_gid | int }}", mode: "0700"}
+    - {path: "{{ lakekeeper_dir }}", owner: "{{ lakekeeper_owner }}", group: "{{ lakekeeper_group }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

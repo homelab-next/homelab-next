@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Lakekeeper's dependencies are the container engine (docker_engine, applied to the guest before this
+# module), its credentials in the secret store and the object store; it calls nothing else.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Resolve the object store's address
+      ansible.builtin.include_tasks: endpoint.yml
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+  tags: [readiness]
