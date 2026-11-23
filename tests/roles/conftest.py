@@ -13,6 +13,10 @@ from rolerun import prefetch_first_runs, workers
 
 
 def pytest_configure(config):
+    import rolerun
+
+    # under pytest-xdist: this worker's share of the CPUs, and only its module's first runs
+    rolerun.XDIST_WORKERS = max(1, int(getattr(config, "workerinput", {}).get("workercount", 1)))
     # a bad HNX_ROLERUN_WORKERS fails the session once, here, not every first-run test later
     try:
         workers()

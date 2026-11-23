@@ -74,11 +74,11 @@ jobs:
   # timeout is a backstop only.  Roles' first runs are prefetched per shard, so nothing repeats.
   test:
     name: test (${{ matrix.python.version }}, ${{ matrix.shard }}/12)
-    # The 3.11 leg's twelve shards go to the pool and the 3.12 leg's stay hosted (matrix.python.pool), so the two halves
-    # of one run draw on two queues and finish sooner when the hosted one is busy; the expression is the pool one
+    # A leg whose matrix entry says `pool: true` runs its twelve shards on the pool; both legs are hosted now (pytest-xdist
+    # made a hosted shard 6-8 min, and twelve shards of several runs at once outran the pool's cores); the expression is the pool one
     # above with `matrix.python.pool &&` in front, word for word (tests/overlay/test_private_overlay_example.py)
     runs-on: ${{ matrix.python.pool && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
-    timeout-minutes: 45  # backstop: a twelfth of the suite takes 8-14 min hosted, 19-23 on the pool's slower cores
+    timeout-minutes: 45  # backstop: a twelfth of the suite takes 6-8 min hosted on xdist workers (13 on a busy pool), 8-14 serially
     strategy:
       fail-fast: false
       matrix:
@@ -92,13 +92,13 @@ jobs:
             extras: "test,lake,mcp,ansible"
             go: true
             pool: false
-            require-modules: "duckdb,pyarrow,pyiceberg,sqlalchemy,mcp,ansible"
+            require-modules: "duckdb,pyarrow,pyiceberg,sqlalchemy,mcp,ansible,xdist"
             require-tools: "ansible-playbook"
           # the extras absent: proves the lake and MCP SDK tests skip cleanly instead of failing
           - version: "3.11"
             extras: "test"
             go: false
-            pool: true
+            pool: false  # measured 2026-11-23 on xdist: 12.7-13.5 min on the pool (nested cores, 7 runs queued at once; timing-sensitive tests failed), 6.5-7.7 hosted
             require-modules: ""
             require-tools: ""
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]  # --shard below names the 12: change both together
@@ -133,6 +133,10 @@ jobs:
       # as the go job's tests do, so a subprocess a test starts (git, curl, an installed tool) cannot
       # reach out either; tests/network_guard.py refuses Python's own sockets, and says which test.
       # sudo -E keeps the job's environment (sudo's secure_path would drop the setup-python PATH)
+      # -n auto: one pytest-xdist worker per CPU of the runner (4 hosted, 8+ on the pool's job VMs),
+      # --dist loadfile: a test file runs whole in one worker, so a module-scoped fixture is built once
+      # (tests/suite_policy.py adds the workers' timings up, so budgets and the shard report mean what
+      # they did serially)
       - env:
           HNX_REQUIRE_GO: ${{ matrix.python.go && '1' || '' }}
           HNX_CONTROLLER_BIN: ${{ matrix.python.go && format('{0}/controller', runner.temp) || '' }}
@@ -146,6 +150,7 @@ jobs:
           sh "$(id -u)" "$(id -g)"
           python -m pytest -q -m "not live and not experimental"
           --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
+          -n auto --dist loadfile
           --shard "$SHARD/12" --shard-report "$RUNNER_TEMP/shard.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()  # a failed shard's report says why to test-ok too
