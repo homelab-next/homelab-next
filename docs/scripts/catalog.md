@@ -9,11 +9,12 @@ summary_generated: true
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-103 scripts: 26 check, 29 job, 5 service, 43 tool.
+104 scripts: 26 check, 29 job, 6 service, 43 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
 | `aide-scan` | [`ansible/roles/aide/templates/scan.sh.j2`](../../ansible/roles/aide/templates/scan.sh.j2) | job | platform | Run one scheduled AIDE file integrity check and record its exit status for the role's health hook. | `timer:aide/scan`; `role:aide` | - | 0 the run finished (the scanner's own status is in last-run) |
+| `alert-intake` | [`modules/alert-intake/roles/alert_intake/files/hnx_alert_intake.py`](../../modules/alert-intake/roles/alert_intake/files/hnx_alert_intake.py) | service | operator | Receive the SIEM's alert events over an authenticated webhook, deduplicate them, record each as an alert in the case-management provider through the cases contract, and page for high severity. | `role:alert_intake` | - | 0 stopped on SIGTERM; 2 refused to start (an input is missing or malformed) |
 | `allowlist-ratchet` | [`tools/allowlist_ratchet.py`](../../tools/allowlist_ratchet.py) | check | maintainers | Fail when a gate's allowlist or inline suppression markers outgrow the reviewed counts in tools/allowlist_counts.yml. | `ci:ci/schemas`; `make:gates`; `make:allowlist-counts` | - | 0 every list is at its count (and no count rose against the base without a human-tier code owner); 1 a list above or below its count, a counts file outside CODEOWNERS' human tier, or a count raised against the base with none; 2 usage error, a malformed counts file or allowlist, an unusable base, or an update that would raise a count without --grow; 100 the check itself failed (could not measure) |
 | `broker-example-dhcp-leases` | [`examples/broker/handlers/dhcp-leases.sh`](../../examples/broker/handlers/dhcp-leases.sh) | tool | broker | Example read-only broker handler for dhcp.leases; reports one stand-in lease of the target DHCP server. | `manual` | - | 0 reported |
 | `broker-example-dns-lookup` | [`examples/broker/handlers/dns-lookup.sh`](../../examples/broker/handlers/dns-lookup.sh) | tool | broker | Example read-only broker handler for dns.lookup; reports a stand-in name and address for the target. | `manual` | - | 0 reported |

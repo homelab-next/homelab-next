@@ -22,6 +22,25 @@
     },
     {
       "exit": {
+        "0": "stopped on SIGTERM",
+        "2": "refused to start (an input is missing or malformed)"
+      },
+      "id": "alert-intake",
+      "inputs": "alert.created events posted to /v1/alerts (bearer token), the cases adapter named by the environment, the state file",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-alert-intake",
+      "kind": "service",
+      "language": "python",
+      "outputs": "alerts (and, by the promotion policy, cases) through the cases contract, notifications, the state file, and journal lines",
+      "owner": "operator",
+      "path": "modules/alert-intake/roles/alert_intake/files/hnx_alert_intake.py",
+      "purpose": "Receive the SIEM's alert events over an authenticated webhook, deduplicate them, record each as an alert in the case-management provider through the cases contract, and page for high severity.",
+      "status": "active",
+      "trigger": [
+        "role:alert_intake"
+      ]
+    },
+    {
+      "exit": {
         "0": "every list is at its count (and no count rose against the base without a human-tier code owner)",
         "1": "a list above or below its count, a counts file outside CODEOWNERS' human tier, or a count raised against the base with none",
         "100": "the check itself failed (could not measure)",
