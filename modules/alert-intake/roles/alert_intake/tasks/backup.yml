@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's paths).
+# What it adds to the case store's own backup is the per-event state: without it a restored guest would
+# count a redelivered event twice. The configuration directory is not listed: it holds the credentials and
+# is re-rendered by the install from the secret store. The export runs first.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Export the state
+      ansible.builtin.include_tasks: export.yml
+    - name: Write the backup manifest
+      ansible.builtin.copy:
+        dest: "{{ alert_intake_data_root }}/backup-manifest.json"
+        content: "{{ {'service': alert_intake_logical_id,
+                      'paths': [alert_intake_data_root],
+                      'restore_from': alert_intake_export_dir,
+                      'note': 'the configuration directory is not listed: it holds the credentials and is re-rendered by the install; the alerts are the case store own data; state/ holds the per-event progress, export/ a copy of it'} | to_nice_json }}\n"
+        owner: "{{ alert_intake_owner }}"
+        group: "{{ alert_intake_group }}"
+        mode: "0640"
+  tags: [backup]

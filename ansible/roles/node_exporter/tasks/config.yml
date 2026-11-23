@@ -10,6 +10,13 @@
     state: directory
     mode: "0750"
 
+- name: Ensure the textfile directory exists when the collector is on
+  ansible.builtin.file:
+    path: "{{ node_exporter_textfile_dir }}"
+    state: directory
+    mode: "0755"
+  when: node_exporter_textfile_dir | length > 0
+
 - name: Write the exporter's arguments (listen on the guest's own address only)
   ansible.builtin.template:
     src: defaults.j2
