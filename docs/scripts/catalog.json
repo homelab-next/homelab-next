@@ -1097,7 +1097,7 @@
       "purpose": "Commit the log pipeline's staged OCSF batches to the fresh tables of the soc lake namespace, one writer per table, commit then checkpoint, refusing any namespace but soc and any event without its pipeline TLP label.",
       "status": "active",
       "trigger": [
-        "timer:lake_writer/commit",
+        "timer:lake_writer/lake-writer",
         "role:lake_writer"
       ]
     },
@@ -1125,6 +1125,7 @@
         "timer:context/reindex",
         "timer:honeypot/lake",
         "timer:intel_ingest/intel-ingest",
+        "timer:lake_writer/lake-writer",
         "timer:honeypot/report",
         "timer:lynis/scan",
         "timer:media_automation/cleanup-downloads",

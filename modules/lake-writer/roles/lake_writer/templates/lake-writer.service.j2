@@ -14,9 +14,9 @@ Group={{ lake_writer_group }}
 EnvironmentFile={{ lake_writer_env_file }}
 EnvironmentFile={{ lake_writer_login_env_file }}
 # the timer's runs are reported to the shared last-run record (the writer runs privileged: +)
-ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ lake_writer_last_run_dir }} --group {{ lake_writer_last_run_group }} --job timer:lake_writer/commit --unit %n --calendar "{{ lake_writer_oncalendar }}" --delay 0
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ lake_writer_last_run_dir }} --group {{ lake_writer_last_run_group }} --job timer:lake_writer/lake-writer --unit %n --calendar "{{ lake_writer_oncalendar }}" --delay 0
 ExecStart=/usr/local/libexec/homelabnext/hnx-lake-writer commit --table %i
-ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ lake_writer_last_run_dir }} --group {{ lake_writer_last_run_group }} --job timer:lake_writer/commit --unit %n --calendar "{{ lake_writer_oncalendar }}" --delay 0
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ lake_writer_last_run_dir }} --group {{ lake_writer_last_run_group }} --job timer:lake_writer/lake-writer --unit %n --calendar "{{ lake_writer_oncalendar }}" --delay 0
 TimeoutStartSec=30min
 Nice=10
 {% if hnx_module_slice | default('') %}

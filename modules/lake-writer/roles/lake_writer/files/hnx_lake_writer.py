@@ -5,7 +5,7 @@
 #   kind: job
 #   purpose: Commit the log pipeline's staged OCSF batches to the fresh tables of the soc lake namespace, one writer per table, commit then checkpoint, refusing any namespace but soc and any event without its pipeline TLP label.
 #   owner: platform
-#   trigger: [timer:lake_writer/commit, role:lake_writer]
+#   trigger: [timer:lake_writer/lake-writer, role:lake_writer]
 #   inputs: "commit [--table T] | ensure-tables | schema-check | status [--max-pending N] [--max-age-s S]; environment HNX_LW_*, the endpoints HNX_ENDPOINT_LAKE_QUERY, HNX_ENDPOINT_LAKE_CATALOG and HNX_ENDPOINT_OBJECT_STORE, the lake login and the object store key pair in the root-only credentials file; staged batches in the staging bucket; runs under the hnx runtime release python"
 #   outputs: rows committed through LakeClient.write_batch; per table a checkpoint and a last-run record under the state directory; staged objects deleted once committed; refused rows under <prefix><table>/_rejected/ in the staging bucket; one JSON line per table on stdout
 #   installs_to: /usr/local/libexec/homelabnext/hnx-lake-writer
