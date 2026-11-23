@@ -652,7 +652,9 @@ def test_the_budgets_absorb_runner_noise_and_still_catch_a_runaway_suite():
     fails.  Raising a figure without the evidence that it was too tight breaks the second half."""
     import tomllib
 
-    ini = tomllib.loads((Path(ROOT) / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]
+    ini = tomllib.loads((Path(ROOT) / "pyproject.toml").read_text())["tool"]["pytest"][
+        "ini_options"
+    ]
     budgets = sp.parse_budgets(ini["suite_budgets"])
     seen = {  # the largest total seen over recent hosted runs, seconds (2026-11-23)
         "tests/roles": 10543.0, "tests/modules": 340.1, "tests/conform_sweeps": 181.4,

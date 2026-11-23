@@ -116,12 +116,9 @@ def lint_workflow(path: Path) -> list[str]:
     jobs = (doc.get("jobs") or {}).values()
     if path.name != "deploy.yml":
         for name, job in (doc.get("jobs") or {}).items():
-            pool = (
-                path == POOL_WORKFLOW
-                and (
-                    (name in POOL_JOBS and job.get("runs-on") == POOL_RUNS_ON)
-                    or (name == POOL_SHARD_JOB and job.get("runs-on") == POOL_SHARD_RUNS_ON)
-                )
+            pool = path == POOL_WORKFLOW and (
+                (name in POOL_JOBS and job.get("runs-on") == POOL_RUNS_ON)
+                or (name == POOL_SHARD_JOB and job.get("runs-on") == POOL_SHARD_RUNS_ON)
             )
             rest = {k: v for k, v in job.items() if not (pool and k == "runs-on")}
             blob = json.dumps(rest)  # runs-on, and a matrix or expression that could feed it
@@ -256,7 +253,9 @@ def test_the_real_ci_yml_pools_exactly_the_listed_jobs_and_keeps_the_rest_hosted
     assert pooled == POOL_JOBS
     # the shards: the 3.11 leg only, through the flagged variant; 3.12 (the Go leg) stays hosted
     assert jobs[POOL_SHARD_JOB]["runs-on"] == POOL_SHARD_RUNS_ON
-    legs = {m["version"]: m.get("pool") for m in jobs[POOL_SHARD_JOB]["strategy"]["matrix"]["python"]}
+    legs = {
+        m["version"]: m.get("pool") for m in jobs[POOL_SHARD_JOB]["strategy"]["matrix"]["python"]
+    }
     assert legs == {"3.11": True, "3.12": False}
     for name in (
         "test-ok",
