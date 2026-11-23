@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
 lakekeeper_container_port: 8181
-# PostgreSQL 18 keeps its cluster at <volume>/18/docker; the volume is the parent, so a later major gets
-# its own directory beside it (pg_upgrade --link). The export is a second mount, written by the database's user.
-lakekeeper_container_pg_volume: /var/lib/postgresql
+# PostgreSQL 17 keeps its cluster at the data directory (the same pin as the other database-backed
+# modules). The export is a second mount, written by the database's user.
+lakekeeper_container_pg_volume: /var/lib/postgresql/data
 lakekeeper_container_export: /export
 # authentication is off (the catalog's allow-all backend: no OIDC provider is configured, decision D2),
 # the network is the only control; metrics and the UI-facing settings are the product's defaults

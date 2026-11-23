@@ -20,7 +20,7 @@ origin: {kind: in-tree}
 product:
   name: lakekeeper
   display: Lakekeeper
-  version: 0.14.1
+  version: 0.15.1
 licence:
   kind: open-source
   spdx: Apache-2.0

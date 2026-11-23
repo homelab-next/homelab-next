@@ -3,8 +3,8 @@
 # images are pinned by DIGEST (and tag, which compose_app requires); the digests are the ones the
 # lab-in-a-box stack runs and the 2026-11-22 rehearsal ran.
 # lakekeeper_logical_id (required): the instance's registry id, e.g. lake-catalog
-lakekeeper_image: "quay.io/lakekeeper/catalog:v0.14.1@sha256:7c5d6b178a1b5ae230bd7d3e7a09da4704ce58fafc66a8b90c3b6edb69ba9817"
-lakekeeper_postgres_image: "docker.io/library/postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
+lakekeeper_image: "quay.io/lakekeeper/catalog:v0.15.1@sha256:22dcb6044c106a962c242b70051bd226bd50c9134c763121d8713c37fe9a70ec"
+lakekeeper_postgres_image: "docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317"
 # published on the guest's own address (the inventory's ansible_host), never on all interfaces; the VM
 # firewall admits the query engine and the lake's writers. 8181 is the registry row's port; a parallel
 # run beside the catalog being replaced sets another (8182) for the verification window only.

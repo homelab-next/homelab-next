@@ -106,14 +106,14 @@ def test_main_renders_both_containers_pinned_with_no_secret_in_the_compose_file(
     text = (tmp_path / "app" / "docker-compose.yml").read_text()
     svcs = yaml.safe_load(text)["services"]
     assert sorted(svcs) == ["lakekeeper", "postgres"]
-    assert "sha256:7c5d6b178a1b5ae230bd7d3e7a09da4704ce58fafc66a8b90c3b6edb69ba9817" in text
-    assert "sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5" in text
+    assert "sha256:22dcb6044c106a962c242b70051bd226bd50c9134c763121d8713c37fe9a70ec" in text
+    assert "sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317" in text
     assert svcs["lakekeeper"]["command"] == ["serve"]
     assert svcs["lakekeeper"]["ports"] == [GUEST + ":8181:8181"]  # the guest's address, never all
     assert "ports" not in svcs["postgres"]  # the database is on the project's own network only
     assert svcs["lakekeeper"]["depends_on"] == {"postgres": {"condition": "service_healthy"}}
-    # PostgreSQL 18: the volume is the PARENT of the cluster directory (<major>/docker)
-    assert any(x.endswith(":/var/lib/postgresql") for x in svcs["postgres"]["volumes"])
+    # PostgreSQL 17 keeps its cluster at the data directory itself
+    assert any(x.endswith(":/var/lib/postgresql/data") for x in svcs["postgres"]["volumes"])
     for secret in (DB_PW, ENC_KEY, KEY_SECRET):
         assert secret not in text
     senv = (tmp_path / "app" / "secrets" / "lakekeeper.env").read_text()
@@ -136,7 +136,7 @@ def _first_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
     "over, env",
     [
         ({"lakekeeper_image": "quay.io/lakekeeper/catalog:latest"}, {}),
-        ({"lakekeeper_image": "quay.io/lakekeeper/catalog:v0.14.1"}, {}),
+        ({"lakekeeper_image": "quay.io/lakekeeper/catalog:v0.15.1"}, {}),
         ({"lakekeeper_bind": "0.0.0.0"}, {}),
         ({"lakekeeper_bind": "lake.example.internal"}, {}),
         ({"lakekeeper_port": 0}, {}),

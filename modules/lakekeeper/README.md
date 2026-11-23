@@ -11,7 +11,7 @@ directory names a real host, address, VM id or secret value.
 |---|---|
 | Slot | `lake-catalog` (contract `conformance/protocols/lake.py`) |
 | Adapter | the shared `homelabnext.conform.adapters.lake:make_lake` |
-| Product | Lakekeeper `v0.14.1` (`quay.io/lakekeeper/catalog`) and PostgreSQL 18, both pinned by digest |
+| Product | Lakekeeper `v0.15.1` (`quay.io/lakekeeper/catalog`) and PostgreSQL 17, both pinned by digest |
 | Host role | `server`: kind `vm`, baseline `base`, 1 vCPU, 1.5 GB, 10 GB |
 | Role | `lakekeeper` (role interface v1), a wrapper of the core `compose_app` |
 | Requires | `cap:secrets`, `cap:object-store` |
