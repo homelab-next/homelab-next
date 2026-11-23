@@ -121,8 +121,7 @@ def empty_dir(path: Path, parent: Path) -> None:
         raise Refused(f"refusing to empty {path}: it is a link")
     if path.exists():
         shutil.rmtree(path)
-    path.mkdir(mode=0o750)
-    os.chmod(path, 0o750)
+    path.mkdir(mode=0o700)
 
 
 def golden_image(cfg: dict) -> Path:
@@ -227,7 +226,7 @@ def _keep_console(d: Path, keep: Path, limit: int) -> None:
         data = f.read()
     tmp = keep.with_name(keep.name + ".tmp")
     tmp.write_bytes(data)
-    os.chmod(tmp, 0o640)
+    os.chmod(tmp, 0o600)
     os.replace(tmp, keep)
 
 
@@ -364,14 +363,14 @@ def build_golden(
                 ],
                 check=True,
             )
-            os.chmod(work / "golden.qcow2", 0o440)
+            os.chmod(work / "golden.qcow2", 0o400)
             os.rename(work / "golden.qcow2", final)
         finally:
             empty_dir(work, images)
             work.rmdir()
     tmp = images / ".current.tmp"
     tmp.write_text(name + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o644)
+    os.chmod(tmp, 0o600)
     os.replace(tmp, images / "current")
     return final
 
@@ -394,7 +393,7 @@ def feed_put(cfg: dict, name: str, data: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(jit + "\n")
-        os.chmod(tmp, 0o640)
+        os.chmod(tmp, 0o600)
         os.rename(tmp, final)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)

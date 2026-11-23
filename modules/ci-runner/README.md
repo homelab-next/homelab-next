@@ -43,8 +43,9 @@ trusted side (holds the forge credential)          runner host (holds no forge c
 * **No state between jobs**: a fresh copy-on-write disk per job over a read-only golden image, the
   slot directory emptied before and after; docker, if a job uses it, runs inside the job VM.
 * **No credential on the host**: the host holds single-use registrations only; the feeder's key
-  logs in as a dedicated account whose `authorized_keys` entry is
-  `restrict,command="... hnx-ci-slot feed"` (no shell, no forwarding, no terminal).
+  logs in as the slots' account, and its root-owned `authorized_keys` entry is
+  `restrict,command="... hnx-ci-slot feed"` (no shell, no forwarding, no terminal). Every file of
+  the pool is that account's alone (0700 directories, 0600/0400 files).
 * **Network**: the job VMs use user-mode networking, so their traffic leaves the host as the slots'
   account. The egress table (`templates/egress.nft.j2`) lets that account reach the resolvers on
   port 53 and public addresses on `ci_runner_egress_tcp_ports`/`ci_runner_egress_udp_ports`, and
@@ -81,7 +82,7 @@ internet egress (`grants.egress.ci-runner.runner: [internet]`).
 Run it on the trusted side, e.g. as a user service:
 
 ```sh
-hnx-ci-feeder --repo <owner>/<name> --host <feed user>@<runner host> --ssh-key <key> \
+hnx-ci-feeder --repo <owner>/<name> --host <slots account>@<runner host> --ssh-key <key> \
   --known-hosts <file> --labels self-hosted,linux,x64,<pool label> --selection-var <SWITCH VARIABLE>
 ```
 

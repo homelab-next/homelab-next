@@ -222,7 +222,9 @@ def parse(argv: list[str]):
     p = argparse.ArgumentParser(prog="hnx-ci-feeder")
     p.add_argument("--repo", required=True, help="owner/name")
     p.add_argument(
-        "--host", required=True, help="the feed account on the runner host: user@address"
+        "--host",
+        required=True,
+        help="the slots' account on the runner host (its key is forced to feed): user@address",
     )
     p.add_argument("--ssh-key", required=True)
     p.add_argument("--known-hosts")

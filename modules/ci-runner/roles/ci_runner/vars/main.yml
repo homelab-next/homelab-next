@@ -14,7 +14,6 @@ ci_runner_slot_unit: "hnx-{{ ci_runner_logical_id }}-slot@.service"
 ci_runner_egress_unit: "hnx-{{ ci_runner_logical_id }}-egress.service"
 ci_runner_egress_file: "{{ ci_runner_config_dir }}/egress.nft"
 ci_runner_egress_table: hnx_ci_egress
-ci_runner_authorized_keys: "/etc/ssh/hnx-authorized-keys/{{ ci_runner_feed_user }}"
 ci_runner_qemu: /usr/bin/qemu-system-x86_64
 ci_runner_qemu_img: /usr/bin/qemu-img
 ci_runner_iso_tool: /usr/bin/genisoimage

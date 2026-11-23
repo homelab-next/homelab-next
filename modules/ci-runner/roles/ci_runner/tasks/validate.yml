@@ -7,8 +7,6 @@
       - ci_runner_logical_id is match('^[a-z][a-z0-9-]{0,30}\Z')
       - ci_runner_user is match('^[a-z][a-z0-9-]{0,31}\Z')
       - ci_runner_group is match('^[a-z][a-z0-9-]{0,31}\Z')
-      - ci_runner_feed_user is match('^[a-z][a-z0-9-]{0,31}\Z')
-      - ci_runner_feed_user != ci_runner_user
       - ci_runner_feed_ssh_group is match('^[a-z][a-z0-9-]{0,31}\Z')
       - ci_runner_base_image_url is match('^https://[^\s\x27"]+\Z')
       - ci_runner_agent_url is match('^https://[^\s\x27"]+\Z')

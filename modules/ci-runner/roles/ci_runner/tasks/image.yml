@@ -18,7 +18,7 @@
         checksum: "sha256:{{ ci_runner_base_image_sha256 }}"
         owner: "{{ ci_runner_user }}"
         group: "{{ ci_runner_group }}"
-        mode: "0440"
+        mode: "0400"
         timeout: 120
 
     - name: Write the build seed

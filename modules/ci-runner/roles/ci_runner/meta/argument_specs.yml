@@ -46,19 +46,15 @@ argument_specs:
         default: hnx-{{ ci_runner_logical_id }}
       ci_runner_group:
         type: str
-        description: The group of that account; the feed account is a member (it reads the slot states).
+        description: The group of that account.
         default: hnx-{{ ci_runner_logical_id }}
-      ci_runner_feed_user:
-        type: str
-        description: The account the feeder's SSH key logs in as; its only command is the slot script's feed.
-        default: hnx-{{ ci_runner_logical_id }}-feed
       ci_runner_manage_accounts:
         type: bool
         description: 'Create the accounts (false: the site provides them).'
         default: true
       ci_runner_feed_ssh_group:
         type: str
-        description: The group sshd admits (AllowGroups); the feed account joins it, and its key is forced to the feed command.
+        description: The group sshd admits (AllowGroups); the slots' account joins it, and the feeder's key is forced to the feed command.
         default: hnx-ssh
       ci_runner_slots:
         type: int

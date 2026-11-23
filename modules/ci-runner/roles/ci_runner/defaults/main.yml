@@ -17,9 +17,9 @@ ci_runner_config_dir: "/etc/hnx/{{ ci_runner_logical_id }}"
 ci_runner_data_root: "/var/lib/hnx-modules/{{ ci_runner_logical_id }}"
 ci_runner_user: "hnx-{{ ci_runner_logical_id }}"
 ci_runner_group: "hnx-{{ ci_runner_logical_id }}"
-ci_runner_feed_user: "hnx-{{ ci_runner_logical_id }}-feed"
 ci_runner_manage_accounts: true
-# the group sshd admits (the baseline's AllowGroups): the feed account joins it, its key is forced to one command
+# the group sshd admits (the baseline's AllowGroups): the slots' account joins it for the feeder's key, which is
+# forced to one command (no shell, no forwarding, no terminal)
 ci_runner_feed_ssh_group: hnx-ssh
 
 # --- the slots ------------------------------------------------------------------------------------

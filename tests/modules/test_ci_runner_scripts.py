@@ -89,7 +89,7 @@ def test_a_slot_run_boots_one_vm_with_one_registration_and_leaves_nothing(cfg):
     d = Path(cfg["data_root"]) / "slots" / "0"
     assert list(d.iterdir()) == []
     assert slot.slot_state(d)["state"] == "waiting"
-    assert d.stat().st_mode & 0o777 == 0o750  # the feed account reads the state through the group
+    assert d.stat().st_mode & 0o777 == 0o700
     assert not list((Path(cfg["data_root"]) / "spool").iterdir())
     assert (Path(cfg["data_root"]) / "slots" / "0.last.log").read_bytes() == b"booted\n"
 
