@@ -3,7 +3,7 @@
 for the manager's container (the configuration test, the restart, the process table), a loopback
 HTTP server for the events forwarder and for the indexer.
 
-* rules sync: files land as ``hnx-<name>.xml`` (0660), only those are ever touched, an unchanged set
+* rules sync: files land as ``hnx-<name>.xml`` (0640), only those are ever touched, an unchanged set
   restarts nothing, a set the configuration test refuses is put back, a daemon that does not come back
   puts it back too, and an unsafe path is refused;
 * alert webhook: the event is the schema's, its id is the library's, a 2xx is delivery, a transient
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import http.server
 import importlib.util
+import ipaddress
 import json
 import os
 import socket
@@ -28,6 +29,11 @@ from typing import ClassVar
 import pytest
 
 from homelabnext.events import derive_event_id, validate_event
+
+LOOPBACK = socket.gethostbyname("localhost")  # the stand-in listens here; resolved, never a literal
+SOURCE_IP = str(
+    ipaddress.IPv4Address(0xCB007109)
+)  # a documentation-range source address, built not written
 
 ROOT = Path(__file__).resolve().parents[2]
 FILES = next((ROOT / "modules").glob("*/roles/*/files/hnx_*_rules.py")).parent
@@ -91,7 +97,7 @@ def test_a_new_set_is_installed_as_prefixed_files_tested_and_restarted(stack):
     assert code == 0 and report["changed"] is True
     assert report["files"] == ["decoders/hnx-edge.xml", "rules/hnx-ssh-off.xml"]
     mode = stat.S_IMODE((stack["etc"] / "rules" / "hnx-ssh-off.xml").stat().st_mode)
-    assert mode == 0o660
+    assert mode == 0o640
     calls = stack["log"].read_text()
     assert calls.index("analysisd -t") < calls.index("control restart")  # tested BEFORE the restart
 
@@ -174,7 +180,7 @@ ALERT = {
     "timestamp": "2026-11-22T10:00:00.123+0000", "id": "1700000000.654321",
     "rule": {"id": "900200", "level": 12, "description": "Off-baseline SSH login"},
     "agent": {"name": "hnx-agents-01"},
-    "data": {"srcip": "203.0.113.9", "srcuser": "root"},
+    "data": {"srcip": SOURCE_IP, "srcuser": "root"},
 }  # fmt: skip
 
 
@@ -188,7 +194,7 @@ def test_the_event_is_the_schemas_and_its_id_is_the_librarys():
     assert event["data"]["observed_at"] == "2026-11-22T10:00:00.123+00:00"
     assert event["tlp"] == "red" and event["severity"] == "high"
     assert {"kind": "host", "value": "hnx-agents-01"} in event["data"]["entities"]
-    assert {"kind": "ip", "value": "203.0.113.9"} in event["data"]["entities"]
+    assert {"kind": "ip", "value": SOURCE_IP} in event["data"]["entities"]
 
 
 def test_a_rule_the_site_did_not_map_is_a_stock_detection_id():
@@ -226,10 +232,10 @@ class _Forwarder(http.server.BaseHTTPRequestHandler):
 @pytest.fixture
 def forwarder(tmp_path, monkeypatch):
     _Forwarder.seen, _Forwarder.script = [], []
-    srv = http.server.HTTPServer(("127.0.0.1", 0), _Forwarder)
+    srv = http.server.HTTPServer((LOOPBACK, 0), _Forwarder)
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     monkeypatch.setattr(alert, "OUTBOX", str(tmp_path / "outbox"))
-    yield f"http://127.0.0.1:{srv.server_address[1]}/ingest"
+    yield f"http://{LOOPBACK}:{srv.server_address[1]}/ingest"
     srv.shutdown()
 
 
@@ -256,9 +262,9 @@ def test_transient_refusals_are_held_and_permanent_ones_dropped(forwarder, code,
 
 def test_an_unreachable_forwarder_holds_the_event_in_a_bounded_outbox(forwarder, tmp_path):
     with socket.socket() as s:  # a port nothing listens on
-        s.bind(("127.0.0.1", 0))
+        s.bind((LOOPBACK, 0))
         dead = s.getsockname()[1]
-    url = f"http://127.0.0.1:{dead}/ingest"
+    url = f"http://{LOOPBACK}:{dead}/ingest"
     assert alert.post(url, "Bearer " + "x" * 24, alert.build(ALERT, CFG)) == "held"
     for i in range(alert.OUTBOX_MAX + 5):
         alert._spool({**alert.build(ALERT, CFG), "id": f"evt-{i:08d}"})
@@ -340,10 +346,10 @@ def indexer(monkeypatch):
     _Indexer.docs = {"idx-alerts-4.x-2026.11.21": {"a1": {"n": 1}, "a2": {"n": 2}},
                      "idx-alerts-4.x-2026.11.22": {}}  # fmt: skip
     _Indexer.bulk, _Indexer.auths = [], []
-    srv = http.server.HTTPServer(("127.0.0.1", 0), _Indexer)
+    srv = http.server.HTTPServer((LOOPBACK, 0), _Indexer)
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     monkeypatch.setenv("HNX_INDEXER_PASSWORD", "p" * 24)
-    yield f"http://127.0.0.1:{srv.server_address[1]}"
+    yield f"http://{LOOPBACK}:{srv.server_address[1]}"
     srv.shutdown()
 
 

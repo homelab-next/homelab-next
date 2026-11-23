@@ -131,8 +131,15 @@ def _wait_alive(compose: str, wait: int) -> bool:
 
 def _write(dest: Path, src: Path) -> None:
     tmp = dest.with_name(dest.name + ".tmp")
-    shutil.copyfile(src, tmp)
-    os.chmod(tmp, 0o660)
+    # born at its final mode (group-readable for the manager, nothing for others): the umask is
+    # pinned for the create so the mode is what is asked for, never narrowed or widened after
+    old = os.umask(0o027)
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o640)
+    finally:
+        os.umask(old)
+    with os.fdopen(fd, "wb") as out, open(src, "rb") as inp:
+        shutil.copyfileobj(inp, out)
     with contextlib.suppress(
         PermissionError
     ):  # not root (a test run): the mode is what matters there

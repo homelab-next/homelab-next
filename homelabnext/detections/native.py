@@ -52,7 +52,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
+from homelabnext import _yaml
 
 REASONS = ("engine-correlation", "decoder", "list-lookup", "stock-override")
 KINDS = ("rules", "decoders")
@@ -79,7 +79,7 @@ def load_index(root: Path) -> dict | None:
     path = Path(root) / "native" / "index.yml"
     if not path.is_file():
         return None
-    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc = _yaml.safe_load(path.read_text(encoding="utf-8"))
     return doc if isinstance(doc, dict) else {}
 
 
@@ -204,7 +204,9 @@ def lint_native(root: Path, sigma_det_ids: set[str] | None = None) -> list[str]:
             # the engine's rule tester cannot reach this kind of event (a file-integrity event is injected by the
             # agent's own daemon, not received as a log line): the proof is a post-deploy live test, written down here
             if not isinstance(e.get("live_test"), str) or len(e["live_test"].strip()) < 40:
-                problems.append(f"{pre}: proof live needs live_test: the steps and the alert that proves it")
+                problems.append(
+                    f"{pre}: proof live needs live_test: the steps and the alert that proves it"
+                )
             continue
         try:
             fixtures = load_fixtures(root, slug)

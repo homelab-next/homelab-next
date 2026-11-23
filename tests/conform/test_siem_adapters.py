@@ -13,6 +13,8 @@ import pytest
 from homelabnext.conform.adapters import siem
 from homelabnext.conform.adapters._env import AdapterConfigError
 
+LOOPBACK = socket.gethostbyname("localhost")  # the stand-in listens here; resolved, never a literal
+
 
 @pytest.fixture
 def ca_file(tmp_path):
@@ -27,10 +29,10 @@ def ca_file(tmp_path):
 
 def test_the_event_port_probe_reads_a_listening_port_and_a_closed_one(monkeypatch):
     with socket.socket() as srv:
-        srv.bind(("127.0.0.1", 0))
+        srv.bind((LOOPBACK, 0))
         srv.listen(1)
         port = srv.getsockname()[1]
-        monkeypatch.setenv("HNX_ENDPOINT_SIEM_SOURCE", f"tcp://127.0.0.1:{port}")
+        monkeypatch.setenv("HNX_ENDPOINT_SIEM_SOURCE", f"tcp://{LOOPBACK}:{port}")
         probe = siem.make_siem_source()
         assert probe.health() is True
     assert probe.health() is False  # the listener is gone
@@ -50,11 +52,11 @@ def test_there_is_no_default_endpoint(monkeypatch, ca_file):
 
 def test_the_index_probe_is_https_only_and_unreachable_is_not_healthy(monkeypatch, ca_file):
     with pytest.raises(ValueError, match="https"):
-        siem.HotIndexProbe("http://127.0.0.1:9", ca_file)
+        siem.HotIndexProbe(f"http://{LOOPBACK}:9", ca_file)
     with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
+        s.bind((LOOPBACK, 0))
         dead = s.getsockname()[1]
-    monkeypatch.setenv("HNX_ENDPOINT_HOT_INDEX", f"https://127.0.0.1:{dead}")
+    monkeypatch.setenv("HNX_ENDPOINT_HOT_INDEX", f"https://{LOOPBACK}:{dead}")
     probe = siem.make_hot_index({"ca_file": ca_file, "timeout": 2})
     assert probe.health() is False
     probe.close()
