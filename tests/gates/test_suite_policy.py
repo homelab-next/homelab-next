@@ -901,7 +901,10 @@ def test_a_suite_can_have_its_own_shared_setup_budget(tmp_path):
 
 def test_this_repos_shared_setup_budgets_are_per_suite():
     default, per = shard_report.load_shared_limits(Path(ROOT) / "pyproject.toml")
-    assert default == 15.0 and per["tests/roles"] == 30.0  # measured 18.8 s on twelve shards
+    assert (
+        default == 15.0 and per["tests/roles"] == 60.0
+    )  # 18.8 s serially on twelve shards, 30.5 s beside xdist workers
+    assert per["tests/packaging"] == 40.0  # 7.9 s serially, 16.6 s beside xdist workers
 
 
 def test_the_merge_rejects_shared_setup_the_suite_time_cannot_hold():
