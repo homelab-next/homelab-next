@@ -43,8 +43,8 @@ not a GitHub noreply address.
 Exit codes: 0 clean, 1 at least one hit (or an unscannable file), 2 misconfiguration.
 
 Waive one reviewed high-entropy string (a vendor field name that is not a credential) with a checked-in
-exemptions file, ``--exemptions FILE`` or env ``HNX_LEAK_EXEMPTIONS`` (a private overlay's
-``.leak-exemptions.json`` at its root is read by ``tools/private_leak_check.py``): a JSON list of
+exemptions file, ``--exemptions FILE`` or env ``HNX_LEAK_EXEMPTIONS`` (the private-overlay
+checker reads ``.leak-exemptions.json`` at an overlay's root): a JSON list of
 ``{path, rule, sha256, reason, approved_by, date}``. A hit is waived only when the file, the rule
 (only ``high-entropy-string``) and the sha256 of the exact matched text all agree; the file never carries
 the text; an entry that waives nothing fails the scan.
