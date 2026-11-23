@@ -42,7 +42,15 @@
 
     - name: Build the golden image (or re-point to it)
       ansible.builtin.command:
+        # as the slots' account (its kvm group, its egress table), started by root with runuser: no
+        # become_user, which needs ACL tools on the host for its temporary files
         argv:
+          - runuser
+          - -u
+          - "{{ ci_runner_user }}"
+          - --
+          - env
+          - "HNX_CI_CONFIG={{ ci_runner_slot_config }}"
           - "{{ ci_runner_slot_script }}"
           - build
           - "{{ ci_runner_base_image }}"
@@ -53,10 +61,6 @@
           - "{{ ci_runner_build_memory_mb }}"
           - "{{ ci_runner_build_disk_gb }}"
           - "{{ ci_runner_build_timeout_s }}"
-      environment:
-        HNX_CI_CONFIG: "{{ ci_runner_slot_config }}"
-      become: true
-      become_user: "{{ ci_runner_user }}"
       changed_when: true
       when:
         - not ansible_check_mode
