@@ -75,7 +75,11 @@ def test_both_fixture_kinds_are_required(tmp_path):
 def test_a_live_proof_replaces_the_fixtures_but_must_say_how_it_is_proven(tmp_path):
     import shutil
 
-    t = tree(tmp_path, proof="live", live_test="touch a watched file on a test guest; the rule's alert appears in alerts.json")
+    t = tree(
+        tmp_path,
+        proof="live",
+        live_test="touch a watched file on a test guest; the rule's alert appears in alerts.json",
+    )
     shutil.rmtree(t / "fixtures")
     assert native.lint_native(t) == []  # no fixtures, and none required
     t2 = tree(tmp_path / "b", proof="live")
