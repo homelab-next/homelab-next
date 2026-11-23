@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: the census is code in the runtime release, so this proves the installed release answers
+# the census command, records it, exports the paging state, then converges the settings.
+#   ansible-playbook -i <inventory> modules/source-census/playbooks/upgrade.yml
+- name: Upgrade the source census
+  hosts: mod_source_census_checker
+  become: true
+  tasks:
+    - name: Prove the release and record it
+      ansible.builtin.include_role:
+        name: source_census
+        tasks_from: upgrade
+    - name: Export the paging state first
+      ansible.builtin.include_role:
+        name: source_census
+        tasks_from: export
+    - name: Converge
+      ansible.builtin.include_role:
+        name: source_census

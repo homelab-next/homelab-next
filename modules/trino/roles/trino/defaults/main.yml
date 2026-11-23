@@ -19,7 +19,12 @@ trino_gid: 61003
 # the catalog name clients use: fixed, queries and the lake's writers say iceberg.<schema>.<table>
 trino_catalog_name: iceberg
 # the warehouse: fixed, the tables' metadata embeds s3://iceberg-warehouse/ paths
+# the warehouse the catalog client names: s3://<bucket>/ (the reference catalog) or a warehouse NAME (a
+# catalog with named warehouses: lakekeeper, whose API is served under trino_catalog_path)
 trino_warehouse: s3://iceberg-warehouse/
+# the path the catalog serves its API under, appended to its address ("" for the reference catalog,
+# /catalog for a catalog that serves it there)
+trino_catalog_path: ""
 trino_region: garage
 # the lake-catalog and object-store rows' registry ids; their urls are resolved from the registry
 # unless trino_catalog_url / trino_s3_url is set (scheme://host:port)

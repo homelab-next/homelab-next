@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data catalog, object-tree): <data root>/export/{db/lakekeeper.dump,listing.jsonl}. The
+# dump is the restore's source: the warehouse (its credential encrypted), the namespaces, the tables and
+# each table's current metadata location.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Dump and list
+      ansible.builtin.include_tasks: dump.yml
+  tags: [export]
