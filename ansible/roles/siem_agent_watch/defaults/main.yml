@@ -4,7 +4,12 @@
 # default already watches /etc, /usr/bin, /usr/sbin, /bin, /sbin and /boot on a schedule; these add
 # real-time watches on what an intruder edits to stay (ssh, pam, sudo, audit rules, cron) and
 # scheduled watches on locally installed code.
-siem_agent_watch_fim_realtime_paths: [/etc/ssh, /etc/pam.d, /etc/sudoers.d, /etc/audit/rules.d, /etc/cron.d]
+siem_agent_watch_fim_realtime_paths: [/etc/ssh, /etc/pam.d, /etc/sudoers.d, /etc/audit/rules.d, /etc/cron.d, /etc/systemd/system, /etc/profile.d]
+# /etc/systemd/system (a unit or drop-in an intruder adds to survive a reboot) and /etc/profile.d (a login hook) are the
+# persistence places the SIEM's native rules read. Package upgrades touch them too (new conffiles), so the noise is bounded
+# by what the agent never reports: the package manager's and editors' temporary and backup files (the sregex list below). A
+# real unit, drop-in or profile script still alerts; the manager's own rules tune the rest of the upgrade noise.
+siem_agent_watch_fim_ignore: ['\.dpkg-(new|old|dist|tmp|bak)$', '\.ucf-(new|old|dist)$', '\.swp$', '~$']
 siem_agent_watch_fim_paths: [/usr/local/bin, /usr/local/sbin]
 # (siem_agent_watch_auditd, required: the kernel audit log as a source - auto = when the audit daemon
 # is installed and the host is not a container, since an unprivileged container has no kernel audit

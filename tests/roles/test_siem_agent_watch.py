@@ -54,7 +54,9 @@ def test_fim_paths_and_the_audit_log_are_written_once(tmp_path):
     root = managed(conf)
     real = [d.text for d in root.iter("directories") if d.get("realtime") == "yes"]
     sched = [d.text for d in root.iter("directories") if d.get("realtime") is None]
-    assert real == ["/etc/ssh", "/etc/pam.d", "/etc/sudoers.d", "/etc/audit/rules.d", "/etc/cron.d"]
+    assert real == ["/etc/ssh", "/etc/pam.d", "/etc/sudoers.d", "/etc/audit/rules.d", "/etc/cron.d", "/etc/systemd/system", "/etc/profile.d"]
+    assert [i.text for i in root.iter("ignore")] == [r"\.dpkg-(new|old|dist|tmp|bak)$", r"\.ucf-(new|old|dist)$", r"\.swp$", "~$"]
+    assert all(i.get("type") == "sregex" for i in root.iter("ignore"))
     assert sched == ["/usr/local/bin", "/usr/local/sbin"]
     assert [x.text for x in root.iter("location")] == ["/var/log/audit/audit.log"]
     assert [x.text for x in root.iter("log_format")] == ["audit"]
@@ -106,6 +108,7 @@ def test_the_audit_log_is_a_source_only_where_the_guest_has_one(tmp_path, over, 
         {"siem_agent_watch_fim_paths": ["/etc/<x>"]},
         {"siem_agent_watch_fim_paths": ["/usr/local/bin</directories><x/>"]},
         {"siem_agent_watch_fim_realtime_paths": ["relative/path"]},
+        {"siem_agent_watch_fim_ignore": ["x</ignore><y/>"]},
         {"siem_agent_watch_auditd": "sometimes"},
         {"siem_agent_watch_audit_log": "audit.log"},
     ],
