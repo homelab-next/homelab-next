@@ -716,3 +716,38 @@ def test_the_real_client_refuses_a_namespace_other_than_soc_before_any_request(
     with pytest.raises(lw.NamespaceRefused):
         lw.open_lake(cfg, schemas, ensure=True)
     assert lab.tables == {} and lab.statements == [] and lab.auth == []
+
+
+# ------------------------------------------------------------------ the pipeline's staging layout
+
+
+def test_an_object_in_the_pipelines_partitioned_gzip_form_is_picked_up_and_committed(
+    lake, store, schemas, tmp_path
+):
+    import gzip
+
+    when = datetime(2026, 11, 22, 13, 5, tzinfo=UTC)
+    key = lw.staging_key(PREFIX, "dns_activity", when, "0192ab-uuid")
+    # the form the log-pipeline module documents: <prefix><table>/dt=%Y-%m-%d/hour=%H/<id>.ndjson.gz
+    assert key == f"{PREFIX}dns_activity/dt=2026-11-22/hour=13/0192ab-uuid.ndjson.gz"
+    body = "".join(json.dumps(event("dns_activity", i)) + "\n" for i in range(3)).encode()
+    store.put(BUCKET, key, gzip.compress(body))
+    plain = lw.staging_key(PREFIX, "dns_activity", when, "plain", gz=False)
+    store.put(BUCKET, plain, json.dumps(event("dns_activity", 9)).encode())
+    w = make(lake, store, schemas, tmp_path)
+    assert w.pending() == sorted([key, plain])
+    res = w.run()
+    assert res["ok"] and res["rows_written"] == 4 and count(lake) == 4 and staged(store) == []
+    assert lw.STAGING_LAYOUT.startswith("<prefix><table>/dt=")
+
+
+def test_a_corrupt_or_oversized_gzip_is_refused_whole(lake, store, schemas, tmp_path, monkeypatch):
+    import gzip
+
+    key = lw.staging_key(PREFIX, "dns_activity", T0, "bad")
+    store.put(BUCKET, key, b"\x1f\x8bnot gzip")
+    res = make(lake, store, schemas, tmp_path).run()
+    assert res["rows_rejected"] == 1 and count(lake) == 0
+    monkeypatch.setattr(lw, "MAX_INFLATED", 10)
+    store.put(BUCKET, lw.staging_key(PREFIX, "dns_activity", T0, "big"), gzip.compress(b"x" * 100))
+    assert make(lake, store, schemas, tmp_path).run()["rows_rejected"] == 1

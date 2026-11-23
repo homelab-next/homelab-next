@@ -54,6 +54,8 @@ times (the write is replay-safe, so a retry cannot duplicate), then the table's 
 
 import argparse
 import contextlib
+import gzip
+import io
 import json
 import os
 import sys
@@ -98,6 +100,20 @@ OWN_TABLES = (
 )
 ALL_TABLES = tuple(sorted(CORE_TABLES + OWN_TABLES))
 REJECTED = "_rejected"
+#: THE staging layout, the contract with the log pipeline (one definition: build keys with
+#: :func:`staging_key`). Objects are gzip (or plain) newline-delimited JSON, one flat OCSF event per
+#: line with ``labels.hnx_tlp``; the writer lists everything under ``<prefix><table>/`` recursively.
+STAGING_LAYOUT = "<prefix><table>/dt=YYYY-MM-DD/hour=HH/<id>.ndjson.gz"
+#: a staged object that inflates past this many bytes is refused whole (a decompression bomb)
+MAX_INFLATED = 256 * 1024 * 1024
+
+
+def staging_key(prefix, table, when, name, gz=True):
+    """The key of a staged object in :data:`STAGING_LAYOUT` (``when``: its write time, UTC)."""
+    stamp = when.strftime("dt=%Y-%m-%d/hour=%H")
+    return f"{prefix}{table}/{stamp}/{name}.ndjson" + (".gz" if gz else "")
+
+
 EXIT_OK, EXIT_FAILED, EXIT_REFUSED = 0, 1, 2
 #: a reason or an original line is cut to this many characters in a rejected record
 CUT = 4000
@@ -175,6 +191,14 @@ def prepare(schema, data):
     ``{"line", "reason", "text"}`` for every line it would not (not UTF-8, not JSON, not an object,
     no canonical pipeline label, a field the pinned schema does not hold). Nothing here writes."""
     rows, rejects = [], []
+    if data[:2] == b"\x1f\x8b":  # gzip
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(data)) as fh:
+                data = fh.read(MAX_INFLATED + 1)
+        except (OSError, EOFError):
+            return [], [{"line": 0, "reason": "the object is not valid gzip", "text": ""}]
+        if len(data) > MAX_INFLATED:
+            return [], [{"line": 0, "reason": "the object inflates past the limit", "text": ""}]
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:

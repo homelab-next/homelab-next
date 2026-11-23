@@ -39,15 +39,15 @@ snapshot expiry, freshness). The records are in namespace `soc`, which is not th
 ## The staged batch (the contract with the pipeline)
 
 ```
-<bucket>/<prefix><table>/<name>        bucket: soc-staging   prefix: lake-writer/staging/
+<bucket>/<prefix><table>/dt=YYYY-MM-DD/hour=HH/<id>.ndjson.gz     bucket: soc-staging   prefix: lake-writer/staging/
 ```
 
-An object is newline-delimited JSON, one event per line, a flat OCSF event of the table's pinned
-shape plus **`labels.hnx_tlp`**, the label the pipeline sets from the route's declaration. `<name>`
-should sort in arrival order (a timestamp first) and be unique per batch: the object key is the
-batch's idempotency key, so **a producer must never reuse a name for different content**. A pipeline
-that writes an object in several steps stages it complete (a rename or a final PUT); the writer treats
-any listed object as whole.
+This is `STAGING_LAYOUT` in the script (keys are built with `staging_key`), the layout the log-pipeline
+module writes. An object is gzip (or plain) newline-delimited JSON, one flat OCSF event per line of the
+table's pinned shape plus **`labels.hnx_tlp`**. The writer lists everything under `<prefix><table>/`
+recursively, oldest key first; the object key is the batch's idempotency key, so a producer must never
+reuse a key for different content. An object that inflates past 256 MiB or is not valid gzip is refused
+whole.
 
 ## What a run does (per table, `hnx-lake-writer commit --table T`)
 
