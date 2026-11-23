@@ -61,7 +61,6 @@ compose_app_export_timer: false
 compose_app_export_engines: {}
 # 07:30 UTC is 01:30 to 02:30 in the lab's zone, before the 04:30 (America/Chicago) image backup
 compose_app_export_calendar: "*-*-* 07:30:00 UTC"
-compose_app_export_delay_s: 900
 compose_app_export_script: /usr/local/libexec/homelabnext/hnx-export-run
 compose_app_export_manifest: "{{ compose_app_dir }}/export-manifest.json"
 compose_app_export_last_run_dir: /var/lib/homelabnext/last-run

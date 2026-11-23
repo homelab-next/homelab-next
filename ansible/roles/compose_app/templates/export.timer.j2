@@ -5,7 +5,7 @@ Description=Database dump of {{ compose_app_name }}, nightly, before the guest's
 
 [Timer]
 OnCalendar={{ compose_app_export_calendar }}
-RandomizedDelaySec={{ compose_app_export_delay_s }}
+RandomizedDelaySec=15min
 Persistent=true
 
 [Install]

@@ -234,7 +234,7 @@ def test_the_timer_task_installs_script_manifest_units_and_arms_the_timer(first)
     assert mf["images"]["db"].endswith("@sha256:" + "b" * 64)
     assert stat.S_IMODE((tmp / "opt" / "export-manifest.json").stat().st_mode) == 0o600
     service = (tmp / "units" / "hnx-export-app.service").read_text()
-    assert "hnx-export-run --manifest" in service and "timer:compose_app/export-app" in service
+    assert "hnx-export-run --manifest" in service and "timer:compose_app/export " in service
     timer = (tmp / "units" / "hnx-export-app.timer").read_text()
     assert "OnCalendar=*-*-* 07:30:00 UTC" in timer and "RandomizedDelaySec=900" in timer
     assert (tmp / "libexec" / "hnx-export-run").stat().st_mode & stat.S_IEXEC

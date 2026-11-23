@@ -5,7 +5,7 @@ Description=Restore drill, daily (one guest, rotating)
 
 [Timer]
 OnCalendar={{ restore_drill_timer_calendar }}
-RandomizedDelaySec={{ restore_drill_timer_delay_s }}
+RandomizedDelaySec=10min
 Persistent=true
 
 [Install]

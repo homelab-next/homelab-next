@@ -24,6 +24,7 @@ import datetime
 import json
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -106,7 +107,14 @@ def check(
     return out
 
 
-def main(argv: list[str] | None = None) -> int:
+def _utcnow() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)  # noqa: UP017
+
+
+def main(
+    argv: list[str] | None = None,
+    clock: Callable[[], datetime.datetime] = _utcnow,
+) -> int:
     ap = argparse.ArgumentParser(prog="hnx recovery drills", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("check", help="judge the drill records")
@@ -124,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     try:
         interval, max_age = parse_duration(args.interval), parse_duration(args.max_age)
-        now = _ts(args.now) if args.now else datetime.datetime.now(datetime.timezone.utc)  # noqa: UP017
+        now = _ts(args.now) if args.now else clock()
         if now is None:
             raise ValueError("--now is YYYY-MM-DDTHH:MM:SSZ")
         doc = json.loads(args.records.read_text(encoding="utf-8"))

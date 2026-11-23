@@ -182,10 +182,6 @@ argument_specs:
         type: str
         description: The timer's OnCalendar, in UTC, before the guest's image backup.
         default: "*-*-* 07:30:00 UTC"
-      compose_app_export_delay_s:
-        type: int
-        description: The timer's randomized delay in seconds (staggers the applications of one guest).
-        default: 900
       compose_app_export_script:
         type: path
         description: Where the dump script is installed.

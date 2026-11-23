@@ -96,15 +96,23 @@
         last_run_group: "{{ compose_app_export_last_run_group }}"
         last_run_writer: "{{ compose_app_export_last_run_writer }}"
 
-    - name: Write the service and timer units
+    - name: Write the service unit
       ansible.builtin.template:
-        src: "export.{{ item }}.j2"
-        dest: "{{ compose_app_unit_dir }}/hnx-export-{{ compose_app_name }}.{{ item }}"
+        src: export.service.j2
+        dest: "{{ compose_app_unit_dir }}/hnx-export-{{ compose_app_name }}.service"
         owner: "{{ compose_app_owner }}"
         group: "{{ compose_app_group }}"
         mode: "0644"
-      loop: [service, timer]
-      register: compose_app_export_units
+      register: compose_app_export_service_unit
+
+    - name: Write the timer unit
+      ansible.builtin.template:
+        src: export.timer.j2
+        dest: "{{ compose_app_unit_dir }}/hnx-export-{{ compose_app_name }}.timer"
+        owner: "{{ compose_app_owner }}"
+        group: "{{ compose_app_group }}"
+        mode: "0644"
+      register: compose_app_export_timer_unit
 
     - name: Ask whether the timer is enabled
       ansible.builtin.command:
@@ -117,11 +125,11 @@
     - name: Reload systemd (units changed)
       ansible.builtin.command:
         argv: ["{{ compose_app_systemctl_cli }}", daemon-reload]
-      when: compose_app_export_units is changed
+      when: (compose_app_export_service_unit is changed or compose_app_export_timer_unit is changed)
       changed_when: true
 
     - name: Enable and start the timer
       ansible.builtin.command:
         argv: ["{{ compose_app_systemctl_cli }}", enable, --now, "hnx-export-{{ compose_app_name }}.timer"]
-      when: compose_app_export_units is changed or compose_app_export_enabled.stdout | default('') | trim != 'enabled'
+      when: (compose_app_export_service_unit is changed or compose_app_export_timer_unit is changed) or compose_app_export_enabled.stdout | default('') | trim != 'enabled'
       changed_when: true

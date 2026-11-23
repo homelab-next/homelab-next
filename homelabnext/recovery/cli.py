@@ -12,9 +12,10 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "drills":
         return drills.main(argv[1:])
+    help_asked = bool(argv) and argv[0] in ("-h", "--help")
     print(
         "usage: hnx recovery drills check --records drills.json [--max-age 90d] [--interval 30d] "
         "[--require ID,ID] [--require-export N] [--strict]",
-        file=sys.stderr,
+        file=sys.stdout if help_asked else sys.stderr,
     )
-    return 2
+    return 0 if help_asked else 2

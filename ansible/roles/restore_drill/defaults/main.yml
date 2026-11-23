@@ -21,7 +21,6 @@ restore_drill_state_file: /var/lib/homelabnext/restore-drill/drills.json
 # with N guests each is drilled about every N days, each copy about every 2N.
 restore_drill_timer: false
 restore_drill_timer_calendar: "*-*-* 13:00:00 UTC"
-restore_drill_timer_delay_s: 600
 restore_drill_config_file: /etc/hnx/restore-drill.json
 restore_drill_env_file: /etc/hnx/restore-drill.env
 # the backup server's API token id (user@realm!token) with the Datastore.Read role on each store's namespace

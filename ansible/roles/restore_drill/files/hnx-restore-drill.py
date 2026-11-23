@@ -142,14 +142,23 @@ def load_records(path):
     return doc
 
 
+def atomic_write(path, text, mode=0o640):
+    """Write text to path through a sibling temp file created at its final mode, then rename."""
+    tmp = os.path.join(os.path.dirname(path), f".drills-{os.getpid()}-{os.urandom(4).hex()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
 def save_records(path, doc):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".drills-", dir=os.path.dirname(path))
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(doc, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-    os.chmod(tmp, 0o640)
-    os.replace(tmp, path)
+    atomic_write(path, json.dumps(doc, indent=2, sort_keys=True) + "\n")
 
 
 # ---------------------------------------------------------------- the backup server

@@ -40,10 +40,6 @@ argument_specs:
         type: str
         description: The timer's OnCalendar (UTC), after the backup server's prune and verify.
         default: "*-*-* 13:00:00 UTC"
-      restore_drill_timer_delay_s:
-        type: int
-        description: The timer's randomized delay in seconds.
-        default: 600
       restore_drill_config_file:
         type: path
         description: Where the drill's config is written (mode 0600).

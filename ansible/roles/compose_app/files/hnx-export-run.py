@@ -25,6 +25,7 @@ last good dump alone.  What the dump does not carry (bind-mounted files, uploads
 written into ``manifest.json`` (ADR-0008 decision 4); those travel in the guest's image backup."""
 
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
@@ -196,6 +197,17 @@ def publish(export_dir, stage, service):
     os.rename(os.path.join(stage, service), final)
 
 
+def atomic_write(path, text, mode=0o600):
+    """Write text to path through a sibling temp file created at its final mode, then rename."""
+    tmp = os.path.join(os.path.dirname(path), "." + os.path.basename(path) + ".tmp")
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+
+
 def write_listing(export_dir, doc, results):
     lines = []
     for service in sorted(results):
@@ -203,11 +215,7 @@ def write_listing(export_dir, doc, results):
         for name in sorted(os.listdir(base)):
             if not name.startswith("."):
                 lines.append(f"{sha256_of(os.path.join(base, name))}  {service}/{name}\n")
-    tmp = os.path.join(export_dir, ".listing.tmp")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.writelines(lines)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, os.path.join(export_dir, "listing.sha256"))
+    atomic_write(os.path.join(export_dir, "listing.sha256"), "".join(lines))
     meta = {
         "schema": SCHEMA,
         "app": doc["app"],
@@ -216,12 +224,9 @@ def write_listing(export_dir, doc, results):
         "images": doc.get("images", {}),
         "does_not_carry": NOT_CARRIED,
     }
-    tmp = os.path.join(export_dir, ".manifest.tmp")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(meta, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, os.path.join(export_dir, "manifest.json"))
+    atomic_write(
+        os.path.join(export_dir, "manifest.json"), json.dumps(meta, indent=2, sort_keys=True) + "\n"
+    )
 
 
 def main(argv=None):
