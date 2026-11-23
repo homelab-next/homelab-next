@@ -33,20 +33,11 @@ import json
 import sys
 from collections.abc import Sequence
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
+from homelabnext._cliargs import iso_when, load_doc
+
 __all__ = ["main"]
-
-
-def _when(text: str) -> datetime:
-    try:
-        t = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not an ISO 8601 time: {text!r}") from None
-    if t.utcoffset() is None:
-        raise argparse.ArgumentTypeError(f"{text!r} has no UTC offset (write Z or +00:00)")
-    return t
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -72,14 +63,14 @@ def _parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="score every profile of a spec for --as-of")
     run.add_argument("--spec", required=True, help="the novelty spec (YAML or JSON)")
-    run.add_argument("--as-of", required=True, type=_when, help="end of the scoring window")
+    run.add_argument("--as-of", required=True, type=iso_when, help="end of the scoring window")
     run.add_argument("--dry-run", action="store_true", help="score, but write nothing")
     run.add_argument("--show-findings", action="store_true", help="print the rows too")
     lake_args(run)
 
     cor = sub.add_parser("corroborate", help="entities flagged by >= 2 distinct sources")
-    cor.add_argument("--since", required=True, type=_when, help="window start (inclusive)")
-    cor.add_argument("--until", required=True, type=_when, help="window end (exclusive)")
+    cor.add_argument("--since", required=True, type=iso_when, help="window start (inclusive)")
+    cor.add_argument("--until", required=True, type=iso_when, help="window end (exclusive)")
     cor.add_argument("--min-sources", type=int, default=2, help="distinct sources (>= 2)")
     lake_args(cor)
     return ap
@@ -90,15 +81,7 @@ class _Usage(Exception):
 
 
 def _load(path: str) -> Any:
-    p = Path(path)
-    try:
-        if p.suffix == ".json":
-            return json.loads(p.read_text(encoding="utf-8"))
-        from homelabnext._yaml import load_unique
-
-        return load_unique(p, _Usage)
-    except (OSError, ValueError) as exc:
-        raise _Usage(f"cannot read {p}: {exc}") from exc
+    return load_doc(path, _Usage)
 
 
 def _lake(args: argparse.Namespace, schemas: Any) -> Any:

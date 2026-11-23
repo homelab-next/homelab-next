@@ -12,7 +12,7 @@
       HNX_LAKE_S3_ENDPOINT: "{{ nifi_s3_endpoint }}"
       HNX_LAKE_S3_REGION: "{{ nifi_region }}"
       HNX_LAKE_WAREHOUSE: "{{ nifi_warehouse }}"
-      HNX_LAKE_CATALOG_URI: "{{ nifi_catalog_endpoint }}"
+      HNX_LAKE_CATALOG_URI: "{{ nifi_catalog_endpoint }}{{ nifi_catalog_path }}"
       HNX_LAKE_QUERY_URL: "{{ nifi_query_endpoint }}"
       HNX_EVENTS_URL: "{{ nifi_events_endpoint }}"
       HNX_TRUSTSTORE_PATH: "{{ nifi_container_tls }}/truststore.p12"

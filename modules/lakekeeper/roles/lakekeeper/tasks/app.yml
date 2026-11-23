@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app): the database (no
+# published port, the project's own network only) and the catalog (published on the guest's address).
+# Neither environment holds a secret: the passwords, the encryption key and the object store key pair
+# are in compose_app_secret_env (main) and in the warehouse (the API), never in the compose file.
+- name: Resolve the object store's address
+  ansible.builtin.include_tasks: endpoint.yml
+
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    lakekeeper_app:
+      compose_app_name: lakekeeper
+      compose_app_dir: "{{ lakekeeper_dir }}"
+      compose_app_data_dir: "{{ lakekeeper_data_root }}"
+      compose_app_export_dir: "{{ lakekeeper_data_root }}/export"
+      compose_app_owner: "{{ lakekeeper_owner }}"
+      compose_app_group: "{{ lakekeeper_group }}"
+      compose_app_start: "{{ lakekeeper_start }}"
+      compose_app_validate_with_docker: "{{ lakekeeper_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          postgres:
+            image: "{{ lakekeeper_db_repository }}"
+            tag: "{{ lakekeeper_db_tag }}"
+            digest: "{{ lakekeeper_db_digest }}"
+            user: "{{ lakekeeper_db_uid | int }}:{{ lakekeeper_db_gid | int }}"
+            environment:
+              POSTGRES_DB: "{{ lakekeeper_db_name }}"
+              POSTGRES_USER: "{{ lakekeeper_db_user }}"
+            volumes:
+              - "{{ lakekeeper_data_root }}/pgdata:{{ lakekeeper_container_pg_volume }}"
+              - "{{ lakekeeper_data_root }}/export/db:{{ lakekeeper_container_export }}"
+            mem_limit: "{{ lakekeeper_db_mem_limit }}"
+            healthcheck:
+              # over TCP: the entrypoint's init server listens on the socket only, so the database is not
+              # reported healthy while it is still initialising
+              test: [CMD, pg_isready, -q, -h, localhost, -U, "{{ lakekeeper_db_user }}", -d, "{{ lakekeeper_db_name }}"]
+              interval: 10s
+              timeout: 5s
+              retries: 10
+              start_period: 20s
+          lakekeeper:
+            image: "{{ lakekeeper_repository }}"
+            tag: "{{ lakekeeper_tag }}"
+            digest: "{{ lakekeeper_digest }}"
+            command: [serve]
+            user: "{{ lakekeeper_uid | int }}:{{ lakekeeper_gid | int }}"
+            depends_on: [postgres]
+            environment: "{{ lakekeeper_fixed_env }}"
+            ports: ["{{ lakekeeper_bind }}:{{ lakekeeper_port | int }}:{{ lakekeeper_container_port }}"]
+            mem_limit: "{{ lakekeeper_mem_limit }}"
+            healthcheck:
+              test: [CMD, "{{ lakekeeper_binary }}", healthcheck]
+              interval: 15s
+              timeout: 5s
+              retries: 10
+              start_period: 20s
+  tags: [health, backup, restore, export, upgrade]

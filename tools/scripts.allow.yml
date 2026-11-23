@@ -26,6 +26,12 @@ uncalled:
     the operator runs it by hand in the lake's rehearsal and in its cutover window, against the
     query engine under test and the reference counts the source reported (the lake modules'
     READMEs); no timer or make target runs it, because it compares one copy with one source once
+  catalog-register: >-
+    the operator runs it by hand in the lake catalog's rehearsal and in its cutover window (plan,
+    register, verify; and register the other way for a rollback), against a COPY of the old
+    catalog's file and the two catalogs' APIs (modules/lakekeeper/README.md, "Taking over a lake
+    that already has tables"); no timer or make target runs it, because it moves one catalog's
+    pointers to another once
   decommission-check: >-
     the operator runs it by hand at step 8 of a service swap (docs/swap.md), with the retired
     service's names as arguments; the swap runner calls the same scanner as a library

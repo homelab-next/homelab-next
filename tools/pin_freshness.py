@@ -146,6 +146,12 @@ SOURCES: dict[str, tuple[str, str]] = {
         "the Docker official image (docker.io/library/postgres): compare its tags with the "
         "PostgreSQL release page by hand, within the pinned major version",
     ),
+    "role:lakekeeper/lakekeeper_image": ("github", "lakekeeper/lakekeeper"),
+    "role:lakekeeper/lakekeeper_postgres_image": (
+        "none",
+        "the Docker official image (docker.io/library/postgres): compare its tags with the "
+        "PostgreSQL release page by hand, within the pinned major version",
+    ),
     "role:media/media_image": ("github", "jellyfin/jellyfin"),
     "role:misp/misp_core_image": ("github", "MISP/MISP"),
     "role:misp/misp_modules_image": ("github", "MISP/misp-modules"),
@@ -310,6 +316,15 @@ NOTES: dict[str, str] = {
     ),
     "role:keycloak/keycloak_postgres_image": (
         "an image (modules/keycloak): the tag and its digest together, a minor version only "
+        "(a major one is a dump and a restore)"
+    ),
+    "role:lakekeeper/lakekeeper_image": (
+        "an image (modules/lakekeeper): bump the tag and its digest together, with product.version in "
+        "modules/lakekeeper/module.yml and the lab registry's version; the upgrade playbook dumps the "
+        "database first, because the schema migration a newer version runs is one way"
+    ),
+    "role:lakekeeper/lakekeeper_postgres_image": (
+        "an image (modules/lakekeeper): the tag and its digest together, a minor version only "
         "(a major one is a dump and a restore)"
     ),
     "role:media_automation/media_automation_gluetun_image": (
