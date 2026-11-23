@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - zeek_logical_id is match(zeek_id_pattern)
+      - zeek_capture_interfaces | length > 0
+      - zeek_capture_interfaces | map(attribute='slug') | list | unique | length == zeek_capture_interfaces | length
+      - zeek_capture_interfaces | map(attribute='interface') | list | unique | length == zeek_capture_interfaces | length
+      - zeek_capture_interfaces | map(attribute='slug') | reject('match', zeek_slug_pattern) | list | length == 0
+      - zeek_capture_interfaces | map(attribute='interface') | reject('match', zeek_iface_pattern) | list | length == 0
+      - zeek_base_image is match(zeek_pinned_ref_pattern)
+      - zeek_script_packages | map(attribute='name') | reject('match', zeek_package_name_pattern) | list | length == 0
+      - zeek_script_packages | map(attribute='version') | reject('match', zeek_package_version_pattern) | list | length == 0
+      - zeek_stats_interval | int >= 10 and zeek_stats_interval | int <= 3600
+      - zeek_stats_window | int >= 1
+      - zeek_stats_max_age_seconds | int > zeek_stats_interval | int
+      - zeek_max_drop_ratio | float > 0 and zeek_max_drop_ratio | float <= 1
+      - zeek_container_memory is match('^[1-9][0-9]{0,5}[mg]\\Z')
+      - zeek_logrotate_max_size is match('^[1-9][0-9]{0,3}[MG]\\Z')
+      - zeek_logrotate_keep | int >= 1
+      - >-
+        [zeek_build_dir, zeek_log_root, zeek_unit_dir, zeek_logrotate_dir] | reject('match', zeek_path_pattern) | list | length == 0
+    fail_msg: >-
+      zeek: a registry id, one or more capture interfaces each with a distinct slug and a Linux
+      interface name of at most 15 characters, a base image pinned by tag and digest, packages named
+      owner/repo/package each pinned to a release tag or commit, a stats interval of 10 to 3600
+      seconds, a stats age bound longer than the interval, a drop bound above 0 and at most 1, a
+      container memory limit like 2g, a logrotate size like 2G and absolute canonical paths
+  tags: [health, backup, restore, export, upgrade, readiness]

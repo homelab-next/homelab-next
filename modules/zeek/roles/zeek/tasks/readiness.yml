@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# The monitor's dependencies: the container engine (docker_engine, applied to the host before this
+# module) and capture interfaces that exist and hold no IPv4 address. It calls no service of the lab.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+      when: zeek_engine_check | default(true) | bool
+    - name: Look at each capture interface (read-only)
+      ansible.builtin.command:
+        argv: [ip, -j, addr, show, dev, "{{ item.interface }}"]
+      loop: "{{ zeek_capture_interfaces }}"
+      loop_control: {label: "{{ item.interface }}"}
+      register: zeek_iface_state
+      changed_when: false
+      check_mode: false
+      when: zeek_iface_check | default(true) | bool
+    - name: No capture interface holds an IPv4 address
+      ansible.builtin.assert:
+        that:
+          - >-
+            (item.stdout | from_json | map(attribute='addr_info') | flatten
+             | selectattr('family', 'equalto', 'inet') | list | length) == 0
+        fail_msg: "zeek: capture interface {{ item.item.interface }} holds an IPv4 address; a capture NIC carries nothing else"
+      loop: "{{ zeek_iface_state.results | default([]) }}"
+      loop_control: {label: "{{ item.item.interface }}"}
+      when: zeek_iface_check | default(true) | bool
+  tags: [readiness]

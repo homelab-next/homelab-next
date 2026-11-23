@@ -1,0 +1,4 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (module zeek); do not edit.
+# The stats heartbeat is what the health hook reads: packets processed and dropped each interval.
+redef Stats::report_interval = {{ zeek_stats_interval }}sec;

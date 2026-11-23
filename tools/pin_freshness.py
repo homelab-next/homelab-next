@@ -92,6 +92,7 @@ SOURCES: dict[str, tuple[str, str]] = {
         "NVIDIA/nvidia-container-toolkit",
     ),
     "role:events_bus/events_bus_version": ("github", "nats-io/nats-server"),
+    "role:zeek/zeek_base_image": ("github", "zeek/zeek"),
     "role:suricata/suricata_package_version": (
         "none",
         "an OS package version (Debian security updates move the +debNuN suffix): compare with the "

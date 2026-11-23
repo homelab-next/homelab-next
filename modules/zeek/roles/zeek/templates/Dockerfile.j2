@@ -1,0 +1,8 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (module zeek); do not edit. The official image, pinned by tag and digest, plus
+# packages each pinned to a release tag or commit. A package that does not install fails the build,
+# so no half-built image is ever tagged.
+FROM {{ zeek_base_image }}
+RUN {% for p in zeek_script_packages %}zkg install --force {{ p.name }} --version {{ p.version }}{{ ' && \\\n    ' if not loop.last else '' }}{% endfor %}
+
+COPY self-signed.zeek {{ zeek_container_site_dir }}/self-signed.zeek
