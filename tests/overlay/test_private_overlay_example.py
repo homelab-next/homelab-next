@@ -61,13 +61,14 @@ READ = {"read", "none"}
 DEPLOY_LABEL = "hnx-deploy"
 #: the one other self-hosted runs-on (operator-approved 2026-11-22 22:41): homelab-next's own ci.yml may send a job to the
 #: lab's ephemeral CI pool (modules/ci-runner, label hnx-ci: one throwaway VM per job, public egress only), word for word
-#: this expression: a push (to main) or a pull request whose head is a branch of this repository, and only while the
-#: repository variable is `on`; a fork's pull request always gets the hosted runner. Nothing else in the job may name a
+#: this expression: a push (to main) or a pull request whose head is a branch of this repository, only while the
+#: repository variable is `on`, and only the 3.11 leg of the test matrix (the 3.12 leg stays hosted); a fork's pull request always gets the hosted runner. Nothing else in the job may name a
 #: self-hosted runner, no other workflow may use it, and the overlay templates may not.
 POOL_LABEL = "hnx-ci"
 POOL_RUNS_ON = (
     "${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)"
-    ' && vars.HNX_CI_POOL == \'on\' && fromJSON(\'["self-hosted","linux","x64","hnx-ci"]\')'
+    " && vars.HNX_CI_POOL == 'on' && matrix.python.version == '3.11'"
+    ' && fromJSON(\'["self-hosted","linux","x64","hnx-ci"]\')'
     " || 'ubuntu-latest' }}"
 )
 POOL_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
@@ -189,6 +190,7 @@ def test_ci_yml_may_send_a_job_to_the_pool_with_the_exact_expression_only(tmp_pa
     variants = [
         fork_open,  # a fork's pull request would reach the pool
         POOL_RUNS_ON.replace(" && vars.HNX_CI_POOL == 'on'", ""),  # no off switch
+        POOL_RUNS_ON.replace(" && matrix.python.version == '3.11'", ""),  # every shard to the pool
         POOL_RUNS_ON.replace(
             "head.repo.full_name == github.repository", "head.repo.fork == false || true"
         ),

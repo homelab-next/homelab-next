@@ -62,16 +62,17 @@ jobs:
   # runs of one test count, and tests/roles (ansible-playbook per case) is ~85% of the time, so
   # twelve shards halve each job's work (hashing keeps them even) for >= 40% headroom, and the
   # timeout is a backstop only.  Roles' first runs are prefetched per shard, so nothing repeats.
-  # Where the shards run (operator 2026-11-22 22:41, "use both local and cloud"): the 24 shards go to the lab's ephemeral
-  # pool (modules/ci-runner: one throwaway VM per job, public egress only) while every other job stays on hosted runners, so
-  # the two run side by side; only for a push to main or a pull request from a branch of THIS repository, and only while the
-  # repository variable HNX_CI_POOL is `on` (the pool's feeder sets it off when the pool stops answering; the lead may set it
-  # off by hand). A fork's pull request, or the variable anything but `on`, runs every shard on hosted runners. This is the
+  # Where the shards run (operator 2026-11-22 22:41, "use both local and cloud"): the twelve 3.11 shards go to the lab's
+  # ephemeral pool (modules/ci-runner: one throwaway VM per job, public egress only) while the twelve 3.12 shards and every
+  # other job stay on hosted runners, so the two run side by side (a nested-virtualised job VM runs a shard slower than a
+  # hosted runner, and the 3.12 leg's timing-sensitive tests are kept off it); only for a push to main or a pull request
+  # from a branch of THIS repository, and only while the repository variable HNX_CI_POOL is `on` (the pool's feeder sets
+  # it off when the pool stops answering; the lead may set it off by hand). A fork's pull request, or the variable anything but `on`, runs every shard on hosted runners. This is the
   # one runs-on that may name a self-hosted runner outside deploy.yml, word for word (tests/overlay/test_private_overlay_example.py
   # POOL_RUNS_ON); the go job and CodeQL stay hosted.
   test:
     name: test (${{ matrix.python.version }}, ${{ matrix.shard }}/12)
-    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && matrix.python.version == '3.11' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 30  # backstop: a twelfth of the suite takes 8-14 min, see above
     strategy:
       fail-fast: false
