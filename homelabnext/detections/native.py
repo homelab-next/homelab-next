@@ -44,6 +44,7 @@ import base64
 import json
 import re
 import ssl
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -258,8 +259,9 @@ class ManagerLogtest:
     own certificate); one session token is kept, the credential is the caller's."""
 
     def __init__(
-        self, base_url: str, user: str, password: str, ca_file: str, timeout: float = 30.0
-    ):
+        self, base_url: str, user: str, password: str, ca_file: str, timeout: float = 30.0,
+        max_per_minute: int = 240, retries: int = 5, clock=time.monotonic, sleep=time.sleep,
+    ):  # fmt: skip
         self._base = base_url.rstrip("/")
         self._basic = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
         ctx = ssl.create_default_context(cafile=ca_file) if self._base.startswith("https") else None
@@ -270,6 +272,29 @@ class ManagerLogtest:
         self._timeout = timeout
         self._jwt: str | None = None
         self._session: str | None = None
+        # the manager API answers 429 past 300 requests a minute (its default): the runner stays under
+        # max_per_minute by itself (a sliding one-minute window) and, if the manager still says 429
+        # (another client shares the budget), waits Retry-After or backs off 2, 4, 8 ... seconds and retries
+        self._max, self._retries, self._clock, self._sleep = max_per_minute, retries, clock, sleep
+        self._sent: list[float] = []
+
+    def _open(self, req: urllib.request.Request):
+        for attempt in range(self._retries + 1):
+            now = self._clock()
+            self._sent = [t for t in self._sent if now - t < 60.0]
+            if len(self._sent) >= self._max:
+                self._sleep(60.0 - (now - self._sent[0]) + 0.01)
+                now = self._clock()
+                self._sent = [t for t in self._sent if now - t < 60.0]
+            self._sent.append(now)
+            try:
+                return self._opener.open(req, timeout=self._timeout)
+            except urllib.error.HTTPError as exc:
+                if exc.code != 429 or attempt == self._retries:
+                    raise
+                retry_after = exc.headers.get("Retry-After", "") if exc.headers else ""
+                self._sleep(float(retry_after) if retry_after.isdigit() else 2.0 ** (attempt + 1))
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def _call(
         self, method: str, path: str, body: dict | None = None, auth: str | None = None
@@ -279,7 +304,7 @@ class ManagerLogtest:
                                      headers={"Authorization": auth or f"Bearer {self._jwt}",
                                               "Content-Type": "application/json"})  # fmt: skip
         try:
-            with self._opener.open(req, timeout=self._timeout) as r:
+            with self._open(req) as r:
                 return json.loads(r.read() or b"{}")
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"{method} {path} answered {exc.code}") from exc
@@ -288,7 +313,7 @@ class ManagerLogtest:
         if self._jwt is None:
             req = urllib.request.Request(self._base + "/security/user/authenticate?raw=true", method="POST",
                                          headers={"Authorization": self._basic})  # fmt: skip
-            with self._opener.open(req, timeout=self._timeout) as r:
+            with self._open(req) as r:
                 self._jwt = r.read().decode().strip()
         body = {
             "event": fx.event,
