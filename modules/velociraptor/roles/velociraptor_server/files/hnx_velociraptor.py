@@ -173,11 +173,17 @@ def vql(cfg: dict, run, query: str, *, api: bool = True) -> list[dict]:
 # --- files -------------------------------------------------------------------------------------
 
 
-def atomic_write(path, text: str, mode: int = 0o640) -> None:
+def atomic_write(path, text: str, mode: int | None = None) -> None:
+    """Write ``text`` to ``path`` through a temp file created at its final mode.  With no ``mode`` the file is
+    owner-only plus group-read exactly when its directory is group-readable (the role sets the directory's
+    mode and group for the readers of results and status), so the directory, not this code, decides who
+    else may read it."""
     p = Path(path)
     if p.is_symlink():
         raise OSError(f"{p}: refusing to write through a link")
     p.parent.mkdir(parents=True, exist_ok=True)
+    if mode is None:
+        mode = 0o600 | (p.parent.stat().st_mode & 0o040)
     tmp = p.parent / f".{p.name}.tmp"
     # created at its final mode (a stale temp from a crashed run is removed, never reused at its old
     # mode), so there is no moment of a wider file and no chmod after the fact
@@ -238,7 +244,7 @@ def collect_hunt(cfg, run, catalog, hunt_id, now) -> int:
                     "row": row,
                 })  # fmt: skip
     text = "".join(json.dumps(r, sort_keys=True) + "\n" for r in out)
-    atomic_write(Path(cfg["results_dir"]) / f"hunts-{hunt_id}.jsonl", text, 0o640)
+    atomic_write(Path(cfg["results_dir"]) / f"hunts-{hunt_id}.jsonl", text)
     return len(out)
 
 
@@ -264,7 +270,7 @@ def cycle(cfg: dict, run, now: float) -> int:
         status["problems"].append(str(e))
         rc = 1
     try:
-        atomic_write(cfg["status_file"], json.dumps(status, sort_keys=True) + "\n", 0o640)
+        atomic_write(cfg["status_file"], json.dumps(status, sort_keys=True) + "\n")
     except OSError as e:
         print(f"status not written: {e}", file=sys.stderr)
         rc = 1
