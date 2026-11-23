@@ -1,11 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: vector-sidecar
+#   kind: service
+#   purpose: Label and remap every event the Vector aggregator hands over, with the core library's own label rules, and forward the rows.
+#   owner: platform
+#   trigger: [manual]
+#   inputs: the aggregator's events on a local socket and the rendered label tables
+#   outputs: labelled OCSF rows on the forward socket and a status file
+#   exit:
+#     "0": stopped cleanly
 """The enrichment sidecar: every event the aggregator receives is labelled and remapped here.
 
 Vector owns the transport (the listeners, the files it tails, the disk buffer, the object store
 writes); this process owns the two things the ``log-pipeline`` contract is about, and it owns them
 with the core library's own rules, not a port: ``homelabnext.logpipeline.enrich`` (the runtime
 label from the address the collector saw) and ``enrich_tlp`` (the TLP label from the route's
-declaration).  The deployment copies ``homelabnext/tlp.py`` and ``homelabnext/logpipeline/``
+declaration).  The deployment copies ``homelabnext/tlp.py``, ``homelabnext/logpipeline/``
 verbatim beside this file (tests prove the copy is byte-identical and its closure complete), so the
 rule that runs on the guest is the rule the conformance suite proved.
 
@@ -42,7 +52,6 @@ import os
 import signal
 import socket
 import sys
-import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -304,19 +313,25 @@ class Tables:
         return changed
 
 
-def write_status(path: Path, tables: Tables, counters: Counters, extra: Mapping[str, Any]) -> None:
+def write_status(
+    path: Path,
+    tables: Tables,
+    counters: Counters,
+    extra: Mapping[str, Any],
+    clock: Callable[[], float] = time.time,
+) -> None:
     doc = {
         "schema": "hnx-vector.status/v1",
-        "time": time.time(),
+        "time": clock(),
         "tables": tables.digests,
         "errors": tables.errors,
         "counters": counters,
         **extra,
     }
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".status.")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)  # its final mode, at creation
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(doc, f, sort_keys=True)
-    os.chmod(tmp, 0o644)
     os.replace(tmp, path)
 
 
@@ -366,8 +381,11 @@ def serve(
     with contextlib.suppress(FileNotFoundError):
         os.unlink(listen)
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(listen)
-    os.chmod(listen, 0o660)
+    old_umask = os.umask(0o117)  # the socket is born 0660: owner and group only
+    try:
+        srv.bind(listen)
+    finally:
+        os.umask(old_umask)
     srv.listen(4)
     srv.settimeout(1.0)
     sender = Sender(forward)
@@ -416,14 +434,14 @@ def serve(
     return 0
 
 
-def healthcheck(status: Path, max_age: float = 30.0) -> int:
+def healthcheck(status: Path, max_age: float = 30.0, clock: Callable[[], float] = time.time) -> int:
     """Exit 0 when the status file is fresh and no table is in error."""
     try:
         doc = json.loads(status.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return 1
     if (
-        time.time() - float(doc.get("time", 0)) > max_age
+        clock() - float(doc.get("time", 0)) > max_age
         or doc.get("errors")
         or not doc.get("listening")
     ):

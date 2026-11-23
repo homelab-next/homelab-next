@@ -27,6 +27,7 @@ from pathlib import Path
 import jinja2
 import pytest
 import yaml
+from jinja2 import sandbox
 
 MODULE_CODE = Path(__file__).resolve().parents[2] / "modules" / "vector" / "python"
 sys.path.insert(0, str(MODULE_CODE))  # the module's own package, as the deployment puts it
@@ -267,7 +268,7 @@ def render_config(**over) -> dict:
     v.update(ld.load_yaml(ROLE / "vars" / "main.yml"))
     v.update(vector_siem_syslog_host="192.0.2." "50", vector_s3_endpoint="http://192.0.2." "60:3900",
              vector_s3_region="region-a", vector_s3_bucket="staging-bucket", **over)  # fmt: skip
-    env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
+    env = sandbox.SandboxedEnvironment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
     env.filters["to_json"] = lambda x: __import__("json").dumps(x)
     env.filters["bool"] = bool
     text = env.from_string((ROLE / "templates" / "vector.yaml.j2").read_text()).render(**v)

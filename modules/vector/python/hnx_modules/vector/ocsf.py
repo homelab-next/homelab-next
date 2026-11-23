@@ -1,4 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: vector-ocsf
+#   kind: tool
+#   purpose: Remap one labelled event into the rows of its OCSF classes for the sidecar.
+#   owner: platform
+#   trigger: [manual]
+#   inputs: a labelled event, its kind and a seed
+#   outputs: rows per OCSF table
+#   exit:
+#     "0": imported
 """The OCSF remap: one labelled event in, the rows of its OCSF classes out (standard library only).
 
 ``map_event(event, kind, uid_seed, now)`` returns ``[(table, row), ...]``.  The event is what the

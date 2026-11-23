@@ -571,8 +571,8 @@ def test_the_daemon_labels_what_it_is_sent_and_hands_every_row_on_even_when_vect
     _, listen, forward, status, th, stop = _serve(tmp_path)
     th.start()
     try:
-        deadline = time.time() + 10
-        while not os.path.exists(listen) and time.time() < deadline:
+        deadline = time.monotonic() + 10
+        while not os.path.exists(listen) and time.monotonic() < deadline:
             time.sleep(0.02)
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.connect(listen)
@@ -594,8 +594,8 @@ def test_the_daemon_labels_what_it_is_sent_and_hands_every_row_on_even_when_vect
         assert {g["table"] for g in got} == {"raw_archive", "detection_finding"}
         assert all(g["row"]["labels"] == {"hnx_runtime": "model", "hnx_tlp": "amber"} for g in got)
         doc = {}
-        deadline = time.time() + 10
-        while time.time() < deadline and "vector/siem-alerts" not in doc.get("counters", {}):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and "vector/siem-alerts" not in doc.get("counters", {}):
             time.sleep(0.1)  # the status is written every interval (0.2 s here)
             doc = json.loads(status.read_text()) if status.exists() else {}
         assert sidecar.healthcheck(status, 30) == 0
@@ -610,16 +610,17 @@ def test_the_daemon_labels_what_it_is_sent_and_hands_every_row_on_even_when_vect
 
 
 def test_the_health_check_fails_on_a_stale_or_errored_or_missing_status(tmp_path):
+    t0 = 1_800_000_000.0  # a frozen clock: the check's own "now"
     p = tmp_path / "s.json"
-    assert sidecar.healthcheck(p) == 1
-    p.write_text(json.dumps({"time": time.time(), "errors": {}, "listening": True}))
-    assert sidecar.healthcheck(p) == 0
-    p.write_text(json.dumps({"time": time.time() - 3600, "errors": {}, "listening": True}))
-    assert sidecar.healthcheck(p) == 1
-    p.write_text(json.dumps({"time": time.time(), "errors": {"x": "y"}, "listening": True}))
-    assert sidecar.healthcheck(p) == 1
-    p.write_text(json.dumps({"time": time.time(), "errors": {}, "listening": False}))
-    assert sidecar.healthcheck(p) == 1
+    assert sidecar.healthcheck(p, clock=lambda: t0) == 1
+    for written, errors, listening, want in (
+        (t0, {}, True, 0),
+        (t0 - 3600, {}, True, 1),
+        (t0, {"x": "y"}, True, 1),
+        (t0, {}, False, 1),
+    ):
+        p.write_text(json.dumps({"time": written, "errors": errors, "listening": listening}))
+        assert sidecar.healthcheck(p, clock=lambda: t0) == want
 
 
 # ---------------------------------------------------------------- the OCSF remap: goldens

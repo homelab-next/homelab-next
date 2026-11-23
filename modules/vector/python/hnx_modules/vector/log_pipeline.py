@@ -1,4 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: vector-log-pipeline-adapter
+#   kind: tool
+#   purpose: Drive the sidecar's labelling path for the log-pipeline conformance suite.
+#   owner: platform
+#   trigger: [manual]
+#   inputs: the suite's observed addresses and events
+#   outputs: the suite's verdict inputs
+#   exit:
+#     "0": imported
 """The ``log-pipeline`` conformance adapter for the vector module (docs/log-pipeline.md).
 
 It drives the sidecar's own labelling path, not a model of it: the observed address comes from

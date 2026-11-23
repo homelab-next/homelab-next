@@ -1,4 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: vector-package
+#   kind: tool
+#   purpose: Mark the vector module's package, the directory the sidecar and its remap are imported from on the guest.
+#   owner: platform
+#   trigger: [manual]
+#   inputs: nothing (imported, never run)
+#   outputs: nothing
+#   exit:
+#     "0": imported
 """The vector module's code (modules/vector/README.md): the enrichment sidecar the Vector
 aggregator hands every event to (``sidecar``), the OCSF remap it applies (``ocsf``) and the
 ``log-pipeline`` conformance adapter (``log_pipeline``).
