@@ -208,10 +208,44 @@ def pytest_configure(config: pytest.Config) -> None:
     }
     config.pluginmanager.register(_Timer(config), "hnx-suite-timer")
     config.pluginmanager.register(_Shard(config), "hnx-shard")
+    config.pluginmanager.register(_Workers(config), "hnx-workers")
 
 
 def _state(config: pytest.Config) -> dict:
     return config.stash[_STATE]
+
+
+def is_xdist_controller(config: pytest.Config) -> bool:
+    """True in the process that drives pytest-xdist workers (``-n``): it runs no test itself, so
+    the figures it needs come from the workers (:func:`pytest_testnodedown`)."""
+    return config.pluginmanager.hasplugin("dsession")
+
+
+def is_xdist_worker(config: pytest.Config) -> bool:
+    return hasattr(config, "workerinput")
+
+
+def merge_worker_state(st: dict, out: dict) -> None:
+    """Adds one worker's figures (``out``, what :func:`pytest_sessionfinish` left in the worker's
+    ``workeroutput``) to the controller's state ``st``."""
+    for key in ("times", "shared"):
+        for suite, secs in out[key].items():
+            st[key][suite] = st[key].get(suite, 0.0) + secs
+    for suite, phases in out["phases"].items():
+        mine = st["phases"].setdefault(suite, {})
+        for phase, secs in phases.items():
+            mine[phase] = mine.get(phase, 0.0) + secs
+    st["ran"].extend(out["ran"])
+    st["quarantined"].extend(q for q in out["quarantined"] if q not in st["quarantined"])
+    if out["collected"] is not None:
+        if st["collected"] is None:
+            st["collected"], st["selected"] = list(out["collected"]), list(out["selected"])
+        else:
+            st["collected_disagree"] = st.get("collected_disagree", False) or (
+                sorted(st["collected"]) != sorted(out["collected"])
+            )
+            have = set(st["selected"])
+            st["selected"].extend(n for n in out["selected"] if n not in have)
 
 
 def required_tools(env: dict[str, str] | None = None) -> set[str]:
@@ -443,6 +477,8 @@ class _Timer:
         self.config = config
 
     def pytest_runtest_logreport(self, report) -> None:
+        if is_xdist_controller(self.config):
+            return  # the workers time their own tests and hand the sums over (_Workers)
         st = _state(self.config)
         suite = suite_of(Path(str(report.fspath)), self.config.rootpath)
         st["times"][suite] = st["times"].get(suite, 0.0) + float(report.duration or 0.0)
@@ -480,9 +516,34 @@ class _Shard:
             items[:] = [item for item, k in zip(items, keep, strict=True) if k]
 
 
+class _Workers:
+    """Collects the figures the xdist workers hand over (a plugin object: it needs config)."""
+
+    def __init__(self, config: pytest.Config):
+        self.config = config
+
+    @pytest.hookimpl(optionalhook=True)  # the hook exists only where pytest-xdist is installed
+    def pytest_testnodedown(self, node, error) -> None:
+        out = (getattr(node, "workeroutput", None) or {}).get("hnx_suite_policy")
+        if out is not None:
+            merge_worker_state(_state(self.config), out)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionfinish(session: pytest.Session, exitstatus) -> None:
     st = _state(session.config)
+    if is_xdist_worker(session.config):
+        # the controller adds the workers' figures up, applies the budgets and writes the report
+        session.config.workeroutput["hnx_suite_policy"] = {
+            "times": st["times"],
+            "shared": st["shared"],
+            "phases": st["phases"],
+            "ran": st["ran"],
+            "quarantined": st["quarantined"],
+            "collected": st["collected"],
+            "selected": st["selected"],
+        }
+        return
     st["over"] = [
         (suite, _work(st, suite), _budget(st, suite))
         for suite in sorted(st["times"])
@@ -492,7 +553,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus) -> None:
         for suite, secs in sorted(st["shared"].items())
         if secs > _shared_budget(st, suite)
     ]
-    if st["over"] and session.exitstatus == 0:
+    if (st["over"] or st.get("collected_disagree")) and session.exitstatus == 0:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
     out = session.config.getoption("shard_report")
     if out:
@@ -531,6 +592,8 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config: pytest.Config)
         tr.section("quarantined tests")
         for q in st["quarantined"]:
             tr.line(q)
+    if st.get("collected_disagree"):
+        tr.line("the xdist workers collected different tests", red=True)
     if st["over"]:
         tr.section("suite time budget exceeded", red=True)
         for suite, secs, budget in st["over"]:

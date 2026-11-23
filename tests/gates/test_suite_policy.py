@@ -952,3 +952,83 @@ def test_the_merge_command_reads_the_shared_limits_from_the_pyproject(tmp_path):
     assert run(head.format(10) + 'suite_shared_budgets = ["s = 30"]\n')[0] == 0
     assert _merge(reports, "--pyproject", tmp_path / "missing.toml")[0] == 2
     assert run("[tool.pytest.ini_options]\n")[0] == 2  # no default configured
+
+
+# --- pytest-xdist: -n N runs a shard's tests in N workers and the figures still add up ---------
+
+
+def _xdist():
+    pytest.importorskip(
+        "xdist"
+    )  # pytest-xdist is in the test extra; HNX_REQUIRE_MODULES names it in CI
+
+
+def test_xdist_workers_add_their_figures_up_in_the_shard_report(tmp_path):
+    """The same shard, serial and on two workers, reports the same tests collected, selected and
+    run, and the same suites timed; the controller writes the one report."""
+    _xdist()
+    serial_dir, par_dir = tmp_path / "s", tmp_path / "p"
+    serial_dir.mkdir()
+    par_dir.mkdir()
+    _, serial = _shards(serial_dir, 2, **SHARDED)
+    procs, par = _shards(par_dir, 2, "-n", "2", "--dist", "loadfile", **SHARDED)
+    assert all(p.returncode == 0 for p in procs), [p.stdout for p in procs]
+    for i in (1, 2):
+        a = json.loads((serial / f"{i}.json").read_text())
+        b = json.loads((par / f"{i}.json").read_text())
+        for key in ("collected", "collected_sha256", "selected", "ran", "exitstatus", "budgets"):
+            assert a[key] == b[key], (i, key)
+        assert sorted(a["times"]) == sorted(b["times"]) and a["selected"]
+        assert all(b["times"][s] > 0 for s in b["times"])
+    rc, out = _merge(par, "--groups", "{}.{}".format(*sys.version_info[:2]))
+    assert rc == 0, out
+
+
+def test_xdist_workers_budgets_are_on_summed_test_time_not_wall_clock(tmp_path):
+    """Six 0.2s tests on three workers take about 0.4s of wall clock but sum to 1.2s: over a 0.8s
+    budget, as they are serially, so a budget means the same at any worker count."""
+    _xdist()
+    slow = "import time\n\n" + "".join(
+        f"def test_{k}():\n    time.sleep(0.2)\n\n" for k in range(6)
+    )
+    _project(tmp_path, ini_budgets="slow = 0.8", slow__test_slow=slow)
+    proc = _pytest(tmp_path, "-n", "3", "--dist", "loadfile", "--suite-times")
+    assert proc.returncode == 1 and "suite time budget exceeded" in proc.stdout, proc.stdout
+    assert re.search(r"slow: 1\.\ds > budget 1s", proc.stdout), proc.stdout
+    ok = _pytest(tmp_path, "-n", "3", "--dist", "loadfile", env={"HNX_SUITE_BUDGET_SCALE": "5"})
+    assert ok.returncode == 0, ok.stdout
+
+
+def test_xdist_keeps_a_module_fixture_in_one_worker_under_loadfile(tmp_path):
+    _xdist()
+    _project(tmp_path, heavy__test_heavy=HEAVY_FIXTURE)
+    reports = tmp_path / "r.json"
+    proc = _pytest(tmp_path, "-n", "3", "--dist", "loadfile", f"--shard-report={reports}")
+    assert proc.returncode == 0, proc.stdout
+    data = json.loads(reports.read_text())
+    assert 0.35 <= data["shared"]["heavy"] <= 0.8, data["shared"]  # built once, not once a worker
+
+
+def test_xdist_still_turns_a_silent_skip_into_a_failure_and_names_the_test(tmp_path):
+    _xdist()
+    _project(tmp_path, skips__test_skips=SKIPS)
+    proc = _pytest(tmp_path, "-n", "2", "--dist", "loadfile")
+    assert proc.returncode == 1, proc.stdout
+    assert "FAILED skips/test_skips.py::test_silent_skip" in proc.stdout
+    assert "ERROR skips/test_skips.py::test_skip_without_reason" in proc.stdout
+    assert "SKIPPED" in proc.stdout and "shellcheck not installed" in proc.stdout  # the allowed one
+
+
+def test_a_worker_that_collected_other_tests_fails_the_run():
+    st = {"times": {}, "shared": {}, "phases": {}, "ran": [], "quarantined": [],
+          "collected": None, "selected": []}  # fmt: skip
+    one = {"times": {"s": 1.0}, "shared": {"s": 0.5}, "phases": {"s": {"call": 1.0}},
+           "ran": ["a"], "quarantined": [], "collected": ["a", "b"], "selected": ["a"]}  # fmt: skip
+    two = {**one, "times": {"s": 2.0}, "ran": ["b"], "collected": ["a", "c"], "selected": ["b"]}
+    sp.merge_worker_state(st, one)
+    sp.merge_worker_state(st, {**one, "ran": ["b"], "selected": ["b"]})
+    assert st["times"] == {"s": 2.0} and st["shared"] == {"s": 1.0}
+    assert st["phases"] == {"s": {"call": 2.0}} and sorted(st["ran"]) == ["a", "b"]
+    assert sorted(st["selected"]) == ["a", "b"] and not st.get("collected_disagree")
+    sp.merge_worker_state(st, two)
+    assert st["collected_disagree"] is True

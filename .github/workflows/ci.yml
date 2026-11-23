@@ -92,7 +92,7 @@ jobs:
             extras: "test,lake,mcp,ansible"
             go: true
             pool: false
-            require-modules: "duckdb,pyarrow,pyiceberg,sqlalchemy,mcp,ansible"
+            require-modules: "duckdb,pyarrow,pyiceberg,sqlalchemy,mcp,ansible,xdist"
             require-tools: "ansible-playbook"
           # the extras absent: proves the lake and MCP SDK tests skip cleanly instead of failing
           - version: "3.11"
@@ -133,6 +133,10 @@ jobs:
       # as the go job's tests do, so a subprocess a test starts (git, curl, an installed tool) cannot
       # reach out either; tests/network_guard.py refuses Python's own sockets, and says which test.
       # sudo -E keeps the job's environment (sudo's secure_path would drop the setup-python PATH)
+      # -n auto: one pytest-xdist worker per CPU of the runner (4 hosted, 8+ on the pool's job VMs),
+      # --dist loadfile: a test file runs whole in one worker, so a module-scoped fixture is built once
+      # (tests/suite_policy.py adds the workers' timings up, so budgets and the shard report mean what
+      # they did serially)
       - env:
           HNX_REQUIRE_GO: ${{ matrix.python.go && '1' || '' }}
           HNX_CONTROLLER_BIN: ${{ matrix.python.go && format('{0}/controller', runner.temp) || '' }}
@@ -146,6 +150,7 @@ jobs:
           sh "$(id -u)" "$(id -g)"
           python -m pytest -q -m "not live and not experimental"
           --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
+          -n auto --dist loadfile
           --shard "$SHARD/12" --shard-report "$RUNNER_TEMP/shard.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()  # a failed shard's report says why to test-ok too
