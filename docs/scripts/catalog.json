@@ -2112,6 +2112,81 @@
     },
     {
       "exit": {
+        "0": "the forwarder's own exit code",
+        "2": "usage error or an unreadable alert (from the forwarder)"
+      },
+      "id": "wazuh-alert-entry",
+      "inputs": "ALERT_FILE API_KEY HOOK_URL (the integration daemon's arguments)",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "nothing of its own; the forwarder's output",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/custom-hnx-alert",
+      "purpose": "The integration daemon's entry point for the alert webhook; hands the alert file, api key and hook url to the product's own Python running the forwarder.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh",
+        "script:wazuh-alert-forward"
+      ]
+    },
+    {
+      "exit": {
+        "0": "delivered, held for the next run, or refused as permanent (the reason on stderr)",
+        "2": "usage error or an unreadable alert"
+      },
+      "id": "wazuh-alert-forward",
+      "inputs": "ALERT_FILE API_KEY HOOK_URL (the integration daemon's arguments); hnx-alert.json (source, tlp, detections) and hnx-alert.auth (the Authorization header value) beside the script",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one CloudEvents JSON POST to HOOK_URL; undelivered events in the outbox directory; a line on stderr per outcome",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/custom-hnx-alert.py",
+      "purpose": "Post each SIEM alert at or above the integration's level to the events forwarder as a homelabnext.alert.created event, and keep what could not be delivered for the next run.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh"
+      ]
+    },
+    {
+      "exit": {
+        "0": "exported or restored",
+        "1": "the indexer refused a call, or the source is not what a restore needs (the reason on stderr)",
+        "2": "usage error or an unsafe path"
+      },
+      "id": "wazuh-index-export",
+      "inputs": "export|restore --url URL --ca FILE --dir DIR [--pattern P] [--user U]; the account's password in HNX_INDEXER_PASSWORD",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON line on stdout, {files: [{key, docs}]} (export) or {indices, docs} (restore); the files under DIR (0600)",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/hnx_wazuh_index.py",
+      "purpose": "Export the SIEM's hot index (the alerts indices) to one JSON-lines file per index, and load such files back, through the indexer's own API.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the set is in place and tested (changed or not)",
+        "1": "the new set was refused by the configuration test or the restart and the previous set is back",
+        "2": "usage error or an unsafe path"
+      },
+      "id": "wazuh-rules-sync",
+      "inputs": "sync --stage DIR --etc DIR --compose FILE --prev DIR [--force-restart]; digest --etc DIR | --stage DIR",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON line on stdout, {changed, digest, files}; the reason on stderr when refused",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/hnx_wazuh_rules.py",
+      "purpose": "Load the site's native rule and decoder files into the SIEM manager, test them with the manager's own configuration test before it restarts, and put the previous set back when the test or the restart fails.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh"
+      ]
+    },
+    {
+      "exit": {
         "0": "queued, already queued (an idempotent replay), already retried, skipped on back-pressure (429), or refused for good (logged on stderr)",
         "1": "no idempotency key or token, the controller could not be reached, refused the token (401, 403), or failed (400, 5xx)"
       },

@@ -214,6 +214,9 @@ SOURCES: dict[str, tuple[str, str]] = {
         "module's (one image, one pin: tools/tests/test_pin_consistency.py), so move both together; "
         "compare its tags with the RabbitMQ release notes by hand",
     ),
+    "role:wazuh/wazuh_manager_image": ("github", "wazuh/wazuh"),
+    "role:wazuh/wazuh_indexer_image": ("github", "wazuh/wazuh"),
+    "role:wazuh/wazuh_dashboard_image": ("github", "wazuh/wazuh"),
     "role:openproject/openproject_image": ("github", "opf/openproject"),
     "role:openproject/openproject_postgres_image": (
         "none",
@@ -475,6 +478,21 @@ NOTES: dict[str, str] = {
     "role:dfir_iris/dfir_iris_broker_image": (
         "an image (modules/dfir-iris): the tag and its digest together, within the pinned major "
         "version (the worker's queue holds nothing that must survive)"
+    ),
+    "role:wazuh/wazuh_manager_image": (
+        "an image (modules/wazuh): bump the tag and its digest together, with the indexer and the "
+        "dashboard images (one release), product.version in modules/wazuh/module.yml, the agent "
+        "role's version (an agent is never newer than its manager: move the manager first) and the "
+        "lab registry's version; the upgrade playbook exports first and refuses a target older "
+        "than the running image"
+    ),
+    "role:wazuh/wazuh_indexer_image": (
+        "an image (modules/wazuh): the tag and its digest together, the same release as the manager "
+        "image (a newer indexer migrates its data forward as it starts: export first)"
+    ),
+    "role:wazuh/wazuh_dashboard_image": (
+        "an image (modules/wazuh): the tag and its digest together, the same release as the manager "
+        "image"
     ),
     "role:openproject/openproject_image": (
         "an image (modules/openproject, the -slim variant): bump the tag and its digest together, "
