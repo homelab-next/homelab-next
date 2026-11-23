@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""A GET-only JSON API on loopback, the shape of the gateways' log APIs the turn-source fakes
-stand in for: a subclass answers ``(path, query, headers)`` with ``(status, document)``, and each
-request's path and query are recorded, so a test can see what was asked."""
+"""A JSON API on loopback, the shape of the gateways' log APIs the turn-source fakes stand in for:
+a subclass answers a GET ``(path, query, headers)`` with ``(status, document)`` and, when it takes
+writes, a POST ``(path, query, headers, body)`` (405 otherwise), and each request's path and
+query are recorded, so a test can see what was asked."""
 
 from __future__ import annotations
 
@@ -10,6 +11,8 @@ import json
 import threading
 import urllib.parse
 from typing import Any
+
+from homelabnext._http import send_json
 
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the fake gateway binds loopback only
 
@@ -26,13 +29,15 @@ class LoopbackAPI:
                 path, _, query = self.path.partition("?")
                 q = {k: v[0] for k, v in urllib.parse.parse_qs(query).items()}
                 api.requests.append({"path": path, **q})
-                code, doc = api.answer(path, q, self.headers)
-                raw = json.dumps(doc).encode()
-                self.send_response(code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
+                send_json(self, *api.answer(path, q, self.headers))
+
+            def do_POST(self):
+                path, _, query = self.path.partition("?")
+                q = {k: v[0] for k, v in urllib.parse.parse_qs(query).items()}
+                api.requests.append({"path": path, "method": "POST", **q})
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"null") if length else None
+                send_json(self, *api.answer_post(path, q, self.headers, body))
 
             def log_message(self, *a):
                 pass
@@ -42,6 +47,11 @@ class LoopbackAPI:
 
     def answer(self, path: str, query: dict[str, str], headers: Any) -> tuple[int, Any]:
         raise NotImplementedError
+
+    def answer_post(
+        self, path: str, query: dict[str, str], headers: Any, body: Any
+    ) -> tuple[int, Any]:
+        return 405, {"error": "this API takes no writes"}
 
     def start(self):
         threading.Thread(

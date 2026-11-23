@@ -7,26 +7,26 @@
 # digests: the sha256 of each entry list's sorted entries, so an entry edited in place (a glob
 # widened, a path swapped) changes this file too; `make allowlist-counts` records it.
 counts:
-  product-names-allow: 91
+  product-names-allow: 99
   no-raw-endpoints-allow: 75
-  scripts-allow: 28
+  scripts-allow: 29
   caddy-lint-allow: 4
   credential-headers-allow: 1
   run-output-lint-allow: 0
-  shared-helpers-allow: 15
+  shared-helpers-allow: 16
   tls-verify-allow: 0
   workstation-refs-allow: 2
   yaml-loader-allow: 52
   scrub-allow-markers: 72
   no-raw-endpoint-markers: 359
 digests:
-  product-names-allow: sha256:1f7273f1a55e3691ae426d3328c2ae0676b88c6d0b6467889ed9f2fcd391f8b4
+  product-names-allow: sha256:02f579ca511b7b93a31d5118e151eca6358d54054d062046acf6e8ba567beb3b
   no-raw-endpoints-allow: sha256:4cd649047149dfe3e3a6ca94977736a0a5af97f559aefa2f7c4ec3a92dd925a2
-  scripts-allow: sha256:47e81de0a7af85baf9504ce55210b080bbcbb9f8f499af99a3d1a1cdbba4f8b6
+  scripts-allow: sha256:302b7927a1cf259bffe2fb1e448864a07e82201f8e912dfde45f33dadb2a18d5
   caddy-lint-allow: sha256:b14357e3e396abaf43255c870a43e23f4acedbdb85692c67777de507fe0740c8
   credential-headers-allow: sha256:741f0c84795e4d682d16a229a223a75fc3080304ad8d56716be9730c2524c230
   run-output-lint-allow: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-  shared-helpers-allow: sha256:65a1e62e06cdabecc08b174a61d8b96c9ebd28c9e39511718d71dae01057a0d9
+  shared-helpers-allow: sha256:d1b81c6d88bc40074b897985230cc9f25f3fee567655ec16f0f67cc6a3d5f2dd
   tls-verify-allow: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   workstation-refs-allow: sha256:efc83f88ce7abea0c7e7b37f84bdf9b1ab41dcb56bec6ca6ff33dd296054c887
   yaml-loader-allow: sha256:b1868fa91fa08eed5370660b2c0c039d9db8862907915a7b995152a5987be441

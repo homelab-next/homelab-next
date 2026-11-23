@@ -41,6 +41,7 @@ EXPECTED = {
     "records/note.schema.json",
     "registers/lesson.schema.json",
     "registers/runbook.schema.json",
+    "registers/cutover_row.schema.json",
     "registers/invariant.schema.json",
     "registers/kanban_item.schema.json",
     "registers/register_event.schema.json",

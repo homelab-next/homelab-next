@@ -37,6 +37,7 @@ hardware that is not part of the first drop: document the interface and ship a f
 | `homelabnext/codemode/{runner,journal,mcp_tools}.py conformance/{protocols,suites}/codemode_runner.py conformance/fakes/codemode_runner.py conformance/codemode-runner/ examples/mcp/hnx-codemode.yml` | codemode | ADR-0031 decisions 3, 7 and 10; docs/codemode.md CM-5b |
 | `homelabnext/projects/ conformance/{protocols,suites}/projects.py conformance/fakes/{project_store,openproject_api}.py docs/projects.md tests/projects/ examples/projects/` | projects | `hnx projects`; ADR-0020 |
 | `homelabnext/novelty/ schemas/platform/novelty_spec.schema.json schemas/ocsf/novelty_finding.v1.json docs/novelty.md tests/novelty/ examples/novelty/` | novelty | `hnx novelty`; ADR-0036 |
+| `homelabnext/{lake/census.py,lake/cli.py,logbursts.py} modules/source-census/ tests/{lake/test_source_census*.py,logbursts/} tests/modules/test_source_census_module.py tests/roles/test_source_census_role.py` | source-census | `hnx lake`, `hnx logbursts`; ADR-0049 decisions 8 and 9 |
 
 Rules that apply to every task: Python >= 3.11, standard library first; an SPDX header on every
 source file; no network in tests; clocks and randomness injected; no real identifiers (see
@@ -168,9 +169,9 @@ Check = Callable[[Mapping[str, Any]], Result]                           # the pl
 imports its package lazily). Current names, in that order: `registry`, `new`, `gen`, `detections`,
 `registers`, `invariants`, `strategy`, `projects`, `records`, `orchestration`, `reviews`, `ids`, `decide`, `models`,
 `golden`,
-`site`, `guests`, `schema-check`, `secrets`, `swap`, `conform`, `decommission`, `docs`, `agent`, `workflows`,
+`site`, `guests`, `schema-check`, `secrets`, `swap`, `conform`, `decommission`, `cutover`, `docs`, `agent`, `workflows`,
 `recovery`, `scripts`, `events`, `status`, `publishing`, `graph`, `mcp`, `broker`, `codemode`, `modules`, `custom`,
-`ssh-ca`, `novelty`.
+`ssh-ca`, `lake`, `logbursts`, `novelty`.
 `parity` is a library only (the swap runner calls it; no sub-command).
 Exit codes everywhere: `0` ok, `1` a check failed, `2` misconfiguration or bad input, `>=100` the
 check itself could not measure.
@@ -572,6 +573,7 @@ change until its ADR is accepted):
 | `platform/slot` | 1.0 | `schemas/platform/slot.schema.json` | draft |
 | `platform/swap_record` | 1.1 | `schemas/platform/swap_record.schema.json` | stable |
 | `records/note` | 1.4 | `schemas/records/note.schema.json` | stable |
+| `registers/cutover_row` | 1.0 | `schemas/registers/cutover_row.schema.json` | draft |
 | `registers/decision_spec` | 1.3 | `schemas/registers/decision_spec.json` | stable |
 | `registers/invariant` | 1.0 | `schemas/registers/invariant.schema.json` | stable |
 | `registers/kanban_item` | 1.0 | `schemas/registers/kanban_item.schema.json` | stable |
@@ -588,7 +590,7 @@ change until its ADR is accepted):
 | `status/observation` | 1.0 | `schemas/status/observation.schema.json` | stable |
 | `status/orchestration_export` | 1.2 | `schemas/status/orchestration_export.schema.json` | stable |
 | `status/roster` | 1.0 | `schemas/status/roster.schema.json` | stable |
-| `status/views` | 1.10 | `schemas/status/views.schema.json` | stable |
+| `status/views` | 1.11 | `schemas/status/views.schema.json` | stable |
 | `strategy/doctrine` | 1.1 | `schemas/strategy/doctrine.schema.json` | stable |
 | `strategy/measure` | 2.0 | `schemas/strategy/measure.schema.json` | stable |
 | `strategy/objective` | 2.0 | `schemas/strategy/objective.schema.json` | stable |

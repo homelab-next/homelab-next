@@ -50,8 +50,12 @@ argument_specs:
         default: iceberg
       trino_warehouse:
         type: str
-        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        description: 'The warehouse the catalog client names: s3://<bucket>/ (the reference catalog) or a warehouse name (a catalog with named warehouses).'
         default: s3://iceberg-warehouse/
+      trino_catalog_path:
+        type: str
+        description: 'The path the catalog serves its API under, appended to its address (empty for the reference catalog, /catalog for a catalog that serves it there).'
+        default: ''
       trino_region:
         type: str
         description: The S3 region the engine signs with.
@@ -398,8 +402,12 @@ argument_specs:
         default: iceberg
       trino_warehouse:
         type: str
-        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        description: 'The warehouse the catalog client names: s3://<bucket>/ (the reference catalog) or a warehouse name (a catalog with named warehouses).'
         default: s3://iceberg-warehouse/
+      trino_catalog_path:
+        type: str
+        description: 'The path the catalog serves its API under, appended to its address (empty for the reference catalog, /catalog for a catalog that serves it there).'
+        default: ''
       trino_region:
         type: str
         description: The S3 region the engine signs with.
@@ -664,8 +672,12 @@ argument_specs:
         default: iceberg
       trino_warehouse:
         type: str
-        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        description: 'The warehouse the catalog client names: s3://<bucket>/ (the reference catalog) or a warehouse name (a catalog with named warehouses).'
         default: s3://iceberg-warehouse/
+      trino_catalog_path:
+        type: str
+        description: 'The path the catalog serves its API under, appended to its address (empty for the reference catalog, /catalog for a catalog that serves it there).'
+        default: ''
       trino_region:
         type: str
         description: The S3 region the engine signs with.
@@ -930,8 +942,12 @@ argument_specs:
         default: iceberg
       trino_warehouse:
         type: str
-        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        description: 'The warehouse the catalog client names: s3://<bucket>/ (the reference catalog) or a warehouse name (a catalog with named warehouses).'
         default: s3://iceberg-warehouse/
+      trino_catalog_path:
+        type: str
+        description: 'The path the catalog serves its API under, appended to its address (empty for the reference catalog, /catalog for a catalog that serves it there).'
+        default: ''
       trino_region:
         type: str
         description: The S3 region the engine signs with.
@@ -1196,8 +1212,12 @@ argument_specs:
         default: iceberg
       trino_warehouse:
         type: str
-        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        description: 'The warehouse the catalog client names: s3://<bucket>/ (the reference catalog) or a warehouse name (a catalog with named warehouses).'
         default: s3://iceberg-warehouse/
+      trino_catalog_path:
+        type: str
+        description: 'The path the catalog serves its API under, appended to its address (empty for the reference catalog, /catalog for a catalog that serves it there).'
+        default: ''
       trino_region:
         type: str
         description: The S3 region the engine signs with.
@@ -1466,8 +1486,12 @@ argument_specs:
         default: iceberg
       trino_warehouse:
         type: str
-        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        description: 'The warehouse the catalog client names: s3://<bucket>/ (the reference catalog) or a warehouse name (a catalog with named warehouses).'
         default: s3://iceberg-warehouse/
+      trino_catalog_path:
+        type: str
+        description: 'The path the catalog serves its API under, appended to its address (empty for the reference catalog, /catalog for a catalog that serves it there).'
+        default: ''
       trino_region:
         type: str
         description: The S3 region the engine signs with.

@@ -19,7 +19,7 @@
       changed_when: false
     - name: The catalog answers its config
       ansible.builtin.uri:
-        url: "{{ nifi_catalog_endpoint }}/v1/config"
+        url: "{{ nifi_catalog_endpoint }}{{ nifi_catalog_path }}/v1/config?warehouse={{ nifi_warehouse | urlencode }}"
         status_code: 200
         timeout: "{{ nifi_health_timeout | int }}"
       changed_when: false

@@ -40,7 +40,10 @@ a real host, address, VM id or secret value.
 - **The `iceberg` catalog** (the name is fixed: the lake's writers say `iceberg.<schema>.<table>`)
   is the REST catalog (`iceberg_rest` row) over the S3 object store, path-style, region `garage`,
   warehouse `s3://iceberg-warehouse/`; the key pair is read from the container's environment
-  (`${ENV:...}`), never from a rendered file.
+  (`${ENV:...}`), never from a rendered file. For a catalog that serves its API under a path and
+  names its warehouses (the lake-catalog provider `lakekeeper`), set `trino_catalog_path`
+  (`/catalog`) and `trino_warehouse` to the warehouse's **name**; the defaults keep the reference
+  catalog's shape (no path, `s3://<bucket>/`).
 - **Pinned behaviour the old lake learned the hard way**: the session time zone is forced to UTC
   server-side (LL-392), a per-query memory bound keeps a runaway query from taking the JVM down
   (`ExitOnOutOfMemoryError` kills every in-flight query), and the retention floors below.
