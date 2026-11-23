@@ -89,7 +89,7 @@ def test_the_shared_library_set_the_role_installs_is_exactly_what_the_script_imp
         "import importlib.util, sys; sys.path.insert(0, sys.argv[1]);"
         "spec = importlib.util.spec_from_file_location('hnx_alert_intake', sys.argv[2]);"
         "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m);"
-        "print('\\n'.join(f'{k} {int(hasattr(v, chr(95) * 2 + 'path' + chr(95) * 2))}' "
+        "print('\\n'.join(f'{k} {int(hasattr(v, chr(95) * 2 + \"path\" + chr(95) * 2))}' "
         "for k, v in sorted(sys.modules.items()) if k.startswith('homelabnext')))"
     )
     out = subprocess.run(
@@ -101,5 +101,8 @@ def test_the_shared_library_set_the_role_installs_is_exactly_what_the_script_imp
         name, is_pkg = line.split()
         rel = name.removeprefix("homelabnext").lstrip(".").replace(".", "/")
         loaded.add(f"{rel}/__init__.py".lstrip("/") if is_pkg == "1" else f"{rel}.py")
+    # the package's __init__ reads _version.py only when the package is not installed (the guest case);
+    # a test environment that has it installed does not load it, so it is expected either way
+    loaded.add("_version.py")
     listed = yaml.safe_load((ROLE / "vars" / "main.yml").read_text())["alert_intake_shared_files"]
     assert len(loaded) > 5 and sorted(listed) == sorted(loaded), (sorted(listed), sorted(loaded))

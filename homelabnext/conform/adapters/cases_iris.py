@@ -459,7 +459,12 @@ def make(**config: Any) -> IrisCases:
 def make_recorded(**_: Any) -> IrisCases:
     """The adapter on a fresh loopback instance of the recorded API (``conformance.fakes.iris_api``), stopped when the
     harness closes the subject: what the module's conformance run and its tests use."""
-    from conformance.fakes.iris_api import TOKEN, FakeIris
+    try:
+        from conformance.fakes.iris_api import TOKEN, FakeIris
+    except ImportError as exc:  # checkout-only: conformance/fakes is not in the wheel
+        raise ValueError(
+            "the recorded cases fake needs a source checkout (conformance/fakes)"
+        ) from exc
 
     fake = FakeIris().start()
     store = IrisCases(fake.url, token=lambda: TOKEN)
