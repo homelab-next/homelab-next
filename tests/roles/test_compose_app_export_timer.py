@@ -236,7 +236,7 @@ def test_the_timer_task_installs_script_manifest_units_and_arms_the_timer(first)
     service = (tmp / "units" / "hnx-export-app.service").read_text()
     assert "hnx-export-run --manifest" in service and "timer:compose_app/export " in service
     timer = (tmp / "units" / "hnx-export-app.timer").read_text()
-    assert "OnCalendar=*-*-* 07:30:00 UTC" in timer and "RandomizedDelaySec=900" in timer
+    assert "OnCalendar=*-*-* 07:30:00 UTC" in timer and "RandomizedDelaySec=15min" in timer
     assert (tmp / "libexec" / "hnx-export-run").stat().st_mode & stat.S_IEXEC
     log = calls(tmp)
     assert "systemctl daemon-reload" in log and "systemctl enable --now hnx-export-app.timer" in log
