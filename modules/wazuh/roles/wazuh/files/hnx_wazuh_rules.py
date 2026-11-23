@@ -36,6 +36,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -131,11 +132,14 @@ def _wait_alive(compose: str, wait: int) -> bool:
 
 def _write(dest: Path, src: Path) -> None:
     tmp = dest.with_name(dest.name + ".tmp")
-    # born at its final mode (group-readable for the manager, nothing for others): the umask is
-    # pinned for the create so the mode is what is asked for, never narrowed or widened after
+    # born at its final mode, never widened after: the product's own directory sets the policy
+    # (its etc/rules is root:group, 0770), so a file is the directory's mode with the group's write
+    # and everything for others taken away (0640: the manager reads, nobody else does).  The umask
+    # is pinned for the create so that mode is exactly what the file gets.
+    mode = stat.S_IMODE(dest.parent.stat().st_mode) & 0o640
     old = os.umask(0o027)
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o640)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
     finally:
         os.umask(old)
     with os.fdopen(fd, "wb") as out, open(src, "rb") as inp:
