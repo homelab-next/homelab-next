@@ -179,12 +179,14 @@ def atomic_write(path, text: str, mode: int = 0o640) -> None:
         raise OSError(f"{p}: refusing to write through a link")
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.parent / f".{p.name}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    # created at its final mode (a stale temp from a crashed run is removed, never reused at its old
+    # mode), so there is no moment of a wider file and no chmod after the fact
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
         f.flush()
         os.fsync(f.fileno())
-    os.chmod(tmp, mode)
     os.replace(tmp, p)
 
 
@@ -262,7 +264,7 @@ def cycle(cfg: dict, run, now: float) -> int:
         status["problems"].append(str(e))
         rc = 1
     try:
-        atomic_write(cfg["status_file"], json.dumps(status, sort_keys=True) + "\n", 0o644)
+        atomic_write(cfg["status_file"], json.dumps(status, sort_keys=True) + "\n", 0o640)
     except OSError as e:
         print(f"status not written: {e}", file=sys.stderr)
         rc = 1

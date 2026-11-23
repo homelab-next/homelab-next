@@ -49,6 +49,7 @@ class EndpointForensicsProbe:
         self._name = server_name
         self._timeout = timeout
         self._ctx = ssl.create_default_context(cafile=ca_file)
+        self._ctx.minimum_version = ssl.TLSVersion.TLSv1_2
 
     def _get(self, port: int, path: str) -> tuple[int, bytes]:
         with (
