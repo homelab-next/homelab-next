@@ -92,6 +92,11 @@ SOURCES: dict[str, tuple[str, str]] = {
         "NVIDIA/nvidia-container-toolkit",
     ),
     "role:events_bus/events_bus_version": ("github", "nats-io/nats-server"),
+    "role:suricata/suricata_package_version": (
+        "none",
+        "an OS package version (Debian security updates move the +debNuN suffix): compare with the "
+        "distribution's package tracker by hand; the upstream project is OISF/suricata",
+    ),
     "role:example_service/example_service_version": ("none", "a fictitious example package"),
     "role:publishing_gate/publishing_gate_wrangler_version": (
         "none",

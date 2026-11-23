@@ -1,0 +1,228 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: 'Install the sensor: package, configuration, rules, HOME_NET from the enrolled guests, the deploy gate (suricata -T), rotation rule, then start it.'
+    options:
+      suricata_logical_id: &id001
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. sensor).
+        required: true
+      suricata_capture_interfaces: &id002
+        type: list
+        elements: str
+        description: 'The NICs to capture on (af-packet): the router-mirror NIC, and a second NIC or tunnel device for a hypervisor''s guest mirror. None may hold an IPv4 address.'
+        required: true
+      suricata_guests: &id023
+        type: list
+        elements: dict
+        description: The enrolled guests, as suricata_enroll takes them (id, name, fqdn, ip, zone and any extra_addresses); every address becomes HOME_NET.
+        required: true
+      suricata_package_version: &id003
+        type: str
+        description: The pinned OS package version of the engine.
+        default: 1:7.0.10-1+deb13u4
+      suricata_install_packages:
+        type: bool
+        description: Install the package (false where the host build already did).
+        default: true
+      suricata_service_manage:
+        type: bool
+        description: Enable, start and restart the service (false in a dry build).
+        default: true
+      suricata_config_dir: &id015
+        type: path
+        description: Config dir.
+        default: /etc/suricata
+      suricata_config_file: &id006
+        type: str
+        description: Config file.
+        default: suricata.yaml
+      suricata_groups_file:
+        type: str
+        description: The generated address-groups file, written by the HOME_NET role and included by the main configuration.
+        default: hnx-address-groups.yaml
+      suricata_log_dir: &id016
+        type: path
+        description: Log dir.
+        default: /var/log/suricata
+      suricata_lib_dir: &id017
+        type: path
+        description: Lib dir.
+        default: /var/lib/suricata
+      suricata_eve_file: &id004
+        type: str
+        description: Eve file.
+        default: eve.json
+      suricata_eve_alert_file: &id005
+        type: str
+        description: Eve alert file.
+        default: eve-alert.json
+      suricata_eve_types: &id007
+        type: list
+        description: The event types written to the eve log the pipeline ships.
+        default:
+        - alert
+        - anomaly
+        - http
+        - tls
+        - ssh
+        - files
+        - flow
+        elements: str
+      suricata_stats_interval: &id009
+        type: int
+        description: Seconds between stats heartbeats (they prove the eve log is alive).
+        default: 60
+      suricata_cluster_id_base:
+        type: int
+        description: Cluster id base.
+        default: 99
+      suricata_af_packet_buffer_bytes: &id012
+        type: int
+        description: Af packet buffer bytes.
+        default: 536870912
+      suricata_rule_sources: &id008
+        type: list
+        description: Upstream rule sources to enable once (suricata-update source names).
+        default:
+        - et/open
+        elements: str
+      suricata_update_cli:
+        type: str
+        description: Update cli.
+        default: suricata-update
+      suricata_logrotate_dir: &id018
+        type: path
+        description: Logrotate dir.
+        default: /etc/logrotate.d
+      suricata_logrotate_max_size: &id013
+        type: str
+        description: Rotate the eve logs at this size (checked hourly).
+        default: 2G
+      suricata_logrotate_keep: &id014
+        type: int
+        description: Logrotate keep.
+        default: 3
+      suricata_systemctl_cli: &id020
+        type: str
+        description: Systemctl cli.
+        default: systemctl
+      suricata_cli:
+        type: str
+        description: Cli.
+        default: suricata
+      suricata_suricatasc_cli: &id021
+        type: str
+        description: Suricatasc cli.
+        default: suricatasc
+      suricata_siem_agent_conf: &id019
+        type: path
+        description: The SIEM agent's configuration file; a localfile block for the alert-only log is added when it exists.
+        default: /var/ossec/etc/ossec.conf
+      suricata_siem_agent_manage:
+        type: bool
+        description: Siem agent manage.
+        default: true
+      suricata_max_drop_ratio: &id010
+        type: float
+        description: 'Health: the most kernel drops, as a fraction of captured packets.'
+        default: 0.05
+      suricata_eve_max_age_seconds: &id011
+        type: int
+        description: 'Health: the longest the eve log may go unwritten (more than the stats interval).'
+        default: 300
+      suricata_health_timeout: &id022
+        type: int
+        description: Health timeout.
+        default: 20
+      suricata_reload:
+        type: bool
+        description: Reload.
+        default: true
+      suricata_siem_agent_unit:
+        type: str
+        description: 'The SIEM agent''s systemd unit, restarted when the alert-only log''s localfile block is added (empty: the site restarts it).'
+        default: ''
+  health:
+    short_description: Fail unless the capture runs, kernel drops are under the bound and the eve log is being written.
+    options:
+      suricata_logical_id: *id001
+      suricata_capture_interfaces: *id002
+      suricata_package_version: *id003
+      suricata_eve_file: *id004
+      suricata_eve_alert_file: *id005
+      suricata_config_file: *id006
+      suricata_eve_types: *id007
+      suricata_rule_sources: *id008
+      suricata_stats_interval: *id009
+      suricata_max_drop_ratio: *id010
+      suricata_eve_max_age_seconds: *id011
+      suricata_af_packet_buffer_bytes: *id012
+      suricata_logrotate_max_size: *id013
+      suricata_logrotate_keep: *id014
+      suricata_config_dir: *id015
+      suricata_log_dir: *id016
+      suricata_lib_dir: *id017
+      suricata_logrotate_dir: *id018
+      suricata_siem_agent_conf: *id019
+      suricata_systemctl_cli: *id020
+      suricata_suricatasc_cli: *id021
+      suricata_health_timeout: *id022
+  readiness:
+    short_description: Fail unless the inputs are valid, the guest list is not empty and no capture interface holds an IPv4 address.
+    options:
+      suricata_logical_id: *id001
+      suricata_capture_interfaces: *id002
+      suricata_package_version: *id003
+      suricata_eve_file: *id004
+      suricata_eve_alert_file: *id005
+      suricata_config_file: *id006
+      suricata_eve_types: *id007
+      suricata_rule_sources: *id008
+      suricata_stats_interval: *id009
+      suricata_max_drop_ratio: *id010
+      suricata_eve_max_age_seconds: *id011
+      suricata_af_packet_buffer_bytes: *id012
+      suricata_logrotate_max_size: *id013
+      suricata_logrotate_keep: *id014
+      suricata_config_dir: *id015
+      suricata_log_dir: *id016
+      suricata_lib_dir: *id017
+      suricata_logrotate_dir: *id018
+      suricata_siem_agent_conf: *id019
+      suricata_guests: *id023
+  upgrade:
+    short_description: Validate a package bump (suricata_target_version) before converging.
+    options:
+      suricata_logical_id: *id001
+      suricata_capture_interfaces: *id002
+      suricata_package_version: *id003
+      suricata_eve_file: *id004
+      suricata_eve_alert_file: *id005
+      suricata_config_file: *id006
+      suricata_eve_types: *id007
+      suricata_rule_sources: *id008
+      suricata_stats_interval: *id009
+      suricata_max_drop_ratio: *id010
+      suricata_eve_max_age_seconds: *id011
+      suricata_af_packet_buffer_bytes: *id012
+      suricata_logrotate_max_size: *id013
+      suricata_logrotate_keep: *id014
+      suricata_config_dir: *id015
+      suricata_log_dir: *id016
+      suricata_lib_dir: *id017
+      suricata_logrotate_dir: *id018
+      suricata_siem_agent_conf: *id019
+      suricata_target_version:
+        type: str
+        description: The package version to move to.
+        required: true
+  backup:
+    short_description: Nothing to back up; the sensor keeps no data of its own.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main renders the sensor again.
+    options: {}
+  export:
+    short_description: Nothing to export; the sensor keeps no data of its own.
+    options: {}

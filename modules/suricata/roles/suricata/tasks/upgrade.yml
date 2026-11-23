@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Refuse a target that is not a package version
+      ansible.builtin.assert:
+        that: suricata_target_version is match(suricata_version_pattern)
+        fail_msg: "suricata: suricata_target_version must be a package version like 1:7.0.10-1+deb13u4"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+  tags: [upgrade]

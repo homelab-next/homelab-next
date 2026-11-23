@@ -245,7 +245,47 @@ Each is a deliberately broken fake (`hnx conform run cases --target broken:<muta
 
 ### Real-product adapters
 
-None yet in this repository. See [Integrating a new product](#integrating-a-new-product).
+#### [`homelabnext.conform.adapters.cases_iris:make`](../../homelabnext/conform/adapters/cases_iris.py)
+
+The `cases` contract on DFIR-IRIS (pinned: 2.4.29), stdlib HTTP.
+
+- Target file: [`conformance/targets/cases-iris.yml`](../../conformance/targets/cases-iris.yml) (target `cases-iris`)
+- Factory: `make(**config: Any) -> IrisCases`
+- Config in the target: `{recorded_fake: true}`
+
+<details><summary>Full adapter notes</summary>
+
+The `cases` contract on DFIR-IRIS (pinned: 2.4.29), stdlib HTTP.
+
+`make(**config)` returns an `IrisCases`, a `conformance.protocols.cases.CaseStore`
+over the product's REST API (the one its web interface and its own tools use), shapes recorded from
+a live 2.4.29 instance (`conformance/fakes/iris_api.py` is the loopback stand-in built from them).
+
+Mapping (the contract's words -> the product's):
+
+* an *alert* is a product alert.  `new` is the product's New, Assigned, In progress and Pending
+  (no human has dispositioned it); `promoted` is Escalated (a case exists); `dismissed` is
+  Closed or Merged.  The dedup key is the alert's `alert_source_ref` (a tag of its hash lets the
+  product's tag filter find it) and the collapse count is `alert_context.hnx_count`.  A dismissal
+  reason is `alert_context.hnx_reason` and the alert's note.
+* promotion is the product's *escalate* call; a *case* is the product's case.  `open` is its state
+  Open, `in_progress` its state In progress, `closed` its state Closed.
+* notes live in the case's note directory `hnx` (title = author, content = text, oldest first by
+  note id); the resolution of a closed case is the last note of the directory `hnx-resolution`
+  (the product's close call takes no text and its closing-note field is not writable by the API).
+* severities are resolved by NAME from the instance's own list, never by number: this product's
+  numbers are not in severity order (Medium is 1, Low is 4).
+
+Limits of the product, not of this adapter: the dedup read-then-bump is not atomic, so two writers
+that open the same new key within one round trip can leave two alerts (one writer, the
+alert-intake service, is the supported shape); an alert changed by a person in the web interface is
+read back by its product status; a closed case rejects a note here, not in the product.
+
+Settings: `base_url` (else `HNX_ENDPOINT_CASE_MANAGEMENT`, never a default), `credential` (`secret:<name>`,
+read from `HNX_SECRET_<NAME>` at every request), `ca_file` (the lab CA), `customer_id`
+(default 1), `timeout`.
+
+</details>
 
 ### Registry services
 
@@ -267,6 +307,8 @@ No service in `examples/services.yml` declares `capability: cases`.
    ```python
    def make(**config) -> CaseStore: ...
    ```
+
+   The factory this repository ships: `homelabnext.conform.adapters.cases_iris:make` is `make(**config: Any) -> IrisCases`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

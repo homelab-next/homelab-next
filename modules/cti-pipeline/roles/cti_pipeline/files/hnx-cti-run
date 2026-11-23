@@ -753,6 +753,22 @@ def write_record(runs_dir: str, job: str, body: dict) -> None:
     os.replace(tmp, final)
 
 
+def last_finished(runs_dir: str, job: str):
+    """The job's last finished record (the previous record, or the one it carried), else None."""
+    try:
+        with open(os.path.join(runs_dir, job + ".json"), encoding="utf-8") as f:
+            rec = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rec, dict):
+        return None
+    if rec.get("state") == "running":
+        rec = rec.get("last_finished")
+        return rec if isinstance(rec, dict) else None
+    rec.pop("last_finished", None)
+    return rec
+
+
 def say(line: str) -> None:
     sys.stdout.write(f"hnx-cti-run: {line}\n")
     sys.stdout.flush()
@@ -787,7 +803,10 @@ def main(argv: list[str]) -> int:
 
     record = {"job": spec["job"], "lane": spec["lane"], "run_id": run["run_id"],
               "started_at": now(), "finished_at": None, "ok": False, "exit": None, "step": 0}  # fmt: skip
-    write_record(spec["runs_dir"], spec["job"], {**record, "state": "running"})
+    # the running record carries the last FINISHED run, so the freshness check judges that run
+    # while this one is in progress (an in-progress run is neither a failure nor a success)
+    write_record(spec["runs_dir"], spec["job"],
+                 {**record, "state": "running", "last_finished": last_finished(spec["runs_dir"], spec["job"])})  # fmt: skip
     say(f"{instance}: started")
     code = EXIT_OK
     child = None

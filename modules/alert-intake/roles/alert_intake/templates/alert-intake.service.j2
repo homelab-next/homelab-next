@@ -1,0 +1,47 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ alert_intake_marker }}, instance {{ alert_intake_logical_id }}); local changes are overwritten.
+# The SIEM's alert webhook: one event in, one alert recorded, a page for a new high-severity one.
+[Unit]
+Description=alert-intake {{ alert_intake_logical_id }}: the SIEM's alerts into the case store
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ alert_intake_user }}
+Group={{ alert_intake_group }}
+EnvironmentFile={{ alert_intake_env_file }}
+EnvironmentFile={{ alert_intake_logins_env_file }}
+ExecStart={{ alert_intake_script }}
+Restart=on-failure
+RestartSec=5
+{% if hnx_module_slice | default('') %}
+Slice={{ hnx_module_slice }}
+{% endif %}
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths={{ alert_intake_state_dir }}
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target
