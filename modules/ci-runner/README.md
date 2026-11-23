@@ -68,6 +68,8 @@ trusted side (holds the forge credential)          runner host (holds no forge c
 | `ci_runner_feed_pubkey` | the feeder's SSH public key |
 | `ci_runner_resolvers` | the host's resolver addresses (the only private addresses a job VM reaches, on 53) |
 
+Optional: `ci_runner_toolcache_pythons` (a list of `{url, sha256}` of the setup action's python-versions archives) puts those Pythons in the golden image's tool cache (`/opt/hostedtoolcache`), so a job's setup step finds one and downloads nothing.
+
 The slot size (`ci_runner_slots`, `_slot_vcpus`, `_slot_memory_mb`, `_slot_disk_gb`) is the site's;
 the readiness hook refuses a host whose memory cannot hold every slot at once.
 
