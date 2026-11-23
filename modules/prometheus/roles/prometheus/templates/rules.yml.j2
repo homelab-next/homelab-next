@@ -56,3 +56,17 @@ groups:
 {% raw %}
           summary: "{{ $labels.instance }} has under {% endraw %}{{ prometheus_alert_memory_available_percent | int }}{% raw %}% of its memory available"
 {% endraw %}
+{% if prometheus_probes_enabled | bool %}
+  - name: hnx-probes
+    rules:
+      # an HTTP(S) probe (the blackbox exporter, one per published service) failed for the whole window
+      - alert: ProbeDown
+        expr: probe_success == 0
+        for: {{ prometheus_alert_probe_down_for }}
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.service }} is down: the probe of {{ $labels.instance }} has failed"
+{% endraw %}
+{% endif %}

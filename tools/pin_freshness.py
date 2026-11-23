@@ -215,6 +215,7 @@ SOURCES: dict[str, tuple[str, str]] = {
         "memcached release notes by hand",
     ),
     "role:prometheus/prometheus_image": ("github", "prometheus/prometheus"),
+    "role:prometheus/prometheus_blackbox_image": ("github", "prometheus/blackbox_exporter"),
     "role:stackstorm/stackstorm_mongo_image": (
         "none",
         "the Docker official image (docker.io/library/mongo), held on the 4.4 line the pinned "
@@ -483,6 +484,9 @@ NOTES: dict[str, str] = {
     "role:stackstorm/stackstorm_python_version": (
         "a CPython 3.11 patch (modules/stackstorm): the pack's virtualenv is rebuilt from it on the "
         "next run"
+    ),
+    "role:prometheus/prometheus_blackbox_image": (
+        "an image (modules/prometheus): bump the tag and its digest together; the probe config format is stable across 0.x minors"
     ),
     "role:prometheus/prometheus_image": (
         "an image (modules/prometheus): bump the tag and its digest together, with product.version "

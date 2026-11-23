@@ -39,3 +39,25 @@
               retries: 5
               start_period: 30s
   tags: [health, backup, restore, export, upgrade]
+
+# The probe exporter is a second container of the same project, only while probes are on: it reads
+# its modules (rendered, mounted read-only) and publishes no port (the metrics service reaches it
+# by name on the project's network).
+- name: Add the probe exporter to the application spec
+  ansible.builtin.set_fact:
+    prometheus_app: >-
+      {{ prometheus_app | combine({'compose_app_spec': {'services': prometheus_app.compose_app_spec.services | combine({
+           prometheus_blackbox_service: {
+             'image': prometheus_blackbox_image.split('@')[0].rsplit(':', 1)[0],
+             'tag': prometheus_blackbox_image.split('@')[0].rsplit(':', 1)[1],
+             'digest': prometheus_blackbox_image.split('@')[1],
+             'command': ['--config.file=' ~ prometheus_container_blackbox_dir ~ '/blackbox.yml'],
+             'user': (prometheus_uid | int | string) ~ ':' ~ (prometheus_gid | int | string),
+             'read_only': true,
+             'volumes': [prometheus_data_root ~ '/config/blackbox:' ~ prometheus_container_blackbox_dir ~ ':ro'],
+             'mem_limit': prometheus_blackbox_mem_limit,
+             'healthcheck': {
+               'test': ['CMD', 'wget', '-q', '--spider', 'http://localhost:' ~ (prometheus_blackbox_port | string) ~ '/-/healthy'],
+               'interval': '30s', 'timeout': '5s', 'retries': 5, 'start_period': '15s'}}})}}) }}
+  when: prometheus_probes_enabled | bool
+  tags: [health, backup, restore, export, upgrade]

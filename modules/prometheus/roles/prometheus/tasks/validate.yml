@@ -44,6 +44,16 @@
       - prometheus_heartbeat_topic == '' or prometheus_heartbeat_topic is match('^[A-Za-z0-9_-]{1,64}\Z')
       - prometheus_heartbeat_topic != prometheus_notify_topic
       - prometheus_heartbeat_every_minutes | int >= 1 and prometheus_heartbeat_every_minutes | int <= 60
+      - prometheus_probes_enabled is boolean
+      - prometheus_probe_exclude is sequence and prometheus_probe_exclude is not string
+      - prometheus_probe_exclude | reject('string') | list | length == 0
+      - prometheus_probe_exclude | reject('match', '^[a-z0-9][a-z0-9-]*\Z') | list | length == 0
+      - prometheus_probe_interval is match(prometheus_interval_pattern)
+      - prometheus_probe_timeout is match('^[1-9][0-9]?s\Z')
+      - (prometheus_probe_timeout[:-1] | int) < (prometheus_probe_interval[:-1] | int * (60 if prometheus_probe_interval.endswith('m') else 1))
+      - prometheus_alert_probe_down_for is match(prometheus_duration_pattern)
+      - prometheus_blackbox_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      - prometheus_blackbox_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
     fail_msg: >-
       prometheus: a registry id, an image pinned by tag and digest, the guest's IPv4 address to
       publish on (not all interfaces), ports, a container uid and gid of 1000 or more, absolute
@@ -51,7 +61,7 @@
       evaluation intervals like 30s, a memory limit like 768m, the hnx command (bare or by absolute
       path, or an absolute python running homelabnext.cli), an absolute registry path, plain host names to exclude, alert durations like 10m and
       percentages 1-99, a notify logical id and topic, a priority 1-5, a secret:<name> token
-      reference, an alert schedule of every minute or every 30 seconds, a read-only mount-point pattern of plain regex characters and a positive number of minutes, a heartbeat topic (not the alert topic, or empty to turn the dead-man off) and 1-60 minutes between heartbeats
+      reference, an alert schedule of every minute or every 30 seconds, a read-only mount-point pattern of plain regex characters and a positive number of minutes, a heartbeat topic (not the alert topic, or empty to turn the dead-man off) and 1-60 minutes between heartbeats, probes on or off with plain service names to exclude, a probe interval like 60s and a whole-seconds timeout shorter than it, a duration for ProbeDown and a blackbox image pinned by tag and digest with a memory limit like 128m
   tags: [health, backup, restore, export, upgrade, readiness]
 
 # The pinned compose network is judged in ONE place, compose_app's network_subnet.yml (RFC 1918,
