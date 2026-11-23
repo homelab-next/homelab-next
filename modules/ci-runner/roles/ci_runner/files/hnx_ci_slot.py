@@ -224,6 +224,7 @@ def run_slot(cfg: dict, slot: int, runner=subprocess.run, sleep=time.sleep) -> i
     p = _paths(cfg)
     d = slot_dir(cfg, slot)
     empty_dir(d, p["slots"])
+    write_state(d, state="waiting")  # the feeder counts a waiting slot as one to supply
     golden = golden_image(cfg)
     name = None
     deadline = time.monotonic() + cfg["claim_wait_s"]

@@ -107,7 +107,7 @@ def test_the_next_job_in_a_slot_sees_none_of_the_previous_job_s_files(cfg):
             return super().__call__(argv, **kw)
 
     slot.run_slot(cfg, 0, runner=Peek())
-    assert seen == ["disk.qcow2", "runner", "seed", "seed.iso", "state.json"]
+    assert seen == ["disk.qcow2", "runner", "seed", "seed.iso", "state.json"]  # nothing of job one
 
 
 def test_the_seed_carries_the_registration_and_the_jit_file_is_gone_before_boot(cfg):
