@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# THROWAWAY (never merged): proves the lab CI pool's isolation from inside two jobs.
+name: pool-probe
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  first:
+    runs-on: [self-hosted, linux, x64, hnx-ci]
+    timeout-minutes: 10
+    steps:
+      - name: leave marks everywhere a job can write
+        run: |
+          set -x
+          hostname; id; cat /etc/os-release | head -2; nproc; free -m | head -2
+          echo first > "$HOME/hnx-probe-mark"; echo first > /tmp/hnx-probe-mark; echo first > "$GITHUB_WORKSPACE/hnx-probe-mark"
+          sudo sh -c 'echo first > /root/hnx-probe-mark; echo first > /var/tmp/hnx-probe-mark'
+          docker volume create hnx-probe-vol; docker run --rm -v hnx-probe-vol:/v alpine:3.20 sh -c 'echo first > /v/mark'
+          docker image ls --format '{{.Repository}}:{{.Tag}}' | tee /tmp/images-first
+          cat /proc/sys/kernel/random/boot_id | tee "$HOME/boot-id"
+  second:
+    needs: first
+    runs-on: [self-hosted, linux, x64, hnx-ci]
+    timeout-minutes: 10
+    steps:
+      - name: none of the first job's files are here
+        run: |
+          set -u; fail=0
+          cat /proc/sys/kernel/random/boot_id
+          for f in "$HOME/hnx-probe-mark" /tmp/hnx-probe-mark "$GITHUB_WORKSPACE/hnx-probe-mark" "$HOME/boot-id"; do
+            if [ -e "$f" ]; then echo "LEAK: $f"; fail=1; else echo "absent: $f"; fi; done
+          for f in /root/hnx-probe-mark /var/tmp/hnx-probe-mark; do
+            if sudo test -e "$f"; then echo "LEAK: $f"; fail=1; else echo "absent: $f"; fi; done
+          if docker volume inspect hnx-probe-vol >/dev/null 2>&1; then echo "LEAK: docker volume"; fail=1; else echo "absent: docker volume"; fi
+          if docker image ls --format '{{.Repository}}' | grep -q alpine; then echo "LEAK: docker image"; fail=1; else echo "absent: alpine image"; fi
+          exit $fail
+      - name: no private or lab address answers; the internet does
+        run: |
+          set -u; fail=0
+          probe() { if timeout 4 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; then echo "REACHABLE: $1:$2"; return 0; else echo "refused/unreachable: $1:$2"; return 1; fi; }
+          for t in 192.168.20.130:80 192.168.20.133:9100 192.168.20.207:8200 192.168.20.150:22 192.168.10.205:8006 192.168.10.205:22 \
+                   192.168.10.254:80 192.168.10.1:443 192.168.1.1:443 192.168.30.1:443 192.168.30.142:22 10.0.2.2:22 10.0.2.2:9100 \
+                   100.100.100.100:53 100.91.72.34:22 169.254.169.254:80 172.17.0.1:22 10.0.0.1:22; do
+            if probe "${t%:*}" "${t#*:}"; then fail=1; fi; done
+          ping -c1 -W2 192.168.30.1 && { echo "REACHABLE: ping gateway"; fail=1; } || echo "no ping to the gateway"
+          getent hosts github.com && curl -fsS -o /dev/null -w 'github %{http_code}\n' https://github.com || fail=1
+          curl -fsS -o /dev/null -w 'pypi %{http_code}\n' https://pypi.org/simple/pip/ || fail=1
+          curl -6 -m 5 -fsS https://github.com -o /dev/null && { echo "REACHABLE: IPv6"; fail=1; } || echo "no IPv6"
+          exit $fail
