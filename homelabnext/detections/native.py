@@ -60,6 +60,7 @@ FILE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\.xml\Z")
 REGEX_CHARS = re.compile(r"[\\.*+?()\[\]|^$]")
 SCHEMA = "homelabnext.detections.native/v1"
 FIXTURE_KINDS = ("must_fire", "must_not_fire")
+PROOFS = ("fixtures", "live")
 
 
 @dataclass(frozen=True)
@@ -195,6 +196,15 @@ def lint_native(root: Path, sigma_det_ids: set[str] | None = None) -> list[str]:
             if n in seen_ids:
                 problems.append(f"{pre}: rule {n} is also declared by {seen_ids[n]}")
             seen_ids[n] = slug
+        proof = e.get("proof", "fixtures")
+        if proof not in PROOFS:
+            problems.append(f"{pre}: proof must be one of {', '.join(PROOFS)}")
+        if proof == "live":
+            # the engine's rule tester cannot reach this kind of event (a file-integrity event is injected by the
+            # agent's own daemon, not received as a log line): the proof is a post-deploy live test, written down here
+            if not isinstance(e.get("live_test"), str) or len(e["live_test"].strip()) < 40:
+                problems.append(f"{pre}: proof live needs live_test: the steps and the alert that proves it")
+            continue
         try:
             fixtures = load_fixtures(root, slug)
         except (ValueError, json.JSONDecodeError) as exc:

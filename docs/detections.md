@@ -206,4 +206,4 @@ never matches), and a count above the baseline (only a reviewed change raises it
 homelabnext.detections run --native --manager-url URL --ca FILE` (the account's password in
 `HNX_MANAGER_API_PASSWORD`) sends every fixture through the manager's own rule tester
 (`PUT /logtest`) and fails on a missed must-fire or a fired must-not-fire. Native fixtures are not
-orphans to the Sigma lint. Native rules count in the engine's own coverage only.
+orphans to the Sigma lint. An entry whose events the rule tester cannot reach (a file-integrity event comes from the agent's own daemon, not as a log line) says `proof: live` and a `live_test` (the steps and the alert that proves it) instead of fixtures; the engine run skips it, and the post-deploy live test is its proof. Native rules count in the engine's own coverage only.

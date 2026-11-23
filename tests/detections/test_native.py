@@ -72,6 +72,18 @@ def test_both_fixture_kinds_are_required(tmp_path):
     assert any("no must_not_fire" in p for p in native.lint_native(t))
 
 
+def test_a_live_proof_replaces_the_fixtures_but_must_say_how_it_is_proven(tmp_path):
+    import shutil
+
+    t = tree(tmp_path, proof="live", live_test="touch a watched file on a test guest; the rule's alert appears in alerts.json")
+    shutil.rmtree(t / "fixtures")
+    assert native.lint_native(t) == []  # no fixtures, and none required
+    t2 = tree(tmp_path / "b", proof="live")
+    assert any("live_test" in p for p in native.lint_native(t2))
+    t3 = tree(tmp_path / "c", proof="soon")
+    assert any("proof must be" in p for p in native.lint_native(t3))
+
+
 def test_a_regex_location_without_pcre2_is_refused(tmp_path):
     t = tree(tmp_path)
     (t / "native" / "rules" / "ssh-off.xml").write_text(
