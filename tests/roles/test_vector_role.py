@@ -129,8 +129,8 @@ def test_main_renders_the_project_and_everything_the_sidecar_runs(first):
         "logpipeline",
         "tlp.py",
     ]
-    for name in ("__init__.py", "ocsf.py", "sidecar.py"):
-        src = MODULE / "python" / "hnx_modules" / "vector" / name
+    for name in ("__init__.py", "log_pipeline.py", "ocsf.py", "sidecar.py"):
+        src = MODULE / "roles" / "vector" / "files" / "hnx_modules" / "vector" / name
         assert (data / "code" / "hnx_modules" / "vector" / name).read_bytes() == src.read_bytes()
     # the tables are the rendered files, and the routes are the configuration's
     for name in ("runtime-labels.json", "tlp-sources.json"):
