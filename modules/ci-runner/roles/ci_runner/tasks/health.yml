@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the egress table is loaded with its default deny, the golden image is in place
+# and named by images/current, every slot unit is active, and not every slot has waited longer
+# than the limit for a registration (that means the feeder is down). Nothing is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Read the egress table
+      ansible.builtin.command:
+        argv: [/usr/sbin/nft, list, table, inet, "{{ ci_runner_egress_table }}"]
+      register: ci_runner_health_table
+      changed_when: false
+      failed_when: false
+    - name: The egress table is loaded, refuses private space and ends in a deny
+      ansible.builtin.assert:
+        that:
+          - ci_runner_health_table.rc == 0
+          - "'hnx-ci-refused-destination' in ci_runner_health_table.stdout"
+          - "'hnx-ci-default-deny' in ci_runner_health_table.stdout"
+        fail_msg: "ci-runner: the egress table {{ ci_runner_egress_table }} is missing or incomplete (systemctl status {{ ci_runner_egress_unit }})"
+    - name: Ask the slot script for the pool's status
+      ansible.builtin.command:
+        argv: ["{{ ci_runner_slot_script }}", status]
+      environment:
+        HNX_CI_CONFIG: "{{ ci_runner_slot_config }}"
+      register: ci_runner_health_status
+      changed_when: false
+    - name: The golden image is in place
+      ansible.builtin.assert:
+        that: (ci_runner_health_status.stdout | from_json).golden == ci_runner_golden
+        fail_msg: "ci-runner: images/current names {{ (ci_runner_health_status.stdout | from_json).golden }}, not {{ ci_runner_golden }} (run the install)"
+    - name: Ask systemd about the slots
+      ansible.builtin.command:
+        argv: "{{ ['systemctl', 'is-active'] + (range(ci_runner_slots | int) | map('regex_replace', '^(.*)$', 'hnx-' ~ ci_runner_logical_id ~ '-slot@\\1.service') | list) }}"
+      register: ci_runner_health_active
+      changed_when: false
+      failed_when: false
+    - name: Every slot runs
+      ansible.builtin.assert:
+        that: ci_runner_health_active.stdout_lines | reject('in', ['active', 'activating']) | list | length == 0
+        fail_msg: "ci-runner: a slot is not active ({{ ci_runner_health_active.stdout_lines | join(', ') }})"
+    - name: Not every slot is starved of registrations (the feeder runs)
+      ansible.builtin.assert:
+        that: >-
+          (ci_runner_health_status.stdout | from_json).slots.values()
+          | selectattr('state', 'in', ['booting', 'running']) | list | length > 0
+          or ((ci_runner_health_status.stdout | from_json).spooled | length) > 0
+        fail_msg: "ci-runner: no slot holds a registration and none is spooled: the feeder is not running (modules/ci-runner README, The feeder)"
+      when: ci_runner_health_max_waiting_s | int > 0
+  tags: [health]

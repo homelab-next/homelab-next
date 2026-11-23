@@ -303,8 +303,24 @@ class BoundedHTTPServer(ThreadingHTTPServer):
             why = "client certificate outside the pin (its name, or its source address)"
         except (OSError, ValueError) as exc:
             why = getattr(exc, "reason", None) or type(exc).__name__
+            if isinstance(exc, ssl.SSLError):
+                self._linger(request)
         self._refusal(why)
         return False
+
+    @staticmethod
+    def _linger(request) -> None:
+        """After a TLS refusal (its alert already sent), read what the peer still sends until it
+        closes, for at most a second: closing a socket that holds unread bytes resets the
+        connection, and a TLS 1.3 client that sends its request before it reads the alert would
+        see that reset (a broken pipe) instead of the alert, depending only on timing."""
+        try:
+            request.settimeout(1.0)
+            request.shutdown(socket.SHUT_WR)
+            while request.recv(65536):
+                pass
+        except (OSError, ValueError):
+            pass
 
     def _refusal(self, why: str) -> None:
         """Count a refused TLS connection; say so on stderr at most once a minute (the count
@@ -461,6 +477,7 @@ def make_server(
     projects: Any = None,
     approvals: Any = None,
     orchestration: Any = None,
+    registers: Any = None,
     maps: Any = None,
     releases: Any = None,
     max_connections: int = DEFAULT_MAX_CONNECTIONS,
@@ -480,7 +497,9 @@ def make_server(
     ``POST`` route; ``maps``: a :class:`homelabnext.status.maps.MapSite` adds the generated maps
     (topology, dataflow, architecture, roadmap: ADR-0018); ``projects``: a
     :class:`homelabnext.projects.pages.ProjectsSite` adds the Projects page; ``orchestration``: an
-    :class:`homelabnext.orchestration.pages.OrchestrationSite` adds the Orchestration page.
+    :class:`homelabnext.orchestration.pages.OrchestrationSite` adds the Orchestration page;
+    ``registers``: a :class:`homelabnext.status.registers.RegistersSite` adds the register pages (Kanban,
+    Lessons, Runbooks, Invariants).
 
     ``/`` and ``/status.json`` are the public view: the document through its release transform
     (``releases``, default the hub's registry: ADR-0033 decision 7), for every request.  Their
@@ -659,8 +678,8 @@ def make_server(
             once, and only when some site is configured.
 
             A withheld route (:func:`homelabnext.status.views.withheld_route`: strategy,
-            projects, orchestration, baselines, the maps and the directory pages, which have no
-            release transform, ADR-0033 decision 8) is judged **first**: a request that does not
+            projects, orchestration, the registers, baselines, the maps and the directory pages,
+            which have no release transform, ADR-0033 decision 8) is judged **first**: a request that does not
             pass the trusted front door gets ``403`` before any site does any work, and the same
             ``403`` whether or not that site is configured (always, without an activity store's
             front door).  One that passes reaches only the withheld sites and is access-logged
@@ -674,7 +693,9 @@ def make_server(
                 decision = agents.authorize(client, self.headers) if agents else None
                 if decision is None or not decision.allowed:
                     return 403, "text/plain; charset=utf-8", b"forbidden: private view\n"
-                withheld = [s for s in (strategy, projects, orchestration, baselines, maps) if s]
+                withheld = [
+                    s for s in (strategy, projects, orchestration, registers, baselines, maps) if s
+                ]
                 if not withheld:
                     return None
                 doc = document()

@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - lakekeeper_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - lakekeeper_image is match(lakekeeper_pinned_ref_pattern)
+      - lakekeeper_postgres_image is match(lakekeeper_pinned_ref_pattern)
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - lakekeeper_bind is match(lakekeeper_ipv4_pattern)
+      - lakekeeper_bind != '0.0.0.0'
+      - lakekeeper_port | int >= 1 and lakekeeper_port | int <= 65535
+      - lakekeeper_uid | int >= 1000 and lakekeeper_db_uid | int >= 1000 and lakekeeper_db_gid | int >= 1000
+      - lakekeeper_uid | int != lakekeeper_db_uid | int
+      - lakekeeper_db_name is match(lakekeeper_name_pattern)
+      - lakekeeper_db_user is match(lakekeeper_name_pattern)
+      - lakekeeper_warehouse_name is match(lakekeeper_name_pattern)
+      - lakekeeper_bucket is match(lakekeeper_bucket_pattern)
+      - lakekeeper_region is match(lakekeeper_region_pattern)
+      - lakekeeper_s3_url == '' or lakekeeper_s3_url is match(lakekeeper_url_pattern)
+      - lakekeeper_soft_delete_seconds | int >= 86400
+      - >-
+        [lakekeeper_db_login_ref, lakekeeper_encryption_key_ref, lakekeeper_access_key_ref,
+         lakekeeper_signing_ref] | reject('match', lakekeeper_ref_pattern) | list | length == 0
+      - >-
+        [lakekeeper_db_login_ref, lakekeeper_encryption_key_ref, lakekeeper_access_key_ref,
+         lakekeeper_signing_ref] | unique | length == 4
+      - >-
+        [lakekeeper_dir, lakekeeper_data_root, lakekeeper_export_dir] | reject('match', lakekeeper_path_pattern) | list | length == 0
+      - lakekeeper_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - lakekeeper_db_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      lakekeeper: a registry id, two images pinned by tag and digest, the guest's IPv4 address to publish
+      on (not all interfaces), a port, distinct container uids of 1000 or more, a database, role,
+      warehouse and bucket name, a region, an object store address (scheme://host:port), a soft-delete
+      window of a day or more, four distinct secret: references, absolute canonical directories and
+      memory limits like 512m
+  tags: [health, backup, restore, export, upgrade]

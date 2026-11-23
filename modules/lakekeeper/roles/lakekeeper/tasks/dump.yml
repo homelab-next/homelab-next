@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# The export (object-tree): db/lakekeeper.dump (pg_dump's custom format, written in the database's
+# container as its own user, so the file is the database's and never root's), then listing.jsonl (key,
+# size, sha256). A snapshot: every run writes a new one. The dump holds the warehouse's ENCRYPTED
+# credential: it is useless without secret:lakekeeper/encryption-key, which is not in it.
+- name: Dump the database (pg_dump, custom format, in its container)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ lakekeeper_dir }}/docker-compose.yml", exec, -T, postgres,
+           pg_dump, -U, "{{ lakekeeper_db_user }}", -d, "{{ lakekeeper_db_name }}", -Fc,
+           -f, "{{ lakekeeper_container_export }}/.lakekeeper.dump.tmp"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Put the dump in place
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ lakekeeper_dir }}/docker-compose.yml", exec, -T, postgres,
+           mv, -f, "{{ lakekeeper_container_export }}/.lakekeeper.dump.tmp",
+           "{{ lakekeeper_container_export }}/lakekeeper.dump"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: List the export (key, size, sha256)
+  ansible.builtin.command:
+    argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', lakekeeper_scripts ~ '/lakekeeper_backup.py') }}",
+           listing, "{{ lakekeeper_data_root }}/export"]
+  register: lakekeeper_export
+  changed_when: false
+  tags: [backup, export]
+
+- name: Write the listing
+  ansible.builtin.copy:
+    content: "{{ (lakekeeper_export.stdout | from_json) | map('to_json', sort_keys=true) | join('\n') }}\n"
+    dest: "{{ lakekeeper_data_root }}/export/listing.jsonl"
+    owner: "{{ lakekeeper_owner }}"
+    group: "{{ lakekeeper_group }}"
+    mode: "0600"
+  tags: [backup, export]

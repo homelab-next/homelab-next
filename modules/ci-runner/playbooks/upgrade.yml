@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: a new pinned base image or agent. Validated, then the role converges: the new golden
+# image is built beside the old one and each slot picks it up at its next run.
+#   ansible-playbook -i <inventory> modules/ci-runner/playbooks/upgrade.yml
+- name: Upgrade the ephemeral CI runner pool
+  hosts: mod_ci_runner_runner
+  become: true
+  tasks:
+    - name: Validate the upgrade
+      ansible.builtin.include_role:
+        name: ci_runner
+        tasks_from: upgrade
+    - name: Converge on the new pins
+      ansible.builtin.include_role:
+        name: ci_runner

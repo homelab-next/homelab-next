@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The daily source census: its settings, the reader and notify credentials as owner-only files, and the service user; the schedule is the module's fleet unit."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []
