@@ -5,7 +5,7 @@
 #   kind: job
 #   purpose: Write a scheduled job's last-run record (schemas/status/last_run.schema.json) when its service starts and again when it stops, whatever the outcome.
 #   owner: platform
-#   trigger: [role:last_run, timer:aide/scan, timer:caddy/acme-renew, timer:clamav/scan, timer:compose_app/export, timer:restore_drill/drill, timer:context/reindex, timer:honeypot/lake, timer:intel_ingest/intel-ingest, timer:honeypot/report, timer:lynis/scan, timer:media_automation/cleanup-downloads, timer:media_automation/rename-cleanup, timer:media_automation/stalled-repair, timer:needrestart/check, timer:needrestart/reboot, timer:ntfy/deadman, timer:openbao/acme-renew, timer:prometheus/alerts, timer:rkhunter/scan, timer:trino/lake-maintenance, timer:trivy/scan]
+#   trigger: [role:last_run, timer:aide/scan, timer:caddy/acme-renew, timer:clamav/scan, timer:compose_app/export, timer:context/reindex, timer:honeypot/lake, timer:honeypot/report, timer:intel_ingest/intel-ingest, timer:lynis/scan, timer:media_automation/cleanup-downloads, timer:media_automation/rename-cleanup, timer:media_automation/stalled-repair, timer:needrestart/check, timer:needrestart/reboot, timer:ntfy/deadman, timer:nut_ups/hnx-nut-ups-check, timer:openbao/acme-renew, timer:prometheus/alerts, timer:restore_drill/drill, timer:rkhunter/scan, timer:trino/lake-maintenance, timer:trivy/scan]
 #   inputs: the job's id, unit, schedule and record directory (arguments); systemd's SERVICE_RESULT, EXIT_CODE and EXIT_STATUS (finish)
 #   outputs: <dir>/<job id as a file name>.json, mode 0640, group-readable by --group
 #   installs_to: /usr/local/libexec/homelabnext/hnx-last-run
