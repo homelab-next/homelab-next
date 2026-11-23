@@ -74,11 +74,11 @@ jobs:
   # timeout is a backstop only.  Roles' first runs are prefetched per shard, so nothing repeats.
   test:
     name: test (${{ matrix.python.version }}, ${{ matrix.shard }}/12)
-    # The 3.11 leg's twelve shards go to the pool and the 3.12 leg's stay hosted (matrix.python.pool), so the two halves
-    # of one run draw on two queues and finish sooner when the hosted one is busy; the expression is the pool one
+    # A leg whose matrix entry says `pool: true` runs its twelve shards on the pool; both legs are hosted now (pytest-xdist
+    # made a hosted shard 6-8 min, and twelve shards of several runs at once outran the pool's cores); the expression is the pool one
     # above with `matrix.python.pool &&` in front, word for word (tests/overlay/test_private_overlay_example.py)
     runs-on: ${{ matrix.python.pool && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
-    timeout-minutes: 45  # backstop: a twelfth of the suite takes 8-14 min hosted, 19-23 on the pool's slower cores
+    timeout-minutes: 45  # backstop: a twelfth of the suite takes 6-8 min hosted on xdist workers (13 on a busy pool), 8-14 serially
     strategy:
       fail-fast: false
       matrix:
@@ -98,7 +98,7 @@ jobs:
           - version: "3.11"
             extras: "test"
             go: false
-            pool: true
+            pool: false  # measured 2026-11-23 on xdist: 12.7-13.5 min on the pool (nested cores, 7 runs queued at once; timing-sensitive tests failed), 6.5-7.7 hosted
             require-modules: ""
             require-tools: ""
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]  # --shard below names the 12: change both together
