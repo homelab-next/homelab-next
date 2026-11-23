@@ -1,0 +1,10 @@
+{
+  "uid": "01a15e4e-758c-7311-82ff-6357fd41e8c9",
+  "type": "cutover",
+  "title": "A carry row that names no successor",
+  "kind": "service",
+  "old": ["vm:app-core/wiki"],
+  "new": null,
+  "disposition": "carry",
+  "rollback_days": 14
+}

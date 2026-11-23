@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# The account, then the directories, one owner each: the data root is root's, read by the module's
+# group; state/ is the module's user's (the service writes its progress there); export/ is root's
+# (the export, backup and restore hooks run as root). The configuration directory is root's; the
+# credentials directory is root-only.
+- name: Create the module's group
+  ansible.builtin.group:
+    name: "{{ alert_intake_group }}"
+    system: true
+  when: alert_intake_manage_accounts | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the module's user (no home, no shell)
+  ansible.builtin.user:
+    name: "{{ alert_intake_user }}"
+    group: "{{ alert_intake_group }}"
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+  when: alert_intake_manage_accounts | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the data root and the export directory (root's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ alert_intake_owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ alert_intake_data_root }}", group: "{{ alert_intake_group }}", mode: "0750"}
+    - {path: "{{ alert_intake_export_dir }}", group: "{{ alert_intake_owner_group }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the state directory (the module's user's)
+  ansible.builtin.file:
+    path: "{{ alert_intake_state_dir }}"
+    state: directory
+    owner: "{{ alert_intake_user }}"
+    group: "{{ alert_intake_group }}"
+    mode: "0700"
+  tags: [backup, export, restore, upgrade]

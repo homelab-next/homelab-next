@@ -29,9 +29,18 @@ env:
   # it by hand to a supported release (https://go.dev/doc/devel/release).
   GO_VERSION: "1.27.4"
 
+# Where jobs run (operator 2026-11-22 22:41, "use both local and cloud"): the jobs whose runs-on is the POOL expression below
+# go to the lab's ephemeral pool (modules/ci-runner: one throwaway VM per job, public egress only) while the 24 test shards,
+# their aggregators, go, lab-in-a-box (it must equal the nightly's), experimental, coverage and CodeQL stay hosted, so the
+# two run side by side. The shards stay hosted because their suite budgets (pyproject.toml) are set on hosted runners' speed:
+# a pool job VM (nested virtualisation, a slower core) ran tests/roles 27% slower, over its budget. The pool is used only for
+# a push to main or a pull request from a branch of THIS repository, and only while the repository variable HNX_CI_POOL is
+# `on` (the pool's feeder sets it off when the pool stops answering; the lead may set it off by hand); a fork's pull request,
+# or the variable anything but `on`, runs everything hosted. This is the one runs-on that may name a self-hosted runner
+# outside deploy.yml, word for word (tests/overlay/test_private_overlay_example.py POOL_RUNS_ON and POOL_JOBS).
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -177,7 +186,7 @@ jobs:
   # Not installed here: dnsmasq (an apt package, not pinnable by version on a moving runner image)
   # and playwright for node (a browser download).
   external-tools:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     env:
       GOTOOLCHAIN: local  # the setup-go toolchain, never a download a module asks for
@@ -260,7 +269,7 @@ jobs:
   # moving version, but a rendered file nft or dnsmasq rejects is a finding at any version.
   # -rs prints the skips, which must be none of nft, dnsmasq, unshare or setpriv.
   real-tools:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -315,7 +324,7 @@ jobs:
         run: python tools/coverage_floor.py
 
   schemas:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     env:
       # Caddy's own reading of every Caddyfile (caddy adapt) for the F-23 semantic check. Version
@@ -496,7 +505,7 @@ jobs:
   # ruleset requires this job from the default branch; the privileged pull-request trigger is never
   # used.  A base that cannot run a gate fails the job: the change's own code never stands in.
   trusted-gates:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -603,7 +612,7 @@ jobs:
   # file and --no-notify: CI never pages.  Could-not-measure (exit 100) fails the job here, where
   # every dependency is installed.
   invariants:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -640,7 +649,7 @@ jobs:
   # nested module is checked without being listed anywhere.  With no module the go job is skipped
   # and go-ok passes: a no-op.  Go outside every module, or a go.work, fails go-modules.
   go-modules:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       modules: ${{ steps.discover.outputs.modules }}
@@ -859,7 +868,7 @@ jobs:
   # runner user under no_new_privs (sudo opens the namespace, setpriv drops back), as the go job's
   # tests do; deps, which downloads, runs before it with the network.
   gateway-conformance:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     env:
       GOFLAGS: -mod=readonly  # go.mod is an input: a build never rewrites it
@@ -902,7 +911,7 @@ jobs:
   # fault injection (tools/orchestration_conformance.py), in a network namespace with only
   # loopback, as an unprivileged user under no_new_privs. Every executed check must pass.
   orchestration-conformance:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 25
     env:
       GOFLAGS: -mod=readonly  # go.mod is an input: a build never rewrites it
@@ -981,7 +990,7 @@ jobs:
   # reads changed and it was skipped.  No secret is used (.env.example's throwaway values), so a
   # Dependabot pull request, which gets a read-only token and no Actions secrets, runs it as is.
   lab-paths:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       affected: ${{ steps.decide.outputs.affected }}
@@ -1061,7 +1070,7 @@ jobs:
   lab-gateway:
     needs: lab-paths
     if: needs.lab-paths.outputs.affected == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
     timeout-minutes: 25
@@ -1168,7 +1177,7 @@ jobs:
   # Build the sdist and wheel exactly as a release would and leak-scan what they contain (the
   # path allowlist for both artefacts is tests/packaging/test_artifacts.py, run by `test`).
   packaging:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1193,7 +1202,7 @@ jobs:
           python tools/leak_scan.py "$out"
 
   leak-scan:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1227,7 +1236,7 @@ jobs:
           fi
 
   register-ids:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1261,7 +1270,7 @@ jobs:
   # turns main red; a 17-fix range took about 4 minutes on CI.
   regression-tests:
     needs: go-modules
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1306,7 +1315,7 @@ jobs:
   # a commit's author email is whatever the committer typed, so it never exempts on its own.
   dco:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1347,7 +1356,7 @@ jobs:
 
   # The pre-commit hooks that do not need their own environment, run on the whole tree.
   hygiene:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1403,7 +1412,7 @@ jobs:
           PY
 
   secret-scan:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     env:
       # The gitleaks-action needs a licence secret for organisation repositories; the CLI does not.
@@ -1431,7 +1440,7 @@ jobs:
         run: gitleaks dir . --no-banner --redact --verbose
 
   pip-audit:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1463,7 +1472,7 @@ jobs:
           allow-dependencies-licenses: pkg:pypi/ansible-core
 
   markdown-links:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.HNX_CI_POOL == 'on' && fromJSON('["self-hosted","linux","x64","hnx-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

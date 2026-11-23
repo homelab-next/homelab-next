@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - suricata_logical_id is match(suricata_id_pattern)
+      - suricata_capture_interfaces | length > 0
+      - suricata_capture_interfaces | unique | length == suricata_capture_interfaces | length
+      - suricata_capture_interfaces | reject('match', suricata_iface_pattern) | list | length == 0
+      - suricata_package_version is match(suricata_version_pattern)
+      - suricata_eve_file is match(suricata_file_pattern)
+      - suricata_eve_alert_file is match(suricata_file_pattern)
+      - suricata_eve_file != suricata_eve_alert_file
+      - suricata_config_file is match(suricata_file_pattern)
+      - suricata_eve_types | length > 0
+      - suricata_eve_types | reject('in', suricata_eve_type_choices) | list | length == 0
+      - suricata_rule_sources | length > 0
+      - suricata_rule_sources | reject('match', suricata_source_pattern) | list | length == 0
+      - suricata_stats_interval | int >= 10 and suricata_stats_interval | int <= 3600
+      - suricata_max_drop_ratio | float > 0 and suricata_max_drop_ratio | float <= 1
+      - suricata_eve_max_age_seconds | int > suricata_stats_interval | int
+      - suricata_af_packet_buffer_bytes | int >= 1048576
+      - suricata_logrotate_max_size is match('^[1-9][0-9]{0,3}[MG]\Z')
+      - suricata_logrotate_keep | int >= 1
+      - >-
+        [suricata_config_dir, suricata_log_dir, suricata_lib_dir, suricata_logrotate_dir, suricata_siem_agent_conf]
+        | reject('match', suricata_path_pattern) | list | length == 0
+    fail_msg: >-
+      suricata: a registry id, one or more distinct capture interface names (Linux names of at most
+      15 characters), a package version, plain file names for the eve logs (two different ones), known
+      eve event types, rule sources like et/open, a stats interval of 10 to 3600 seconds, a kernel
+      drop bound above 0 and at most 1, an eve age bound longer than the stats interval, a capture
+      buffer of at least 1 MiB, a logrotate size like 2G and absolute canonical paths
+  tags: [health, backup, restore, export, upgrade, readiness]

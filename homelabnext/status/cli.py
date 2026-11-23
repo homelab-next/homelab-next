@@ -16,6 +16,7 @@
                      [--tls-cert FILE --tls-key FILE --client-ca FILE [--client-name NAME ...]
                       | --plain-http]
                      [--strategy DIR] [--projects DIR] [--orchestration DB]
+                     [--registers DIR]
                      [--guests DIR --guests-site SITE [--guests-registry FILE]]
                      [--maps ROOT] [--invariants-results FILE] [--roster FILE]
                      [--mcp-catalog DIR]
@@ -38,7 +39,10 @@ Requirements, Objectives, RFIs; ``docs/strategy.md``); ``--projects`` (``example
 adds the Projects page (open projects and their steps, blocked work, work by strategy record;
 ``docs/projects.md``); ``--orchestration DB`` (the store ``hnx orchestration`` fills) adds the
 Orchestration page (agent jobs per profile and backend, and one job's gateway turns;
-``docs/orchestration-telemetry.md``); ``--guests`` (``examples/minimal/guests``
+``docs/orchestration-telemetry.md``); ``--registers DIR`` (kanban.yml, lessons.yml,
+runbooks.yml, invariants.yml, optional invariants.results.json and meta.json) adds the Kanban,
+Lessons, Runbooks and Invariants register pages (``docs/status.md``, "Register pages");
+``--guests`` (``examples/minimal/guests``
 with ``--guests-site examples/minimal/site.yml``) adds the Baselines page, the guest x
 defense-layer coverage matrix (``docs/compute-model.md``).
 The generated maps (ADR-0018, ``homelabnext.status.maps``): ``--guests``/``--guests-site`` also
@@ -116,6 +120,7 @@ def _document(args, reg, specs, views, clock, site=None, *, approvals=False, map
     strategy = bool(getattr(args, "strategy", None))
     projects = bool(getattr(args, "projects", None))
     orchestration = bool(getattr(args, "orchestration", None))
+    registers = bool(getattr(args, "registers", None))
     baselines = getattr(args, "cmd", "serve") == "serve" and bool(getattr(args, "guests", None))
     return build_status(
         hub.snapshot(now),
@@ -129,6 +134,7 @@ def _document(args, reg, specs, views, clock, site=None, *, approvals=False, map
         maps=maps.available() if maps is not None else (),
         projects=projects,
         orchestration=orchestration,
+        registers=registers,
     )
 
 
@@ -303,6 +309,12 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         "--orchestration",
         help="the orchestration telemetry store: serve the Orchestration page "
         "(docs/orchestration-telemetry.md)",
+    )
+    p.add_argument(
+        "--registers",
+        help="a directory of register files (kanban.yml, lessons.yml, runbooks.yml, "
+        "invariants.yml, invariants.results.json, meta.json): serve the Kanban, Lessons, "
+        "Runbooks and Invariants pages (docs/status.md, section 'Register pages')",
     )
     map_opts(p)
     agents_opt(p)
@@ -504,6 +516,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             strategy=_strategy_site(args, clock),
             projects=_projects_site(args, clock),
             orchestration=_orchestration_site(args, clock),
+            registers=_registers_site(args, clock),
             baselines=_baseline_site(args),
             approvals=approvals,
             maps=maps,
@@ -681,6 +694,15 @@ def _orchestration_site(args, clock: Callable[[], float]):
 
     store = TelemetryStore(args.orchestration, clock=clock, read_only=True)
     return OrchestrationSite(store, clock=clock)
+
+
+def _registers_site(args, clock: Callable[[], float]):
+    """The register pages for ``--registers DIR``, or None."""
+    if not getattr(args, "registers", None):
+        return None
+    from .registers import RegistersSite
+
+    return RegistersSite(args.registers, clock=clock)
 
 
 def _projects_site(args, clock: Callable[[], float]):

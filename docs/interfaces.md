@@ -168,7 +168,7 @@ Check = Callable[[Mapping[str, Any]], Result]                           # the pl
 imports its package lazily). Current names, in that order: `registry`, `new`, `gen`, `detections`,
 `registers`, `invariants`, `strategy`, `projects`, `records`, `orchestration`, `reviews`, `ids`, `decide`, `models`,
 `golden`,
-`site`, `guests`, `schema-check`, `secrets`, `swap`, `conform`, `decommission`, `docs`, `agent`, `workflows`,
+`site`, `guests`, `schema-check`, `secrets`, `swap`, `conform`, `decommission`, `cutover`, `docs`, `agent`, `workflows`,
 `scripts`, `events`, `status`, `publishing`, `graph`, `mcp`, `broker`, `codemode`, `modules`, `custom`,
 `ssh-ca`, `novelty`.
 `parity` is a library only (the swap runner calls it; no sub-command).
@@ -572,6 +572,7 @@ change until its ADR is accepted):
 | `platform/slot` | 1.0 | `schemas/platform/slot.schema.json` | draft |
 | `platform/swap_record` | 1.1 | `schemas/platform/swap_record.schema.json` | stable |
 | `records/note` | 1.4 | `schemas/records/note.schema.json` | stable |
+| `registers/cutover_row` | 1.0 | `schemas/registers/cutover_row.schema.json` | draft |
 | `registers/decision_spec` | 1.3 | `schemas/registers/decision_spec.json` | stable |
 | `registers/invariant` | 1.0 | `schemas/registers/invariant.schema.json` | stable |
 | `registers/kanban_item` | 1.0 | `schemas/registers/kanban_item.schema.json` | stable |
@@ -588,7 +589,7 @@ change until its ADR is accepted):
 | `status/observation` | 1.0 | `schemas/status/observation.schema.json` | stable |
 | `status/orchestration_export` | 1.2 | `schemas/status/orchestration_export.schema.json` | stable |
 | `status/roster` | 1.0 | `schemas/status/roster.schema.json` | stable |
-| `status/views` | 1.10 | `schemas/status/views.schema.json` | stable |
+| `status/views` | 1.11 | `schemas/status/views.schema.json` | stable |
 | `strategy/doctrine` | 1.1 | `schemas/strategy/doctrine.schema.json` | stable |
 | `strategy/measure` | 2.0 | `schemas/strategy/measure.schema.json` | stable |
 | `strategy/objective` | 2.0 | `schemas/strategy/objective.schema.json` | stable |

@@ -1,0 +1,12 @@
+{
+  "uid": "01a15e4e-758c-7312-93c9-0445ca755d11",
+  "type": "cutover",
+  "title": "Retire the sample file browser",
+  "kind": "service",
+  "old": ["lxc:browser-core"],
+  "new": null,
+  "disposition": "drop",
+  "rollback_days": 7,
+  "decision": {"by": "human:example-operator", "date": "2026-11-01", "cite": "operator decision list item 4"},
+  "soak_ends": "2026-11-29"
+}

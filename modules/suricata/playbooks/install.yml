@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the sensor on the host the site placed the module's `sensor` role on. The
+# apply path (docs/modules/apply.md) renders its own modules.yml from the selection and does not
+# import this file; it is the module's own entry point, for a lab that runs one module by hand:
+#   ansible-playbook -i <inventory with --selection> modules/suricata/playbooks/install.yml
+- name: Install the network sensor (Suricata)
+  hosts: mod_suricata_sensor
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: suricata
+        tasks_from: readiness
+      tags: [mod_suricata]
+  roles:
+    - role: suricata
+      tags: [mod_suricata]
