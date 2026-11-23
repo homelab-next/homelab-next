@@ -129,6 +129,10 @@ argument_specs:
         type: str
         description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
         default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
       wazuh_syslog_allowed_ips:
         type: list
         description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
@@ -319,6 +323,10 @@ argument_specs:
         type: str
         description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
         default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
       wazuh_syslog_allowed_ips:
         type: list
         description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
@@ -509,6 +517,10 @@ argument_specs:
         type: str
         description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
         default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
       wazuh_syslog_allowed_ips:
         type: list
         description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
@@ -698,6 +710,10 @@ argument_specs:
         type: str
         description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
         default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
       wazuh_syslog_allowed_ips:
         type: list
         description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
@@ -887,6 +903,10 @@ argument_specs:
         type: str
         description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
         default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
       wazuh_syslog_allowed_ips:
         type: list
         description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
@@ -1076,6 +1096,10 @@ argument_specs:
         type: str
         description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
         default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
       wazuh_syslog_allowed_ips:
         type: list
         description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
@@ -1269,6 +1293,10 @@ argument_specs:
         type: str
         description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
         default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
       wazuh_syslog_allowed_ips:
         type: list
         description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or

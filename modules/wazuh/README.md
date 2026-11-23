@@ -144,6 +144,12 @@ regular-expression characters needs `type="pcre2"` (an element without it loads 
 matches); a custom field name must be prefixed; the log collector drops lines over 64 KiB; the
 configuration must not reset `logall_json`.
 
+`wazuh_json_decoder_excluded` (default false) makes the manager skip the product's generic JSON decoder file
+(`0006-json_decoders.xml`). A site whose JSON logs (the Zeek sensors') have their own decoders needs it: otherwise the generic
+decoder claims every line that starts with `{`, answers rule 1002, and no rule keyed on the site's decoder fires. The file also
+holds the `json` and `json-msgraph` decoders other stock rules rely on, so the site ships identical replacements in its native
+decoders (the overlay's `zeek-zjson-*.xml`).
+
 `wazuh/rule-drift` compares the digest of what the manager has loaded
 (`hnx_wazuh_rules.py digest --etc`) with the digest of what the site wants (`--stage`): the health
 hook runs both and refuses a difference.

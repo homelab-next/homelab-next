@@ -52,6 +52,11 @@ wazuh_network_subnet: ""
 # it, on the loopback of the guest): the addresses it accepts, as the manager sees them (the
 # network's gateway when the pipeline is on the guest). Empty: no syslog listener.
 wazuh_syslog_allowed_ips: []
+# true: the manager does not load the product's generic JSON decoder file (0006-json_decoders.xml), so a site's own decoders for
+# JSON log lines (the Zeek sensors' logs) get first refusal instead of the generic one claiming every line that starts with "{"
+# (it answers rule 1002 and no rule keyed on the site's decoder fires). The site then ships replacements for the two decoders the
+# file holds (json, json-msgraph) in its native decoders, which load as hnx-<name>.xml. Default false: the product's behaviour.
+wazuh_json_decoder_excluded: false
 wazuh_syslog_port: 5514
 # the rules (README, "Native rules"): a directory on the controller holding rules/*.xml and
 # decoders/*.xml, loaded into the manager as hnx-<name>.xml after the manager's own configuration

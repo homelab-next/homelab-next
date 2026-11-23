@@ -10,3 +10,4 @@
 - A private CA for the stack's internal TLS, create-only; the indexer's accounts hashed by its own tool.
 - Native rules loaded with the manager's configuration test and a rollback, an alert integration, a
   retention policy, health that checks live processes, export and restore.
+- `wazuh_json_decoder_excluded` (default false): the manager skips the product's generic JSON decoder file so a site's own decoders for JSON lines (Zeek) get first refusal; the site ships replacements for `json` and `json-msgraph` as native decoders.

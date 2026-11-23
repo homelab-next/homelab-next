@@ -76,6 +76,9 @@
 
   <ruleset>
     <decoder_dir>ruleset/decoders</decoder_dir>
+{% if wazuh_json_decoder_excluded | bool %}
+    <decoder_exclude>ruleset/decoders/0006-json_decoders.xml</decoder_exclude>
+{% endif %}
     <rule_dir>ruleset/rules</rule_dir>
     <rule_exclude>0215-policy_rules.xml</rule_exclude>
     <list>etc/lists/audit-keys</list>

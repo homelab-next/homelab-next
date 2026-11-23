@@ -234,6 +234,18 @@ def test_the_manager_acts_on_no_host():
     )
 
 
+def test_the_generic_json_decoder_is_excluded_only_when_the_site_asks():
+    conf = role_text("templates", "ossec.conf.j2")
+    block = re.search(
+        r"\{% if " + P + r"json_decoder_excluded \| bool %\}\s*"
+        r"<decoder_exclude>ruleset/decoders/0006-json_decoders\.xml</decoder_exclude>\s*\{% endif %\}",
+        conf,
+    )
+    assert block, "the exclusion must be conditional on the variable"
+    assert conf.index(block.group(0)) > conf.index("<decoder_dir>ruleset/decoders</decoder_dir>")
+    assert re.search(rf"^{P}json_decoder_excluded: false$", role_text("defaults", "main.yml"), re.M)
+
+
 def test_enrolment_needs_the_password_and_the_stack_has_no_demo_accounts():
     conf = role_text("templates", "ossec.conf.j2")
     assert "<use_password>yes</use_password>" in conf
