@@ -157,3 +157,15 @@ def test_the_cli_lints_and_needs_its_inputs_to_run(tmp_path, capsys, monkeypatch
     assert "native lint ok" in capsys.readouterr().out
     monkeypatch.delenv("HNX_MANAGER_API_PASSWORD", raising=False)
     assert cli.main(["--root", str(t), "run", "--native"]) == 2
+
+
+def test_a_stock_override_may_carry_the_stock_rules_own_number(tmp_path):
+    t = tree(tmp_path, native_reason="stock-override", overrides=[1007], rule_ids=[1007])
+    (t / "native" / "rules" / "ssh-off.xml").write_text(RULE.format(n=1007))
+    (t / "native" / "native.baseline.json").write_text(
+        json.dumps({"count": 1, "stock-override": 1})
+    )
+    assert native.lint_native(t) == []
+    other = tree(tmp_path / "b", rule_ids=[1007])
+    (other / "native" / "rules" / "ssh-off.xml").write_text(RULE.format(n=1007))
+    assert any("outside" in p for p in native.lint_native(other))

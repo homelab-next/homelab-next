@@ -25,7 +25,8 @@ Layout, in a detections root (the module's, or the overlay module's for the lab'
         native_reason: engine-correlation   # engine-correlation | decoder | list-lookup | stock-override
         why: one sentence on what Sigma cannot say here
         rule_ids: [100200, 100201]   # exactly the ids the file declares (decoders: [])
-        overrides: [5710]            # stock-override only: the stock rule ids it changes
+        overrides: [5710]            # stock-override only: the stock rule ids it changes (they are the file's own
+                                     # ids, so they are exempt from the range)
 
 A fixture is ``{"event": "<the raw line>", "location": "/var/log/auth.log", "format": "syslog",
 "rule_id": 100200}``; for ``must_fire`` the engine must match that rule, for ``must_not_fire`` it
@@ -185,7 +186,11 @@ def lint_native(root: Path, sigma_det_ids: set[str] | None = None) -> list[str]:
                 f"{pre}: rule_ids {sorted(listed)} differ from the ids the file declares {sorted(declared)}"
             )
         for n in declared:
-            if rng and not rng[0] <= n <= rng[1]:
+            if (
+                rng
+                and not rng[0] <= n <= rng[1]
+                and not (reason == "stock-override" and n in (e.get("overrides") or []))
+            ):
                 problems.append(f"{pre}: rule {n} is outside the module's range {rng[0]}-{rng[1]}")
             if n in seen_ids:
                 problems.append(f"{pre}: rule {n} is also declared by {seen_ids[n]}")
