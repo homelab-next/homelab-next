@@ -7,7 +7,7 @@
 #   owner: platform
 #   trigger: [role:status_hub, timer:status_hub/hnx-hub-login-token]
 #   inputs: "--config FILE: JSON {entries: [{name, url, username, password_file, out}], ca_file?: PATH}"
-#   outputs: one line per entry on stdout (name, ok or the error class); each token is written to its entry's out file (0640, group kept) by rename; the token is never printed
+#   outputs: one line per entry on stdout (name, ok or the error class); each token is written to its entry's out file (0600, owned by the configured owner, the collector's account) by rename; the token is never printed
 #   installs_to: /usr/local/libexec/hnx-hub/hnx-hub-login-token
 #   exit:
 #     "0": every entry refreshed
@@ -25,9 +25,9 @@ refused, because the form carries the password.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
+import pwd
 import re
 import secrets
 import ssl
@@ -81,16 +81,17 @@ def fetch_token(entry: dict, ctx: ssl.SSLContext, timeout: float = 20.0) -> str:
     return token
 
 
-def write_atomic(path: str, token: str) -> None:
+def write_atomic(path: str, token: str, owner: str | None = None) -> None:
+    """The token, by rename, in a file only ``owner`` (the collector's account) can read: created
+    at its final mode 0600 and handed to ``owner``, never widened to a group afterwards."""
     directory = os.path.dirname(path)
-    # created at its final mode (0640, as far as the umask allows), never widened afterwards
     tmp = os.path.join(directory, f".tok-{secrets.token_hex(8)}")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="ascii") as fh:
             fh.write(token + "\n")
-            with contextlib.suppress(PermissionError):  # keep the group of the directory
-                os.fchown(fh.fileno(), -1, os.stat(directory).st_gid)  # the collector reads from
+            if owner:
+                os.fchown(fh.fileno(), pwd.getpwnam(owner).pw_uid, -1)
         os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
@@ -109,6 +110,7 @@ def main(argv: list[str]) -> int:
         assert isinstance(entries, list) and entries
         for e in entries:
             assert NAME_RE.match(e["name"])
+        assert cfg.get("owner") is None or NAME_RE.match(cfg["owner"])
     except (OSError, ValueError, KeyError, AssertionError, TypeError):
         print("hnx-hub-login-token: unreadable configuration", file=sys.stderr)
         return 2
@@ -116,7 +118,7 @@ def main(argv: list[str]) -> int:
     failed = 0
     for e in entries:
         try:
-            write_atomic(e["out"], fetch_token(e, ctx))
+            write_atomic(e["out"], fetch_token(e, ctx), cfg.get("owner"))
             print(f"{e['name']}: ok")
         except Exception as exc:  # one entry never blocks the others; the class, never a value
             failed += 1

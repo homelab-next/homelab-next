@@ -48,7 +48,7 @@
 - name: Write the helper's configuration
   ansible.builtin.copy:
     dest: "{{ status_hub_config_dir }}/login-tokens.json"
-    content: "{{ {'ca_file': status_hub_ca_bundle_path if status_hub_ca_bundle | bool else none, 'entries': status_hub_login_entries} | to_nice_json }}\n"
+    content: "{{ {'ca_file': status_hub_ca_bundle_path if status_hub_ca_bundle | bool else none, 'owner': status_hub_user, 'entries': status_hub_login_entries} | to_nice_json }}\n"
     owner: root
     group: root
     mode: "0600"

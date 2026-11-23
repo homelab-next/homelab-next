@@ -8,6 +8,8 @@ from __future__ import annotations
 import http.server
 import importlib.util
 import json
+import os
+import pwd
 import ssl
 import subprocess
 import threading
@@ -60,7 +62,8 @@ class _Server:
                 pass
 
         self.httpd = http.server.HTTPServer(("localhost", 0), H)
-        ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.load_cert_chain(crt, key)
         self.httpd.socket = ctx.wrap_socket(self.httpd.socket, server_side=True)
         self.port = self.httpd.server_address[1]
@@ -86,7 +89,15 @@ def _entry(tmp_path, srv, **over):
 
 def _config(tmp_path, srv, entries):
     cfg = tmp_path / "cfg.json"
-    cfg.write_text(json.dumps({"ca_file": str(srv.crt), "entries": entries}))
+    cfg.write_text(
+        json.dumps(
+            {
+                "ca_file": str(srv.crt),
+                "owner": pwd.getpwuid(os.getuid()).pw_name,
+                "entries": entries,
+            }
+        )
+    )
     return cfg
 
 
@@ -99,7 +110,7 @@ def test_a_login_writes_the_token_file_and_prints_no_token(tmp_path, capsys):
     finally:
         srv.close()
     out = Path(entry["out"])
-    assert out.read_text() == token + "\n" and oct(out.stat().st_mode & 0o777) == "0o640"
+    assert out.read_text() == token + "\n" and oct(out.stat().st_mode & 0o777) == "0o600"
     assert srv.seen == [f"username=reader&password={PW_ENCODED}"]  # a form, encoded
     assert token not in capsys.readouterr().out
     assert [p.name for p in out.parent.iterdir()] == ["flow-reader"]  # no temp file left behind

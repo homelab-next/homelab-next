@@ -217,7 +217,7 @@ and password). `status_hub_logins` lists them, each `{name, service, path, usern
 a root-run timer (`hnx-hub-login-token.timer`, every 4 hours by default) runs the helper, which posts
 the form to the registry row's url + `path` over verified https (no redirect, no proxy from the
 environment, a password file only root reads) and writes the answer to `<status_hub_issued_dir>/<name>`
-by rename, so a failed login leaves the previous token in place. A source's `auth: {secret:
+by rename, as a file only the hub's user reads (mode 0600, created that way), so a failed login leaves the previous token in place. A source's `auth: {secret:
 "secret:<name>"}` then reads that file. The login account should be read-only where the product
 allows; where it has a single user (the product's own limit) the credential is the administrator's,
 held in a root-only file on the hub's host and never in the unit's environment.

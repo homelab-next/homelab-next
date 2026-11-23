@@ -799,7 +799,7 @@
       "installs_to": "/usr/local/libexec/hnx-hub/hnx-hub-login-token",
       "kind": "tool",
       "language": "python",
-      "outputs": "one line per entry on stdout (name, ok or the error class); each token is written to its entry's out file (0640, group kept) by rename; the token is never printed",
+      "outputs": "one line per entry on stdout (name, ok or the error class); each token is written to its entry's out file (0600, owned by the configured owner, the collector's account) by rename; the token is never printed",
       "owner": "platform",
       "path": "ansible/roles/status_hub/files/hnx-hub-login-token.py",
       "purpose": "Refresh the short-lived bearer tokens the status hub's collector sends to products that only issue them for a login (a form post of a user name and password), so no expired token leaves a source unreadable.",
