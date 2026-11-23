@@ -1227,3 +1227,41 @@ def test_skeleton_declares_the_private_layout():
     assert "lab/" in doc["private_paths"]
     for p in doc["private_paths"]:
         assert (SKELETON / p).is_dir(), p
+
+
+# ---- reviewed exemptions (tools/leak_scan.py): one exact string in one file, never a blanket waiver ----
+
+CRED = "Zx9Qw3Rt7Yp2" + "Lk8Vb5Nm1Cd4Fg6Hj0sA"
+ELSE = "Qa7Ws3Ed9Rf2" + "Tg6Yh1Uj8Ik4Ol0pZx5C"
+
+
+def exempt(path: str, text: str = CRED, **over) -> str:
+    import hashlib
+
+    entry = {"path": path, "rule": "high-entropy-string", "sha256": hashlib.sha256(text.encode()).hexdigest(),
+             "reason": "a vendor field name, reviewed", "approved_by": "operator", "date": "2026-11-22"}  # fmt: skip
+    entry.update(over)
+    return json.dumps([entry])
+
+
+def test_an_exemption_waives_one_string_in_one_file_only(tmp_path):
+    line = f"api_key_value {CRED}\n"
+    files = {"lab/fx.json": line, ".leak-exemptions.json": exempt("lab/fx.json")}
+    assert plc.check_private(overlay(tmp_path / "a", files)) == []
+    both = {**files, "lab/other.json": line}
+    found = plc.check_private(overlay(tmp_path / "b", both))
+    assert [(f.path, f.rule) for f in found] == [("lab/other.json", "secret")]
+    two = {**files, "lab/fx.json": line + f"api_key_value {ELSE}\n"}
+    found = plc.check_private(overlay(tmp_path / "c", two))
+    assert [(f.path, f.rule, f.detail.startswith("line 2:")) for f in found] == [("lab/fx.json", "secret", True)]
+
+
+def test_a_stale_or_widened_exemption_fails(tmp_path):
+    stale = {"lab/fx.json": "nothing here\n", ".leak-exemptions.json": exempt("lab/fx.json")}
+    assert rules(plc.check_private(overlay(tmp_path / "a", stale))) == {"stale-exemption"}
+    gone = {".leak-exemptions.json": exempt("lab/missing.json")}
+    assert rules(plc.check_private(overlay(tmp_path / "b", gone))) == {"stale-exemption"}
+    for i, over in enumerate([{"rule": "keyed-secret"}, {"path": "lab/*.json"}]):
+        files = {"lab/fx.json": f"k {CRED}\n", ".leak-exemptions.json": exempt(**{"path": "lab/fx.json", **over})}
+        with pytest.raises(plc.ConfigError):
+            plc.check_private(overlay(tmp_path / f"c{i}", files))
