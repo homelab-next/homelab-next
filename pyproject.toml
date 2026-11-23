@@ -135,7 +135,7 @@ suite_budget_default = "90"  # 60 until 2026-11-23: the suites near it (maps, re
 # packaging 7.9 s, graph 3.8 s, context 2.8 s, everything else 1.3 s or less.
 # 2026-11-23: with xdist workers sharing the runner's cores a test's own clock stretches (roles summed 19680 s against 14800
 # serially; a runaway suite still doubles that), so every budget is multiplied by this when a run uses workers
-suite_budget_xdist_scale = "1.5"
+suite_budget_xdist_scale = "1.75"
 suite_shared_budget_default = "15"
 suite_shared_budgets = [
   "tests/roles = 60",  # 18.8 s measured serially, 30.5 s beside xdist workers (2026-11-23)

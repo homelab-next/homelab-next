@@ -1042,6 +1042,6 @@ def test_this_repos_budgets_are_scaled_only_for_runs_on_xdist_workers():
 
     with open(Path(ROOT) / "pyproject.toml", "rb") as f:
         ini = tomllib.load(f)["tool"]["pytest"]["ini_options"]
-    assert float(ini["suite_budget_xdist_scale"]) == 1.5
+    assert float(ini["suite_budget_xdist_scale"]) == 1.75
     src = (Path(ROOT) / "tests" / "suite_policy.py").read_text()
     assert 'getattr(config.option, "numprocesses", None) or is_xdist_worker(config)' in src
