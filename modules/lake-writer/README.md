@@ -88,7 +88,7 @@ lost checkpoint, the same events under another batch name).
 * A run in which every row was refused exits 1 (a pipeline shipping unlabelled events is not a green
   unit over an empty table).
 * A store that cannot read one object fails that object only.
-* Timers are on the calendar (`*:0/10`), never an interval (LL-041).
+* Timers are on the calendar (`*-*-* *:0/10:00 UTC`), never an interval (LL-041).
 
 ## Hooks
 

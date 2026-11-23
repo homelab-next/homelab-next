@@ -151,7 +151,7 @@ def test_main_installs_the_writer_with_no_secret_in_any_world_readable_file(tmp_
         and f"ReadWritePaths={tmp_path}/data/state" in service
     )
     timer = (tmp_path / "units" / "hnx-writer@.timer").read_text()
-    assert "OnCalendar=*:0/10" in timer and "Unit=hnx-writer@%i.service" in timer
+    assert "OnCalendar=*-*-* *:0/10:00 UTC" in timer and "Unit=hnx-writer@%i.service" in timer
     assert "OnBootSec=" not in timer and "OnUnitActiveSec=" not in timer
     assert oct((tmp_path / "data" / "state").stat().st_mode & 0o777) == "0o700"
 

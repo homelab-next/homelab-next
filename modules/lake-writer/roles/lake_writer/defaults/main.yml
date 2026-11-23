@@ -57,7 +57,7 @@ lake_writer_s3_id_ref: secret:lake-writer/s3-access-key
 lake_writer_s3_key_ref: secret:lake-writer/s3-secret-key
 
 # every table's timer: on the calendar, never an interval (LL-041)
-lake_writer_oncalendar: "*:0/10"
+lake_writer_oncalendar: "*-*-* *:0/10:00 UTC"
 # a lake that is away is retried this many times per batch (a retry cannot duplicate: the write is
 # replay-safe), then the table's run stops with the objects still staged
 lake_writer_max_attempts: 5

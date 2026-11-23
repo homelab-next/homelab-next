@@ -132,7 +132,7 @@ argument_specs:
       lake_writer_oncalendar:
         type: str
         description: Each table timer's OnCalendar (a calendar, never an interval).
-        default: '*:0/10'
+        default: '*-*-* *:0/10:00 UTC'
       lake_writer_max_attempts:
         type: int
         description: Attempts per batch when the lake is away (the write is replay-safe, so a retry cannot
