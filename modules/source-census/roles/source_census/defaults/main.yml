@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+source_census_user: hnx-source-census
+source_census_group: hnx-source-census
+source_census_hnx_bin: /opt/hnx/bin/hnx
+# the lake-query reader (the domain, the warehouse and the engine's catalog name are the site's: no defaults): its engine password is a secret read by name, written to an owner-only file
+source_census_lake_namespace: soc
+source_census_lake_user: "analyzer:source-census"
+source_census_lake_ca_file: ""
+source_census_reader_cred: secret:source-census/reader-password
+source_census_notify_cred: secret:source-census/notify-token
+source_census_notify_topic: source-census
+source_census_notify_ceiling: red
+# the census (homelabnext.lake.census.CensusConfig)
+source_census_table: raw_archive
+source_census_source_columns: [location, decoder_name]
+source_census_time_column: time
+source_census_window_days: 8
+source_census_multiple: 3
+source_census_min_silence_hours: 2
+source_census_floor_hours: 24
+source_census_learning_min_arrivals: 3
+# declared sources: [{name, match: {column: text | {equals|prefix|suffix|contains: text}}, cadence_hours, grace}]
+source_census_expected: []
+# the acknowledged-quiet list: [{name | match, owner, reason, expires: YYYY-MM-DD}]
+source_census_acknowledged: []
+# all-classes-dark: the tables (empty: the census table) and its own window
+source_census_dark_tables: []
+source_census_dark_hours: 24
+source_census_export_dir: /var/lib/hnx-modules/source-census/export
+source_census_restore_source: ""

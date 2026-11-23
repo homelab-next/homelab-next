@@ -161,8 +161,12 @@ argument_specs:
         default: ''
       nifi_warehouse: &id036
         type: str
-        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        description: 'The warehouse flows name: s3://<bucket>/ (the reference catalog) or a warehouse name (a catalog with named warehouses).'
         required: true
+      nifi_catalog_path: &id900
+        type: str
+        description: 'The path the catalog serves its API under, appended to its address in HNX_LAKE_CATALOG_URI (empty for the reference catalog, /catalog for a catalog that serves it there).'
+        default: ''
       nifi_region: &id037
         type: str
         description: The S3 region flows sign with.
@@ -321,6 +325,7 @@ argument_specs:
       nifi_events_id: *id034
       nifi_events_url: *id035
       nifi_warehouse: *id036
+      nifi_catalog_path: *id900
       nifi_region: *id037
       nifi_s3_access_key_ref: *id038
       nifi_s3_signing_ref: *id039
@@ -391,6 +396,7 @@ argument_specs:
       nifi_events_id: *id034
       nifi_events_url: *id035
       nifi_warehouse: *id036
+      nifi_catalog_path: *id900
       nifi_region: *id037
       nifi_s3_access_key_ref: *id038
       nifi_s3_signing_ref: *id039
@@ -460,6 +466,7 @@ argument_specs:
       nifi_events_id: *id034
       nifi_events_url: *id035
       nifi_warehouse: *id036
+      nifi_catalog_path: *id900
       nifi_region: *id037
       nifi_s3_access_key_ref: *id038
       nifi_s3_signing_ref: *id039
@@ -530,6 +537,7 @@ argument_specs:
       nifi_events_id: *id034
       nifi_events_url: *id035
       nifi_warehouse: *id036
+      nifi_catalog_path: *id900
       nifi_region: *id037
       nifi_s3_access_key_ref: *id038
       nifi_s3_signing_ref: *id039
@@ -604,6 +612,7 @@ argument_specs:
       nifi_events_id: *id034
       nifi_events_url: *id035
       nifi_warehouse: *id036
+      nifi_catalog_path: *id900
       nifi_region: *id037
       nifi_s3_access_key_ref: *id038
       nifi_s3_signing_ref: *id039
@@ -684,6 +693,7 @@ argument_specs:
       nifi_events_id: *id034
       nifi_events_url: *id035
       nifi_warehouse: *id036
+      nifi_catalog_path: *id900
       nifi_region: *id037
       nifi_s3_access_key_ref: *id038
       nifi_s3_signing_ref: *id039

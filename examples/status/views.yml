@@ -7,7 +7,7 @@
 #
 # Every entry and every export declares its TLP ceiling (ADR-0033; docs/status.md, "TLP
 # ceilings and release transforms"): clear for the public view, red for the private group. A
-# page that no release transform shapes yet (strategy, projects, orchestration, baselines, the
+# page that no release transform shapes yet (strategy, projects, orchestration, registers, baselines, the
 # maps and the directory pages) is withheld: it sits in the private group and is served only
 # through the trusted front door.
 views_version: 1
@@ -98,6 +98,27 @@ menu:
   - id: orchestration
     title: Orchestration
     panel: orchestration
+    group: private
+    tlp: red
+  # register pages (docs/status.md, "Register pages"; unavailable without --registers)
+  - id: kanban
+    title: Kanban
+    panel: kanban
+    group: private
+    tlp: red
+  - id: lessons
+    title: Lessons
+    panel: lessons
+    group: private
+    tlp: red
+  - id: runbooks
+    title: Runbooks
+    panel: runbooks
+    group: private
+    tlp: red
+  - id: invariants
+    title: Invariants
+    panel: invariants
     group: private
     tlp: red
   # guest baselines (docs/compute-model.md; listed as unavailable without --guests)

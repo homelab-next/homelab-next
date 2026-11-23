@@ -162,6 +162,20 @@ def test_the_driver_directory_is_mounted_read_only_and_empty_by_default(first):
 # ----------------------------------------------------------------------------- main renders
 
 
+def _first_main_supplies_the_catalog_under_its_path_and_the_warehouse_by_name(tmp_path):
+    v = vs(tmp_path, catalog_path="/catalog", warehouse="lake")
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": secrets()}
+
+
+@first_run(_first_main_supplies_the_catalog_under_its_path_and_the_warehouse_by_name)
+def test_main_supplies_the_catalog_under_its_path_and_the_warehouse_by_name(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    env = compose(tmp_path)["environment"]
+    assert env["HNX_LAKE_CATALOG_URI"] == CATALOG_URL + "/catalog"  # the flows' catalog service URI
+    assert env["HNX_LAKE_WAREHOUSE"] == "lake"
+
+
 def _first_main_renders_the_service_with_no_secret_in_the_compose_file(tmp_path):
     return {"role": ROLE, "tasks_from": "main", "extra_vars": vs(tmp_path), "env": secrets()}
 

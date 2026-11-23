@@ -1,0 +1,118 @@
+# SPDX-License-Identifier: Apache-2.0
+# Split from main so it runs without the package install.
+- name: Validate the settings
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Ensure the state and libexec directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "{{ '0750' if item == nut_ups_state_dir else '0755' }}"
+  loop: ["{{ nut_ups_state_dir }}", "{{ nut_ups_libexec_dir }}", "{{ nut_ups_textfile_dir }}"]
+
+- name: Generate the monitor's login once (random; it never leaves the host, and its directory is owner-only)
+  ansible.builtin.command:
+    argv: [openssl, rand, -hex, -out, "{{ nut_ups_state_dir }}/upsmon-password", "24"]
+    creates: "{{ nut_ups_state_dir }}/upsmon-password"
+
+- name: Keep the login owner-only
+  ansible.builtin.file:
+    path: "{{ nut_ups_state_dir }}/upsmon-password"
+    mode: "0600"
+  when: not ansible_check_mode
+
+- name: Read the monitor's password
+  ansible.builtin.slurp:
+    src: "{{ nut_ups_state_dir }}/upsmon-password"
+  register: nut_ups_pw
+  no_log: true
+  check_mode: false
+  failed_when: nut_ups_pw is failed and not ansible_check_mode
+
+- name: nut.conf (netserver mode, the monitor runs beside the driver and upsd)
+  ansible.builtin.copy:
+    dest: "{{ nut_ups_conf_dir }}/nut.conf"
+    mode: "0640"
+    owner: "{{ nut_ups_conf_owner }}"
+    group: "{{ nut_ups_conf_group }}"
+    content: |
+      # Managed by homelabnext (role nut_ups, control ups-protection); local changes are overwritten.
+      MODE=netserver
+  notify: Restart nut
+
+- name: ups.conf
+  ansible.builtin.template:
+    src: ups.conf.j2
+    dest: "{{ nut_ups_conf_dir }}/ups.conf"
+    mode: "0640"
+    owner: "{{ nut_ups_conf_owner }}"
+    group: "{{ nut_ups_conf_group }}"
+  notify: Restart nut
+
+- name: upsd.conf (loopback only, by name)
+  ansible.builtin.copy:
+    dest: "{{ nut_ups_conf_dir }}/upsd.conf"
+    mode: "0640"
+    owner: "{{ nut_ups_conf_owner }}"
+    group: "{{ nut_ups_conf_group }}"
+    content: |
+      # Managed by homelabnext (role nut_ups, control ups-protection); local changes are overwritten.
+      LISTEN localhost 3493
+  notify: Restart nut
+
+- name: upsd.users (the monitor's login, primary role, nothing else)
+  ansible.builtin.template:
+    src: upsd.users.j2
+    dest: "{{ nut_ups_conf_dir }}/upsd.users"
+    mode: "0640"
+    owner: "{{ nut_ups_conf_owner }}"
+    group: "{{ nut_ups_conf_group }}"
+  no_log: true
+  notify: Restart nut
+
+- name: upsmon.conf (the MONITOR line, shutdown command and policy)
+  ansible.builtin.template:
+    src: upsmon.conf.j2
+    dest: "{{ nut_ups_conf_dir }}/upsmon.conf"
+    mode: "0640"
+    owner: "{{ nut_ups_conf_owner }}"
+    group: "{{ nut_ups_conf_group }}"
+  no_log: true
+  notify: Restart nut monitor
+
+- name: Install the metrics and fallback-shutdown checker
+  ansible.builtin.template:
+    src: nut-ups-check.py.j2
+    dest: "{{ nut_ups_libexec_dir }}/nut-ups-check"
+    mode: "0755"
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ nut_ups_last_run_dir }}"
+    last_run_group: "{{ nut_ups_last_run_group }}"
+    last_run_writer: "{{ nut_ups_last_run_writer }}"
+
+- name: Install the checker's service and timer
+  ansible.builtin.template:
+    src: "hnx-nut-ups-check.{{ item }}.j2"
+    dest: "{{ nut_ups_systemd_dir }}/hnx-nut-ups-check.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: nut_ups_units
+
+- name: Reload systemd when a unit changed
+  ansible.builtin.command:
+    argv: ["{{ nut_ups_systemctl_cli }}", daemon-reload]
+  when: nut_ups_units is changed
+  changed_when: true
+
+- name: Flush handlers so a changed configuration is live before the run ends
+  ansible.builtin.meta: flush_handlers
+
+- name: Run the checker once so the metrics exist before the first timer tick
+  ansible.builtin.command:
+    argv: ["{{ nut_ups_libexec_dir }}/nut-ups-check"]
+  changed_when: false
+  failed_when: false

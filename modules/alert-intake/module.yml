@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: Apache-2.0
+# The SIEM's alert webhook as a feature module (docs/modules.md; README.md beside this file; ADR-0049
+# decision 5, which names it `alert-intake`): a small stdlib service the SIEM posts its alert events to.
+# It validates each event, refuses one whose source is not the SIEM's, deduplicates on the detection and
+# its entities, records an ALERT (not a case) in the case store through the `cases` contract with an
+# adapter the site names, and pages for high severity. It names slots and the contract, never a product:
+# which case store, which adapter, which notifier are the site's, and every real value (the guest, its
+# address, the URLs, the adapter, the secret values) is the overlay's.
+manifest_version: "1.0"
+id: alert-intake
+kind: feature
+title: The SIEM's alerts into the case store
+description: Receives the SIEM's alert.created events over an authenticated webhook, refuses a foreign
+  source, deduplicates on the detection and its entities, records one alert per distinct detection through
+  the cases contract (promoting to a case only by the site's policy), and pages once for a new alert at
+  or above a conservative severity; progress is kept per event so a retry never double-counts or re-pages,
+  and a canary alert is recorded, dismissed and never pages.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+bundle: {id: soc, group: detect-respond}
+identifiers:
+  - {kind: secret-name, name: alert-intake, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the webhook token, the case store's key and CA and the notification token are read by name at deploy time
+    - cap: cap:case-management
+      provisional: true
+      purpose: the alerts are recorded in the case store through the cases contract's adapter the site installs (create_alert, and promote by the site's policy)
+    - cap: cap:notify
+      version: "1.0"
+      purpose: a new alert at or above the paging severity is posted to the notification endpoint
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 1, memory_mb: 512, disk_gb: 5}
+      guest:
+        baselines: [base]
+      roles: [role:alert_intake]
+      purpose: runs the webhook the SIEM posts to and holds its per-event state; place it where the SIEM, the case store and the notifier all answer
+egress: none
+contributes:
+  roles:
+    - file: roles/alert_intake
+  preflight:
+    - {role: role:alert_intake, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: state
+    kind: state
+    description: "The per-event progress (state.json: for each event id its body digest, the alert it became, whether it was promoted and paged), exported under export/<stamp>/. Without it a restored service would count a redelivered event twice; the alerts are the case store's own data."
+    export: {formats: [object-tree], via: role:alert_intake}
+    import: {formats: [object-tree], via: role:alert_intake}
+    retention: {keep: forever}
+config:
+  webhook_token:
+    type: secret
+    description: the bearer token the SIEM's integration sends to the webhook, in a root-only environment file the unit loads (alert_intake_webhook_login_ref)
+    default: secret:alert-intake/webhook-token
+    overlay: optional
+  cases_credential:
+    type: secret
+    description: the case store's API key the adapter sends as a bearer token (alert_intake_cases_key_ref; the overlay may name the case store provider's own key with a grant)
+    default: secret:alert-intake/cases-credential
+    overlay: optional
+  cases_ca:
+    type: secret
+    description: the CA certificate (PEM) the case store is verified against (alert_intake_cases_ca_ref)
+    default: secret:alert-intake/cases-ca
+    overlay: optional
+  notify_token:
+    type: secret
+    description: the notification endpoint's publisher token (alert_intake_notify_login_ref)
+    default: secret:alert-intake/notify-token
+    overlay: optional
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "no pinned artefact: a validated re-converge that first checks the live state is this module's form"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

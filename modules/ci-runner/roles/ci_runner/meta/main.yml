@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "An ephemeral CI runner pool: N job slots, each a throwaway VM booted from a pinned golden image with one single-use runner registration and destroyed after its one job, behind a host egress table that refuses every private address."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

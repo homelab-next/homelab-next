@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: Apache-2.0
+# Bootstrap the catalog once (accepting the product's terms), then create the warehouse when absent.
+# A warehouse that exists is CHECKED against the settings and never changed: a difference stops here
+# (changing a live warehouse's storage profile is a deliberate API call, README "Changing the warehouse").
+# The create call validates the storage by writing and deleting one probe object under the bucket's
+# root, so the object store key must be able to write there. Nothing here reads or writes a table.
+- name: The catalog answers its health check
+  ansible.builtin.uri:
+    url: "http://{{ lakekeeper_bind }}:{{ lakekeeper_port | int }}/health"
+    status_code: 200
+    timeout: "{{ lakekeeper_health_timeout | int }}"
+  register: lakekeeper_up
+  until: lakekeeper_up.status == 200
+  retries: 30
+  delay: 3
+  changed_when: false
+
+- name: Ask whether the catalog is bootstrapped
+  ansible.builtin.uri:
+    url: "http://{{ lakekeeper_bind }}:{{ lakekeeper_port | int }}/management/v1/info"
+    return_content: true
+    timeout: "{{ lakekeeper_health_timeout | int }}"
+  register: lakekeeper_info
+  changed_when: false
+
+- name: Bootstrap the catalog (once)
+  ansible.builtin.uri:
+    url: "http://{{ lakekeeper_bind }}:{{ lakekeeper_port | int }}/management/v1/bootstrap"
+    method: POST
+    body_format: json
+    body: {accept-terms-of-use: true}
+    status_code: [200, 204]
+    timeout: "{{ lakekeeper_health_timeout | int }}"
+  when: not (lakekeeper_info.json.bootstrapped | bool)
+
+- name: List the warehouses
+  ansible.builtin.uri:
+    url: "http://{{ lakekeeper_bind }}:{{ lakekeeper_port | int }}/management/v1/warehouse"
+    return_content: true
+    timeout: "{{ lakekeeper_health_timeout | int }}"
+  register: lakekeeper_warehouses
+  changed_when: false
+
+- name: Create the warehouse (the bucket root, access-key credential, remote signing, soft deletes)
+  ansible.builtin.uri:
+    url: "http://{{ lakekeeper_bind }}:{{ lakekeeper_port | int }}/management/v1/warehouse"
+    method: POST
+    body_format: json
+    body:
+      warehouse-name: "{{ lakekeeper_warehouse_name }}"
+      storage-profile:
+        type: s3
+        bucket: "{{ lakekeeper_bucket }}"
+        region: "{{ lakekeeper_region }}"
+        endpoint: "{{ lakekeeper_s3_endpoint }}"
+        path-style-access: true
+        flavor: s3-compat
+        sts-enabled: false
+        remote-signing-enabled: true
+      storage-credential:
+        type: s3
+        credential-type: access-key
+        aws-access-key-id: "{{ lookup('hnx_secret', lakekeeper_access_key_ref) }}"
+        aws-secret-access-key: "{{ lookup('hnx_secret', lakekeeper_signing_ref) }}"
+      delete-profile:
+        type: soft
+        expiration-seconds: "{{ lakekeeper_soft_delete_seconds | int }}"
+    status_code: [200, 201]
+    timeout: "{{ lakekeeper_health_timeout | int }}"
+  when: lakekeeper_warehouses.json.warehouses | selectattr('name', 'equalto', lakekeeper_warehouse_name) | list | length == 0
+  no_log: true
+
+- name: List the warehouses again
+  ansible.builtin.uri:
+    url: "http://{{ lakekeeper_bind }}:{{ lakekeeper_port | int }}/management/v1/warehouse"
+    return_content: true
+    timeout: "{{ lakekeeper_health_timeout | int }}"
+  register: lakekeeper_warehouses
+  changed_when: false
+
+- name: The warehouse is as configured
+  ansible.builtin.include_tasks: warehouse_check.yml

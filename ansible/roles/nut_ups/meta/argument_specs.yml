@@ -1,0 +1,462 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install NUT, write its configuration with a MONITOR line, the checker and its timer.
+    options:
+      nut_ups_last_run_dir:
+        type: path
+        description: "Where each run writes its last-run record (role last_run; the status hub's job-last-run mapping reads it)."
+        default: /var/lib/homelabnext/last-run
+      nut_ups_last_run_group:
+        type: str
+        description: "The group that may read the last-run records (the account that ships them to the status hub)."
+        default: root
+      nut_ups_name:
+        type: str
+        description: "The UPS's name in ups.conf and the MONITOR line."
+        default: "ups"
+      nut_ups_description:
+        type: str
+        description: "Free-text description in ups.conf."
+        default: "UPS attached by USB"
+      nut_ups_vendorid:
+        type: str
+        description: "The UPS's USB vendor id, four lowercase hex digits (required)."
+        required: true
+      nut_ups_productid:
+        type: str
+        description: "The UPS's USB product id, four lowercase hex digits (required)."
+        required: true
+      nut_ups_driver:
+        type: str
+        description: "The NUT driver."
+        default: "usbhid-ups"
+      nut_ups_monitor_user:
+        type: str
+        description: "The monitor's login on the loopback upsd."
+        default: "upsmon"
+      nut_ups_shutdown_charge_percent:
+        type: int
+        description: "Forced shutdown when on battery at or under this charge percent (0 turns the fallback off)."
+        default: 20
+      nut_ups_shutdown_cmd:
+        type: str
+        description: "The shutdown command upsmon runs."
+        default: "/sbin/shutdown -h +0 'UPS low battery: clean shutdown'"
+      nut_ups_cut_power:
+        type: bool
+        description: "Also power the UPS output off after the host halts, so the UPS restarts the host on mains return."
+        default: false
+      nut_ups_textfile_dir:
+        type: path
+        description: "The node exporter's textfile directory the metrics are written to."
+        default: "/var/lib/homelabnext-textfile"
+      nut_ups_metrics_interval:
+        type: str
+        description: "systemd OnCalendar of the checker."
+        default: "*-*-* *:*:00 UTC"
+      nut_ups_conf_owner:
+        type: str
+        description: "Owner of NUT's configuration files."
+        default: "root"
+      nut_ups_conf_group:
+        type: str
+        description: "Group of NUT's configuration files (the nut user reads them)."
+        default: "nut"
+      nut_ups_state_dir:
+        type: path
+        description: "Where the role keeps the generated monitor login."
+        default: "/var/lib/homelabnext/nut_ups"
+      nut_ups_conf_dir:
+        type: path
+        description: "NUT's configuration directory."
+        default: "/etc/nut"
+      nut_ups_libexec_dir:
+        type: path
+        description: "Where the checker is installed."
+        default: "/usr/local/libexec/homelabnext"
+      nut_ups_systemd_dir:
+        type: path
+        description: "Where the checker's units are installed."
+        default: "/etc/systemd/system"
+      nut_ups_upsc_cli:
+        type: str
+        description: "The upsc command."
+        default: "upsc"
+      nut_ups_upsmon_cli:
+        type: str
+        description: "The upsmon command."
+        default: "upsmon"
+      nut_ups_systemctl_cli:
+        type: str
+        description: "The systemctl command."
+        default: "systemctl"
+      nut_ups_health_max_age_seconds:
+        type: int
+        description: "Oldest acceptable metrics file for health."
+        default: 180
+  config:
+    short_description: Write the configuration, the checker and its timer (no package install).
+    options:
+      nut_ups_last_run_dir:
+        type: path
+        description: "Where each run writes its last-run record (role last_run; the status hub's job-last-run mapping reads it)."
+        default: /var/lib/homelabnext/last-run
+      nut_ups_last_run_group:
+        type: str
+        description: "The group that may read the last-run records (the account that ships them to the status hub)."
+        default: root
+      nut_ups_name:
+        type: str
+        description: "The UPS's name in ups.conf and the MONITOR line."
+        default: "ups"
+      nut_ups_description:
+        type: str
+        description: "Free-text description in ups.conf."
+        default: "UPS attached by USB"
+      nut_ups_vendorid:
+        type: str
+        description: "The UPS's USB vendor id, four lowercase hex digits (required)."
+        required: true
+      nut_ups_productid:
+        type: str
+        description: "The UPS's USB product id, four lowercase hex digits (required)."
+        required: true
+      nut_ups_driver:
+        type: str
+        description: "The NUT driver."
+        default: "usbhid-ups"
+      nut_ups_monitor_user:
+        type: str
+        description: "The monitor's login on the loopback upsd."
+        default: "upsmon"
+      nut_ups_shutdown_charge_percent:
+        type: int
+        description: "Forced shutdown when on battery at or under this charge percent (0 turns the fallback off)."
+        default: 20
+      nut_ups_shutdown_cmd:
+        type: str
+        description: "The shutdown command upsmon runs."
+        default: "/sbin/shutdown -h +0 'UPS low battery: clean shutdown'"
+      nut_ups_cut_power:
+        type: bool
+        description: "Also power the UPS output off after the host halts, so the UPS restarts the host on mains return."
+        default: false
+      nut_ups_textfile_dir:
+        type: path
+        description: "The node exporter's textfile directory the metrics are written to."
+        default: "/var/lib/homelabnext-textfile"
+      nut_ups_metrics_interval:
+        type: str
+        description: "systemd OnCalendar of the checker."
+        default: "*-*-* *:*:00 UTC"
+      nut_ups_conf_owner:
+        type: str
+        description: "Owner of NUT's configuration files."
+        default: "root"
+      nut_ups_conf_group:
+        type: str
+        description: "Group of NUT's configuration files (the nut user reads them)."
+        default: "nut"
+      nut_ups_state_dir:
+        type: path
+        description: "Where the role keeps the generated monitor login."
+        default: "/var/lib/homelabnext/nut_ups"
+      nut_ups_conf_dir:
+        type: path
+        description: "NUT's configuration directory."
+        default: "/etc/nut"
+      nut_ups_libexec_dir:
+        type: path
+        description: "Where the checker is installed."
+        default: "/usr/local/libexec/homelabnext"
+      nut_ups_systemd_dir:
+        type: path
+        description: "Where the checker's units are installed."
+        default: "/etc/systemd/system"
+      nut_ups_upsc_cli:
+        type: str
+        description: "The upsc command."
+        default: "upsc"
+      nut_ups_upsmon_cli:
+        type: str
+        description: "The upsmon command."
+        default: "upsmon"
+      nut_ups_systemctl_cli:
+        type: str
+        description: "The systemctl command."
+        default: "systemctl"
+      nut_ups_health_max_age_seconds:
+        type: int
+        description: "Oldest acceptable metrics file for health."
+        default: 180
+  health:
+    short_description: Fail unless the UPS answers, nut-monitor is active with a MONITOR line, and the metrics are fresh.
+    options:
+      nut_ups_name:
+        type: str
+        description: "The UPS's name in ups.conf and the MONITOR line."
+        default: "ups"
+      nut_ups_description:
+        type: str
+        description: "Free-text description in ups.conf."
+        default: "UPS attached by USB"
+      nut_ups_vendorid:
+        type: str
+        description: "The UPS's USB vendor id, four lowercase hex digits (required)."
+        required: true
+      nut_ups_productid:
+        type: str
+        description: "The UPS's USB product id, four lowercase hex digits (required)."
+        required: true
+      nut_ups_driver:
+        type: str
+        description: "The NUT driver."
+        default: "usbhid-ups"
+      nut_ups_monitor_user:
+        type: str
+        description: "The monitor's login on the loopback upsd."
+        default: "upsmon"
+      nut_ups_shutdown_charge_percent:
+        type: int
+        description: "Forced shutdown when on battery at or under this charge percent (0 turns the fallback off)."
+        default: 20
+      nut_ups_shutdown_cmd:
+        type: str
+        description: "The shutdown command upsmon runs."
+        default: "/sbin/shutdown -h +0 'UPS low battery: clean shutdown'"
+      nut_ups_cut_power:
+        type: bool
+        description: "Also power the UPS output off after the host halts, so the UPS restarts the host on mains return."
+        default: false
+      nut_ups_textfile_dir:
+        type: path
+        description: "The node exporter's textfile directory the metrics are written to."
+        default: "/var/lib/homelabnext-textfile"
+      nut_ups_metrics_interval:
+        type: str
+        description: "systemd OnCalendar of the checker."
+        default: "*-*-* *:*:00 UTC"
+      nut_ups_conf_owner:
+        type: str
+        description: "Owner of NUT's configuration files."
+        default: "root"
+      nut_ups_conf_group:
+        type: str
+        description: "Group of NUT's configuration files (the nut user reads them)."
+        default: "nut"
+      nut_ups_state_dir:
+        type: path
+        description: "Where the role keeps the generated monitor login."
+        default: "/var/lib/homelabnext/nut_ups"
+      nut_ups_conf_dir:
+        type: path
+        description: "NUT's configuration directory."
+        default: "/etc/nut"
+      nut_ups_libexec_dir:
+        type: path
+        description: "Where the checker is installed."
+        default: "/usr/local/libexec/homelabnext"
+      nut_ups_systemd_dir:
+        type: path
+        description: "Where the checker's units are installed."
+        default: "/etc/systemd/system"
+      nut_ups_upsc_cli:
+        type: str
+        description: "The upsc command."
+        default: "upsc"
+      nut_ups_upsmon_cli:
+        type: str
+        description: "The upsmon command."
+        default: "upsmon"
+      nut_ups_systemctl_cli:
+        type: str
+        description: "The systemctl command."
+        default: "systemctl"
+      nut_ups_health_max_age_seconds:
+        type: int
+        description: "Oldest acceptable metrics file for health."
+        default: 180
+  readiness:
+    short_description: Fail unless the settings are well formed.
+    options:
+      nut_ups_name:
+        type: str
+        description: "The UPS's name in ups.conf and the MONITOR line."
+        default: "ups"
+      nut_ups_description:
+        type: str
+        description: "Free-text description in ups.conf."
+        default: "UPS attached by USB"
+      nut_ups_vendorid:
+        type: str
+        description: "The UPS's USB vendor id, four lowercase hex digits (required)."
+        required: true
+      nut_ups_productid:
+        type: str
+        description: "The UPS's USB product id, four lowercase hex digits (required)."
+        required: true
+      nut_ups_driver:
+        type: str
+        description: "The NUT driver."
+        default: "usbhid-ups"
+      nut_ups_monitor_user:
+        type: str
+        description: "The monitor's login on the loopback upsd."
+        default: "upsmon"
+      nut_ups_shutdown_charge_percent:
+        type: int
+        description: "Forced shutdown when on battery at or under this charge percent (0 turns the fallback off)."
+        default: 20
+      nut_ups_shutdown_cmd:
+        type: str
+        description: "The shutdown command upsmon runs."
+        default: "/sbin/shutdown -h +0 'UPS low battery: clean shutdown'"
+      nut_ups_cut_power:
+        type: bool
+        description: "Also power the UPS output off after the host halts, so the UPS restarts the host on mains return."
+        default: false
+      nut_ups_textfile_dir:
+        type: path
+        description: "The node exporter's textfile directory the metrics are written to."
+        default: "/var/lib/homelabnext-textfile"
+      nut_ups_metrics_interval:
+        type: str
+        description: "systemd OnCalendar of the checker."
+        default: "*-*-* *:*:00 UTC"
+      nut_ups_conf_owner:
+        type: str
+        description: "Owner of NUT's configuration files."
+        default: "root"
+      nut_ups_conf_group:
+        type: str
+        description: "Group of NUT's configuration files (the nut user reads them)."
+        default: "nut"
+      nut_ups_state_dir:
+        type: path
+        description: "Where the role keeps the generated monitor login."
+        default: "/var/lib/homelabnext/nut_ups"
+      nut_ups_conf_dir:
+        type: path
+        description: "NUT's configuration directory."
+        default: "/etc/nut"
+      nut_ups_libexec_dir:
+        type: path
+        description: "Where the checker is installed."
+        default: "/usr/local/libexec/homelabnext"
+      nut_ups_systemd_dir:
+        type: path
+        description: "Where the checker's units are installed."
+        default: "/etc/systemd/system"
+      nut_ups_upsc_cli:
+        type: str
+        description: "The upsc command."
+        default: "upsc"
+      nut_ups_upsmon_cli:
+        type: str
+        description: "The upsmon command."
+        default: "upsmon"
+      nut_ups_systemctl_cli:
+        type: str
+        description: "The systemctl command."
+        default: "systemctl"
+      nut_ups_health_max_age_seconds:
+        type: int
+        description: "Oldest acceptable metrics file for health."
+        default: 180
+  backup:
+    short_description: Record that the role holds no data a backup must keep.
+    options:
+      nut_ups_name:
+        type: str
+        description: "The UPS's name in ups.conf and the MONITOR line."
+        default: "ups"
+      nut_ups_description:
+        type: str
+        description: "Free-text description in ups.conf."
+        default: "UPS attached by USB"
+      nut_ups_vendorid:
+        type: str
+        description: "The UPS's USB vendor id, four lowercase hex digits (required)."
+        required: true
+      nut_ups_productid:
+        type: str
+        description: "The UPS's USB product id, four lowercase hex digits (required)."
+        required: true
+      nut_ups_driver:
+        type: str
+        description: "The NUT driver."
+        default: "usbhid-ups"
+      nut_ups_monitor_user:
+        type: str
+        description: "The monitor's login on the loopback upsd."
+        default: "upsmon"
+      nut_ups_shutdown_charge_percent:
+        type: int
+        description: "Forced shutdown when on battery at or under this charge percent (0 turns the fallback off)."
+        default: 20
+      nut_ups_shutdown_cmd:
+        type: str
+        description: "The shutdown command upsmon runs."
+        default: "/sbin/shutdown -h +0 'UPS low battery: clean shutdown'"
+      nut_ups_cut_power:
+        type: bool
+        description: "Also power the UPS output off after the host halts, so the UPS restarts the host on mains return."
+        default: false
+      nut_ups_textfile_dir:
+        type: path
+        description: "The node exporter's textfile directory the metrics are written to."
+        default: "/var/lib/homelabnext-textfile"
+      nut_ups_metrics_interval:
+        type: str
+        description: "systemd OnCalendar of the checker."
+        default: "*-*-* *:*:00 UTC"
+      nut_ups_conf_owner:
+        type: str
+        description: "Owner of NUT's configuration files."
+        default: "root"
+      nut_ups_conf_group:
+        type: str
+        description: "Group of NUT's configuration files (the nut user reads them)."
+        default: "nut"
+      nut_ups_state_dir:
+        type: path
+        description: "Where the role keeps the generated monitor login."
+        default: "/var/lib/homelabnext/nut_ups"
+      nut_ups_conf_dir:
+        type: path
+        description: "NUT's configuration directory."
+        default: "/etc/nut"
+      nut_ups_libexec_dir:
+        type: path
+        description: "Where the checker is installed."
+        default: "/usr/local/libexec/homelabnext"
+      nut_ups_systemd_dir:
+        type: path
+        description: "Where the checker's units are installed."
+        default: "/etc/systemd/system"
+      nut_ups_upsc_cli:
+        type: str
+        description: "The upsc command."
+        default: "upsc"
+      nut_ups_upsmon_cli:
+        type: str
+        description: "The upsmon command."
+        default: "upsmon"
+      nut_ups_systemctl_cli:
+        type: str
+        description: "The systemctl command."
+        default: "systemctl"
+      nut_ups_health_max_age_seconds:
+        type: int
+        description: "Oldest acceptable metrics file for health."
+        default: 180
+  restore:
+    short_description: Nothing to restore; re-running main renders the configuration again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; the distribution package follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export.
+    options: {}

@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (lakekeeper_target_image, or
+# lakekeeper_target_postgres_image within its major version), dump the database first, then converge with the
+# new pin (set lakekeeper_image or lakekeeper_postgres_image to the target in the overlay). The catalog's
+# schema migration is one way: the dump taken here is the way back.
+#   ansible-playbook -i <inventory> modules/lakekeeper/playbooks/upgrade.yml -e lakekeeper_target_image=<ref>
+- name: Upgrade the Lakekeeper catalog
+  hosts: mod_lakekeeper_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: lakekeeper
+        tasks_from: upgrade
+    - name: Dump the database before the new image migrates it
+      ansible.builtin.include_role:
+        name: lakekeeper
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: lakekeeper
+      vars:
+        lakekeeper_image: "{{ lakekeeper_target_image | default(lakekeeper_image, true) }}"
+        lakekeeper_postgres_image: "{{ lakekeeper_target_postgres_image | default(lakekeeper_postgres_image, true) }}"
