@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# The provider's dependencies are the container engine (docker_engine, applied to the guest before
+# this module) and its credentials in the secret store; it calls no other service. The indexer needs
+# the kernel's map count raised (the guest's sysctl, by the site's os-hardening settings), the
+# certificates are made with openssl, and the health hook reads over HTTP with curl.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Read the kernel's map count
+      ansible.builtin.slurp:
+        src: /proc/sys/vm/max_map_count
+      register: wazuh_map_count
+    - name: The indexer's kernel setting is in place
+      ansible.builtin.assert:
+        that: (wazuh_map_count.content | b64decode | trim | int) >= 262144
+        fail_msg: >-
+          siem: vm.max_map_count is {{ wazuh_map_count.content | b64decode | trim }}, the indexer needs 262144
+          (set it in the guest's sysctl, the os-hardening settings, before this module is applied)
+    - name: The tools the role uses are on the guest
+      ansible.builtin.command:
+        argv: ["{{ item }}", --version]
+      loop: [curl, openssl, tar, python3]
+      changed_when: false
+      check_mode: false
+  tags: [readiness]

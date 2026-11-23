@@ -102,3 +102,17 @@ groups:
 {% raw %}
           summary: "{{ $labels.instance }} the UPS check has not written metrics for over 5 minutes"
 {% endraw %}
+{% if prometheus_probes_enabled | bool %}
+  - name: hnx-probes
+    rules:
+      # an HTTP(S) probe (the blackbox exporter, one per published service) failed for the whole window
+      - alert: ProbeDown
+        expr: probe_success == 0
+        for: {{ prometheus_alert_probe_down_for }}
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.service }} is down: the probe of {{ $labels.instance }} has failed"
+{% endraw %}
+{% endif %}

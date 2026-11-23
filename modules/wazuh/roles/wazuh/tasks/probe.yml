@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# One call to a service's API, from inside its container (so the certificate is judged for the name
+# the stack uses and no port is needed on the host). With wazuh_probe_user (a secret reference) the
+# account's password goes to curl on its standard input as a config line, never in argv; the task
+# runs under no_log. Sets wazuh_probe_code (0 when curl could not connect or verify) and
+# wazuh_probe_body. Never fails: the caller judges the answer. With wazuh_probe_wait it asks again
+# every 5 seconds until a status in wazuh_probe_expect (default 200) or wazuh_ready_timeout.
+# wazuh_probe_service: indexer (https, verified against the stack's CA), manager (the API, https,
+# verified against its own self-signed certificate, which names localhost) or dashboard (http).
+- name: Ask the service
+  ansible.builtin.command:
+    argv: >-
+      {{ ['docker', 'compose', '-f', wazuh_dir ~ '/docker-compose.yml', 'exec', '-T', wazuh_probe_service,
+          'curl', '--silent', '--show-error', '--max-time', wazuh_health_timeout | string,
+          '--write-out', '\n%{http_code}']
+         + (['--cacert', '/usr/share/wazuh-indexer/config/certs/root-ca.pem'] if wazuh_probe_service == 'indexer' else [])
+         + (['--cacert', '/var/ossec/api/configuration/ssl/server.crt'] if wazuh_probe_service == 'manager' else [])
+         + (['--config', '-'] if wazuh_probe_user | default('') | length > 0 else [])
+         + (['--request', wazuh_probe_method] if wazuh_probe_method | default('') | length > 0 else [])
+         + [wazuh_probe_url] }}
+    stdin: >-
+      {{ ('user = "' ~ wazuh_probe_user_name ~ ':' ~ lookup('hnx_secret', wazuh_probe_user) ~ '"' ~ wazuh_nl
+          ~ ('header = "Content-Type: application/json"' ~ wazuh_nl ~ 'data = "'
+             ~ (wazuh_probe_json | replace(wazuh_bs, wazuh_bs ~ wazuh_bs) | replace('"', wazuh_bs ~ '"')) ~ '"' ~ wazuh_nl
+             if wazuh_probe_json | default('') | length > 0 else ''))
+         if wazuh_probe_user | default('') | length > 0 else omit }}
+  register: wazuh_probe_out
+  until: >-
+    not (wazuh_probe_wait | default(false) | bool)
+    or (wazuh_probe_out.rc | default(1) == 0 and (wazuh_probe_out.stdout | default('') | trim).splitlines() | last | default('0') in (wazuh_probe_expect | default(['200'])))
+  retries: "{{ ((wazuh_ready_timeout | int) / 5) | int if (wazuh_probe_wait | default(false) | bool) else 0 }}"
+  delay: 5
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Keep the status line and the body (never the request)
+  no_log: "{{ wazuh_probe_quiet | default(true) | bool }}"
+  ansible.builtin.set_fact:
+    wazuh_probe_code: "{{ (wazuh_probe_out.stdout | default('') | trim).splitlines() | last | default('0') if (wazuh_probe_out.rc | default(1)) == 0 else '0' }}"
+    wazuh_probe_body: "{{ ((wazuh_probe_out.stdout | default('')).splitlines()[:-1] | join('\n')) if (wazuh_probe_out.rc | default(1)) == 0 else '' }}"
+    wazuh_probe_curl_rc: "{{ wazuh_probe_out.rc | default(1) }}"

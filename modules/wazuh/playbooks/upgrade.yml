@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (wazuh_target_manager_image, or
+# wazuh_target_indexer_image or wazuh_target_dashboard_image: one per run), export first, then converge
+# with the new pin (set the three images in the overlay). A newer product image migrates its data
+# forward as it starts, so the export is the way back.
+#   ansible-playbook -i <inventory> modules/wazuh/playbooks/upgrade.yml -e wazuh_target_manager_image=<ref>
+- name: Upgrade the SIEM provider
+  hosts: mod_wazuh_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: wazuh
+        tasks_from: upgrade
+    - name: Export the manager's state and the hot index before the new image opens them
+      ansible.builtin.include_role:
+        name: wazuh
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: wazuh
+      vars:
+        wazuh_manager_image: "{{ wazuh_target_manager_image | default(wazuh_manager_image, true) }}"
+        wazuh_indexer_image: "{{ wazuh_target_indexer_image | default(wazuh_indexer_image, true) }}"
+        wazuh_dashboard_image: "{{ wazuh_target_dashboard_image | default(wazuh_dashboard_image, true) }}"

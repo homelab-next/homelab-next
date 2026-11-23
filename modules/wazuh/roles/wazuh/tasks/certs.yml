@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# The stack's private CA and its node certificates (README, "TLS"): the indexer's HTTP and transport
+# layers, the security plugin's administrator client certificate (securityadmin), and the manager's
+# client certificate for the indexer connection. Create-only: an existing file is never replaced, so a
+# re-run (and a restore) keeps the CA the exports were taken under. The indexer's certificate is
+# the one exception: it is reissued, under the same CA, when the names it must carry change (the
+# guest's address). The CA's key stays root's, never mounted into a container.
+- name: Generate the CA key
+  ansible.builtin.command:
+    argv: [openssl, genrsa, -out, "{{ wazuh_data_root }}/certs/root-ca.key", "{{ wazuh_cert_key_bits }}"]
+    creates: "{{ wazuh_data_root }}/certs/root-ca.key"
+  tags: [restore]
+
+- name: Self-sign the CA certificate
+  ansible.builtin.command:
+    argv: [openssl, req, -x509, -new, -nodes, -key, "{{ wazuh_data_root }}/certs/root-ca.key", -sha256,
+           -days, "{{ wazuh_cert_days }}", -subj, "{{ wazuh_cert_subject_base }}/CN=hnx-{{ wazuh_logical_id }}-ca",
+           -out, "{{ wazuh_data_root }}/certs/root-ca.pem"]
+    creates: "{{ wazuh_data_root }}/certs/root-ca.pem"
+  tags: [restore]
+
+- name: Record the names the indexer certificate must carry
+  ansible.builtin.copy:
+    content: "{{ wazuh_indexer_san }}\n"
+    dest: "{{ wazuh_data_root }}/certs/indexer.san"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0644"
+  register: wazuh_indexer_san_file
+  tags: [restore]
+
+- name: Reissue the indexer certificate when its names changed
+  ansible.builtin.file:
+    path: "{{ wazuh_data_root }}/certs/indexer.pem"
+    state: absent
+  when: wazuh_indexer_san_file is changed
+  tags: [restore]
+
+- name: Issue each node certificate
+  ansible.builtin.include_tasks: cert_one.yml
+  loop:
+    - {name: indexer, cn: wazuh.indexer, san: "{{ wazuh_indexer_san }}", group: "{{ wazuh_indexer_gid | int }}", mode: "0640"}
+    - {name: admin, cn: admin, san: "DNS:admin", group: "{{ wazuh_indexer_gid | int }}", mode: "0640"}
+    - {name: manager, cn: wazuh.manager, san: "DNS:manager,DNS:wazuh.manager", group: "{{ wazuh_group }}", mode: "0600"}
+  loop_control:
+    loop_var: wazuh_cert
+    label: "{{ wazuh_cert.name }}"
+  tags: [restore]
+
+- name: The CA certificate is readable by every container that verifies with it
+  ansible.builtin.file:
+    path: "{{ wazuh_data_root }}/certs/root-ca.pem"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_indexer_gid | int }}"
+    mode: "0644"
+  tags: [restore]
+
+- name: The CA key is root's alone
+  ansible.builtin.file:
+    path: "{{ wazuh_data_root }}/certs/root-ca.key"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0600"
+  tags: [restore]

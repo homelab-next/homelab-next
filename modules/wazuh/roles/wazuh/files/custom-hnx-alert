@@ -1,0 +1,21 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: wazuh-alert-entry
+#   kind: tool
+#   purpose: The integration daemon's entry point for the alert webhook; hands the alert file, api key and hook url to the product's own Python running the forwarder.
+#   owner: platform
+#   trigger: [role:wazuh, "script:wazuh-alert-forward"]
+#   inputs: ALERT_FILE API_KEY HOOK_URL (the integration daemon's arguments)
+#   outputs: nothing of its own; the forwarder's output
+#   exit:
+#     "0": the forwarder's own exit code
+#     "2": usage error or an unreadable alert (from the forwarder)
+# The manager's integration entry point (a custom-<name> script, run by the integration daemon with
+# the alert file, the api key and the hook url): hands them to the product's own Python.
+WPYTHON_BIN="framework/python/bin/python3"
+SCRIPT_PATH_NAME="$0"
+DIR_NAME="$(cd "$(dirname "${SCRIPT_PATH_NAME}")" || exit 1; pwd -P)"
+SCRIPT_NAME="$(basename "${SCRIPT_PATH_NAME}")"
+WAZUH_PATH="$(dirname "${DIR_NAME}")"
+exec "${WAZUH_PATH}/${WPYTHON_BIN}" "${WAZUH_PATH}/integrations/${SCRIPT_NAME}.py" "$@"

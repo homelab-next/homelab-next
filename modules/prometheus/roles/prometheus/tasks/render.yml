@@ -13,6 +13,7 @@
   loop:
     - {src: prometheus.yml.j2, dest: prometheus.yml}
     - {src: rules.yml.j2, dest: rules.yml}
+    - {src: blackbox.yml.j2, dest: blackbox/blackbox.yml}
   loop_control:
     label: "{{ item.dest }}"
   register: prometheus_config_written
@@ -30,6 +31,25 @@
   loop_control:
     label: "{{ item.dest }}"
   register: prometheus_targets_written
+
+# the probe target list exists only while probes are on (a stale list would be unreferenced, but
+# a file nothing names is removed, as a credential is)
+- name: Install the generated probe target list
+  ansible.builtin.copy:
+    dest: "{{ prometheus_data_root }}/config/{{ prometheus_generated_dir }}/probe_targets.yml"
+    content: "{{ prometheus_probe_text }}"
+    owner: "{{ prometheus_owner }}"
+    group: "{{ prometheus_gid | int }}"
+    mode: "0640"
+  when: prometheus_probes_enabled | bool
+  register: prometheus_probes_written
+
+- name: Remove the probe target list when probes are off
+  ansible.builtin.file:
+    path: "{{ prometheus_data_root }}/config/{{ prometheus_generated_dir }}/probe_targets.yml"
+    state: absent
+  when: not (prometheus_probes_enabled | bool)
+  register: prometheus_probes_removed
 
 - name: Create the credential subdirectories
   ansible.builtin.file:

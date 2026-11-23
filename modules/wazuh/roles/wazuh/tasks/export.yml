@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (jsonl, docs/modules/data.md): <data root>/export/{manager-state.tar, index/*.jsonl,
+# version.txt, listing.jsonl}. The state archive is the restore's source for the agents' keys, the rule
+# files and the agent database; the index files are the hot index in a neutral format.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Copy the index tool
+      ansible.builtin.copy:
+        src: hnx_wazuh_index.py
+        dest: "{{ wazuh_data_root }}/config/hnx_wazuh_index.py"
+        owner: "{{ wazuh_owner }}"
+        group: "{{ wazuh_group }}"
+        mode: "0750"
+    - name: Archive, export and list
+      ansible.builtin.include_tasks: dump.yml
+  tags: [export]

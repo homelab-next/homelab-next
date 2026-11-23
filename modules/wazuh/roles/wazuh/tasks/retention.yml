@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# The hot index keeps wazuh_index_retention_days days: an index-state-management policy that deletes
+# an alerts index after that age and attaches itself to every new one (the lake holds the history,
+# and an indexer disk that fills is the failure this prevents). Idempotent: the policy is read first
+# and written only when its age differs.
+- name: Read the retention policy
+  ansible.builtin.include_tasks: probe.yml
+  vars:
+    wazuh_probe_service: indexer
+    wazuh_probe_url: "https://localhost:{{ wazuh_container_indexer_port }}/_plugins/_ism/policies/hnx-alerts-retention"
+    wazuh_probe_user: "{{ wazuh_indexer_admin_ref }}"
+    wazuh_probe_user_name: "{{ wazuh_indexer_user }}"
+    wazuh_probe_quiet: false
+    wazuh_probe_wait: true
+    wazuh_probe_expect: ['200', '404']
+
+- name: Note the policy's current age and sequence number
+  ansible.builtin.set_fact:
+    wazuh_policy_exists: "{{ wazuh_probe_code == '200' }}"
+    wazuh_policy_age: "{{ ((wazuh_probe_body | from_json).policy.states | selectattr('name', 'equalto', 'hot') | first).transitions[0].conditions.min_index_age | default('') if wazuh_probe_code == '200' else '' }}"
+    wazuh_policy_seq: "{{ (wazuh_probe_body | from_json)._seq_no if wazuh_probe_code == '200' else '' }}"
+    wazuh_policy_term: "{{ (wazuh_probe_body | from_json)._primary_term if wazuh_probe_code == '200' else '' }}"
+
+- name: Write the retention policy
+  ansible.builtin.include_tasks: probe.yml
+  vars:
+    wazuh_probe_service: indexer
+    wazuh_probe_url: >-
+      https://localhost:{{ wazuh_container_indexer_port }}/_plugins/_ism/policies/hnx-alerts-retention{{
+      '?if_seq_no=' ~ wazuh_policy_seq ~ '&if_primary_term=' ~ wazuh_policy_term if wazuh_policy_exists | bool else '' }}
+    wazuh_probe_method: PUT
+    wazuh_probe_user: "{{ wazuh_indexer_admin_ref }}"
+    wazuh_probe_user_name: "{{ wazuh_indexer_user }}"
+    wazuh_probe_json: >-
+      {{ {'policy': {'description': 'hnx: delete the hot index after its retention', 'default_state': 'hot',
+          'states': [{'name': 'hot', 'actions': [], 'transitions': [{'state_name': 'delete', 'conditions': {'min_index_age': wazuh_index_retention_days ~ 'd'}}]},
+                     {'name': 'delete', 'actions': [{'delete': {}}], 'transitions': []}],
+          'ism_template': [{'index_patterns': ['wazuh-alerts-*', 'wazuh-archives-*'], 'priority': 100}]}} | to_json }}
+  when: not wazuh_policy_exists | bool or wazuh_policy_age != (wazuh_index_retention_days ~ 'd')
+
+- name: Refuse a policy the indexer did not take
+  ansible.builtin.assert:
+    that: wazuh_probe_code in ['200', '201']
+    fail_msg: "siem: the indexer refused the retention policy (status {{ wazuh_probe_code }})"
+  when: not wazuh_policy_exists | bool or wazuh_policy_age != (wazuh_index_retention_days ~ 'd')
