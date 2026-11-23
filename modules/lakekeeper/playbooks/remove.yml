@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: dump the database first (export_first), stop and remove both containers, and delete the
+# env_files (the database password, the encryption key). The data root (with the export in it) and the
+# rest of the compose project are kept for the operator to archive or delete; the decommission audit
+# (module.yml lifecycle.remove.audit) checks nothing still names the service. The tables' data and
+# metadata are the object store's and are not touched. Removing the module and its data root loses the
+# catalog's pointers: keep the dump AND the encryption key together.
+- name: Remove the Lakekeeper catalog
+  hosts: mod_lakekeeper_server
+  become: true
+  tasks:
+    - name: Dump the database first
+      ansible.builtin.include_role:
+        name: lakekeeper
+        tasks_from: export
+    - name: Stop and remove the containers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ lakekeeper_dir | default('/opt/compose/lakekeeper') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credentials the containers were given
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ lakekeeper_dir | default('/opt/compose/lakekeeper') }}/secrets/postgres.env"
+        - "{{ lakekeeper_dir | default('/opt/compose/lakekeeper') }}/secrets/lakekeeper.env"

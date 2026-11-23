@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The warehouse exists and has the settings the module states (shared by converge and health): the
+# bucket root as its base (no key prefix, so every existing table location is inside it), the object
+# store's address, path-style access, no STS, remote signing, and soft deletes.
+- name: Find the warehouse
+  ansible.builtin.set_fact:
+    lakekeeper_wh: "{{ (lakekeeper_warehouses.json.warehouses | selectattr('name', 'equalto', lakekeeper_warehouse_name) | list | first) | default({}) }}"
+
+- name: The warehouse has the stated settings
+  ansible.builtin.assert:
+    that:
+      - lakekeeper_wh | length > 0
+      - lakekeeper_wh['storage-profile'].type == 's3'
+      - lakekeeper_wh['storage-profile'].bucket == lakekeeper_bucket
+      - (lakekeeper_wh['storage-profile']['key-prefix'] | default('')) in ['', none]
+      - lakekeeper_wh['storage-profile'].region == lakekeeper_region
+      - lakekeeper_wh['storage-profile'].endpoint | regex_replace('/$', '') == lakekeeper_s3_endpoint | regex_replace('/$', '')
+      - lakekeeper_wh['storage-profile']['path-style-access'] | bool
+      - not (lakekeeper_wh['storage-profile']['sts-enabled'] | bool)
+      - lakekeeper_wh['storage-profile']['remote-signing-enabled'] | bool
+      - lakekeeper_wh['delete-profile'].type == 'soft'
+    fail_msg: >-
+      lakekeeper: warehouse {{ lakekeeper_warehouse_name }} is missing or differs from the module's
+      settings (bucket {{ lakekeeper_bucket }}, no key prefix, endpoint {{ lakekeeper_s3_endpoint }},
+      path-style, no STS, remote signing, soft deletes); found
+      {{ lakekeeper_wh | to_json | truncate(600) }}

@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore state.json from <restore_source>/state.json, verified against its sha256 file first and
+# never over a live state that holds a flagged set (that would forget what was already paged).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: A source is named
+      ansible.builtin.assert:
+        that: source_census_restore_source is match(source_census_path_pattern)
+        fail_msg: "source-census: source_census_restore_source is an absolute path"
+    - name: Hash the source state
+      ansible.builtin.stat:
+        path: "{{ source_census_restore_source }}/state.json"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: source_census_src_state
+    - name: Read the recorded hash
+      ansible.builtin.slurp:
+        src: "{{ source_census_restore_source }}/state.sha256"
+      register: source_census_src_sum
+    - name: The state is there and is the one that was exported
+      ansible.builtin.assert:
+        that:
+          - source_census_src_state.stat.exists
+          - (source_census_src_sum.content | b64decode).split()[0] == source_census_src_state.stat.checksum
+        fail_msg: "source-census: the source state is missing or does not match its sha256"
+    - name: The live state
+      ansible.builtin.slurp:
+        src: "{{ source_census_state_dir }}/state.json"
+      register: source_census_live_state
+      failed_when: false
+    - name: Refuse to overwrite a live state that holds a flagged set
+      ansible.builtin.assert:
+        that: source_census_live_state.content is not defined or (source_census_live_state.content | b64decode | from_json).flagged | default([]) | length == 0
+        fail_msg: "source-census: the live state holds a flagged set; restoring over it would page it again"
+    - name: Restore it
+      ansible.builtin.copy:
+        src: "{{ source_census_restore_source }}/state.json"
+        dest: "{{ source_census_state_dir }}/state.json"
+        remote_src: true
+        owner: "{{ source_census_user }}"
+        group: "{{ source_census_group }}"
+        mode: "0640"
+  tags: [restore]

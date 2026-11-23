@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: both containers run and are healthy; the database answers; the catalog's health is ok
+# for its database pools and its secret store; it is bootstrapped; and the warehouse is as the module
+# states it (including that its base is the bucket root, so every existing table is inside it). Nothing
+# is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: lakekeeper
+        compose_app_dir: "{{ lakekeeper_app.compose_app_dir }}"
+        compose_app_spec: "{{ lakekeeper_app.compose_app_spec }}"
+    - name: The database answers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ lakekeeper_dir }}/docker-compose.yml", exec, -T, postgres,
+               pg_isready, -h, localhost, -U, "{{ lakekeeper_db_user }}", -d, "{{ lakekeeper_db_name }}"]
+      changed_when: false
+    - name: The catalog reports its health
+      ansible.builtin.uri:
+        url: "http://{{ lakekeeper_bind }}:{{ lakekeeper_port | int }}/health"
+        return_content: true
+        timeout: "{{ lakekeeper_health_timeout | int }}"
+      register: lakekeeper_health
+      changed_when: false
+    - name: The catalog and its secret store are ok
+      ansible.builtin.assert:
+        that:
+          - lakekeeper_health.json.health == 'ok'
+          - lakekeeper_health.json.services.catalog | map(attribute='status') | unique | list == ['ok']
+          - lakekeeper_health.json.services.secrets | map(attribute='status') | unique | list == ['ok']
+        fail_msg: "lakekeeper: unhealthy: {{ lakekeeper_health.json | to_json | truncate(500) }}"
+    - name: Ask for the catalog's info and warehouses
+      ansible.builtin.uri:
+        url: "http://{{ lakekeeper_bind }}:{{ lakekeeper_port | int }}{{ item }}"
+        return_content: true
+        timeout: "{{ lakekeeper_health_timeout | int }}"
+      loop: [/management/v1/info, /management/v1/warehouse]
+      register: lakekeeper_asked
+      changed_when: false
+    - name: The catalog is bootstrapped and the warehouse is as the module states it
+      ansible.builtin.assert:
+        that: lakekeeper_asked.results[0].json.bootstrapped | bool
+        fail_msg: "lakekeeper: the catalog is not bootstrapped"
+    - name: The warehouse is as configured
+      ansible.builtin.include_tasks: warehouse_check.yml
+      vars:
+        lakekeeper_warehouses: "{{ lakekeeper_asked.results[1] }}"
+  tags: [health]

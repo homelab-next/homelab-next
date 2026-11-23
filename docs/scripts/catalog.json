@@ -194,6 +194,25 @@
     },
     {
       "exit": {
+        "0": "plan found no problem, or every table is registered (register) or equals its source and every object its metadata names exists (verify)",
+        "1": "a table could not be registered, differs from the source, or a file its metadata names is not in the listing",
+        "2": "usage error, an unusable source file, an unknown schema, or zero tables (a vacuous run is an error)"
+      },
+      "id": "catalog-register",
+      "inputs": "a COPY of the source catalog's SQLite file (the lake-catalog export), the target catalog's URL and warehouse name, for verify the source catalog's URL and a listing of the object store's keys",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line per table (planned, registered, exists, ok, MISMATCH, MISSING, ERROR) and a summary, or the same as JSON",
+      "owner": "maintainers",
+      "path": "tools/migrate/catalog_register.py",
+      "purpose": "Register every table of one lake catalog (a copy of its SQLite file) into another Iceberg REST catalog at its current metadata file, without copying, rewriting or deleting any file, and verify the target against the source.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "both sections present",
         "1": "a section is missing",
         "2": "the version or CHANGELOG.md cannot be read"
@@ -1137,6 +1156,25 @@
       "status": "active",
       "trigger": [
         "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "listed, checked or staged",
+        "1": "the export or the source is refused (the reason on stderr)",
+        "2": "usage error"
+      },
+      "id": "lakekeeper-backup",
+      "inputs": "listing EXPORT_DIR | check SOURCE DB_UID | stage SOURCE DEST DB_UID DB_GID",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the dump's key, size and sha256 as JSON on stdout; stage also writes DEST (0600, the database's user)",
+      "owner": "platform",
+      "path": "modules/lakekeeper/roles/lakekeeper/files/lakekeeper_backup.py",
+      "purpose": "List the lakekeeper role's export, and check an export (and stage its dump through the checked descriptor) before a restore.",
+      "status": "active",
+      "trigger": [
+        "role:lakekeeper"
       ]
     },
     {
