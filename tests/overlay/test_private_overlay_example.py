@@ -62,7 +62,7 @@ DEPLOY_LABEL = "hnx-deploy"
 #: the one other self-hosted runs-on (operator-approved 2026-11-22 22:41): homelab-next's own ci.yml may send a job to the
 #: lab's ephemeral CI pool (modules/ci-runner, label hnx-ci: one throwaway VM per job, public egress only), word for word
 #: this expression: a push (to main) or a pull request whose head is a branch of this repository, only while the
-#: repository variable is `on`, and only on the jobs POOL_JOBS names (never the suite-budgeted test shards, go or the lab); a fork's pull request always gets the hosted runner. Nothing else in the job may name a
+#: repository variable is `on`, and only on the jobs POOL_JOBS names (the test shards only through POOL_SHARD_RUNS_ON, for the 3.11 leg; never go or the lab); a fork's pull request always gets the hosted runner. Nothing else in the job may name a
 #: self-hosted runner, no other workflow may use it, and the overlay templates may not.
 POOL_LABEL = "hnx-ci"
 POOL_RUNS_ON = (
@@ -71,6 +71,9 @@ POOL_RUNS_ON = (
     ' && fromJSON(\'["self-hosted","linux","x64","hnx-ci"]\')'
     " || 'ubuntu-latest' }}"
 )
+#: the test shards' variant: the same expression behind a matrix flag, so one leg (3.11) takes the pool and the other stays hosted
+POOL_SHARD_RUNS_ON = POOL_RUNS_ON.replace("${{ (", "${{ matrix.python.pool && (", 1)
+POOL_SHARD_JOB = "test"
 POOL_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 #: the ci.yml jobs that run on the pool: none of them carries a suite time budget set on hosted runners' speed
 POOL_JOBS = frozenset({
@@ -113,8 +116,9 @@ def lint_workflow(path: Path) -> list[str]:
     jobs = (doc.get("jobs") or {}).values()
     if path.name != "deploy.yml":
         for name, job in (doc.get("jobs") or {}).items():
-            pool = (
-                path == POOL_WORKFLOW and name in POOL_JOBS and job.get("runs-on") == POOL_RUNS_ON
+            pool = path == POOL_WORKFLOW and (
+                (name in POOL_JOBS and job.get("runs-on") == POOL_RUNS_ON)
+                or (name == POOL_SHARD_JOB and job.get("runs-on") == POOL_SHARD_RUNS_ON)
             )
             rest = {k: v for k, v in job.items() if not (pool and k == "runs-on")}
             blob = json.dumps(rest)  # runs-on, and a matrix or expression that could feed it
@@ -224,12 +228,36 @@ def test_ci_yml_may_send_a_job_to_the_pool_with_the_exact_expression_only(tmp_pa
         assert any("only deploy.yml may" in p for p in lint_workflow(f)), other
 
 
+def test_the_shard_job_may_use_only_its_flagged_variant_of_the_expression(tmp_path, monkeypatch):
+    ci = tmp_path / "ci.yml"
+    monkeypatch.setattr(sys.modules[__name__], "POOL_WORKFLOW", ci)
+    ci.write_text(_pool_job(POOL_SHARD_RUNS_ON))
+    assert lint_workflow(ci) == []
+    for v in (
+        POOL_SHARD_RUNS_ON.replace("matrix.python.pool && ", ""),  # every leg on the pool
+        POOL_SHARD_RUNS_ON.replace("matrix.python.pool", "true"),
+        POOL_SHARD_RUNS_ON.replace(" && vars.HNX_CI_POOL == 'on'", ""),
+        POOL_SHARD_RUNS_ON.replace("(github.event_name == 'push' || ", "("),
+    ):
+        assert v != POOL_SHARD_RUNS_ON
+        ci.write_text(_pool_job(v))
+        assert any("only deploy.yml may" in p for p in lint_workflow(ci)), v
+    # the flagged variant on any other job than the shards fails
+    ci.write_text(_pool_job(POOL_SHARD_RUNS_ON).replace("  test:", "  lint:"))
+    assert any("only deploy.yml may" in p for p in lint_workflow(ci))
+
+
 def test_the_real_ci_yml_pools_exactly_the_listed_jobs_and_keeps_the_rest_hosted():
     jobs = yaml.safe_load(POOL_WORKFLOW.read_text())["jobs"]
     pooled = {n for n, j in jobs.items() if j.get("runs-on") == POOL_RUNS_ON}
     assert pooled == POOL_JOBS
+    # the shards: the 3.11 leg only, through the flagged variant; 3.12 (the Go leg) stays hosted
+    assert jobs[POOL_SHARD_JOB]["runs-on"] == POOL_SHARD_RUNS_ON
+    legs = {
+        m["version"]: m.get("pool") for m in jobs[POOL_SHARD_JOB]["strategy"]["matrix"]["python"]
+    }
+    assert legs == {"3.11": True, "3.12": False}
     for name in (
-        "test",
         "test-ok",
         "go",
         "go-ok",

@@ -995,7 +995,7 @@ def test_health_waits_for_a_model_that_is_still_loading(tmp_path):
     """The unit is active once the container starts, but the model loads for a while longer: health
     retries /health until it answers 200 instead of failing on the first 503."""
     env = _fakes(tmp_path)
-    with engine(loading_for=2.5) as srv:
+    with engine(loading_polls=2) as srv:
         v = health_vars(tmp_path, srv, load_timeout=30, load_poll_s=1)
         r = run_role(tmp_path, ROLE, "health", v, env=env)
         health_calls = [p for _, p in srv.requests if p == "/health"]
