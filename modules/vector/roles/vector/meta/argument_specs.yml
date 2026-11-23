@@ -1,0 +1,246 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the Vector aggregator and the label sidecar as a compose_app, staging OCSF batches in the object store.
+    options: &appopts
+      vector_logical_id:
+        type: str
+        description: "The instance's registry id (the service row the site binds, e.g. log-pipeline)."
+        required: true
+      vector_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the Vector image.'
+        default: docker.io/timberio/vector:0.46.1-debian@sha256:ccf9c8ffcd1ffbe59e4d62bf44926664908ea1cb6b492b91634d1afd01e3376f
+      vector_sidecar_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the sidecar image (the interpreter the module code and the core label rules run on).'
+        default: docker.io/library/python:3.11.17-slim-trixie@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377
+      vector_bind:
+        type: str
+        description: "The guest's own IPv4 address the listeners are published on (never all interfaces)."
+        default: '{{ ansible_host }}'
+      vector_syslog_udp_port:
+        type: int
+        description: "Host port of the router's UDP syslog listener."
+        default: 514
+      vector_syslog_tls_port:
+        type: int
+        description: 'Host port of the syslog-over-TLS listener (the registry row port).'
+        default: 6514
+      vector_sensor_port:
+        type: int
+        description: "Host port of the sensors' vector-protocol listener."
+        default: 6000
+      vector_sensor_tls:
+        type: bool
+        description: "TLS on the sensors' listener (the guest's certificate)."
+        default: true
+      vector_sensor_ca_ref:
+        type: str
+        description: "secret:<name> of the CA a sensor's client certificate must chain to; empty: no client certificate required."
+        default: ''
+      vector_dir:
+        type: path
+        description: 'The compose project directory.'
+        default: /opt/compose/vector
+      vector_data_root:
+        type: path
+        description: "The module's data root on the host: state/, run/, config/, tables/, tls/, code/ and lib/."
+        default: /var/lib/hnx-modules/vector
+      vector_export_dir:
+        type: path
+        description: 'Where the exit copy of the checkpoints is written.'
+        default: /var/backups/hnx-modules/vector/export
+      vector_owner:
+        type: str
+        description: 'Owner of the compose project and the data root.'
+        default: root
+      vector_group:
+        type: str
+        description: "Group of the data root: the containers' gid, so their user passes through it."
+        default: '{{ vector_gid }}'
+      vector_uid:
+        type: int
+        description: "The containers' user id (no account on the host has it)."
+        default: 61005
+      vector_gid:
+        type: int
+        description: "The containers' group id."
+        default: 61005
+      vector_siem_logs_dir:
+        type: path
+        description: "The manager's stream directory on this guest (the manager's logs directory, the parent of the two stream files), mounted read-only."
+        default: ''
+      vector_siem_logs_gid:
+        type: int
+        description: 'A supplementary group number that can read the manager files inside the container (0: none added).'
+        default: 999
+      vector_siem_alerts_file:
+        type: str
+        description: "The manager's alert stream file name."
+        default: alerts/alerts.json
+      vector_siem_archives_file:
+        type: str
+        description: "The manager's archive stream file name."
+        default: archives/archives.json
+      vector_siem_syslog_host:
+        type: str
+        description: "The manager's syslog input address (the module's own address, never the 514 the listener uses)."
+        default: '{{ vector_bind }}'
+      vector_siem_syslog_port:
+        type: int
+        description: "The manager's syslog input port."
+        default: 5514
+      vector_siem_syslog_protocol:
+        type: str
+        description: 'udp or tcp, how the raw syslog is forwarded.'
+        default: udp
+      vector_runtime_labels_src:
+        type: str
+        description: 'Absolute path on the controller of the rendered runtime-labels.json (hnx guests render --target runtime-labels).'
+        default: ''
+      vector_tlp_sources_src:
+        type: str
+        description: 'Absolute path on the controller of the rendered tlp-sources.json (hnx modules render).'
+        default: ''
+      vector_trusted_recorders:
+        type: list
+        elements: str
+        description: "Addresses of the services trusted to record a client's address in what they log (the router): its events take the address it recorded."
+        default: []
+      vector_route_syslog_udp:
+        type: str
+        description: 'The route (<module>/<dataset>) the UDP syslog input feeds.'
+        default: vector/syslog-udp
+      vector_route_syslog_tls:
+        type: str
+        description: 'The route the TLS syslog input feeds.'
+        default: vector/syslog-tls
+      vector_route_sensors:
+        type: str
+        description: "The route the sensors' input feeds."
+        default: vector/sensor-stream
+      vector_route_siem_alerts:
+        type: str
+        description: 'The route the alert stream feeds.'
+        default: vector/siem-alerts
+      vector_route_siem_archives:
+        type: str
+        description: 'The route the archive stream feeds.'
+        default: vector/siem-archives
+      vector_detection_ids:
+        type: dict
+        description: 'Map of manager rule id to logical detection id (det:<slug>); an alert no entry names is det:siem-unmapped.'
+        default: {}
+      vector_s3_bucket:
+        type: str
+        description: 'The staging bucket the lake writer reads.'
+        default: soc-staging
+      vector_s3_prefix:
+        type: str
+        description: 'The key prefix (ending in /) under which each table has its own directory.'
+        default: lake-writer/staging/
+      vector_s3_region:
+        type: str
+        description: "The object store's region name."
+        default: ''
+      vector_object_store_id:
+        type: str
+        description: "The object store's registry id (its url is resolved from the registry)."
+        default: object-store
+      vector_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry.'
+        default: ''
+      vector_s3_access_key_ref:
+        type: str
+        description: 'secret:<name> of the staging key id.'
+        default: secret:vector/s3-access-key
+      vector_s3_signing_ref:
+        type: str
+        description: 'secret:<name> of the staging key secret.'
+        default: secret:vector/s3-secret-key
+      vector_tls_cert_ref:
+        type: str
+        description: 'secret:<name> of the PEM certificate chain the TLS listeners present.'
+        default: secret:vector/tls-cert
+      vector_tls_pem_ref:
+        type: str
+        description: 'secret:<name> of the PEM private key of that certificate.'
+        default: secret:vector/tls-key
+      vector_batch_max_bytes:
+        type: int
+        description: 'A staged object is written at this size ...'
+        default: 33554432
+      vector_batch_timeout_secs:
+        type: int
+        description: '... or this age in seconds, whichever comes first.'
+        default: 60
+      vector_buffer_max_bytes:
+        type: int
+        description: 'Size of each disk buffer; when full the source blocks, it never drops.'
+        default: 1073741824
+      vector_mem_limit:
+        type: str
+        description: 'Memory limit of the aggregator container.'
+        default: 1g
+      vector_sidecar_mem_limit:
+        type: str
+        description: 'Memory limit of the sidecar container.'
+        default: 256m
+      vector_code_src:
+        type: str
+        description: "The module's own package directory the sidecar's code is copied from."
+        default: '{{ role_path }}/files/hnx_modules/vector'
+      vector_lib_src:
+        type: str
+        description: "The core's homelabnext directory the label rules are copied from (verbatim)."
+        default: '{{ role_path }}/../../../../homelabnext'
+      vector_start:
+        type: bool
+        description: 'Run docker compose up after rendering.'
+        default: true
+      vector_validate_with_docker:
+        type: bool
+        description: 'Validate the rendered files with docker (compose config, vector validate).'
+        default: true
+      vector_health_timeout:
+        type: int
+        description: 'Seconds for each health request.'
+        default: 10
+      vector_status_max_age:
+        type: int
+        description: "Seconds the sidecar's status may be old before health fails."
+        default: 60
+  health:
+    short_description: Fail unless both containers are healthy, the listeners answer, and the sidecar's status is fresh and names exactly the deployed tables.
+    options:
+      <<: *appopts
+  readiness:
+    short_description: Fail unless the container engine is ready, every credential and rendered table resolves in its form, the object store answers and the manager stream directory exists.
+    options:
+      <<: *appopts
+  backup:
+    short_description: Copy the file checkpoints consistently, then name the data root for the backup.
+    options:
+      <<: *appopts
+  restore:
+    short_description: Check an export (listing, sizes, sha256) and put the checkpoints back, the containers stopped meanwhile.
+    options:
+      <<: *appopts
+      vector_restore_source:
+        type: path
+        description: Directory holding an export (listing.jsonl and the checkpoints it lists).
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest) and record it as pending.
+    options:
+      <<: *appopts
+      vector_target_image:
+        type: str
+        description: "repository:tag@sha256:<digest> to move to."
+        required: true
+  export:
+    short_description: Write the open-format exit copy (object-tree) of the checkpoints to the export directory.
+    options:
+      <<: *appopts

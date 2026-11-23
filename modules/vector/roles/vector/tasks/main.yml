@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a malformed credential or table before the pipeline uses it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Name and read the rendered tables
+  ansible.builtin.include_tasks: tables_check.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Put the code, the label rules, the tables and the certificate in place
+  ansible.builtin.include_tasks: files.yml
+
+- name: Render and validate the aggregator's configuration
+  ansible.builtin.include_tasks: config.yml
+
+- name: Read the object store key pair
+  ansible.builtin.set_fact:
+    vector_secret_env:
+      vector:
+        VECTOR_S3_ACCESS_KEY: "{{ lookup('hnx_secret', vector_s3_access_key_ref) }}"
+        VECTOR_S3_SECRET_KEY: "{{ lookup('hnx_secret', vector_s3_signing_ref) }}"
+  no_log: true
+
+- name: Render and start the pipeline
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ vector_app.compose_app_name }}"
+    compose_app_dir: "{{ vector_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ vector_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ vector_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ vector_app.compose_app_owner }}"
+    compose_app_group: "{{ vector_app.compose_app_group }}"
+    compose_app_start: "{{ vector_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ vector_app.compose_app_validate_with_docker }}"
+    compose_app_bind_extra: "{{ vector_app.compose_app_bind_extra }}"
+    compose_app_spec: "{{ vector_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ vector_secret_env }}"
+  no_log: true
+
+# A changed file the running containers read at start (the code, the config, the certificate) needs
+# its container restarted; the label tables reload by themselves. Nothing restarts on a first run
+# (compose_app has just started both) or a run that changed none of them.
+- name: Restart the sidecar when its code changed
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ vector_dir }}/docker-compose.yml", restart, sidecar]
+  when: vector_start | bool and (vector_sidecar_files.changed or vector_sidecar_files_1.changed or vector_sidecar_files_2.changed)
+  changed_when: true
+
+- name: Restart the aggregator when its configuration or certificate changed
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ vector_dir }}/docker-compose.yml", restart, vector]
+  when: vector_start | bool and (vector_config_written.changed or vector_tls_written.changed)
+  changed_when: true
