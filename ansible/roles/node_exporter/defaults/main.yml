@@ -15,3 +15,6 @@ node_exporter_systemctl_cli: systemctl
 node_exporter_restart: true
 node_exporter_health_timeout: 10
 node_exporter_state_dir: /var/lib/homelabnext/node_exporter
+# Empty (default): the textfile collector stays off. A directory: the exporter also serves the .prom files other
+# roles drop there (control ups-protection writes nut_ups.prom), the listener and every other argument unchanged.
+node_exporter_textfile_dir: ""

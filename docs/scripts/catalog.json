@@ -1111,6 +1111,7 @@
         "timer:media_automation/stalled-repair",
         "timer:needrestart/check",
         "timer:needrestart/reboot",
+        "timer:nut_ups/hnx-nut-ups-check",
         "timer:ntfy/deadman",
         "timer:openbao/acme-renew",
         "timer:prometheus/alerts",
@@ -1523,6 +1524,25 @@
       "trigger": [
         "timer:ntfy/deadman",
         "role:ntfy"
+      ]
+    },
+    {
+      "exit": {
+        "0": "checked and metrics written"
+      },
+      "id": "nut-ups-check",
+      "inputs": "upsc output for the UPS; systemctl is-active nut-monitor",
+      "installs_to": "/usr/local/libexec/homelabnext/nut-ups-check",
+      "kind": "job",
+      "language": "python",
+      "outputs": "nut_ups.prom in the textfile directory (atomic); on the charge floor, upsmon -c fsd",
+      "owner": "platform",
+      "path": "ansible/roles/nut_ups/templates/nut-ups-check.py.j2",
+      "purpose": "Write the UPS and shutdown-monitor state as node-exporter textfile metrics, and force a clean shutdown when on battery under the charge floor.",
+      "status": "active",
+      "trigger": [
+        "timer:nut_ups/hnx-nut-ups-check",
+        "role:nut_ups"
       ]
     },
     {
