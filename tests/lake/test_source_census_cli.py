@@ -27,8 +27,8 @@ def _iso(d):
 def rows(source, decoder, hours_ago):
     return [
         {
-            "source": source,
-            "decoder": decoder,
+            "location": source,
+            "decoder_name": decoder,
             "time": _iso(NOW - timedelta(hours=h) + timedelta(minutes=1)),
         }
         for h in hours_ago
@@ -115,7 +115,9 @@ def test_could_not_measure_is_exit_100_not_a_fail(tmp_path, capsys, monkeypatch)
     monkeypatch.setattr(
         lcli,
         "_lake",
-        lambda *a, **k: FakeLake([lcli.fixture_schema("other", ("source", "decoder"), "time")]),
+        lambda *a, **k: FakeLake(
+            [lcli.fixture_schema("other", ("location", "decoder_name"), "time")]
+        ),
     )
     code, out, err = run(capsys, write(tmp_path, HEALTHY))
     assert code == 100 and "could not measure" in err and "FAIL" not in out

@@ -77,7 +77,11 @@ def test_validate_passes_for_the_defaults(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-GOOD_EXPECTED = {"name": "Edge", "match": {"source": {"suffix": "/access.log"}}, "cadence_hours": 1}
+GOOD_EXPECTED = {
+    "name": "Edge",
+    "match": {"location": {"suffix": "/access.log"}},
+    "cadence_hours": 1,
+}
 GOOD_ACK = {"name": "Edge", "owner": "o", "reason": "r", "expires": "2030-01-02"}
 
 
@@ -152,7 +156,7 @@ def test_the_rendered_settings_load_into_the_census(tmp_path):
     doc = yaml.safe_load((tmp_path / "etc" / "census.yml").read_text())
     cfg = config_from(doc["census"])  # the very loader the command uses
     assert cfg.table == "raw_archive" and cfg.window_days == 8 and cfg.multiple == 3.0
-    assert cfg.expected[0].match == {"source": {"suffix": "/access.log"}}
+    assert cfg.expected[0].match == {"location": {"suffix": "/access.log"}}
     assert str(cfg.acknowledged[0].expires) == "2030-01-02"
     assert doc["dark"] == {"tables": ["raw_archive", "detections"], "hours": 24.0}
     assert doc["lake"]["credential_file"] == str(

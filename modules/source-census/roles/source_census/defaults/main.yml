@@ -12,7 +12,7 @@ source_census_notify_topic: source-census
 source_census_notify_ceiling: red
 # the census (homelabnext.lake.census.CensusConfig)
 source_census_table: raw_archive
-source_census_source_columns: [source, decoder]
+source_census_source_columns: [location, decoder_name]
 source_census_time_column: time
 source_census_window_days: 8
 source_census_multiple: 3

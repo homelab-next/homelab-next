@@ -20,7 +20,7 @@ it with `--no-notify`, so an ad-hoc run never pages and never touches the paging
 
 ### How a source's cadence is learned
 
-The census groups the table by its **source columns** (default `source`, `decoder`) and the UTC hour
+The census groups the table by its **source columns** (default `location`, `decoder_name`) and the UTC hour
 over the window (`window_days`, default **8**): one query through the portable SQL subset plus the
 hour bucket of `homelabnext/lake/dialect.py`. For each source it takes the gaps between the hours it
 arrived in; its cadence is the 90th-percentile gap (at least 1 hour). A source is flagged when its
@@ -113,8 +113,8 @@ with the manager log (24 hours verdict window, 7 days lookback for recurrence) a
 ## Interface assumptions (agreed with the log-pipeline modules)
 
 The census reads one table: `soc.raw_archive` by default (the `soc` namespace is fresh and new, never
-a migrated one), with a UTC `time` timestamp column and the source columns `source` and `decoder`
-(the decoded format of the line). The lake writer's raw-archive table owns those names; if it names
+a migrated one), with a UTC `time` timestamp column and the source columns `location` and `decoder_name`
+(the decoded format of the line). The lake writer's raw-archive table owns those names (its schema is checked by a test); if it names
 them otherwise, only `census_table`, `source_columns` and `time_column` change. Nothing else is
 assumed of it.
 

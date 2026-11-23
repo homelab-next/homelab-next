@@ -98,7 +98,7 @@ class Ack:
 @dataclass(frozen=True)
 class CensusConfig:
     table: str = "raw_archive"
-    source_columns: tuple[str, ...] = ("source", "decoder")
+    source_columns: tuple[str, ...] = ("location", "decoder_name")
     time_column: str = "time"
     window_days: int = 8
     multiple: float = 3.0

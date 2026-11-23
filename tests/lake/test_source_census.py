@@ -31,7 +31,7 @@ HOUR = timedelta(hours=1)
 
 def lake_with(*sources) -> FakeLake:
     """``sources``: (source, decoder, [hours ago an event arrived])."""
-    lake = FakeLake([fixture_schema("raw_archive", ("source", "decoder"), "time")])
+    lake = FakeLake([fixture_schema("raw_archive", ("location", "decoder_name"), "time")])
     rows, n = [], 0
     for src, dec, ago in sources:
         for h in ago:
@@ -40,8 +40,8 @@ def lake_with(*sources) -> FakeLake:
                 {
                     "uid": f"u{n}",
                     "time": NOW - timedelta(hours=h) + timedelta(minutes=1),
-                    "source": src,
-                    "decoder": dec,
+                    "location": src,
+                    "decoder_name": dec,
                 }
             )
     if rows:
@@ -125,7 +125,7 @@ def test_an_acknowledged_quiet_source_passes_until_its_expiry():
         "platform-team",
         "the host is off for repair",
         NOW.date() + timedelta(days=3),
-        match={"source": "auth.log"},
+        match={"location": "auth.log"},
     )
     rep = run_census(lake, CensusConfig(acknowledged=(ack,)))
     r = by_name(rep, "auth.log / sshd")
@@ -135,7 +135,7 @@ def test_an_acknowledged_quiet_source_passes_until_its_expiry():
         "platform-team",
         "the host is off for repair",
         NOW.date() - timedelta(days=1),
-        match={"source": "auth.log"},
+        match={"location": "auth.log"},
     )
     rep = run_census(lake, CensusConfig(acknowledged=(expired,)))
     r = by_name(rep, "auth.log / sshd")
@@ -143,7 +143,7 @@ def test_an_acknowledged_quiet_source_passes_until_its_expiry():
 
 
 def test_the_ack_covers_the_day_it_expires():
-    ack = Ack("o", "r", NOW.date(), match={"source": "auth.log"})
+    ack = Ack("o", "r", NOW.date(), match={"location": "auth.log"})
     rep = run_census(
         lake_with(("auth.log", "sshd", range(30, 8 * 24))), CensusConfig(acknowledged=(ack,))
     )
@@ -152,7 +152,7 @@ def test_the_ack_covers_the_day_it_expires():
 
 def test_a_declared_source_that_never_arrived_is_missing():
     cfg = CensusConfig(
-        expected=(Expected("Scanner export", {"source": "/var/log/scan.json"}, 168, 2),)
+        expected=(Expected("Scanner export", {"location": "/var/log/scan.json"}, 168, 2),)
     )
     rep = run_census(lake_with(("auth.log", "sshd", EVERY_HOUR_8D)), cfg)
     r = by_name(rep, "Scanner export")
@@ -163,7 +163,10 @@ def test_a_declared_source_matches_by_file_name_and_fragment_not_one_exact_path(
     cfg = CensusConfig(
         expected=(
             Expected(
-                "Edge access log", {"source": {"suffix": "/access.log", "contains": "/edge/"}}, 1, 3
+                "Edge access log",
+                {"location": {"suffix": "/access.log", "contains": "/edge/"}},
+                1,
+                3,
             ),
         )
     )
@@ -179,7 +182,7 @@ def test_a_declared_source_matches_by_file_name_and_fragment_not_one_exact_path(
 
 
 def test_a_declared_source_is_never_learning_and_uses_its_declared_grace():
-    cfg = CensusConfig(expected=(Expected("Weekly scan", {"source": "scan"}, 168, 2),))
+    cfg = CensusConfig(expected=(Expected("Weekly scan", {"location": "scan"}, 168, 2),))
     rep = run_census(
         lake_with(("scan", None, [150, 151])), cfg
     )  # a learned source this young would be LEARNING
@@ -187,14 +190,14 @@ def test_a_declared_source_is_never_learning_and_uses_its_declared_grace():
     assert r.status == "OK"  # 149 h of silence is inside 2 x 168 h
     rep = run_census(
         lake_with(("scan", None, [100, 101])),
-        CensusConfig(expected=(Expected("Weekly scan", {"source": "scan"}, 24, 2),)),
+        CensusConfig(expected=(Expected("Weekly scan", {"location": "scan"}, 24, 2),)),
     )
     assert by_name(rep, "Weekly scan").status == "STALE"  # 99 h of silence against 2 x 24 h
 
 
 def test_an_ack_can_cover_a_declared_source_by_name():
     cfg = CensusConfig(
-        expected=(Expected("Weekly scan", {"source": "scan"}, 24, 1),),
+        expected=(Expected("Weekly scan", {"location": "scan"}, 24, 1),),
         acknowledged=(
             Ack(
                 "o", "scanner retired next week", NOW.date() + timedelta(days=2), name="Weekly scan"
@@ -211,7 +214,7 @@ def test_nothing_arrived_is_a_failure_not_a_vacuous_pass():
 
 
 def test_a_missing_table_is_could_not_measure():
-    lake = FakeLake([fixture_schema("other", ("source", "decoder"), "time")])
+    lake = FakeLake([fixture_schema("other", ("location", "decoder_name"), "time")])
     with pytest.raises(CensusError, match="cannot read raw_archive"):
         run_census(lake)
 
@@ -231,16 +234,16 @@ def test_two_hours_in_a_group_count_once_and_arrivals_are_summed():
     "kw",
     [
         {"table": 'raw"; DROP TABLE x; --'},
-        {"source_columns": ("source", "dec oder")},
+        {"source_columns": ("location", "dec oder")},
         {"time_column": "time;"},
         {"source_columns": ()},
         {"window_days": 1},
         {"multiple": 0.5},
         {"learning_min_arrivals": 0},
         {"expected": (Expected("x", {"nope": "v"}, 1, 1),)},
-        {"expected": (Expected("x", {"source": {"regex": ".*"}}, 1, 1),)},
-        {"expected": (Expected("x", {"source": "v"}, 0, 1),)},
-        {"acknowledged": (Ack("", "why", date(2030, 1, 1), match={"source": "v"}),)},
+        {"expected": (Expected("x", {"location": {"regex": ".*"}}, 1, 1),)},
+        {"expected": (Expected("x", {"location": "v"}, 0, 1),)},
+        {"acknowledged": (Ack("", "why", date(2030, 1, 1), match={"location": "v"}),)},
         {"acknowledged": (Ack("o", "why", date(2030, 1, 1), name="undeclared"),)},
         {"acknowledged": (Ack("o", "why", date(2030, 1, 1)),)},
     ],
@@ -254,12 +257,12 @@ def test_config_from_a_parsed_document():
     cfg = config_from(
         {
             "table": "raw_archive",
-            "source_columns": ["source", "decoder"],
+            "source_columns": ["location", "decoder_name"],
             "window_days": 8,
             "expected": [
                 {
                     "name": "Edge",
-                    "match": {"source": {"suffix": "/access.log"}},
+                    "match": {"location": {"suffix": "/access.log"}},
                     "cadence_hours": 1,
                     "grace": 3,
                 }
@@ -291,13 +294,13 @@ def test_all_classes_dark_fails_on_an_empty_lake_during_learning():
 def test_all_classes_dark_passes_when_any_table_has_an_event():
     lake = FakeLake(
         [
-            fixture_schema("raw_archive", ("source", "decoder"), "time"),
-            fixture_schema("detections", ("source", "decoder"), "time"),
+            fixture_schema("raw_archive", ("location", "decoder_name"), "time"),
+            fixture_schema("detections", ("location", "decoder_name"), "time"),
         ]
     )
     lake.write_batch(
         "detections",
-        [{"uid": "a", "time": NOW - timedelta(hours=3), "source": "x", "decoder": "y"}],
+        [{"uid": "a", "time": NOW - timedelta(hours=3), "location": "x", "decoder_name": "y"}],
         idempotency_key="k",
     )
     d = dark(lake.query, ["raw_archive", "detections"], now=NOW)
@@ -317,3 +320,20 @@ def test_all_classes_dark_refuses_bad_input():
         dark(lake_with().query, ["x y"], now=NOW)
     with pytest.raises(CensusError, match="cannot read nope"):
         dark(lake_with().query, ["nope"], now=NOW)
+
+
+def test_the_census_reads_only_columns_the_raw_archive_schema_has():
+    """The fixture is the lake-writer module's raw_archive schema as of its PR; the census's
+    defaults (table, time and source columns) must all exist in it."""
+    import json
+    from pathlib import Path
+
+    doc = json.loads(
+        (Path(__file__).parent / "fixtures" / "lake_writer_raw_archive.v1.json").read_text()
+    )
+    cfg = CensusConfig()
+    assert doc["x-lake"]["table"] == cfg.table
+    assert doc["x-lake"]["time_column"] == cfg.time_column
+    cols = set(doc["properties"])
+    assert {cfg.time_column, *cfg.source_columns} <= cols
+    assert set(cfg.source_columns) <= set(doc["required"]) | {"decoder_name"}

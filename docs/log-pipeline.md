@@ -208,7 +208,7 @@ A pipeline that stops delivering does not announce it. Two checks watch the end 
 by the [`source-census`](../modules/source-census/README.md) module (ADR-0049 decisions 8 and 9):
 
 - **`source-census/sources-flowing`** groups the raw-archive table (`soc.raw_archive` by default:
-  a time column and the source columns `source` and `decoder`) by source and UTC hour over a window
+  a time column and the source columns `location` and `decoder_name`) by source and UTC hour over a window
   (8 days), learns each source's own cadence from when it arrived, and flags a source silent past a
   multiple of that cadence. A source with less history than the window is `learning`: it passes and
   the criterion reads `warn`, but one that arrived three times and is then silent past 24 hours

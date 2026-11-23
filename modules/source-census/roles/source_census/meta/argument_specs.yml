@@ -68,7 +68,7 @@ argument_specs:
         type: list
         elements: str
         description: The columns that identify a source (a source is one distinct tuple of them).
-        default: [source, decoder]
+        default: [location, decoder_name]
       source_census_time_column:
         type: str
         description: The event time column.
