@@ -235,7 +235,7 @@
       "outputs": "registrations pushed over SSH to the host's forced command; deleted orphan registrations; the runner-selection variable",
       "owner": "platform",
       "path": "modules/ci-runner/roles/ci_runner/files/hnx_ci_feeder.py",
-      "purpose": "Keep the CI runner host's spool supplied with single-use runner registrations minted with a repository-admin credential that never leaves the trusted side, remove registrations that were orphaned, and point the repository's runner-selection variable at the pool only while the pool answers.",
+      "purpose": "Keep the CI runner host's spool supplied with single-use runner registrations minted with a repository-admin credential that never leaves the trusted side, remove registrations that were orphaned, and turn the repository's pool switch on only while the pool answers.",
       "status": "active",
       "trigger": [
         "manual",

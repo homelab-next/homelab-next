@@ -3,7 +3,7 @@
 # hnx-script:
 #   id: ci-runner-feeder
 #   kind: service
-#   purpose: Keep the CI runner host's spool supplied with single-use runner registrations minted with a repository-admin credential that never leaves the trusted side, remove registrations that were orphaned, and point the repository's runner-selection variable at the pool only while the pool answers.
+#   purpose: Keep the CI runner host's spool supplied with single-use runner registrations minted with a repository-admin credential that never leaves the trusted side, remove registrations that were orphaned, and turn the repository's pool switch on only while the pool answers.
 #   owner: platform
 #   trigger: [manual, role:ci_runner]
 #   inputs: --repo, --host, --ssh-key, --labels; the forge token from HNX_CI_FORGE_TOKEN, or the forge CLI's own stored login (--token-command)
@@ -23,9 +23,9 @@ ends.
 Every ``--reap-every`` rounds it lists the repository's runners and deletes the ones that carry
 the pool's name prefix, are offline and not busy, and are neither spooled nor held by a slot
 (a registration whose VM died before it connected). With ``--selection-var`` it sets that
-repository variable to the pool's labels (JSON) while the host answers with at least one live
-slot, and to the hosted fallback after ``--down-after`` seconds without one, so new workflow runs
-are never routed to a pool that is gone.
+repository variable (the workflow's switch) to ``--on-value`` while the host answers with a golden
+image and slots, and to ``--off-value`` after ``--down-after`` seconds without that, so new workflow
+runs are never routed to a pool that is gone.
 """
 
 from __future__ import annotations
@@ -187,13 +187,13 @@ class Feeder:
         except Exception as e:  # unreachable, refused, garbled: the pool is not answering
             print(f"feeder: host status failed: {e}", flush=True)
             if self.clock() - self.last_live > self.args.down_after:
-                self.route(json.dumps(self.args.fallback))
+                self.route(self.args.off_value)
             raise
         if st.get("golden") and st.get("slots_total", 0) > 0:
             self.last_live = self.clock()
-            self.route(json.dumps(self.args.labels))
+            self.route(self.args.on_value)
         elif self.clock() - self.last_live > self.args.down_after:
-            self.route(json.dumps(self.args.fallback))
+            self.route(self.args.off_value)
         if st.get("golden"):
             for _ in range(wanted(st, self.args.buffer)):
                 name = new_name(self.args.tag)
@@ -224,13 +224,16 @@ def parse(argv: list[str]):
     p.add_argument("--ssh-key", required=True)
     p.add_argument("--known-hosts")
     p.add_argument("--labels", default="self-hosted,linux,x64,hnx-ci")
+    p.add_argument("--on-value", default="on", help="the variable's value while the pool answers")
     p.add_argument(
-        "--fallback",
-        default="ubuntu-latest",
-        help="the hosted label routed to when the pool is down",
+        "--off-value",
+        default="off",
+        help="its value once the pool has not answered for --down-after",
     )
     p.add_argument(
-        "--selection-var", default="", help="repository variable holding the runs-on labels (JSON)"
+        "--selection-var",
+        default="",
+        help="the repository variable the workflow reads as the pool's on/off switch",
     )
     p.add_argument("--tag", default="pool", help="a short word in every runner name")
     p.add_argument("--buffer", type=int, default=2)
@@ -241,7 +244,6 @@ def parse(argv: list[str]):
     p.add_argument("--once", action="store_true")
     a = p.parse_args(argv)
     a.labels = [x for x in a.labels.split(",") if x]
-    a.fallback = a.fallback if "," not in a.fallback else a.fallback.split(",")
     if not a.labels or a.buffer < 0 or a.reap_every < 1 or not a.tag.isalnum():
         p.error("bad --labels, --buffer, --reap-every or --tag")
     return a

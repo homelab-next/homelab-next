@@ -34,9 +34,9 @@ trusted side (holds the forge credential)          runner host (holds no forge c
 * **The feeder** (`files/hnx_ci_feeder.py`) runs where the forge credential already lives. It
   mints one just-in-time registration per idle slot (plus a small buffer), pushes it over SSH to
   the host's forced command, deletes registrations that were orphaned (offline, not busy, neither
-  spooled nor held by a slot), and with `--selection-var` sets a repository variable to the pool's
-  labels while the host answers and to the hosted fallback after `--down-after` seconds without
-  it, so new workflow runs are not routed to a pool that is gone.
+  spooled nor held by a slot), and with `--selection-var` sets a repository variable (the workflow's switch) to `on` while the
+  host answers and to `off` after `--down-after` seconds without it, so new workflow runs are not
+  routed to a pool that is gone.
 
 ## Isolation
 
@@ -82,7 +82,7 @@ Run it on the trusted side, e.g. as a user service:
 
 ```sh
 hnx-ci-feeder --repo <owner>/<name> --host <feed user>@<runner host> --ssh-key <key> \
-  --known-hosts <file> --labels self-hosted,linux,x64,<pool label> --selection-var <VARIABLE>
+  --known-hosts <file> --labels self-hosted,linux,x64,<pool label> --selection-var <SWITCH VARIABLE>
 ```
 
 The token comes from `HNX_CI_FORGE_TOKEN` or, by default, the forge CLI's stored login

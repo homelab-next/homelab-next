@@ -7,7 +7,7 @@
   direct child of the slots (or images) directory; the feed side accepts only ``put <name>`` with
   encoded text and ``status``; the golden image is kept only when its build printed the marker.
 * The feeder: how many registrations it mints, which runners are orphans, and the routing variable
-  set to the pool while it answers and to the hosted fallback once it has not for long enough.
+  set on while the pool answers and off once it has not for long enough.
 """
 
 from __future__ import annotations
@@ -357,7 +357,7 @@ class FakeHost:
 
 
 def _args(**kw):
-    a = {"labels": ["self-hosted", "linux", "x64", "pool"], "fallback": "ubuntu-latest",
+    a = {"labels": ["self-hosted", "linux", "x64", "pool"], "on_value": "on", "off_value": "off",
          "selection_var": "POOL", "tag": "t", "buffer": 1, "reap_every": 1, "down_after": 100.0}  # fmt: skip
     a.update(kw)
     return SimpleNamespace(**a)
@@ -368,7 +368,7 @@ def test_a_round_feeds_the_idle_slots_and_routes_to_the_pool():
     feeder.Feeder(forge, host, _args()).round()
     assert len(host.puts) == 2 and all(n.startswith("hnx-ci-t-") for n, _ in host.puts)
     assert forge.minted[0][1] == ("self-hosted", "linux", "x64", "pool")
-    assert json.loads(forge.vars["POOL"]) == ["self-hosted", "linux", "x64", "pool"]
+    assert forge.vars["POOL"] == "on"
 
 
 def test_an_unreachable_pool_is_routed_away_only_after_the_grace_period():
@@ -380,11 +380,11 @@ def test_an_unreachable_pool_is_routed_away_only_after_the_grace_period():
     now[0] = 50.0
     with pytest.raises(RuntimeError):
         f.round()
-    assert json.loads(forge.vars["POOL"]) != "ubuntu-latest"
+    assert forge.vars["POOL"] == "on"
     now[0] = 200.0
     with pytest.raises(RuntimeError):
         f.round()
-    assert json.loads(forge.vars["POOL"]) == "ubuntu-latest"
+    assert forge.vars["POOL"] == "off"
 
 
 def test_a_host_without_a_golden_image_gets_no_registrations():
