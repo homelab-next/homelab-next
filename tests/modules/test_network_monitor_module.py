@@ -1,19 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """The flow-monitor network-sensor provider module (one container per capture interface).
 
-* The public tree loads clean; the module contributes only its one role, a provisional slot, one
-  registry row (the host's SSH: a passive sensor listens on nothing) and no credential.
+* The public tree loads clean; the module contributes only its one role, a provisional slot, no registry row (a host's SSH port is claimed once) and no credential.
 * The only egress is the build-time image and package fetch (the internet, from its one host role).
 * A fictional overlay that places it on a stand-in physical host checks clean (with the egress
-  grant) and renders ``modules.yml`` on ``mod_<id>_sensor``; a registry row that differs is
-  refused; without the egress grant it is refused.
+  grant) and renders ``modules.yml`` on ``mod_<id>_sensor``;
+  without the egress grant it is refused.
 * The shared probe adapter reports an open port healthy and a closed one not.
 * role_lint passes the role and the lifecycle playbooks.
 """
 
 from __future__ import annotations
 
-import copy
 import shutil
 import socket
 import subprocess
@@ -44,18 +42,11 @@ def _dump(doc) -> str:
     return yaml.dump(doc, Dumper=_NoAliases, sort_keys=False)
 
 
-def bound_row() -> dict:
-    row = ld.load_yaml(MODULE / "registry" / "services.yml")["services"]["network-sensor"]
-    version = str(ld.load_yaml(MODULE / "module.yml")["product"]["version"])
-    return {**copy.deepcopy(row), "host": "sensor", "version": version}
-
-
 def overlay(tmp: Path, grant: bool = True) -> Path:
     lab = tmp / "lab"
     (lab / "guests").mkdir(parents=True)
     reg = ld.load_yaml(ROOT / "examples" / "services.yml")
     reg["hosts"]["sensor"] = {"address": GUEST, "zone": "mgmt", "role": "apps"}
-    reg["services"]["sensor"] = bound_row()
     hosts = {"agent-runtime": "runtime-core", "backup": "secrets-core", "broker": "idp-core",
              "edge": "edge-core", "records": "lake-core"}  # fmt: skip
     for i, (slot, host) in enumerate(sorted(hosts.items())):
@@ -106,7 +97,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
-def test_the_module_contributes_one_role_one_row_and_no_credential():
+def test_the_module_contributes_one_role_and_no_credential():
     manifest = ld.load_yaml(MODULE / "module.yml")
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == [MID]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -118,14 +109,13 @@ def test_the_module_contributes_one_role_one_row_and_no_credential():
     assert [h["role"] for h in manifest["requires"]["hosts"]] == ["sensor"]
 
 
-def test_the_only_egress_is_the_build_fetch_and_the_row_names_no_public_route():
+def test_the_only_egress_is_the_build_fetch_and_no_registry_row_is_contributed():
     manifest = ld.load_yaml(MODULE / "module.yml")
     assert [(e["host"], e["to"]) for e in manifest["egress"]] == [("sensor", ["internet"])]
-    row = ld.load_yaml(MODULE / "registry" / "services.yml")["services"]["network-sensor"]
-    assert row["capability"] == "network-sensor"
-    assert row["impl"] == manifest["product"]["name"]
-    assert (row["protocol"], row["port"], row["health"]) == ("ssh", 22, {"kind": "tcp"})
-    assert not {"public_hostname", "version", "upstreams"} & set(row)
+    # a host's one SSH port is claimed once, by the other sensor's row; this monitor is judged by its
+    # role's health hook and contributes no row
+    assert "services" not in manifest["contributes"]
+    assert not (MODULE / "registry").exists()
 
 
 def test_the_base_image_is_the_product_version_pinned_by_digest_and_every_package_is_pinned():
@@ -160,19 +150,6 @@ def test_an_overlay_placing_the_sensor_on_a_host_checks_clean_and_renders(tmp_pa
 def test_internet_egress_needs_the_overlays_grant(tmp_path, capsys):
     code, out = _check(overlay(tmp_path, grant=False), capsys)
     assert code == 1 and "internet" in out, out
-
-
-def test_a_registry_row_that_differs_is_named(tmp_path, capsys):
-    ov = overlay(tmp_path)
-    reg = ld.load_yaml(ov / "lab" / "services.yml")
-    reg["services"]["sensor"]["port"] = 2222
-    (ov / "lab" / "services.yml").write_text(_dump(reg))
-    code, out = _check(ov, capsys)
-    assert code == 1
-    assert (
-        f"registry: services.sensor.port: {MID} (instance sensor) contributes 22 (its row network-sensor)"
-        in out
-    )
 
 
 # ----------------------------------------------------------------------------- the probe

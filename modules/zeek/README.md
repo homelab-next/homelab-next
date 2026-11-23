@@ -28,7 +28,7 @@ must carry the old zeek decoder). This module guarantees the path, the format an
 * `lab/modules.yml`: slot `network-sensor`, provider `zeek`, an instance id different from the other
   sensor's, placement `sensor: <host>`; `grants.egress.zeek.sensor: [internet]` (image pull and package
   fetch at build time only).
-* `lab/services.yml`: the row exactly as bound (`version: 8.0.8`).
+* `lab/services.yml`: nothing: the module contributes no registry row (a host's SSH port is claimed once, by the other sensor's row); its health is the role's hook.
 * Host vars: `zeek_capture_interfaces` (`[{slug, interface}]`, the same NICs the IDS reads; a capture
   NIC is unmanaged by the host's network manager and holds no address).
 * The container engine on the host (its own control, applied first). No secrets.
