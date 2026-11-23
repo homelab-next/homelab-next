@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# The base image is fetched once and kept only on its pinned digest. The golden image's name is
+# the hash of the base digest, the agent digest and the build seed, so a change to any of them
+# builds a new image beside the old one (never over it) and re-points images/current; the slots
+# pick it up on their next run. Old images are left for the operator to remove.
+- name: Fetch the base image on its pinned digest
+  ansible.builtin.get_url:
+    url: "{{ ci_runner_base_image_url }}"
+    dest: "{{ ci_runner_base_image }}"
+    checksum: "sha256:{{ ci_runner_base_image_sha256 }}"
+    owner: "{{ ci_runner_user }}"
+    group: "{{ ci_runner_group }}"
+    mode: "0440"
+    timeout: 120
+
+- name: Write the build seed
+  ansible.builtin.template:
+    src: build-user-data.j2
+    dest: "{{ ci_runner_build_dir }}/user-data"
+    owner: root
+    group: "{{ ci_runner_group }}"
+    mode: "0640"
+
+- name: Look for the golden image of this base, agent and seed
+  ansible.builtin.stat:
+    path: "{{ ci_runner_images_dir }}/{{ ci_runner_golden }}"
+  register: ci_runner_golden_stat
+
+- name: Read the current pointer
+  ansible.builtin.slurp:
+    src: "{{ ci_runner_images_dir }}/current"
+  register: ci_runner_current
+  failed_when: false
+
+- name: Build the golden image (or re-point to it)
+  ansible.builtin.command:
+    argv:
+      - "{{ ci_runner_slot_script }}"
+      - build
+      - "{{ ci_runner_base_image }}"
+      - "{{ ci_runner_build_dir }}/user-data"
+      - "{{ ci_runner_golden }}"
+      - "HNX-CI-BUILD-OK {{ ci_runner_base_image_sha256[:16] }}"
+      - "{{ ci_runner_build_vcpus }}"
+      - "{{ ci_runner_build_memory_mb }}"
+      - "{{ ci_runner_build_disk_gb }}"
+      - "{{ ci_runner_build_timeout_s }}"
+  environment:
+    HNX_CI_CONFIG: "{{ ci_runner_slot_config }}"
+  become: true
+  become_user: "{{ ci_runner_user }}"
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - not ci_runner_golden_stat.stat.exists or (ci_runner_current.content | default('') | b64decode | trim) != ci_runner_golden

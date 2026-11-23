@@ -1,0 +1,21 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ ci_runner_marker }}, instance {{ ci_runner_logical_id }}); local changes are overwritten.
+# Loads the egress table that holds the job VMs' traffic (it leaves as {{ ci_runner_user }}) to
+# DNS and public addresses. Re-applied whenever nftables.service (re)loads, and the slots require
+# it: no slot starts without the table.
+[Unit]
+Description=CI runner {{ ci_runner_logical_id }} job VM egress table
+After=nftables.service
+PartOf=nftables.service
+Before=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f {{ ci_runner_egress_file }}
+ExecReload=/usr/sbin/nft -f {{ ci_runner_egress_file }}
+# no ExecStop: stopping or restarting this unit never removes the table (a restart replaces it in
+# one transaction), so the VMs are never without it
+
+[Install]
+WantedBy=multi-user.target nftables.service

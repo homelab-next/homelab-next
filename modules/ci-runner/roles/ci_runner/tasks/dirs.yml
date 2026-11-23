@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# The accounts, then the directories. The slots' account owns images/, slots/ and (with the feed
+# account, through the group) spool/; the feed account is a member of the slots' group, so it
+# reads the slot states and writes the spool, and nothing else. The configuration is root's.
+- name: Create the module's group
+  ansible.builtin.group:
+    name: "{{ ci_runner_group }}"
+    system: true
+  when: ci_runner_manage_accounts | bool
+
+- name: Create the slots' account (no shell; in the kvm group for the job VMs)
+  ansible.builtin.user:
+    name: "{{ ci_runner_user }}"
+    group: "{{ ci_runner_group }}"
+    groups: [kvm]
+    append: true
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+  when: ci_runner_manage_accounts | bool
+
+- name: Create the feed account (its key is forced to the feed command)
+  ansible.builtin.user:
+    name: "{{ ci_runner_feed_user }}"
+    group: "{{ ci_runner_group }}"
+    groups: ["{{ ci_runner_feed_ssh_group }}"]
+    append: true
+    system: true
+    create_home: false
+    home: "{{ ci_runner_data_root }}/feed"
+    shell: /bin/sh
+    password: "!"
+  when: ci_runner_manage_accounts | bool
+
+- name: Create the directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ ci_runner_config_dir }}", owner: root, group: "{{ ci_runner_group }}", mode: "0750"}
+    - {path: "{{ ci_runner_build_dir }}", owner: root, group: "{{ ci_runner_group }}", mode: "0750"}
+    - {path: "{{ ci_runner_data_root }}", owner: root, group: "{{ ci_runner_group }}", mode: "0750"}
+    - {path: "{{ ci_runner_images_dir }}", owner: "{{ ci_runner_user }}", group: "{{ ci_runner_group }}", mode: "0750"}
+    - {path: "{{ ci_runner_slots_dir }}", owner: "{{ ci_runner_user }}", group: "{{ ci_runner_group }}", mode: "0750"}
+    - {path: "{{ ci_runner_spool_dir }}", owner: "{{ ci_runner_feed_user }}", group: "{{ ci_runner_group }}", mode: "2770"}
+    - {path: "{{ ci_runner_data_root }}/feed", owner: root, group: "{{ ci_runner_group }}", mode: "0750"}
+    - {path: "{{ ci_runner_data_root }}/feed/.ssh", owner: root, group: "{{ ci_runner_group }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
