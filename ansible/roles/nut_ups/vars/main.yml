@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+nut_ups_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+nut_ups_word_pattern: '^[A-Za-z0-9_-]+\Z'
+nut_ups_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

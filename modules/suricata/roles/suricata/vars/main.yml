@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+suricata_id_pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+suricata_iface_pattern: '^[A-Za-z0-9][A-Za-z0-9._@-]{0,14}\Z'
+suricata_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+suricata_file_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*\Z'
+suricata_version_pattern: '^([0-9]+:)?[0-9][A-Za-z0-9.+~-]*\Z'
+suricata_source_pattern: '^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?\Z'
+suricata_eve_type_choices: [alert, anomaly, http, tls, ssh, files, flow, dns, smb, smtp, fileinfo, dhcp, mqtt]
+# the SIEM agent block is appended as its own top-level section between these markers
+suricata_siem_marker: "hnx-suricata alert log"

@@ -446,6 +446,7 @@ def test_the_four_default_rules_use_the_settings(tmp_path):
     by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
     assert sorted(by) == [
         "DiskAlmostFull", "FilesystemReadOnly", "MemoryPressure", "NoTargets", "TargetDown",
+        "UpsCheckStale", "UpsLowBattery", "UpsMonitorDown", "UpsOnBattery", "UpsUnreadable",
         "Watchdog",
     ]  # fmt: skip
     assert by["TargetDown"]["for"] == "20m" and by["TargetDown"]["expr"] == "up == 0"
@@ -580,6 +581,42 @@ tests:
         exp_alerts:
           - exp_labels: {severity: warning, instance: a}
             exp_annotations: {summary: "a has under 10% of its memory available"}
+  - name: a host on UPS battery fires, one on mains does not
+    interval: 1m
+    input_series:
+      - {series: 'nut_ups_on_battery{instance="a", ups="u"}', values: '0 0 1x20'}
+      - {series: 'nut_ups_on_battery{instance="b", ups="u"}', values: '0x20'}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UpsOnBattery
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: a, ups: u}
+            exp_annotations: {summary: "a is running on UPS battery (mains lost); a clean shutdown follows at low battery"}
+  - name: a failed shutdown monitor fires, a running one does not
+    interval: 1m
+    input_series:
+      - {series: 'nut_monitor_active{instance="a"}', values: '0x20'}
+      - {series: 'nut_monitor_active{instance="b"}', values: '1x20'}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UpsMonitorDown
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: a}
+            exp_annotations: {summary: "a nut-monitor (the UPS shutdown controller) is not running: no automatic shutdown on power loss"}
+  - name: low battery fires at once, and a host with no UPS metrics never fires a UPS rule
+    interval: 1m
+    input_series:
+      - {series: 'nut_ups_low_battery{instance="a", ups="u"}', values: '0 1x5'}
+      - {series: 'node_memory_MemTotal_bytes{instance="c"}', values: '1000x20'}
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: UpsLowBattery
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: a, ups: u}
+            exp_annotations: {summary: "a UPS reports low battery: the host is shutting down"}
+      - eval_time: 10m
+        alertname: UpsUnreadable
+        exp_alerts: []
 """
 
 
