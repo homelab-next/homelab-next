@@ -791,12 +791,27 @@ def load_exemptions(path: str | None) -> list[Exemption]:
         if not all(isinstance(e[k], str) and e[k].strip() for k in EXEMPTION_FIELDS):
             raise ConfigError(f"{path}: entry {i} has an empty or non-text field")
         if e["rule"] not in EXEMPTION_RULES:
-            raise ConfigError(f"{path}: entry {i}: only {', '.join(EXEMPTION_RULES)} can be exempted")
+            raise ConfigError(
+                f"{path}: entry {i}: only {', '.join(EXEMPTION_RULES)} can be exempted"
+            )
         if not re.fullmatch(r"[0-9a-f]{64}", e["sha256"]):
             raise ConfigError(f"{path}: entry {i}: sha256 must be 64 lower-case hex digits")
-        if e["path"].startswith("/") or ".." in Path(e["path"]).parts or any(c in e["path"] for c in "*?["):
+        if (
+            e["path"].startswith("/")
+            or ".." in Path(e["path"]).parts
+            or any(c in e["path"] for c in "*?[")
+        ):
             raise ConfigError(f"{path}: entry {i}: path is one relative file, not a glob")
-        out.append(Exemption(_norm_path(e["path"]), e["rule"], e["sha256"], e["reason"], e["approved_by"], e["date"]))
+        out.append(
+            Exemption(
+                _norm_path(e["path"]),
+                e["rule"],
+                e["sha256"],
+                e["reason"],
+                e["approved_by"],
+                e["date"],
+            )
+        )
     return out
 
 
@@ -860,7 +875,9 @@ def scan_text(
     try:
         for lineno, line in enumerate(text.splitlines(), 1):
             _GO_CONTEXT[:] = [(go_src, lineno)] if go_src else []
-            _scan_line(hits, label, lineno, line, pats, denylist, suppressed, path, exemptions, used)
+            _scan_line(
+                hits, label, lineno, line, pats, denylist, suppressed, path, exemptions, used
+            )
     finally:
         _GO_CONTEXT.clear()
     return hits
@@ -1055,7 +1072,9 @@ def scan_paths(
         if scanned is not None:
             scanned.add(_norm_path(str(f)))
         hits.extend(
-            scan_text(text, printable_path(str(f)), pats, denylist, suppressed, None, exemptions, used)
+            scan_text(
+                text, printable_path(str(f)), pats, denylist, suppressed, None, exemptions, used
+            )
         )
     return hits
 

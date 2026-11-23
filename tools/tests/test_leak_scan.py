@@ -60,7 +60,12 @@ def run_scan(
     e = {k: v for k, v in os.environ.items() if k != "HNX_DENYLIST"}
     e.update(env or {})
     return subprocess.run(
-        [sys.executable, str(SCAN), *args], capture_output=True, text=True, input=stdin, env=e, cwd=cwd
+        [sys.executable, str(SCAN), *args],
+        capture_output=True,
+        text=True,
+        input=stdin,
+        env=e,
+        cwd=cwd,
     )
 
 
@@ -1182,15 +1187,27 @@ def test_an_exemption_waives_its_string_in_its_file_only(tmp_path: Path):
     assert "exempted 1 [high-entropy-string]" in r.stdout and "operator" in r.stdout
     assert STRING not in r.stdout
     # the same string in another file still fails
-    r = scan_with(tmp_path / "b", {"a/fixture.json": line, "a/other.json": line}, [exemption("a/fixture.json")])
-    hits = [ln for ln in r.stdout.splitlines() if "[high-entropy-string]" in ln and not ln.startswith("note:")]
+    r = scan_with(
+        tmp_path / "b",
+        {"a/fixture.json": line, "a/other.json": line},
+        [exemption("a/fixture.json")],
+    )
+    hits = [
+        ln
+        for ln in r.stdout.splitlines()
+        if "[high-entropy-string]" in ln and not ln.startswith("note:")
+    ]
     assert r.returncode == 1 and len(hits) == 1 and hits[0].startswith("a/other.json:1:")
 
 
 def test_a_different_high_entropy_string_in_the_same_file_still_fails(tmp_path: Path):
     path = "fixture.json"
     r = scan_with(tmp_path, {"fixture.json": f"k {STRING}\nk {OTHER}\n"}, [exemption(path)])
-    hits = [ln for ln in r.stdout.splitlines() if "[high-entropy-string]" in ln and not ln.startswith("note:")]
+    hits = [
+        ln
+        for ln in r.stdout.splitlines()
+        if "[high-entropy-string]" in ln and not ln.startswith("note:")
+    ]
     assert r.returncode == 1 and hits == ["fixture.json:2: [high-entropy-string] Qa7W...(32 chars)"]
 
 
@@ -1221,4 +1238,6 @@ def test_an_exemption_never_waives_a_keyed_secret_or_another_rule_in_the_same_fi
     text = f"k {STRING}\n" + PLANTED["keyed-secret"] + "\n" + PLANTED["github-token"] + "\n"
     r = scan_with(tmp_path, {"f.json": text}, [exemption(path)])
     assert r.returncode == 1 and "[keyed-secret]" in r.stdout and "[github-token]" in r.stdout
-    assert "f.json:1:" not in [ln.split(" ")[0] for ln in r.stdout.splitlines() if not ln.startswith("note:")]
+    assert "f.json:1:" not in [
+        ln.split(" ")[0] for ln in r.stdout.splitlines() if not ln.startswith("note:")
+    ]

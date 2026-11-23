@@ -1253,7 +1253,9 @@ def test_an_exemption_waives_one_string_in_one_file_only(tmp_path):
     assert [(f.path, f.rule) for f in found] == [("lab/other.json", "secret")]
     two = {**files, "lab/fx.json": line + f"api_key_value {ELSE}\n"}
     found = plc.check_private(overlay(tmp_path / "c", two))
-    assert [(f.path, f.rule, f.detail.startswith("line 2:")) for f in found] == [("lab/fx.json", "secret", True)]
+    assert [(f.path, f.rule, f.detail.startswith("line 2:")) for f in found] == [
+        ("lab/fx.json", "secret", True)
+    ]
 
 
 def test_a_stale_or_widened_exemption_fails(tmp_path):
@@ -1262,6 +1264,9 @@ def test_a_stale_or_widened_exemption_fails(tmp_path):
     gone = {".leak-exemptions.json": exempt("lab/missing.json")}
     assert rules(plc.check_private(overlay(tmp_path / "b", gone))) == {"stale-exemption"}
     for i, over in enumerate([{"rule": "keyed-secret"}, {"path": "lab/*.json"}]):
-        files = {"lab/fx.json": f"k {CRED}\n", ".leak-exemptions.json": exempt(**{"path": "lab/fx.json", **over})}
+        files = {
+            "lab/fx.json": f"k {CRED}\n",
+            ".leak-exemptions.json": exempt(**{"path": "lab/fx.json", **over}),
+        }
         with pytest.raises(plc.ConfigError):
             plc.check_private(overlay(tmp_path / f"c{i}", files))
