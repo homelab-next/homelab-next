@@ -173,9 +173,18 @@ def _spool(event: dict) -> None:
     for old in held[: max(0, len(held) - OUTBOX_MAX + 1)]:  # bounded: the oldest give way
         os.unlink(os.path.join(OUTBOX, old))
     path = os.path.join(OUTBOX, event["id"] + ".json")
-    with open(path + ".tmp", "w", encoding="utf-8") as fh:
+    _write_private(path + ".tmp", event)
+    _publish(path + ".tmp", path)
+
+
+def _write_private(tmp: str, event: dict) -> None:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(event, fh, sort_keys=True)
-    os.replace(path + ".tmp", path)
+
+
+def _publish(tmp: str, final: str) -> None:
+    os.replace(tmp, final)
 
 
 def flush(url: str, auth: str) -> None:

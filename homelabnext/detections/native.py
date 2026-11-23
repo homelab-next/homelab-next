@@ -51,7 +51,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
+from homelabnext import _yaml
 
 REASONS = ("engine-correlation", "decoder", "list-lookup", "stock-override")
 KINDS = ("rules", "decoders")
@@ -78,7 +78,7 @@ def load_index(root: Path) -> dict | None:
     path = Path(root) / "native" / "index.yml"
     if not path.is_file():
         return None
-    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc = _yaml.safe_load(path.read_text(encoding="utf-8"))
     return doc if isinstance(doc, dict) else {}
 
 

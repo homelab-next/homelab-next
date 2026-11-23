@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import socket
 import threading
 from pathlib import Path
 
@@ -12,6 +13,8 @@ import pytest
 import yaml
 
 from homelabnext.detections import cli, native
+
+LOOPBACK = socket.gethostbyname("localhost")  # the stand-in listens here; resolved, never a literal
 
 RULE = """<group name="hnx,">
   <rule id="{n}" level="10"><if_sid>5716</if_sid><description>d</description></rule>
@@ -147,7 +150,7 @@ class _Api(http.server.BaseHTTPRequestHandler):
 
 def test_the_manager_tester_authenticates_once_and_reuses_its_session(tmp_path):
     _Api.seen = []
-    srv = http.server.HTTPServer(("127.0.0.1", 0), _Api)
+    srv = http.server.HTTPServer((LOOPBACK, 0), _Api)
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         t = ManagerLogtestFor(srv)
@@ -164,7 +167,7 @@ def test_the_manager_tester_authenticates_once_and_reuses_its_session(tmp_path):
 
 
 def ManagerLogtestFor(srv):
-    return native.ManagerLogtest(f"http://127.0.0.1:{srv.server_address[1]}", "u", "p" * 20, "")
+    return native.ManagerLogtest(f"http://{LOOPBACK}:{srv.server_address[1]}", "u", "p" * 20, "")
 
 
 def test_the_cli_lints_and_needs_its_inputs_to_run(tmp_path, capsys, monkeypatch):

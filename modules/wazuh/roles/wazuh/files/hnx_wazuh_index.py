@@ -6,7 +6,7 @@
 #   owner: platform
 #   trigger: [role:wazuh]
 #   inputs: "export|restore --url URL --ca FILE --dir DIR [--pattern P] [--user U]; the account's password in HNX_INDEXER_PASSWORD"
-#   outputs: one JSON line on stdout, {files: [{key, docs}]} (export) or {indices, docs} (restore); the files under DIR (0600)
+#   outputs: "one JSON line on stdout, {files: [{key, docs}]} (export) or {indices, docs} (restore); the files under DIR (0600)"
 #   exit:
 #     "0": exported or restored
 #     "1": the indexer refused a call, or the source is not what a restore needs (the reason on stderr)
@@ -103,9 +103,12 @@ def _safe_dir(p: str) -> Path:
     return path
 
 
+def _publish(tmp: Path, final: Path) -> None:
+    os.replace(tmp, final)
+
+
 def export(client: Client, out: Path, pattern: str) -> dict:
-    out.mkdir(parents=True, exist_ok=True)
-    os.chmod(out, 0o700)
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
     rows = client.call(
         "GET", "/_cat/indices/" + urllib.parse.quote(pattern, safe="*,-") + "?format=json&h=index"
     )
@@ -139,7 +142,7 @@ def export(client: Client, out: Path, pattern: str) -> dict:
         if scroll:
             with contextlib.suppress(Refused):  # the scroll expires by itself
                 client.call("DELETE", "/_search/scroll", json.dumps({"scroll_id": scroll}).encode())
-        os.replace(tmp, out / f"{name}.jsonl")
+        _publish(tmp, out / f"{name}.jsonl")
         files.append({"key": f"{name}.jsonl", "docs": docs})
     return {"files": files}
 

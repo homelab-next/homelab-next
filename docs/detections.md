@@ -1,6 +1,6 @@
 ---
-summary: 'Detections authored in a Sigma subset: layout, ATT&CK coverage counted only from tested rules, ATT&CK-id validation, known-id snapshots and writing tests.'
-summary_of: outline:sha256:64e5dbedaeb5f722
+summary: 'Detections as Sigma: layout, ATT&CK coverage from tested rules, known-id snapshots, writing tests, and native engine rules (reasons, lint, proof).'
+summary_of: outline:sha256:593e901c1cb08da1
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Detections
