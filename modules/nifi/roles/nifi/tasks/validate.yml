@@ -12,6 +12,7 @@
       - nifi_auth in ['single-user', 'oidc']
       - nifi_single_user_name is match(nifi_user_pattern)
       - nifi_warehouse is match(nifi_warehouse_pattern)
+      - nifi_catalog_path is match(nifi_catalog_path_pattern)
       - nifi_region is match(nifi_region_pattern)
       - >-
         [nifi_object_store_id, nifi_catalog_id, nifi_query_id, nifi_events_id]

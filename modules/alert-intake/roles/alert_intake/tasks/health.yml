@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the script, the environment, the credentials, the adapter and the CA are in place, the unit
+# is active, and the webhook answers /healthz. The case store and the notification endpoint are not called:
+# whether an event reached them is the unit's own journal and the 502 the sender sees.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Look for the files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: alert_intake_files
+      loop: "{{ [alert_intake_script, alert_intake_env_file, alert_intake_logins_env_file, alert_intake_cases_config_file, alert_intake_cases_ca_file, alert_intake_adapter_dir ~ '/conformance/protocols/cases.py', alert_intake_adapter_dir ~ '/' ~ (alert_intake_adapter_file | basename), alert_intake_shared_dir ~ '/homelabnext/notify/senders.py'] }}"
+    - name: They are all there
+      ansible.builtin.assert:
+        that: alert_intake_files.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: "alert-intake: missing {{ alert_intake_files.results | rejectattr('stat.exists') | map(attribute='item') | list }} (run the install)"
+    - name: Ask systemd about the unit
+      ansible.builtin.command:
+        argv: "{{ [alert_intake_systemctl_cli, 'is-active', alert_intake_unit] }}"
+      register: alert_intake_active
+      changed_when: false
+      failed_when: false
+    - name: The unit is active
+      ansible.builtin.assert:
+        that: alert_intake_active.rc == 0
+        fail_msg: "alert-intake: the unit {{ alert_intake_unit }} is not active ({{ alert_intake_active.stdout }})"
+    - name: The webhook answers its health path
+      ansible.builtin.uri:
+        url: "http://{{ alert_intake_listen_address }}:{{ alert_intake_port }}/healthz"
+        return_content: true
+        timeout: "{{ alert_intake_health_timeout }}"
+      register: alert_intake_healthz
+      until: alert_intake_healthz.status | default(0) == 200
+      retries: 6
+      delay: 2
+    - name: The webhook refuses a caller with no token
+      ansible.builtin.uri:
+        url: "http://{{ alert_intake_listen_address }}:{{ alert_intake_port }}/v1/alerts"
+        method: POST
+        body: "{}"
+        status_code: 401
+        timeout: "{{ alert_intake_health_timeout }}"
+    - name: Look for the state
+      ansible.builtin.slurp:
+        src: "{{ alert_intake_state_file }}"
+      register: alert_intake_live_state
+      failed_when: false
+    - name: The state, when there is one, is this module's form
+      ansible.builtin.include_tasks: state_check.yml
+      vars:
+        alert_intake_state_text: "{{ alert_intake_live_state.content | b64decode }}"
+      when: alert_intake_live_state.content is defined
+  tags: [health]

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# The object store's scheme://host:port: the override, else the registry row of
+# lakekeeper_object_store_id (which must be an object-store).
+- name: Refuse an id that is not an object store
+  ansible.builtin.assert:
+    that: lakekeeper_s3_url != '' or lookup('hnx_registry', lakekeeper_object_store_id, field='capability') == 'object-store'
+    fail_msg: "lakekeeper: the registry row {{ lakekeeper_object_store_id }} is not an object-store"
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Resolve the object store's address
+  ansible.builtin.set_fact:
+    lakekeeper_s3_endpoint: "{{ lakekeeper_s3_url if lakekeeper_s3_url != '' else lookup('hnx_registry', lakekeeper_object_store_id, field='url') }}"
+  tags: [readiness, health, backup, restore, export, upgrade]

@@ -663,6 +663,23 @@ def test_trino_main_installs_the_maintenance_timer_with_the_lake_retention_value
     assert MAINT_PW not in script and NOTIFY_TOKEN not in script
 
 
+def _first_trino_main_names_a_catalog_that_serves_its_api_under_a_path_by_warehouse_name(tmp_path):
+    v = trino_vars(tmp_path, trino_catalog_path="/catalog", trino_warehouse="lake")
+    return {"role": TRINO, "tasks_from": "main", "extra_vars": v, "env": TRINO_SECRETS}
+
+
+@first_run(_first_trino_main_names_a_catalog_that_serves_its_api_under_a_path_by_warehouse_name)
+def test_trino_main_names_a_catalog_that_serves_its_api_under_a_path_by_warehouse_name(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    cat = (tmp_path / "app" / "etc" / "catalog" / "iceberg.properties").read_text()
+    assert f"iceberg.rest-catalog.uri={CATALOG_URL}/catalog\n" in cat
+    assert "iceberg.rest-catalog.warehouse=lake\n" in cat
+    assert (
+        "iceberg.rest-catalog.vended-credentials-enabled=false" in cat
+    )  # the engine keeps its own key
+
+
 def _first_trino_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
     return {
         "role": TRINO,
@@ -677,6 +694,10 @@ def _first_trino_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
     [
         ({"trino_image": "docker.io/trinodb/trino:latest"}, {}),
         ({"trino_catalog_name": "lake"}, {}),
+        ({"trino_catalog_path": "catalog"}, {}),  # a path starts with a slash
+        ({"trino_catalog_path": "//catalog"}, {}),
+        ({"trino_catalog_path": "/a b"}, {}),
+        ({"trino_warehouse": "Bad Name"}, {}),
         ({"trino_uid": 0}, {}),
         (
             {"trino_expire_retention": "3d"},

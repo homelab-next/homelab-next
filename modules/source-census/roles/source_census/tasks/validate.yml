@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - source_census_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - source_census_lake_domain is match('^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\Z')
+      - source_census_lake_namespace is match(source_census_ident_pattern)
+      - source_census_lake_warehouse is match(source_census_ident_pattern)
+      - source_census_lake_catalog is match(source_census_ident_pattern)
+      - source_census_table is match(source_census_ident_pattern)
+      - source_census_time_column is match(source_census_ident_pattern)
+      - source_census_source_columns is sequence and source_census_source_columns is not string
+      - source_census_source_columns | length > 0
+      - source_census_source_columns | reject('match', source_census_ident_pattern) | list | length == 0
+      # the census needs history to learn a cadence; a source's silence is measured in whole hours
+      - source_census_window_days | int >= 2
+      - source_census_multiple | float >= 1
+      - source_census_min_silence_hours | float >= 1
+      - source_census_floor_hours | float >= 1
+      - source_census_learning_min_arrivals | int >= 1
+      - source_census_dark_hours | float > 0
+      - source_census_dark_tables is sequence and source_census_dark_tables is not string
+      - source_census_dark_tables | reject('match', source_census_ident_pattern) | list | length == 0
+      - source_census_expected is sequence and source_census_expected is not string
+      - source_census_expected | select('mapping') | list | length == source_census_expected | length
+      - source_census_expected | map(attribute='name', default='') | reject('match', '^[^\n]{1,80}\Z') | list | length == 0
+      - source_census_expected | map(attribute='name', default='') | unique | list | length == source_census_expected | length
+      - source_census_expected | rejectattr('cadence_hours', 'defined') | list | length == 0
+      - source_census_expected | rejectattr('match', 'defined') | list | length == 0
+      - source_census_acknowledged is sequence and source_census_acknowledged is not string
+      - source_census_acknowledged | select('mapping') | list | length == source_census_acknowledged | length
+      # an acknowledgement carries an owner, a reason and an expiry (never open-ended)
+      - source_census_acknowledged | rejectattr('owner', 'defined') | list | length == 0
+      - source_census_acknowledged | rejectattr('reason', 'defined') | list | length == 0
+      - source_census_acknowledged | map(attribute='expires', default='') | map('string') | reject('match', '^[0-9]{4}-[0-9]{2}-[0-9]{2}\Z') | list | length == 0
+      - source_census_notify_ceiling in source_census_tlp_labels
+      - source_census_notify_topic is match(source_census_topic_pattern)
+      - source_census_reader_cred is match(source_census_ref_pattern)
+      - source_census_notify_cred is match(source_census_ref_pattern)
+      - source_census_user is match(source_census_name_pattern)
+      - source_census_group is match(source_census_name_pattern)
+      - >-
+        [source_census_root, source_census_config_dir, source_census_hnx_bin, source_census_export_dir]
+        | reject('match', source_census_path_pattern) | list | length == 0
+      - source_census_lake_ca_file == '' or source_census_lake_ca_file is match(source_census_path_pattern)
+    fail_msg: >-
+      source-census: a registry-style id, a lake domain, warehouse and catalog, plain table and column names, a window of at
+      least 2 days, multiple, silence and floor of at least 1, a learning minimum of at least 1,
+      declared sources with a name, a match and a cadence, acknowledgements with an owner, a reason and
+      a YYYY-MM-DD expiry, a TLP label as the notify ceiling, secret references (never values) and
+      absolute canonical paths are required
+  tags: [health, backup, restore, export, upgrade, readiness]

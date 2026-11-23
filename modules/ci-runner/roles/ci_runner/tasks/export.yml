@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to export (the pool keeps no data; every job VM is destroyed after its job)
+  ansible.builtin.debug:
+    msg: ci-runner keeps no data of its own; the images are rebuilt from their pinned digests and re-running main converges everything
+  tags: [export]

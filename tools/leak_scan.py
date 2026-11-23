@@ -7,7 +7,7 @@
 #   owner: maintainers
 #   trigger: [ci:ci/leak-scan, ci:ci/packaging, ci:release/build, make:leak-scan, make:leak-scan-history, make:secret-scan, pre-commit:leak-scan, pre-commit:secret-scan, script:allowlist-ratchet, script:coverage-floor, script:private-leak-check]
 #   invariant: [F-05, F-18, Q-06]
-#   inputs: paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file
+#   inputs: paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file, optional --exemptions FILE
 #   outputs: one line per hit
 #   exit:
 #     "0": clean
@@ -42,6 +42,13 @@ not a GitHub noreply address.
 
 Exit codes: 0 clean, 1 at least one hit (or an unscannable file), 2 misconfiguration.
 
+Waive one reviewed high-entropy string (a vendor field name that is not a credential) with a checked-in
+exemptions file, ``--exemptions FILE`` or env ``HNX_LEAK_EXEMPTIONS`` (the private-overlay
+checker reads ``.leak-exemptions.json`` at an overlay's root): a JSON list of
+``{path, rule, sha256, reason, approved_by, date}``. A hit is waived only when the file, the rule
+(only ``high-entropy-string``) and the sha256 of the exact matched text all agree; the file never carries
+the text; an entry that waives nothing fails the scan.
+
 Suppress one reviewed line with an end-of-line marker ``scrub-allow: <reason>`` (any comment
 syntax; the reason is a few plain words).  Only hits *before* the marker are suppressed, a hit in
 the ``secret`` group is never suppressed, and the note printed for CI logs names the patterns and
@@ -62,7 +69,9 @@ from __future__ import annotations
 import argparse
 import bisect
 import fnmatch
+import hashlib
 import ipaddress
+import json
 import math
 import os
 import re
@@ -733,6 +742,95 @@ class ConfigError(Exception):
     """Misconfiguration (exit 2)."""
 
 
+# ---- reviewed exemptions of a high-entropy string --------------------------------------------------
+#
+# A string that looks like a credential and is not (a vendor's field name, say) cannot be waived by a
+# ``scrub-allow`` marker: the ``secret`` group is never waived by one. A checked-in exemptions file
+# can waive ONE exact string in ONE file: ``[{"path", "rule", "sha256", "reason", "approved_by",
+# "date"}]``, where ``sha256`` is the hash of the exact matched text (the file never carries the text).
+# A hit is waived only when the path AND the rule AND the hash all match; ``rule`` can only be
+# ``high-entropy-string`` (no keyed-secret, cloud-key, token or PEM rule is ever waivable); an entry that
+# waives nothing (the string or the file is gone) is itself a failure, so the file cannot rot into a
+# blanket waiver.
+EXEMPTION_RULES = ("high-entropy-string",)
+EXEMPTION_FIELDS = ("path", "rule", "sha256", "reason", "approved_by", "date")
+
+
+@dataclass(frozen=True)
+class Exemption:
+    path: str
+    rule: str
+    sha256: str
+    reason: str
+    approved_by: str
+    date: str
+
+
+def _norm_path(path: str) -> str:
+    posix = Path(path).as_posix()
+    return posix[2:] if posix.startswith("./") else posix
+
+
+def load_exemptions(path: str | None) -> list[Exemption]:
+    """The entries of an exemptions file (JSON); raises ConfigError when unusable."""
+    if not path:
+        return []
+    p = Path(path)
+    if not p.is_file():
+        raise ConfigError(f"exemptions file not found: {path}")
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise ConfigError(f"{path}: not valid JSON ({exc})") from exc
+    if not isinstance(doc, list):
+        raise ConfigError(f"{path}: must be a list of entries")
+    out: list[Exemption] = []
+    for i, e in enumerate(doc):
+        if not isinstance(e, dict) or set(e) != set(EXEMPTION_FIELDS):
+            raise ConfigError(f"{path}: entry {i} must have exactly {', '.join(EXEMPTION_FIELDS)}")
+        if not all(isinstance(e[k], str) and e[k].strip() for k in EXEMPTION_FIELDS):
+            raise ConfigError(f"{path}: entry {i} has an empty or non-text field")
+        if e["rule"] not in EXEMPTION_RULES:
+            raise ConfigError(
+                f"{path}: entry {i}: only {', '.join(EXEMPTION_RULES)} can be exempted"
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", e["sha256"]):
+            raise ConfigError(f"{path}: entry {i}: sha256 must be 64 lower-case hex digits")
+        if (
+            e["path"].startswith("/")
+            or ".." in Path(e["path"]).parts
+            or any(c in e["path"] for c in "*?[")
+        ):
+            raise ConfigError(f"{path}: entry {i}: path is one relative file, not a glob")
+        out.append(
+            Exemption(
+                _norm_path(e["path"]),
+                e["rule"],
+                e["sha256"],
+                e["reason"],
+                e["approved_by"],
+                e["date"],
+            )
+        )
+    return out
+
+
+def stale_exemptions(
+    exemptions: list[Exemption], used: set[int], scanned: set[str] | None = None
+) -> list[str]:
+    """One finding per entry that waived nothing. ``scanned``: the files this run read (a partial scan
+    judges only the entries of those files); None: every entry is judged (a whole-tree scan)."""
+    out = []
+    for i, e in enumerate(exemptions):
+        if i in used or (scanned is not None and e.path not in scanned):
+            continue
+        out.append(
+            f"exemption {i} ({e.path}, {e.rule}): stale, it waives nothing (the string or the file is "
+            "gone or changed): remove it"
+        )
+    return out
+
+
 def load_denylist(path: str | None) -> list[tuple[int, re.Pattern[str]]]:
     """Return ``[(line_number, regex)]``; raises ConfigError when unusable."""
     if not path:
@@ -762,8 +860,12 @@ def scan_text(
     denylist: list[tuple[int, re.Pattern[str]]] | None = None,
     suppressed: list[str] | None = None,
     path: str | None = None,
+    exemptions: list[Exemption] | None = None,
+    used: set[int] | None = None,
 ) -> list[Hit]:
-    """Hits in ``text``; ``path`` (default: ``label``) is the file name some patterns read."""
+    """Hits in ``text``; ``path`` (default: ``label``) is the file name some patterns read.
+    ``exemptions``: reviewed waivers of one exact high-entropy string in one file; the index of each
+    entry that waived a hit is added to ``used``."""
     hits: list[Hit] = []
     pats = list(patterns)
     path = label if path is None else path
@@ -773,7 +875,9 @@ def scan_text(
     try:
         for lineno, line in enumerate(text.splitlines(), 1):
             _GO_CONTEXT[:] = [(go_src, lineno)] if go_src else []
-            _scan_line(hits, label, lineno, line, pats, denylist, suppressed, path)
+            _scan_line(
+                hits, label, lineno, line, pats, denylist, suppressed, path, exemptions, used
+            )
     finally:
         _GO_CONTEXT.clear()
     return hits
@@ -788,6 +892,8 @@ def _scan_line(
     denylist: list[tuple[int, re.Pattern[str]]] | None,
     suppressed: list[str] | None,
     path: str,
+    exemptions: list[Exemption] | None = None,
+    used: set[int] | None = None,
 ) -> None:
     """The hits of one line of ``scan_text``, appended to ``hits``."""
     sup = SUPPRESS_RE.search(line)
@@ -797,6 +903,23 @@ def _scan_line(
         for m in pat.regex.finditer(line):
             if pat.accept is not None and not pat.accept(m, line, path):
                 continue
+            if exemptions and pat.name in EXEMPTION_RULES:
+                digest = hashlib.sha256(m.group(0).encode("utf-8")).hexdigest()
+                norm = _norm_path(path)
+                waiver = next(
+                    (i for i, e in enumerate(exemptions)
+                     if e.path == norm and e.rule == pat.name and e.sha256 == digest),
+                    None,
+                )  # fmt: skip
+                if waiver is not None:
+                    if used is not None:
+                        used.add(waiver)
+                    if suppressed is not None:
+                        suppressed.append(
+                            f"{label}:{lineno}: exempted 1 [{pat.name}]: {exemptions[waiver].reason} "
+                            f"({exemptions[waiver].approved_by}, {exemptions[waiver].date})"
+                        )
+                    continue
             hit = Hit(label, lineno, pat.name, _display(pat, m.group(0)))
             # a reviewed line may waive what lies before its marker, never a credential
             if sup and pat.group != "secret" and m.end() <= cut:
@@ -933,6 +1056,9 @@ def scan_paths(
     skipped: list[Skipped] | None = None,
     allow_skip: Iterable[str] = (),
     walk: bool = False,
+    exemptions: list[Exemption] | None = None,
+    used: set[int] | None = None,
+    scanned: set[str] | None = None,
 ) -> list[Hit]:
     hits: list[Hit] = []
     pats = list(patterns)
@@ -943,7 +1069,13 @@ def scan_paths(
             if skipped is not None and not _allowed_skip(text.path, globs):
                 skipped.append(text)
             continue
-        hits.extend(scan_text(text, printable_path(str(f)), pats, denylist, suppressed))
+        if scanned is not None:
+            scanned.add(_norm_path(str(f)))
+        hits.extend(
+            scan_text(
+                text, printable_path(str(f)), pats, denylist, suppressed, None, exemptions, used
+            )
+        )
     return hits
 
 
@@ -1027,6 +1159,12 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("HNX_DENYLIST"),
         help="file of extra terms (default: env HNX_DENYLIST)",
     )
+    ap.add_argument(
+        "--exemptions",
+        default=os.environ.get("HNX_LEAK_EXEMPTIONS"),
+        help="JSON file of reviewed waivers of one exact high-entropy string in one file "
+        "(default: env HNX_LEAK_EXEMPTIONS); an entry that waives nothing fails the scan",
+    )
     ap.add_argument("--groups", default="", help="comma list: network,identity,path,secret")
     ap.add_argument(
         "--allow-skip",
@@ -1066,6 +1204,9 @@ def main(argv: list[str] | None = None) -> int:
     problems: list[str] = []
     try:
         denylist = load_denylist(args.denylist)
+        exemptions = load_exemptions(args.exemptions)
+        used: set[int] = set()
+        scanned: set[str] = set()
         if args.check_authors:
             problems = check_authors(args.check_authors)
             hits = []
@@ -1082,7 +1223,11 @@ def main(argv: list[str] | None = None) -> int:
                 skipped,
                 args.allow_skip,
                 args.walk,
+                exemptions,
+                used,
+                scanned,
             )
+            problems += stale_exemptions(exemptions, used, scanned if args.paths else None)
     except ConfigError as exc:
         print(f"leak_scan: {exc}", file=sys.stderr)
         return EXIT_CONFIG
@@ -1100,7 +1245,7 @@ def main(argv: list[str] | None = None) -> int:
     if failures:
         print(
             f"leak_scan: {len(hits)} hit(s), {len(skipped)} unscanned file(s), "
-            f"{len(problems)} commit identity problem(s)",
+            f"{len(problems)} other problem(s)",
             file=sys.stderr,
         )
         return EXIT_HIT

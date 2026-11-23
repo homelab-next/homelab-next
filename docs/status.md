@@ -1,6 +1,6 @@
 ---
-summary: 'The read-only status hub: sources, views, the status.json contract, events, agent activity, the mTLS edge hop from both sides and the Approvals page.'
-summary_of: outline:sha256:a280e586607274e3
+summary: 'The read-only status hub: sources, views, status.json, events, agent activity, the collector, the mTLS edge hop, Approvals and the register pages.'
+summary_of: outline:sha256:c5dc55eccbaabe6a
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Status hub: one read-only place for activity and status
@@ -241,7 +241,7 @@ menu:
 Schema: `schemas/status/views.schema.json`; `hnx status views check` also checks the menu ids are
 unique, `main` is a panel view, a `select` names registered sources and modules, an external
 entry names a registered service unless it is `optional` (then it is shown as unavailable), and
-every entry and export declares its TLP ceiling (views 1.10; see
+every entry and export declares its TLP ceiling (views 1.10; the register panels are 1.11; see
 [TLP ceilings and release transforms](#tlp-ceilings-and-release-transforms)).
 `hnx status views check --preview public` also prints what the public tier is shown,
 `status.json` through its release transform, built from `--state` without a server
@@ -403,6 +403,7 @@ Each sits in the `private` group at `red` (`WITHHELD_PANELS` in `homelabnext/sta
 | `strategy`, `requirements`, `objectives`, `rfis` | public, no group | the lab's strategy records: priorities, intelligence requirements and their gaps |
 | `projects` | public, no group | the lab's own work, steps and blockers |
 | `orchestration` | public, no group | agent jobs, profiles, backends and gateway turns |
+| `kanban`, `lessons`, `runbooks`, `invariants` | new (views 1.11) | the lab's work queue, its failure history, its procedures and the live verdict of its standing checks |
 | `baselines` | public, no group | per-guest defense coverage: which guest lacks which layer |
 | `topology`, `dataflow`, `architecture`, `roadmap` | `group: maps` | guests, zones, flows, the lab's controls; the topology reads every observation and the UPS states unfiltered |
 | `links`, `schedule`, `roster`, `mcp-servers` | `group: directory` | the service directory and its sign-ins, every scheduled job, the agent roster (which reads the sessions unfiltered) and the MCP servers with their grants |
@@ -569,6 +570,43 @@ and lane (outcomes, p50/p95 wall time and queue wait, tokens, cache-read share, 
 fallbacks, input vs output size), the trend by day, and one job's gateway turns. It reads the
 telemetry store `hnx orchestration` fills, names and numbers only; see
 [orchestration telemetry](orchestration-telemetry.md) ([[orchestration-telemetry]]).
+
+### Register pages: Kanban, Lessons, Runbooks, Invariants
+
+`hnx status serve --registers DIR` adds four read-only pages, menu entries `panel: kanban`,
+`lessons`, `runbooks` and `invariants` (views schema 1.11; routes `/kanban`, `/lessons`,
+`/runbooks`, `/invariants`), rendered server-side from YAML register files in `DIR`
+(`homelabnext/status/registers.py`). They replace the old repository's hand-built dev pages: the
+register is edited in its repository, the hub only shows a snapshot of it.
+
+| File in `DIR` | Page | Shows |
+|---|---|---|
+| `kanban.yml` | `/kanban` | cards by column (Blocked, To Do, In Progress, Projects); a project (`PRJ-NNN`) with its steps and done count, step cards (`PRJ-NNN.M`), tags and dates; `?status=done` is the archive. The RFI column is generated from the task queue and is not in the snapshot |
+| `lessons.yml` | `/lessons` | per lesson: symptom, contributing factors, root cause, corrective action, preventive control, verification, status, recurrences, systems |
+| `runbooks.yml` | `/runbooks` | per runbook: summary, access, a checklist whose every step carries its own verify, key files, rollback, and every lesson sharing a systems tag (tags compared with `_` and `-` equal) |
+| `invariants.yml`, `invariants.results.json` | `/invariants` | per criterion: statement, observable, expected, and the live verdict from the results file (an `auto` criterion with no result is `untested`; a red one opens by default and shows its remediation, or says none is recorded). Without the results file the page says so |
+| `meta.json` | every page | `{"commit", "fetched_at"}`: the git commit the files are a snapshot of and when they were fetched |
+
+**Snapshot, not live.** Each page shows the commit and `fetched_at`; a snapshot older than two
+hours, or whose age cannot be read, gets a loud `STALE` banner. Whatever syncs `DIR` from git
+owns that freshness; the hub never fetches.
+
+**Filters** are query strings only (the console's CSP allows no script and no form): `?q=` text
+search, `?status=` (the column on Kanban, the runbook kind on Runbooks, `pass|fail|error|untested|
+deferred` on Invariants, the lesson status on Lessons), `?system=` (Lessons, Runbooks), `?pillar=`
+(Invariants), `?id=` (one record, opened) and `?page=`. A page holds at most 25 records (40
+cards on Kanban); chips under the title link the values.
+
+**Reading.** Each file is parsed once with the repository's budgeted unique-key YAML loader
+(nothing is executed; a file above 16 MiB is refused unread) and cached by mtime, size and
+inode, so a request never re-parses an unchanged file; a malformed or missing file gives its own
+page an error banner and does not affect the others. Every value is escaped; the inline markup
+the registers carry in prose (`<code>`, `<strong>`) is kept, and anything else, links included, is
+shown as text.
+
+**Withheld.** Private group, `red`, served only through the trusted front door and in no public
+view; the menu entry shows as unavailable (not an error) when `--registers` is not given. They
+are served live only: `hnx status render` does not write them.
 
 ### Baselines page
 

@@ -12,6 +12,7 @@
       # the catalog name is fixed: the lake's writers and readers say iceberg.<schema>.<table>
       - trino_catalog_name == 'iceberg'
       - trino_warehouse is match(trino_warehouse_pattern)
+      - trino_catalog_path is match(trino_catalog_path_pattern)
       - trino_region is match(trino_region_pattern)
       - trino_catalog_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
       - trino_object_store_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')

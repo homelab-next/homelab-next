@@ -7,7 +7,7 @@ connector.name=iceberg
 # a catalog the engine itself holds read-only: every write and every table procedure is refused
 iceberg.security=read-only
 {% endif %}iceberg.catalog.type=rest
-iceberg.rest-catalog.uri={{ trino_catalog_endpoint }}
+iceberg.rest-catalog.uri={{ trino_catalog_endpoint }}{{ trino_catalog_path }}
 iceberg.rest-catalog.warehouse={{ trino_warehouse }}
 iceberg.rest-catalog.vended-credentials-enabled=false
 fs.s3.enabled=true
