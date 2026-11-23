@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means the three things ADR-0049 decision 4 names: the capture is running, kernel drops are
+# under a bound, and event output is growing. Read-only. A running process with an empty ruleset
+# or a dead capture looks up and sees nothing, so each is read from the engine, not the unit.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The sensor service is active
+      ansible.builtin.command:
+        argv: ["{{ suricata_systemctl_cli }}", is-active, suricata.service]
+      register: suricata_active
+      changed_when: false
+      check_mode: false
+      failed_when: suricata_active.rc != 0
+    - name: Read the engine's own counters
+      ansible.builtin.command:
+        argv: ["{{ suricata_suricatasc_cli }}", -c, dump-counters]
+      register: suricata_counters
+      changed_when: false
+      check_mode: false
+      timeout: "{{ suricata_health_timeout | int }}"
+    - name: The capture is running and drops are under the bound
+      vars:
+        _c: "{{ (suricata_counters.stdout | from_json).message.capture }}"
+        _packets: "{{ _c.kernel_packets | default(0) | int }}"
+        _drops: "{{ _c.kernel_drops | default(0) | int }}"
+      ansible.builtin.assert:
+        that:
+          - _packets | int > 0
+          - (_drops | int) <= (_packets | int) * (suricata_max_drop_ratio | float)
+        fail_msg: >-
+          suricata: capture is not healthy: {{ _packets }} packet(s) captured, {{ _drops }} kernel drop(s)
+          (bound {{ suricata_max_drop_ratio }} of captured); a mirror that stopped, a cable or tunnel that
+          dropped, or a ring too small for the load
+    - name: Look at the eve log
+      ansible.builtin.stat:
+        path: "{{ suricata_log_dir }}/{{ suricata_eve_file }}"
+      register: suricata_eve
+    - name: Event output is growing (the stats heartbeat writes every interval)
+      ansible.builtin.assert:
+        that:
+          - suricata_eve.stat.exists
+          - (now().timestamp() | int) - (suricata_eve.stat.mtime | int) <= suricata_eve_max_age_seconds | int
+        fail_msg: "suricata: {{ suricata_log_dir }}/{{ suricata_eve_file }} was not written in the last {{ suricata_eve_max_age_seconds }} seconds"
+  tags: [health]

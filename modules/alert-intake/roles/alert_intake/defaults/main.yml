@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# The alert webhook as one module role (modules/alert-intake): a stdlib service the SIEM posts its
+# alert events to. It validates each event, refuses a foreign source, deduplicates, records an alert
+# through the cases contract (an adapter the site names) and pages for high severity. Nothing here
+# is a lab value: the guest, its address, the adapter, the case store's URL and every secret
+# reference are the site's.
+# alert_intake_logical_id (required): the instance id, e.g. alert-intake
+# alert_intake_listen_address (required): the guest address the webhook binds (an IPv4 literal)
+# alert_intake_allowed_source (required): the one `source` an event may carry, the SIEM's (svc:<name>)
+# alert_intake_cases_adapter (required): module:factory of the cases adapter the site installs (the module is the file's basename)
+# alert_intake_adapter_file (required): the adapter's one source file on the control host (stdlib only, plus the contract file)
+# alert_intake_cases_url (required): the case store's base URL (https)
+# alert_intake_homelabnext_dir (required): the homelabnext package directory on the control host (its notify, state and
+#   http helpers are installed beside the adapter; the service uses the shared sender and state store)
+# alert_intake_notify_url (required): the notification endpoint's base URL (http or https)
+# alert_intake_notify_topic (required): the topic a page is published to
+alert_intake_config_dir: "/etc/hnx/{{ alert_intake_logical_id }}"
+# the module's data root (docs/modules/data.md): state/ (per-event progress), export/
+alert_intake_data_root: "/var/lib/hnx-modules/{{ alert_intake_logical_id }}"
+alert_intake_bin_dir: /usr/local/libexec/homelabnext
+# the adapter and the contract file are installed under this directory (root's)
+alert_intake_lib_dir: "/usr/local/lib/hnx-modules/{{ alert_intake_logical_id }}"
+alert_intake_owner: root
+alert_intake_owner_group: root
+alert_intake_user: "hnx-{{ alert_intake_logical_id }}"
+alert_intake_group: "hnx-{{ alert_intake_logical_id }}"
+alert_intake_manage_accounts: true
+alert_intake_port: 8480
+
+# the webhook's bearer token (what the SIEM's integration sends), the case store's API key (the overlay
+# may point this at the case store provider's own key with a grant) and its CA, the notification
+# endpoint's bearer token and, when it is https, its CA (empty: the system roots)
+alert_intake_webhook_login_ref: secret:alert-intake/webhook-token
+alert_intake_cases_key_ref: secret:alert-intake/cases-credential
+alert_intake_cases_ca_ref: secret:alert-intake/cases-ca
+alert_intake_notify_login_ref: secret:alert-intake/notify-token
+alert_intake_notify_ca_ref: ""
+# a token is never sent over plain http to a non-loopback host unless this is true (the lab's notifier is
+# reached over plain http inside its own network: a decision for the site)
+alert_intake_notify_plaintext: false
+# extra settings for the adapter's factory (the URL, the credential reference and the CA path are set by the role)
+alert_intake_cases_settings: {}
+
+# policy: page a NEW alert at or above this severity (info, low, medium, high, critical; the old lab paged
+# only its top tier, so `high` is the conservative default); promote an alert to a case at or above this
+# severity ("" = never: alerts, not cases); a detection id under the canary prefix is recorded, dismissed
+# and never pages
+alert_intake_page_min: high
+alert_intake_promote_min: ""
+alert_intake_canary_prefix: "det:canary"
+
+# restore: the directory a prior export wrote (state.json)
+alert_intake_restore_source: ""
+
+alert_intake_start: true
+alert_intake_unit_dir: /etc/systemd/system
+alert_intake_systemctl_cli: systemctl
+alert_intake_health_timeout: 10

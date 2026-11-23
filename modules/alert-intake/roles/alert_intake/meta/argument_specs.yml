@@ -1,0 +1,159 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the SIEM's alert webhook (the script, the adapter, the unit and the credentials).
+    options: &opts
+      alert_intake_logical_id:
+        type: str
+        description: The instance's id (the unit's name), e.g. alert-intake.
+        required: true
+      alert_intake_listen_address:
+        type: str
+        description: The guest address the webhook binds (an IPv4 literal).
+        required: true
+      alert_intake_allowed_source:
+        type: str
+        description: The one source an event may carry, the SIEM's (svc:<name>); any other is refused with 403.
+        required: true
+      alert_intake_cases_adapter:
+        type: str
+        description: module:factory of the cases adapter the site installs (its settings are written by the role).
+        required: true
+      alert_intake_adapter_file:
+        type: str
+        description: The cases adapter's one source file on the control host (stdlib only, plus the contract file); its basename is the module the adapter setting names.
+        required: true
+      alert_intake_homelabnext_dir:
+        type: str
+        description: The homelabnext package directory on the control host; the service's shared notify, state and http helpers are copied from it.
+        required: true
+      alert_intake_notify_topic:
+        type: str
+        description: The topic a page is published to.
+        required: true
+      alert_intake_cases_url:
+        type: str
+        description: https base URL of the case store.
+        required: true
+      alert_intake_notify_url:
+        type: str
+        description: The notification endpoint's base URL (http or https).
+        required: true
+      alert_intake_config_dir:
+        type: path
+        description: Where the environment file, the adapter's settings, the credentials directory and the CA files are written.
+        default: /etc/hnx/{{ alert_intake_logical_id }}
+      alert_intake_data_root:
+        type: str
+        description: 'The module''s data root on the host: state/ and export/.'
+        default: /var/lib/hnx-modules/{{ alert_intake_logical_id }}
+      alert_intake_bin_dir:
+        type: path
+        description: Where the script is installed (its unit's ExecStart names it).
+        default: /usr/local/libexec/homelabnext
+      alert_intake_lib_dir:
+        type: path
+        description: Where the adapter and the contract file are installed.
+        default: /usr/local/lib/hnx-modules/{{ alert_intake_logical_id }}
+      alert_intake_owner:
+        type: str
+        description: Owner of the install and config directories and the credential files.
+        default: root
+      alert_intake_owner_group:
+        type: str
+        description: Group of the install and config directories, the credential files and export/.
+        default: root
+      alert_intake_user:
+        type: str
+        description: The unprivileged account the service runs as.
+        default: hnx-{{ alert_intake_logical_id }}
+      alert_intake_group:
+        type: str
+        description: The group of that account; it owns the state directory.
+        default: hnx-{{ alert_intake_logical_id }}
+      alert_intake_manage_accounts:
+        type: bool
+        description: Create the group and the user.
+        default: true
+      alert_intake_port:
+        type: int
+        description: The webhook's TCP port (1024 or above).
+        default: 8480
+      alert_intake_webhook_login_ref:
+        type: str
+        description: 'secret: reference of the webhook''s bearer token (24 to 256 characters).'
+        default: secret:alert-intake/webhook-token
+      alert_intake_cases_key_ref:
+        type: str
+        description: 'secret: reference of the case store''s API key.'
+        default: secret:alert-intake/cases-credential
+      alert_intake_cases_ca_ref:
+        type: str
+        description: 'secret: reference of the CA certificate (PEM) the case store is verified with; required.'
+        default: secret:alert-intake/cases-ca
+      alert_intake_notify_login_ref:
+        type: str
+        description: 'secret: reference of the notification endpoint''s publisher token.'
+        default: secret:alert-intake/notify-token
+      alert_intake_notify_ca_ref:
+        type: str
+        description: 'secret: reference of the CA certificate for an https notification endpoint; empty: the system roots.'
+        default: ''
+      alert_intake_notify_plaintext:
+        type: bool
+        description: Allow the publisher token over plain http to a non-loopback notifier (a decision for the site).
+        default: false
+      alert_intake_cases_settings:
+        type: dict
+        description: Extra settings for the adapter's factory (customer_id, timeout); the URL, credential reference and CA path are set by the role.
+        default: {}
+      alert_intake_page_min:
+        type: str
+        description: Page a NEW alert at or above this severity (info, low, medium, high, critical).
+        default: high
+      alert_intake_promote_min:
+        type: str
+        description: 'Promote an alert to a case at or above this severity; empty: never (alerts, not cases).'
+        default: ''
+      alert_intake_canary_prefix:
+        type: str
+        description: A detection id under this prefix is recorded, dismissed with the reason canary and never pages.
+        default: det:canary
+      alert_intake_restore_source:
+        type: str
+        description: The directory a prior export wrote (state.json); the restore hook REPLACES the live state with it.
+        default: ''
+      alert_intake_start:
+        type: bool
+        description: Enable and start the service (false for a render-only converge).
+        default: true
+      alert_intake_unit_dir:
+        type: path
+        description: Where the unit is written.
+        default: /etc/systemd/system
+      alert_intake_systemctl_cli:
+        type: str
+        description: The systemctl binary the hooks call.
+        default: systemctl
+      alert_intake_health_timeout:
+        type: int
+        description: Seconds the health hook waits for the webhook.
+        default: 10
+  health:
+    short_description: The health hook.
+    options: *opts
+  readiness:
+    short_description: The readiness hook.
+    options: *opts
+  backup:
+    short_description: The backup hook.
+    options: *opts
+  export:
+    short_description: The export hook.
+    options: *opts
+  restore:
+    short_description: The restore hook.
+    options: *opts
+  upgrade:
+    short_description: The upgrade hook.
+    options: *opts

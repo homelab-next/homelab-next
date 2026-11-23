@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate a pinned package bump (suricata_target_version), then converge with the new pin
+# (set suricata_package_version to the target in the overlay). The configuration is tested with
+# suricata -T before the service is restarted, and a failed test leaves the running sensor alone.
+#   ansible-playbook -i <inventory> modules/suricata/playbooks/upgrade.yml -e suricata_target_version=<version>
+- name: Upgrade the network sensor
+  hosts: mod_suricata_sensor
+  become: true
+  tasks:
+    - name: Validate the bump
+      ansible.builtin.include_role:
+        name: suricata
+        tasks_from: upgrade
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: suricata
+      vars:
+        suricata_package_version: "{{ suricata_target_version }}"

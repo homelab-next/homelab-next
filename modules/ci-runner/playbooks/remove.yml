@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: stop and disable every slot (their VMs end with them) and the egress table's unit, then
+# remove the units, the scripts, the configuration and the feed key, and reload systemd. The data
+# root (the images) is kept for the operator to delete. The runner registrations still listed at
+# the forge are removed by the feeder's reaper, or by hand.
+- name: Remove the ephemeral CI runner pool
+  hosts: mod_ci_runner_runner
+  become: true
+  tasks:
+    - name: Stop and disable the slots
+      ansible.builtin.command:
+        argv: [systemctl, disable, --now, "hnx-{{ ci_runner_logical_id }}-slot@*.service"]
+      changed_when: true
+      failed_when: false
+    - name: Stop and disable the egress table's unit
+      ansible.builtin.systemd_service:
+        name: "hnx-{{ ci_runner_logical_id }}-egress.service"
+        state: stopped
+        enabled: false
+      failed_when: false
+    - name: Remove the units, the scripts, the configuration and the feed key
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/etc/systemd/system/hnx-{{ ci_runner_logical_id }}-slot@.service"
+        - "/etc/systemd/system/hnx-{{ ci_runner_logical_id }}-egress.service"
+        - /usr/local/libexec/homelabnext/hnx-ci-slot
+        - /usr/local/libexec/homelabnext/hnx-ci-feeder
+        - "/var/lib/hnx-modules/{{ ci_runner_logical_id }}/feed/.ssh/authorized_keys"
+        - "/etc/hnx/{{ ci_runner_logical_id }}"
+    - name: Remove the egress table
+      ansible.builtin.command:
+        argv: [nft, delete, table, inet, hnx_ci_egress]
+      changed_when: true
+      failed_when: false
+    - name: Reload systemd
+      ansible.builtin.command:
+        argv: [systemctl, daemon-reload]
+      changed_when: true

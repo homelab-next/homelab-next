@@ -1,0 +1,21 @@
+{
+  "uid": "01a15e4e-758c-7311-82ff-6357fd41e8c9",
+  "type": "cutover",
+  "title": "Wiki: old app-core wiki to the new wiki module",
+  "kind": "service",
+  "plane": "household",
+  "old": ["vm:app-core/wiki"],
+  "new": "module:wiki",
+  "disposition": "replace",
+  "capability": "wiki",
+  "contract": "1.0",
+  "gate": "conform report: capability wiki passes at 1.0 with --strict",
+  "governed_by": "ADR-0040",
+  "rollback_days": 14,
+  "checks": {
+    "data_verified": {"status": "pass", "note": "page counts equal (412/412)"},
+    "consumers_repointed": {"status": "pending", "note": "the intranet link list still names the old host"},
+    "soak": {"status": "pending"}
+  },
+  "links": ["evidence/01a15e4e-758c-7311-82ff-6357fd41e8c9/counts.txt"]
+}

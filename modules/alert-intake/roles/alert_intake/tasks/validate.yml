@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# Refuse a bad input before anything is read or written: the names that end up in unit names, paths and
+# the environment file are checked here, so no later task has to trust them.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - alert_intake_logical_id is match('^[a-z][a-z0-9-]{0,30}\Z')
+      - alert_intake_listen_address is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}\Z')
+      - alert_intake_port | int >= 1024 and alert_intake_port | int <= 65535
+      - alert_intake_allowed_source is match('^svc:[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - alert_intake_cases_adapter is match('^[A-Za-z_][A-Za-z0-9_]*:[A-Za-z_][A-Za-z0-9_]*\Z')
+      - alert_intake_adapter_file is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\.py\Z')
+      - alert_intake_adapter_file | basename | regex_replace('\.py$', '') == alert_intake_cases_adapter.split(':')[0]
+      - alert_intake_cases_url is match('^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?\Z')
+      - alert_intake_notify_url is match('^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?\Z')
+      - alert_intake_notify_topic is match('^[A-Za-z0-9_-]{1,64}\Z')
+      - alert_intake_notify_plaintext is boolean
+      - alert_intake_homelabnext_dir is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z')
+      - alert_intake_webhook_login_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - alert_intake_cases_key_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - alert_intake_cases_ca_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - alert_intake_notify_login_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - alert_intake_notify_ca_ref == '' or alert_intake_notify_ca_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      # the webhook's token is its own: never the case store's key or the page token
+      - alert_intake_webhook_login_ref != alert_intake_cases_key_ref
+      - alert_intake_webhook_login_ref != alert_intake_notify_login_ref
+      - alert_intake_page_min in alert_intake_severities
+      - alert_intake_promote_min == '' or alert_intake_promote_min in alert_intake_severities
+      - alert_intake_canary_prefix is match('^det:[a-z][a-z0-9-]{0,60}\Z')
+      - alert_intake_cases_settings is mapping
+      - alert_intake_cases_settings.keys() | difference(['customer_id', 'timeout']) | length == 0
+      - >-
+        [alert_intake_config_dir, alert_intake_data_root, alert_intake_lib_dir]
+        | reject('match', '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z') | list | length == 0
+      - alert_intake_restore_source == '' or alert_intake_restore_source is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z')
+    fail_msg: >-
+      alert-intake: an input is invalid (the instance id, the listen address (an IPv4 literal), the port (1024 or
+      above), the SIEM's source (svc:<name>), the adapter (module:factory) and its source file (its basename names the module),
+      the case store's https URL, the notification URL and topic, the homelabnext directory, secret references (the webhook token must
+      differ from the other two), the paging and promotion severities, the canary prefix and absolute paths of
+      at least two components are all checked)
+  tags: [readiness, health, backup, export, restore, upgrade]
