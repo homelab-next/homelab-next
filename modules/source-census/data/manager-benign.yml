@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# The manager-log error shapes that are known scan noise, not an ingest problem: the old daily
+# ingest audit's filter list, kept as reviewed data (each entry carries its reason). A match is a
+# literal substring of the message; {names} are site values (hnx logbursts --var NAME=VALUE), because
+# the address of the site's own vulnerability scanner is the site's, not this repository's.
+#
+# The list only grows by a reviewed change: tests/logbursts/test_benign_ratchet.py pins its length.
+# Scope an entry as tightly as the evidence allows: a genuine failure must never be hidden.
+benign:
+  - match: "Invalid request for new agent from: {scanner_address}"
+    reason: The site's own vulnerability scanner probes the manager's enrolment and agent ports during its authorised weekly scan, which produces malformed enrolment requests. A scan artefact of our own tooling, not an enrolment failure.
+  - match: "message request for {scanner_address}"
+    reason: The same scanner's malformed agent-port requests (the second line the manager logs for one probe).
+  - match: "Message from '{scanner_address}' not allowed"
+    reason: The same scanner's traffic, refused because it is no enrolled agent (the third line for one probe).
+  - match: "Too big message size from socket"
+    reason: Investigated 2026-07-26 - not agent ingest loss. No enrolled agent sends events over 64 KiB, and the line repeats every few seconds only while the scanner runs and sends oversized probe payloads to the agent port. A genuine oversized-event drop still surfaces through the source census (sources-flowing), not here.

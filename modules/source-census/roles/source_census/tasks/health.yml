@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy: the settings and the credential files are in place with the right modes and the census
+# command is there. It does not run the census (that is the criteria's job, and a lake that is
+# still learning is not an unhealthy role). Reads only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Stat the settings and the credential files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ source_census_config_file }}"
+        - "{{ source_census_cred_dir }}/reader-password"
+        - "{{ source_census_cred_dir }}/notify-token"
+      register: source_census_stats
+    - name: They exist
+      ansible.builtin.assert:
+        that: item.stat.exists
+        fail_msg: "source-census: {{ item.item }} is missing"
+      loop: "{{ source_census_stats.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+    - name: The credentials are 0600 (the run refuses any readable by group or others)
+      ansible.builtin.assert:
+        that: item.stat.mode == '0600'
+        fail_msg: "source-census: {{ item.item }} is not 0600"
+      loop: "{{ source_census_stats.results[1:] }}"
+      loop_control:
+        label: "{{ item.item }}"
+    - name: The command answers
+      ansible.builtin.command:
+        argv: ["{{ source_census_hnx_bin }}", lake, source-census, --help]
+      changed_when: false
+  tags: [health]

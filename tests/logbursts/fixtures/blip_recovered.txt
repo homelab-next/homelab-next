@@ -1,0 +1,18 @@
+2026/07/31 05:00:00 modulesd: INFO: Started sync cycle
+2026/07/31 08:00:00 integratord: ERROR: (7000): ConnectionError retrying integration 'soar' to https://soar.example.internal/api/v1/hooks/hook_0a1b2c: connection refused
+2026/07/31 08:00:03 integratord: ERROR: (7000): ConnectionError retrying integration 'soar' to https://soar.example.internal/api/v1/hooks/hook_0a1b2c: connection refused
+2026/07/31 08:00:06 integratord: ERROR: (7000): ConnectionError retrying integration 'soar' to https://soar.example.internal/api/v1/hooks/hook_0a1b2c: connection refused
+2026/07/31 08:00:09 integratord: ERROR: (7000): ConnectionError retrying integration 'soar' to https://soar.example.internal/api/v1/hooks/hook_0a1b2c: connection refused
+2026/07/31 08:00:12 integratord: ERROR: (7000): ConnectionError retrying integration 'soar' to https://soar.example.internal/api/v1/hooks/hook_0a1b2c: connection refused
+2026/07/31 08:00:15 integratord: ERROR: (7000): ConnectionError retrying integration 'soar' to https://soar.example.internal/api/v1/hooks/hook_0a1b2c: connection refused
+2026/07/31 08:00:20 remoted: WARNING: Agent '004' re-registering after connection reset
+2026/07/31 08:00:22 remoted: WARNING: Agent '007' re-registering after connection reset
+2026/07/31 08:00:24 remoted: WARNING: Agent '011' re-registering after connection reset
+2026/07/31 08:00:26 remoted: WARNING: Agent '013' re-registering after connection reset
+2026/07/31 08:00:28 remoted: WARNING: Agent '016' re-registering after connection reset
+2026/07/31 08:00:30 remoted: WARNING: Agent '019' re-registering after connection reset
+2026/07/31 08:00:32 remoted: WARNING: Agent '021' re-registering after connection reset
+2026/07/31 08:00:34 remoted: WARNING: Agent '023' re-registering after connection reset
+2026/07/31 08:00:36 remoted: WARNING: Agent '027' re-registering after connection reset
+2026/07/31 10:00:00 remoted: INFO: Started (pid: 211)
+2026/07/31 21:55:00 remoted: INFO: agent count 14

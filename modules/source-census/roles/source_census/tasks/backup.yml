@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# What a backup captures: the paging state (state.json). The credentials are not listed: the install
+# writes them again from the secret store, and a backup of them would copy secrets into the backup
+# store. Losing the state costs one repeated page of a standing set, nothing else.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Write the backup manifest
+      ansible.builtin.copy:
+        dest: "{{ source_census_state_dir }}/backup-manifest.json"
+        content: "{{ {'service': source_census_logical_id,
+                      'paths': [source_census_state_dir],
+                      'note': 'state/ holds state.json (the flagged set at the last run); credentials are not listed (written again from the secret store)'} | to_nice_json }}\n"
+        owner: "{{ source_census_user }}"
+        group: "{{ source_census_group }}"
+        mode: "0640"
+  tags: [backup]
