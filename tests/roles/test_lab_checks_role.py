@@ -14,7 +14,7 @@ import pwd
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from rolerun import fake, last_run_vars, run_role
+from rolerun import fake, first_run, last_run_vars, run_cases, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLE = str(ROOT / "modules" / "lab-checks" / "roles" / "lab_checks")
@@ -23,6 +23,7 @@ USER = pwd.getpwuid(os.getuid()).pw_name
 GROUP = grp.getgrgid(os.getgid()).gr_name
 TOKEN = "tk" + "-" + "t" * 20  # built here, never a literal that looks like a key
 SECRETS = {"HNX_SECRET_LAB_CHECKS_NOTIFY_TOKEN": TOKEN}
+CERT = "-----BEGIN " + "CERTIFICATE-----\n" + "x" * 20 + "\n-----END " + "CERTIFICATE-----"
 REGISTER = """\
 pillars:
 - {letter: N, title: Lab}
@@ -72,9 +73,25 @@ def _env(tmp_path: Path) -> dict:
     return out
 
 
-def test_main_installs_the_checks_with_the_token_only_in_the_root_only_file(tmp_path):
+def _first_main(tmp_path):
     v = _env(tmp_path)
-    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+def _first_main_with_ca(tmp_path):
+    v = {**_env(tmp_path), P + "ca_ref": "secret:lab-checks/ca"}
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": {**SECRETS, "HNX_SECRET_LAB_CHECKS_CA": CERT},
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first_main)
+def test_main_installs_the_checks_with_the_token_only_in_the_root_only_file(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert TOKEN not in r.stdout + r.stderr
     etc = tmp_path / "etc"
@@ -105,16 +122,20 @@ def test_main_installs_the_checks_with_the_token_only_in_the_root_only_file(tmp_
     assert "OnCalendar=*-*-* *:07:00 UTC" in timer and "OnBootSec=" not in timer
 
 
-def test_a_second_run_changes_nothing(tmp_path):
-    v = _env(tmp_path)
-    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0
+@first_run(_first_main)
+def test_a_second_run_changes_nothing(first):
+    first_r, tmp_path = first
+    v = first.setup["v"]
+    assert first_r.returncode == 0
     again = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-def test_a_register_that_does_not_validate_is_refused_and_the_live_one_stays(tmp_path):
-    v = _env(tmp_path)
-    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0
+@first_run(_first_main)
+def test_a_register_that_does_not_validate_is_refused_and_the_live_one_stays(first):
+    first_r, tmp_path = first
+    v = first.setup["v"]
+    assert first_r.returncode == 0
     Path(v[P + "register_src"]).write_text(
         REGISTER.replace("remediation: nothing to do, it always holds", "")
     )
@@ -124,13 +145,15 @@ def test_a_register_that_does_not_validate_is_refused_and_the_live_one_stays(tmp
 
 
 def test_bad_inputs_and_a_bad_token_are_refused_before_anything_is_written(tmp_path):
-    for bad in (
+    bad = [
         {P + "logical_id": "Bad Name"},
         {P + "oncalendar": "hourly"},
         {P + "notify_ceiling": "purple"},
-    ):
-        r = run_role(tmp_path, ROLE, "main", {**_env(tmp_path), **bad}, env=SECRETS)
-        assert r.returncode != 0 and "lab-checks: an input is invalid" in r.stdout + r.stderr
+    ]
+    results = run_cases(tmp_path, ROLE, "main", _env(tmp_path), bad, env=SECRETS)
+    assert len(results) == 3
+    for failed, message in results:
+        assert failed and "lab-checks: an input is invalid" in message
     r = run_role(
         tmp_path, ROLE, "main", _env(tmp_path), env={"HNX_SECRET_LAB_CHECKS_NOTIFY_TOKEN": "x y"}
     )
@@ -138,9 +161,11 @@ def test_bad_inputs_and_a_bad_token_are_refused_before_anything_is_written(tmp_p
     assert not (tmp_path / "etc" / "invariants.yml").exists()
 
 
-def test_health_needs_the_files_an_armed_timer_and_a_recent_results_document(tmp_path):
-    v = _env(tmp_path)
-    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0
+@first_run(_first_main)
+def test_health_needs_the_files_an_armed_timer_and_a_recent_results_document(first):
+    first_r, tmp_path = first
+    v = first.setup["v"]
+    assert first_r.returncode == 0
     sysd = fake(
         tmp_path / "bin" / "systemctl",
         "import sys\nsys.exit(int(open(sys.argv[0] + '.rc').read()))\n",
@@ -168,9 +193,11 @@ def test_health_needs_the_files_an_armed_timer_and_a_recent_results_document(tmp
     assert r.returncode != 0 and "missing" in r.stdout + r.stderr
 
 
-def test_the_export_writes_the_documents_beside_and_renames_into_place(tmp_path):
-    v = _env(tmp_path)
-    assert run_role(tmp_path, ROLE, "main", v, env=SECRETS).returncode == 0
+@first_run(_first_main)
+def test_the_export_writes_the_documents_beside_and_renames_into_place(first):
+    first_r, tmp_path = first
+    v = first.setup["v"]
+    assert first_r.returncode == 0
     (tmp_path / "data" / "results" / "checks.hourly.json").write_text('{"results": {}}')
     (tmp_path / "data" / "state" / "checks.hourly.json").write_text('{"N-01": "pass"}')
     r = run_role(tmp_path, ROLE, "export", v, env=SECRETS)
@@ -190,10 +217,11 @@ def test_the_export_writes_the_documents_beside_and_renames_into_place(tmp_path)
     assert bad.returncode != 0
 
 
-def test_the_ca_is_written_only_when_named_and_must_be_a_certificate(tmp_path):
-    cert = "-----BEGIN " + "CERTIFICATE-----\n" + "x" * 20 + "\n-----END " + "CERTIFICATE-----"
-    v = {**_env(tmp_path), P + "ca_ref": "secret:lab-checks/ca"}
-    r = run_role(tmp_path, ROLE, "main", v, env={**SECRETS, "HNX_SECRET_LAB_CHECKS_CA": cert})
+@first_run(_first_main_with_ca)
+def test_the_ca_is_written_only_when_named_and_must_be_a_certificate(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    cert = CERT
     assert r.returncode == 0, r.stdout + r.stderr
     assert (tmp_path / "etc" / "ca.pem").read_text().strip() == cert
     assert oct((tmp_path / "etc" / "ca.pem").stat().st_mode & 0o777) == "0o644"
