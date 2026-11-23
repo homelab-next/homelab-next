@@ -32,7 +32,7 @@
     dest: "{{ zeek_build_dir }}/{{ item.dest }}"
     mode: "0644"
   loop:
-    - {src: Dockerfile.j2, dest: Dockerfile}
+    - {src: build-context.j2, dest: Dockerfile}
     - {src: hnx-local.zeek.j2, dest: hnx-local.zeek}
   register: zeek_context
 
