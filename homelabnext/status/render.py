@@ -58,7 +58,7 @@ nav .grp{margin:.9rem 0 .2rem;padding:0 .5rem;color:var(--mute);font-size:.75rem
 text-transform:uppercase;letter-spacing:.04em}
 .chips{margin:0 0 .75rem;font-size:.85rem}.chips a,.chips b{display:inline-block;margin:0 .3rem .3rem 0;
 padding:.1rem .5rem;border:1px solid var(--line);border-radius:1rem;color:inherit;text-decoration:none}
-.chips b{background:var(--panel)}.split{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);
+.chips b{background:var(--panel)}.pane+.pane{margin-top:.75rem}summary{cursor:pointer}.split{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);
 gap:1rem}.pane{background:var(--panel);border:1px solid var(--line);border-radius:.4rem;padding:.6rem .75rem;
 min-width:0}dl{display:grid;grid-template-columns:max-content 1fr;gap:.2rem .75rem;margin:0}
 dt{color:var(--mute)}dd{margin:0;overflow-wrap:anywhere}
