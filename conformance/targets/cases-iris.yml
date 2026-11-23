@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The cases adapter (homelabnext.conform.adapters.cases_iris) on the loopback stand-in for the case
+# store's recorded 2.4.29 API (conformance/fakes/iris_api.py), a fresh instance per check:
+#   hnx conform run cases --strict --target cases-iris
+# Against the live instance (a lab run) copy this file and replace `recorded_fake` with
+#   base_url (or HNX_ENDPOINT_CASE_MANAGEMENT), credential: <secret reference; the variable it names
+#   holds the key>, ca_file: <the lab CA>.
+name: cases-iris
+capabilities:
+  cases:
+    adapter: homelabnext.conform.adapters.cases_iris:make
+    config: {recorded_fake: true}

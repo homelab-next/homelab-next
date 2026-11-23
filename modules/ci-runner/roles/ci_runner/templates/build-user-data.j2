@@ -1,0 +1,94 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+#cloud-config
+# {{ ci_runner_marker }}, instance {{ ci_runner_logical_id }}): the golden image's one build.
+# Booted once from the pinned base image; installs the toolchain the CI workflows expect of a
+# hosted image and the pinned runner agent, adds the per-job unit, resets cloud-init so every
+# job VM is a new instance, prints the build marker on the console and powers off. The role
+# keeps the image only when the marker is there.
+hostname: hnx-ci
+groups: [docker]
+users:
+  - name: runner
+    gecos: CI runner
+    shell: /bin/bash
+    groups: [adm, docker, sudo, systemd-journal]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+write_files:
+  - path: /usr/local/sbin/hnx-ci-build
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      # no background package jobs in a job VM: a job's own apt-get must never wait on a lock
+      systemctl disable --now unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer || true
+      systemctl mask unattended-upgrades.service apt-daily.service apt-daily-upgrade.service
+      apt-get update -q
+      apt-get -y -q -o Dpkg::Options::=--force-confold dist-upgrade
+      apt-get -y -q --no-install-recommends install \
+        acl build-essential ca-certificates curl docker-buildx docker-compose-v2 docker.io file git \
+        gnupg iproute2 jq nodejs openssh-client pipx python3 python3-pip python3-venv rsync \
+        shellcheck sudo time unzip wget xz-utils zip zstd{{ (' ' ~ (ci_runner_extra_packages | join(' '))) if ci_runner_extra_packages else '' }}
+      apt-get -y -q purge snapd || true
+      usermod -aG docker runner
+{% if ci_runner_go_url %}
+      # Go on the PATH, as on a hosted image (a job's setup action may still install another)
+      curl -fsSL --retry 5 -o /tmp/go.tar.gz '{{ ci_runner_go_url }}'
+      echo '{{ ci_runner_go_sha256 }}  /tmp/go.tar.gz' | sha256sum -c -
+      tar -xzf /tmp/go.tar.gz -C /usr/local
+      rm -f /tmp/go.tar.gz
+      ln -sfn /usr/local/go/bin/go /usr/local/bin/go
+      ln -sfn /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+{% endif %}
+{% for spec in ci_runner_pipx_packages %}
+      PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install '{{ spec }}'
+{% endfor %}
+      install -d -o runner -g runner -m 0755 /opt/hostedtoolcache /home/runner/actions-runner
+      curl -fsSL --retry 5 -o /tmp/agent.tar.gz '{{ ci_runner_agent_url }}'
+      echo '{{ ci_runner_agent_sha256 }}  /tmp/agent.tar.gz' | sha256sum -c -
+      runuser -u runner -- tar -xzf /tmp/agent.tar.gz -C /home/runner/actions-runner
+      rm -f /tmp/agent.tar.gz
+      /home/runner/actions-runner/bin/installdependencies.sh
+      printf '%s\n' 'LANG=C.UTF-8' 'ImageOS={{ ci_runner_hosted_os_name }}' 'ImageVersion=hnx-{{ ci_runner_base_image_sha256[:12] }}' \
+        'AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache' 'RUNNER_TOOL_CACHE=/opt/hostedtoolcache' \
+        > /home/runner/actions-runner/.env
+      printf '%s\n' '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' > /home/runner/actions-runner/.path
+      chown runner:runner /home/runner/actions-runner/.env /home/runner/actions-runner/.path
+      systemctl enable docker.service containerd.service
+      apt-get clean
+      rm -rf /var/lib/apt/lists/*
+      cloud-init clean --logs --machine-id
+      fstrim -av || true
+  - path: /usr/local/libexec/hnx-ci-job
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # The job VM's one job: the single-use registration the seed carried, then the agent until
+      # its job ends. The unit powers the VM off whatever the outcome.
+      set -uo pipefail
+      jit=$(cat /run/hnx-ci/jit)
+      rm -f /run/hnx-ci/jit
+      cd /home/runner/actions-runner
+      echo "hnx-ci-job: agent starting" > /dev/ttyS0
+      runuser -u runner -- env HOME=/home/runner ./run.sh --jitconfig "$jit"
+      rc=$?
+      echo "hnx-ci-job: agent exited $rc, powering off" > /dev/ttyS0
+      # whatever the agent left running (a job's background process, a container), the VM ends here
+      systemctl poweroff --force --force
+  - path: /etc/systemd/system/hnx-ci-job.service
+    content: |
+      [Unit]
+      Description=CI job (one single-use runner registration, then power off)
+      Wants=network-online.target docker.service
+      After=network-online.target docker.service
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/libexec/hnx-ci-job
+      SuccessAction=poweroff-force
+      FailureAction=poweroff-force
+      TimeoutStartSec=0
+      StandardOutput=journal+console
+      StandardError=journal+console
+runcmd:
+  - [sh, -c, "/usr/local/sbin/hnx-ci-build && echo 'HNX-CI-BUILD-OK {{ ci_runner_base_image_sha256[:16] }}' > /dev/ttyS0; systemctl poweroff"]

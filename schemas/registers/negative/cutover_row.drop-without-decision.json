@@ -1,0 +1,10 @@
+{
+  "uid": "01a15e4e-758c-7311-82ff-6357fd41e8c9",
+  "type": "cutover",
+  "title": "A drop nobody decided",
+  "kind": "service",
+  "old": ["lxc:browser-core"],
+  "new": null,
+  "disposition": "drop",
+  "rollback_days": 7
+}

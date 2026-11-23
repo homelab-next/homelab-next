@@ -1,0 +1,9 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role nut_ups, control ups-protection); local changes are overwritten.
+maxretry = 3
+[{{ nut_ups_name }}]
+  driver = {{ nut_ups_driver }}
+  port = auto
+  vendorid = {{ nut_ups_vendorid }}
+  productid = {{ nut_ups_productid }}
+  desc = "{{ nut_ups_description }}"

@@ -46,8 +46,12 @@ PORT = 9443
 SELF = "https://dataflow.example.internal:" + str(PORT)
 
 
-def _module_for(slot: str) -> str:
-    """The id of the module that fills ``slot`` (this test names slots, not products)."""
+def _module_for(slot: str, *, any_provider: bool = False) -> str:
+    """The id of the module that fills ``slot`` (this test names slots, not products).
+
+    A slot can have several in-tree providers (an overlay places exactly one). The slot under test
+    must have one; for a slot the module only requires, ``any_provider`` takes the first by id, since
+    any provider of the slot satisfies the requirement."""
     found = [
         d.name
         for d in sorted((ROOT / "modules").iterdir())
@@ -55,7 +59,7 @@ def _module_for(slot: str) -> str:
         and slot
         in (yaml.safe_load((d / "module.yml").read_text()).get("provides", {}).get("slots") or {})
     ]
-    assert len(found) == 1, (slot, found)
+    assert found and (any_provider or len(found) == 1), (slot, found)
     return found[0]
 
 
@@ -67,7 +71,7 @@ GUEST = ld.load_yaml(ROOT / "examples" / "services.yml")["hosts"]["dns-core"]["a
 BEARER_REF = f"secret:{MID}/api-bearer"
 BEARER_ENV = secret_env_name(BEARER_REF)
 LAKE = {
-    _module_for(slot): {"slot": slot, "row": slot}
+    _module_for(slot, any_provider=True): {"slot": slot, "row": slot}
     for slot in ("object-store", "lake-catalog", "lake-query")
 }
 ALL = {**LAKE, MID: {"slot": SLOT, "row": SLOT}}
@@ -125,7 +129,11 @@ def test_the_row_is_https_on_its_own_port_and_its_liveness_is_a_refusal():
     assert "version" not in row and "public_hostname" not in row  # internal only
     # the query engine publishes 8443 on the same guest's address
     query_row = ld.load_yaml(
-        ROOT / "modules" / _module_for("lake-query") / "registry" / "services.yml"
+        ROOT
+        / "modules"
+        / _module_for("lake-query", any_provider=True)
+        / "registry"
+        / "services.yml"
     )["services"]
     assert row["port"] == defaults()[f"{P}_port"] == 9443
     assert row["port"] != query_row["lake-query"]["port"]

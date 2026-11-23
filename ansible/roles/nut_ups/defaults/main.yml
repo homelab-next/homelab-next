@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# UPS protection (control ups-protection, applied per host with a USB-attached UPS): the
+# distribution's NUT with the driver, a LOOPBACK-only upsd and upsmon (the shutdown monitor) on the
+# one host the UPS cable reaches. The monitor has a MONITOR line for that UPS (the first version of this
+# host's config had none, so the monitor failed to start and nothing would have shut the host down).
+# Shutdown policy: upsmon shuts the host down when the UPS reports low battery (LB) while on battery;
+# the checker below ALSO forces a shutdown (upsmon -c fsd) once the host is on battery with a charge at or
+# under nut_ups_shutdown_charge_percent, for a UPS whose LB flag is not reliable. The host's hypervisor stops
+# its guests on a clean shutdown (PVE's guest-stop-on-shutdown); the role never shuts anything down itself.
+nut_ups_name: ups
+nut_ups_description: "UPS attached by USB"
+# The USB ids of the UPS (the driver matches on them; port auto).
+nut_ups_driver: usbhid-ups
+# The monitor's own login to the loopback upsd. Generated on the host once (random, owner-only) and
+# kept in the state dir; upsd listens on loopback only, so the secret never crosses the network.
+nut_ups_monitor_user: upsmon
+# Forced shutdown when on battery with a charge at or under this percent (0 turns the fallback off).
+nut_ups_shutdown_charge_percent: 20
+# The host's shutdown command, run by upsmon on a forced shutdown (a clean, ordered stop).
+nut_ups_shutdown_cmd: "/sbin/shutdown -h +0 'UPS low battery: clean shutdown'"
+# Also power the UPS output off after the host halts (upsdrvctl shutdown), so the UPS restarts the
+# host when mains returns. Off: the host stays down until the UPS pack is empty or an operator acts.
+nut_ups_cut_power: false
+# Where the textfile metrics go (the node exporter's textfile directory, control metrics-agent): NOT under /var/lib/homelabnext, which is 0750 root and the exporter's user could not traverse.
+nut_ups_textfile_dir: /var/lib/homelabnext-textfile
+nut_ups_metrics_interval: "*-*-* *:*:00 UTC"
+nut_ups_state_dir: /var/lib/homelabnext/nut_ups
+nut_ups_conf_dir: /etc/nut
+nut_ups_libexec_dir: /usr/local/libexec/homelabnext
+nut_ups_systemd_dir: /etc/systemd/system
+nut_ups_upsc_cli: upsc
+nut_ups_upsmon_cli: upsmon
+nut_ups_systemctl_cli: systemctl
+nut_ups_health_max_age_seconds: 180
+nut_ups_conf_owner: root
+nut_ups_conf_group: nut
+# Each run's last-run record (role last_run, docs/role-interface.md section 8): the shared
+# per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
+nut_ups_last_run_dir: /var/lib/homelabnext/last-run
+nut_ups_last_run_group: root
