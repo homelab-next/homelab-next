@@ -11,6 +11,7 @@ import argparse
 import datetime as dt
 import json
 import sys
+from collections.abc import Callable
 
 from .model import (
     ahead_of_proof,
@@ -47,13 +48,13 @@ def _parser() -> argparse.ArgumentParser:
     return ap
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, clock: Callable[[], dt.date] = dt.date.today) -> int:
     try:
         args = _parser().parse_args(argv)
     except SystemExit as exc:
         return 2 if exc.code else 0
     try:
-        today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
+        today = dt.date.fromisoformat(args.today) if args.today else clock()
     except ValueError:
         print("hnx cutover: --today must be YYYY-MM-DD", file=sys.stderr)
         return 2

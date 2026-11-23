@@ -169,3 +169,11 @@ def test_render_and_cli(tmp_path, capsys):
     assert main(["check", str(tmp_path)]) == 0
     assert main(["check", str(tmp_path / "missing")]) == 1
     assert main(["gate", str(tmp_path)]) == 2
+
+
+def test_cli_uses_the_injected_clock_when_no_today_is_given(tmp_path):
+    write(tmp_path, row(A, disposition="undecided", new=None))
+    argv = ["gate", str(tmp_path), "--archive-gate"]
+    assert main(argv, clock=lambda: dt.date(2026, 11, 22)) == 1
+    (tmp_path / f"{A}.md").unlink()
+    assert main(argv, clock=lambda: dt.date(2026, 11, 30)) == 0
