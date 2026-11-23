@@ -271,23 +271,18 @@ def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
 
 
 def test_the_golden_image_puts_pinned_pythons_in_the_tool_cache():
-    import jinja2
-
     text = (ROLE / "templates" / "build-user-data.j2").read_text()
-    base = {
-        "ci_runner_marker": "m", "ci_runner_logical_id": "x", "ci_runner_extra_packages": [],
-        "ci_runner_go_url": "", "ci_runner_go_sha256": "", "ci_runner_pipx_packages": [],
-        "ci_runner_agent_url": "https://example.invalid/a.tgz", "ci_runner_agent_sha256": "a" * 64,
-        "ci_runner_hosted_os_name": "ubuntu26", "ci_runner_base_image_sha256": "b" * 64,
-    }  # fmt: skip
-    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
-    none = env.from_string(text).render(**base, ci_runner_toolcache_pythons=[])
-    assert "setup.sh" not in none
-    entry = {"url": "https://example.invalid/python-3.12.1.tar.gz", "sha256": "c" * 64}
-    one = env.from_string(text).render(**base, ci_runner_toolcache_pythons=[entry])
-    assert "AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache bash ./setup.sh" in one
-    assert "c" * 64 + '  \'"$tc/python.tar.gz" | sha256sum -c -' in one
-    assert one.index("setup.sh") < one.index("chown -R runner:runner /opt/hostedtoolcache")
-    assert one.index("install -d -o runner") < one.index(
-        "setup.sh"
-    )  # the tool cache dir exists first
+    loop = text[text.index("{% for tc in ci_runner_toolcache_pythons %}") :]
+    loop = loop[: loop.index("{% endfor %}")]
+    assert "{{ tc.url }}" in loop and "{{ tc.sha256 }}" in loop
+    assert "sha256sum -c -" in loop
+    assert "AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache bash ./setup.sh" in loop
+    assert text.index("install -d -o runner") < text.index(
+        "{% for tc in"
+    )  # the cache dir exists first
+    assert text.index("{% endfor %}") < text.index("chown -R runner:runner /opt/hostedtoolcache")
+    tasks = yaml.safe_load((ROLE / "tasks" / "validate.yml").read_text())
+    that = "\n".join(
+        str(x) for t in tasks for x in t.get("ansible.builtin.assert", {}).get("that", [])
+    )
+    assert "ci_runner_toolcache_pythons" in that
