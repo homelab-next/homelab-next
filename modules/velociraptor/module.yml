@@ -42,17 +42,13 @@ requires:
       purpose: the administrator's password and the client configuration are read by name at deploy time
   hosts:
     - role: server
-      kind: vm
+      kind: any
       footprint: {cpu: 2, memory_mb: 4096, disk_gb: 60}
-      guest:
-        baselines: [base]
       roles: [role:velociraptor_server]
       purpose: runs the server container (docker_engine first, compose_app renders it); its configuration with the authority, datastore, hunt results and exports live on this disk
     - role: endpoint
-      kind: vm
+      kind: any
       footprint: {cpu: 1, memory_mb: 256, disk_gb: 1}
-      guest:
-        baselines: [base]
       roles: [role:velociraptor_client]
       purpose: the client baseline control on every endpoint the site wants hunted; it dials the server's clients' port and takes no inbound connection
 provides:

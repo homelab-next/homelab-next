@@ -282,12 +282,21 @@ def test_a_registry_row_that_differs_is_refused(tmp_path, capsys):
     assert code == 1 and "services.forensics.port" in out, out
 
 
-def test_a_guest_without_the_base_baseline_is_refused(tmp_path, capsys):
+def test_a_guest_with_no_baseline_at_all_is_still_refused(tmp_path, capsys):
     ov = overlay(tmp_path)
     g = ov / "lab" / "guests" / "forensics-1.yml"
     g.write_text(g.read_text().replace("baseline: {names: [base]}", "baseline: {names: []}"))
     code, out = _check(ov, capsys)
-    assert code == 1 and "base" in out, out
+    assert code == 1, out
+
+
+def test_both_host_roles_accept_a_physical_host_and_ask_for_no_guest_baseline():
+    # a capture host that is a physical machine (kind host, a baseline exemption) carries the server and
+    # the client baseline: the roles are kind any and name no guest baseline of their own
+    manifest = ld.load_yaml(MODULE / "module.yml")
+    roles = {h["role"]: h for h in manifest["requires"]["hosts"]}
+    assert {r: h["kind"] for r, h in roles.items()} == {"server": "any", "endpoint": "any"}
+    assert not any("guest" in h for h in roles.values())
 
 
 # ----------------------------------------------------------------------------- the probe
