@@ -26,7 +26,7 @@ argument_specs:
       velociraptor_server_gui_port: &gui_port
         type: int
         description: "Host port of the GUI (its own sign-in; the registry's gui row)."
-        default: 8889
+        default: 8890
       velociraptor_server_dir: &dir
         type: path
         description: 'The compose project directory.'

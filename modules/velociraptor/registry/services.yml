@@ -13,7 +13,7 @@ services:
     impl: velociraptor
     host: server
     protocol: https
-    port: 8889
+    port: 8890
     health: {kind: tcp}
     owner: operator
     tls: internal

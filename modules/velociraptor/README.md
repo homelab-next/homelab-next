@@ -30,7 +30,7 @@ module's.
 
 | Port | What | Proxied? |
 |---|---|---|
-| `velociraptor_server_gui_port` (default **8889**) | the GUI and its API, HTTPS with the server's own certificate, its own sign-in (`auth: own`). This is the module's **registry row** (`endpoint-forensics`) | a site may front it with its edge proxy (a `public_hostname` and the grants); the old fleet did, with the upstream's own origin override |
+| `velociraptor_server_gui_port` (default **8890**) | the GUI and its API, HTTPS with the server's own certificate, its own sign-in (`auth: own`). This is the module's **registry row** (`endpoint-forensics`) | a site may front it with its edge proxy (a `public_hostname` and the grants); the old fleet did, with the upstream's own origin override |
 | `velociraptor_server_frontend_port` (default **8000**) | the **clients' port**: mutual-TLS speaking the product's own protocol, dialled by every endpoint | **never**. The clients pin the server's certificate authority and verify the server by name: a proxy in the way breaks every client. It is not a registry row (a provider's row is keyed by its slot, one per slot); the site's firewall file admits the endpoints' zones to it |
 
 Both are published on the guest's own address only (`velociraptor_server_bind`, default the inventory's

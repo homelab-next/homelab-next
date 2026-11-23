@@ -49,7 +49,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 HOSTS = ld.load_yaml(ROOT / "examples" / "services.yml")["hosts"]
 GUEST = HOSTS["dns-core"]["address"]
-PORT = 8889
+PORT = 8890
 GUEST2 = HOSTS["lake-core"]["address"]
 REQUIRED = sorted(
     s
@@ -169,7 +169,7 @@ def test_the_manifest_names_the_secrets_no_egress_and_a_provisional_slot():
     assert slot["provisional"] is True and slot["migration"]["formats"] == ["object-tree"]
     assert [h["role"] for h in manifest["requires"]["hosts"]] == ["server", "endpoint"]
     row = ld.load_yaml(MODULE / "registry" / "services.yml")["services"][SLOT]
-    assert row["auth"] == "own" and row["port"] == 8889 and row["protocol"] == "https"
+    assert row["auth"] == "own" and row["port"] == 8890 and row["protocol"] == "https"
     assert "public_hostname" not in row and "version" not in row
     slots = ld.load_yaml(ROOT / "examples" / "modules" / "slots.yml")["slots"]
     assert slots[SLOT]["contract"] is None and not slots[SLOT].get("privileged")

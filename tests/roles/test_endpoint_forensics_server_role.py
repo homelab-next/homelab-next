@@ -148,7 +148,7 @@ def test_main_renders_the_guarded_server_with_the_credential_only_in_the_env_fil
     cmd = svc["command"]
     assert cmd[:2] == ["/bin/sh", "-c"] and "-s /etc/" in cmd[2] and cmd[2].count("entrypoint") == 1
     assert "then exec" in cmd[2] and "else exec /bin/sh /bin/entrypoint" in cmd[2]
-    assert svc["ports"] == [f"{GUEST}:8000:8000", f"{GUEST}:8889:8889"]
+    assert svc["ports"] == [f"{GUEST}:8000:8000", f"{GUEST}:8890:8889"]
     assert svc["volumes"] == [
         f"{tmp_path}/data/etc:/etc/{MID}",
         f"{tmp_path}/data/datastore:/datastore",
@@ -207,7 +207,7 @@ BAD = [
     ({f"{SP}frontend_hostname": "https://frontend.example.internal"}, {}),  # a URL, not a name
     ({f"{SP}frontend_hostname": ""}, {}),
     ({f"{SP}frontend_hostname": "a b"}, {}),
-    ({f"{SP}frontend_port": 8889}, {}),  # both ports the same
+    ({f"{SP}frontend_port": 8890}, {}),  # both ports the same
     ({f"{SP}hunt_principal": "admin"}, {}),
     ({f"{SP}uid": 0}, {}),
     ({f"{SP}data_root": "/var/lib/../etc"}, {}),

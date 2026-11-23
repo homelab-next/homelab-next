@@ -11,7 +11,7 @@ velociraptor_server_image: "ghcr.io/velocidex/velociraptor-server:0.77.1@sha256:
 velociraptor_server_bind: "{{ ansible_host }}"
 # the clients' port (not proxied: the clients speak their own mutual-TLS protocol on it) and the GUI's
 velociraptor_server_frontend_port: 8000
-velociraptor_server_gui_port: 8889
+velociraptor_server_gui_port: 8890
 velociraptor_server_dir: /opt/compose/velociraptor
 velociraptor_server_owner: root
 velociraptor_server_group: root
