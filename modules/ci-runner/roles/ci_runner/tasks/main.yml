@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Install the hypervisor tools, the seed image tool and nftables
+  ansible.builtin.apt:
+    name: "{{ ci_runner_packages }}"
+    state: present
+    install_recommends: false
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the accounts and the directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Write the scripts, the slot configuration, the feed key and the egress table
+  ansible.builtin.include_tasks: config.yml
+
+- name: Fetch the base image and build the golden image (once per base, agent and build seed)
+  ansible.builtin.include_tasks: image.yml
+
+- name: Start the slots
+  ansible.builtin.include_tasks: slots.yml
