@@ -1680,7 +1680,7 @@ def test_status_hub_collector_renders_a_calendar_timer_and_a_hardened_oneshot(tm
     assert svc["Type"] == ["oneshot"] and svc["User"] == ["hnx-hub"]
     assert svc["ReadWritePaths"] == ["/var/lib/hnx-hub"] and svc["NoNewPrivileges"] == ["yes"]
     timer = _directives(files["hnx-hub-collect.timer"])
-    assert timer["OnCalendar"] == ["*-*-* *:*:00"]
+    assert timer["OnCalendar"] == ["*-*-* *:*:00 UTC"]
     assert not {"OnBootSec", "OnUnitActiveSec"} & set(timer)  # LL-041
     assert "--registers" in hub_argv  # the register pages are served from the delivered directory
     assert "--notify-topic" not in argv  # no paging unless a topic is set
@@ -1704,7 +1704,7 @@ def test_status_hub_login_refresh_runs_a_root_helper_on_a_calendar(tmp_path):
     assert svc["ExecStart"][0].startswith("/usr/bin/python3 -I /usr/local/libexec/hnx-hub/")
     assert "User" not in svc  # root: it reads the password files only root can
     assert svc["ReadWritePaths"] == ["/etc/hnx-hub/issued"]
-    assert _directives(files["hnx-hub-login-token.timer"])["OnCalendar"] == ["*-*-* 00/4:15:00"]
+    assert _directives(files["hnx-hub-login-token.timer"])["OnCalendar"] == ["*-*-* 00/4:15:00 UTC"]
 
 
 def test_status_hub_collector_inputs_are_checked(tmp_path):

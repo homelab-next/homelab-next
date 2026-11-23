@@ -60,7 +60,7 @@ class _Server:
                 pass
 
         self.httpd = http.server.HTTPServer(("localhost", 0), H)
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         ctx.load_cert_chain(crt, key)
         self.httpd.socket = ctx.wrap_socket(self.httpd.socket, server_side=True)
         self.port = self.httpd.server_address[1]

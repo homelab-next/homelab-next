@@ -1,6 +1,6 @@
 ---
 summary: 'The read-only status hub: sources, views, the status.json contract, events, agent activity, the mTLS edge hop from both sides and the Approvals page.'
-summary_of: outline:sha256:dd4201ec73c6b397
+summary_of: outline:sha256:a280e586607274e3
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Status hub: one read-only place for activity and status
@@ -194,7 +194,7 @@ hub.publish(publisher, observations, "svc:metrics")  # onto the bus (homelabnext
 ### Running the collector on the hub's host (role `status_hub`)
 
 `hnx status serve` only reads `state.json`; something has to write it. With `status_hub_collect: true`
-the role installs `hnx-hub-collect.timer` (a calendar, `*-*-* *:*:00`, never a monotonic timer) that
+the role installs `hnx-hub-collect.timer` (a calendar, `*-*-* *:*:00 UTC`, never a monotonic timer) that
 starts `hnx-hub-collect.service`, a hardened oneshot running `hnx status collect` as the hub's user
 against the registry copy, with `--root` (the directory poll-file producers deliver into,
 `status_hub_root_dir`) and `--secrets-dir` (`status_hub_issued_dir`). Each source runs when its own

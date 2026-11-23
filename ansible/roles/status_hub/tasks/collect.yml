@@ -28,14 +28,22 @@
   diff: false
   when: status_hub_ca_bundle | bool
 
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ status_hub_last_run_dir }}"
+    last_run_group: "{{ status_hub_last_run_group }}"
+    last_run_writer: "{{ status_hub_last_run_writer }}"
+
 - name: Write the collector's service and timer
   ansible.builtin.template:
-    src: "{{ item }}.j2"
-    dest: "{{ status_hub_systemd_dir }}/{{ item }}"
+    src: "hnx-hub-collect.{{ item }}.j2"
+    dest: "{{ status_hub_systemd_dir }}/hnx-hub-collect.{{ item }}"
     owner: root
     group: root
     mode: "0644"
-  loop: [hnx-hub-collect.service, hnx-hub-collect.timer]
+  loop: [service, timer]
   register: status_hub_collect_units
 
 - name: Refresh login-issued tokens

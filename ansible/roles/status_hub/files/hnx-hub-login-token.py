@@ -5,9 +5,10 @@
 #   kind: tool
 #   purpose: Refresh the short-lived bearer tokens the status hub's collector sends to products that only issue them for a login (a form post of a user name and password), so no expired token leaves a source unreadable.
 #   owner: platform
-#   trigger: [role:status_hub]
+#   trigger: [role:status_hub, timer:status_hub/hnx-hub-login-token]
 #   inputs: "--config FILE: JSON {entries: [{name, url, username, password_file, out}], ca_file?: PATH}"
 #   outputs: one line per entry on stdout (name, ok or the error class); each token is written to its entry's out file (0640, group kept) by rename; the token is never printed
+#   installs_to: /usr/local/libexec/hnx-hub/hnx-hub-login-token
 #   exit:
 #     "0": every entry refreshed
 #     "1": at least one entry failed (its previous token file is left as it was)
@@ -24,12 +25,13 @@ refused, because the form carries the password.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
+import secrets
 import ssl
 import sys
-import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -81,15 +83,14 @@ def fetch_token(entry: dict, ctx: ssl.SSLContext, timeout: float = 20.0) -> str:
 
 def write_atomic(path: str, token: str) -> None:
     directory = os.path.dirname(path)
-    fd, tmp = tempfile.mkstemp(prefix=".tok-", dir=directory)
+    # created at its final mode (0640, as far as the umask allows), never widened afterwards
+    tmp = os.path.join(directory, f".tok-{secrets.token_hex(8)}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
     try:
         with os.fdopen(fd, "w", encoding="ascii") as fh:
             fh.write(token + "\n")
-        os.chmod(tmp, 0o640)
-        try:  # keep the group of the directory the collector reads from
-            os.chown(tmp, -1, os.stat(directory).st_gid)
-        except PermissionError:
-            pass
+            with contextlib.suppress(PermissionError):  # keep the group of the directory
+                os.fchown(fh.fileno(), -1, os.stat(directory).st_gid)  # the collector reads from
         os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):

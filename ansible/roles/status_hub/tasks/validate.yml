@@ -104,7 +104,6 @@
       - status_hub_collect_timeout_s | int > 0 and status_hub_collect_timeout_s | int < 3600
       - status_hub_root_dir is match('^/[A-Za-z0-9._/-]+\Z')
       - status_hub_issued_dir is match('^/[A-Za-z0-9._/-]+\Z')
-      - status_hub_libexec_dir is match('^/[A-Za-z0-9._/-]+\Z')
       - status_hub_logins_oncalendar is match('^[A-Za-z0-9*:/,. -]{1,80}\Z')
       - status_hub_extra_ca_refs | select('match', '^secret:[a-z0-9][a-z0-9/_.-]*\Z') | list | length == status_hub_extra_ca_refs | length
       - status_hub_extra_ca_refs | length == 0 or status_hub_tls | bool

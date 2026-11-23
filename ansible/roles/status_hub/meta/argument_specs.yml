@@ -13,7 +13,7 @@ argument_specs:
         required: true
       status_hub_hnx_bin: &bin
         type: path
-        description: "The hnx command (role hnx_runtime's <prefix>/bin/hnx)."
+        description: "The hnx command (role hnx_runtime's <prefix>/bin/hnx); the collector's unit names the default path literally, so the script catalog can follow it."
         default: /opt/hnx/bin/hnx
       status_hub_runtime_release: &release
         type: str
@@ -57,10 +57,18 @@ argument_specs:
         type: bool
         description: "Run the collector: a timer that executes hnx status collect each minute (due sources only) so state.json exists and is fresh. Off: the hub only serves."
         default: false
+      status_hub_last_run_dir:
+        type: path
+        description: "Where each timer run writes its last-run record (role last_run; the status hub's job-last-run mapping reads it)."
+        default: /var/lib/homelabnext/last-run
+      status_hub_last_run_group:
+        type: str
+        description: "The group that may read the last-run records (the account that ships them to the status hub)."
+        default: root
       status_hub_collect_oncalendar:
         type: str
         description: "The collector timer's calendar (never a monotonic timer, LL-041)."
-        default: "*-*-* *:*:00"
+        default: "*-*-* *:*:00 UTC"
       status_hub_collect_timeout_s:
         type: int
         description: "The collection pass's hard time limit."
@@ -86,11 +94,7 @@ argument_specs:
       status_hub_logins_oncalendar:
         type: str
         description: "The refresh timer's calendar (tokens last hours)."
-        default: "*-*-* 00/4:15:00"
-      status_hub_libexec_dir:
-        type: path
-        description: "Where the token helper is installed."
-        default: /usr/local/libexec/hnx-hub
+        default: "*-*-* 00/4:15:00 UTC"
       status_hub_endpoints:
         type: dict
         description: "Capability -> scheme://host:port the collector uses instead of the registry alias (HNX_ENDPOINT_<CAPABILITY>), for a product whose certificate does not carry the alias name. The name must still verify against the CA bundle."

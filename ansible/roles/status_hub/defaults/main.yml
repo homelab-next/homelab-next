@@ -69,7 +69,7 @@ status_hub_export_dir: /var/backups/hnx-hub/export
 # off by default: the serve-only hub of earlier stages is unchanged
 status_hub_collect: false
 # a calendar, one pass a minute; each source runs when its own interval_s is due (LL-041)
-status_hub_collect_oncalendar: "*-*-* *:*:00"
+status_hub_collect_oncalendar: "*-*-* *:*:00 UTC"
 status_hub_collect_timeout_s: 50
 # what poll-file sources are relative to: files delivered here by their producers (root writes, the hub reads)
 status_hub_root_dir: "{{ status_hub_state_dir }}/files"
@@ -79,8 +79,11 @@ status_hub_issued_dir: "{{ status_hub_config_dir }}/issued"
 status_hub_extra_ca_refs: []
 # bearer tokens a product only issues for a login: [{name, service, path, username, password_ref}]
 status_hub_logins: []
-status_hub_logins_oncalendar: "*-*-* 00/4:15:00"
-status_hub_libexec_dir: /usr/local/libexec/hnx-hub
+status_hub_logins_oncalendar: "*-*-* 00/4:15:00 UTC"
+# Each timer run's last-run record (role last_run, docs/role-interface.md section 8): the shared
+# per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
+status_hub_last_run_dir: /var/lib/homelabnext/last-run
+status_hub_last_run_group: root
 # page transitions through the registry's notify service (empty: no paging)
 status_hub_notify_topic: ""
 status_hub_notify_ceiling: red

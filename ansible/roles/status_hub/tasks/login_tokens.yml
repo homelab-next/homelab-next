@@ -56,12 +56,12 @@
 
 - name: Write the refresh service and timer
   ansible.builtin.template:
-    src: "{{ item }}.j2"
-    dest: "{{ status_hub_systemd_dir }}/{{ item }}"
+    src: "hnx-hub-login-token.{{ item }}.j2"
+    dest: "{{ status_hub_systemd_dir }}/hnx-hub-login-token.{{ item }}"
     owner: root
     group: root
     mode: "0644"
-  loop: [hnx-hub-login-token.service, hnx-hub-login-token.timer]
+  loop: [service, timer]
   register: status_hub_login_units
 
 - name: Look for each token file

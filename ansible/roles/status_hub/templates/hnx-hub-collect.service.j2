@@ -11,7 +11,12 @@ Type=oneshot
 User={{ status_hub_user }}
 Group={{ status_hub_group }}
 WorkingDirectory={{ status_hub_state_dir }}
-ExecStart={{ status_hub_hnx_bin }} status collect --registry {{ status_hub_config_dir }}/services.yml --state {{ status_hub_state_dir }}/state.json --root {{ status_hub_root_dir }} --secrets-dir {{ status_hub_issued_dir }}{% if status_hub_notify_topic | length > 0 %} --notify-topic {{ status_hub_notify_topic }} --notify-ceiling {{ status_hub_notify_ceiling }}{% endif %}
+# the job's last-run record (role last_run), written on start and again on stop, whatever
+# the outcome; a writer problem never changes the job's own result (the - prefix; the + runs the
+# writer privileged, outside this unit's User= and sandbox, as the record directory is root's)
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ status_hub_last_run_dir }} --group {{ status_hub_last_run_group }} --job timer:status_hub/hnx-hub-collect --unit %n --calendar "{{ status_hub_collect_oncalendar }}" --delay 0
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ status_hub_last_run_dir }} --group {{ status_hub_last_run_group }} --job timer:status_hub/hnx-hub-collect --unit %n --calendar "{{ status_hub_collect_oncalendar }}" --delay 0
+ExecStart=/opt/hnx/bin/hnx status collect --registry {{ status_hub_config_dir }}/services.yml --state {{ status_hub_state_dir }}/state.json --root {{ status_hub_root_dir }} --secrets-dir {{ status_hub_issued_dir }}{% if status_hub_notify_topic | length > 0 %} --notify-topic {{ status_hub_notify_topic }} --notify-ceiling {{ status_hub_notify_ceiling }}{% endif %}
 
 {% for cap, url in status_hub_endpoints | dictsort %}
 Environment=HNX_ENDPOINT_{{ cap | upper | replace('-', '_') }}={{ url }}
