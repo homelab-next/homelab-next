@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - wazuh_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - wazuh_manager_image is match(wazuh_pinned_ref_pattern)
+      - wazuh_indexer_image is match(wazuh_pinned_ref_pattern)
+      - wazuh_dashboard_image is match(wazuh_pinned_ref_pattern)
+      # the three images are one release of the product: the same tag
+      - wazuh_manager_tag is match(wazuh_tag_pattern)
+      - wazuh_indexer_tag == wazuh_manager_tag
+      - wazuh_dashboard_tag == wazuh_manager_tag
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - wazuh_bind is match(wazuh_ipv4_pattern)
+      - wazuh_bind != '0.0.0.0'
+      - >-
+        [wazuh_agent_port, wazuh_enrollment_port, wazuh_api_port, wazuh_indexer_port,
+         wazuh_dashboard_port, wazuh_syslog_port] | map('int') | select('lt', 1) | list | length == 0
+      - >-
+        [wazuh_agent_port, wazuh_enrollment_port, wazuh_api_port, wazuh_indexer_port,
+         wazuh_dashboard_port, wazuh_syslog_port] | map('int') | select('gt', 65535) | list | length == 0
+      - >-
+        [wazuh_agent_port, wazuh_enrollment_port, wazuh_api_port, wazuh_indexer_port,
+         wazuh_dashboard_port, wazuh_syslog_port] | map('int') | unique | list | length == 6
+      - wazuh_indexer_uid | int >= 1 and wazuh_dashboard_uid | int >= 1
+      - wazuh_indexer_gid | int >= 1 and wazuh_dashboard_gid | int >= 1 and wazuh_manager_gid | int >= 1
+      - wazuh_indexer_heap is match('^[1-9][0-9]{0,3}[mg]\Z')
+      - >-
+        [wazuh_indexer_mem_limit, wazuh_manager_mem_limit, wazuh_dashboard_mem_limit]
+        | reject('match', '^[1-9][0-9]{0,5}[kmg]\Z') | list | length == 0
+      - >-
+        [wazuh_enrollment_ref, wazuh_indexer_admin_ref, wazuh_dashboard_login_ref, wazuh_api_login_ref,
+         wazuh_alert_auth_ref] | reject('match', wazuh_ref_pattern) | list | length == 0
+      - >-
+        [wazuh_enrollment_ref, wazuh_indexer_admin_ref, wazuh_dashboard_login_ref, wazuh_api_login_ref,
+         wazuh_alert_auth_ref] | unique | length == 5
+      - >-
+        [wazuh_dir, wazuh_data_root] | reject('match', wazuh_path_pattern) | list | length == 0
+      - wazuh_indexer_cert_names | reject('match', wazuh_name_pattern) | list | length == 0
+      - wazuh_network_subnet == '' or wazuh_network_subnet is match(wazuh_cidr_pattern)
+      - >-
+        wazuh_syslog_allowed_ips | reject('match', '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}(/([0-9]|[12][0-9]|3[0-2]))?\Z')
+        | list | length == 0
+      - wazuh_native_dir == '' or wazuh_native_dir is match(wazuh_path_pattern)
+      - wazuh_detection_ids is mapping
+      - wazuh_detection_ids | dict2items | map(attribute='key') | reject('match', '^[0-9]{1,7}\Z') | list | length == 0
+      - wazuh_detection_ids | dict2items | map(attribute='value') | reject('match', wazuh_det_pattern) | list | length == 0
+      - wazuh_alert_forward_url == '' or wazuh_alert_forward_url is match(wazuh_url_pattern)
+      - wazuh_alert_forward_level | int >= 1 and wazuh_alert_forward_level | int <= 15
+      - wazuh_alert_source is match(wazuh_source_pattern)
+      - wazuh_alert_tlp in ['clear', 'green', 'amber', 'amber+strict', 'red']
+      - wazuh_index_retention_days | int >= 1 and wazuh_index_retention_days | int <= 3650
+    fail_msg: >-
+      siem: a registry id, three images of one release pinned by tag (X.Y.Z) and digest, the guest's
+      IPv4 address to publish on (not all interfaces), six distinct ports, user and group ids of 1 or
+      more, a heap like 8g and memory limits like 512m, five distinct secret: references, absolute
+      canonical directories, valid certificate names, an IPv4 CIDR for the network (or empty),
+      allowed syslog sources as IPv4 addresses or CIDRs, an absolute native-rules directory (or
+      empty), detection ids as {"<rule number>": "det:<slug>"}, an http(s) forwarder URL (or empty),
+      a level of 1 to 15, an svc: source, a TLP label and a retention of 1 to 3650 days
+  tags: [health, backup, restore, export, upgrade]

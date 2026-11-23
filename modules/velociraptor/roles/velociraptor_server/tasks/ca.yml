@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# LL-087: the certificate authority in the server configuration is what every enrolled client
+# pinned; if it ever changes, the whole fleet is dark and the client list still looks healthy. The
+# first run records the authority's sha256 under state/; every later run (and health) compares the
+# configuration's authority with it and refuses to go on when it differs, unless the operator said
+# so on purpose (velociraptor_server_accept_new_ca, for a restore or a migration). Read-only
+# except for the record itself.
+- name: Read the server configuration's certificate authority
+  ansible.builtin.slurp:
+    src: "{{ velociraptor_server_data_root }}/etc/{{ velociraptor_server_config_name }}"
+  register: velociraptor_server_config_raw
+  no_log: true
+  tags: [health, restore]
+
+- name: Name the authority by its sha256
+  ansible.builtin.set_fact:
+    velociraptor_server_ca_now: >-
+      {{ ((velociraptor_server_config_raw.content | b64decode | from_yaml).Client.ca_certificate | default('')) | trim | hash('sha256') }}
+    velociraptor_server_ca_present: >-
+      {{ 'BEGIN CERTIFICATE' in ((velociraptor_server_config_raw.content | b64decode | from_yaml).Client.ca_certificate | default('')) }}
+  no_log: true
+  tags: [health, restore]
+
+- name: Refuse a configuration with no certificate authority
+  ansible.builtin.assert:
+    that: velociraptor_server_ca_present | bool
+    fail_msg: "velociraptor: the server configuration holds no client certificate authority (Client.ca_certificate)"
+  tags: [health, restore]
+
+- name: Read the recorded authority
+  ansible.builtin.slurp:
+    src: "{{ velociraptor_server_data_root }}/state/ca.sha256"
+  register: velociraptor_server_ca_recorded_raw
+  failed_when: false
+  tags: [health, restore]
+
+- name: The authority is the recorded one (or this is the first record, or the operator accepted a new one)
+  ansible.builtin.assert:
+    that: >-
+      velociraptor_server_ca_recorded_raw.content is not defined
+      or (velociraptor_server_ca_recorded_raw.content | b64decode | trim) == velociraptor_server_ca_now
+      or (velociraptor_server_accept_new_ca | bool)
+      or (velociraptor_server_ca_force_record | default(false) | bool)
+    fail_msg: >-
+      velociraptor: the server's certificate authority changed (LL-087): every enrolled client trusts
+      the recorded one ({{ (velociraptor_server_ca_recorded_raw.content | default('') | b64decode | trim)[:16] }}),
+      the configuration now holds {{ velociraptor_server_ca_now[:16] }}. Do not redistribute client
+      configurations until you know why; set velociraptor_server_accept_new_ca only for a restore or a
+      migration that brings the authority on purpose
+  tags: [health, restore]
+
+- name: Record the authority
+  ansible.builtin.copy:
+    content: "{{ velociraptor_server_ca_now }}\n"
+    dest: "{{ velociraptor_server_data_root }}/state/ca.sha256"
+    owner: "{{ velociraptor_server_owner }}"
+    group: "{{ velociraptor_server_group }}"
+    mode: "0600"
+  when: velociraptor_server_record_ca | default(true) | bool
+  tags: [restore]

@@ -46,6 +46,7 @@ slots:
   enrichment:          {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   feed-reader:         {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   threat-intel:        {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
+  endpoint-forensics:  {stage: 1, contract: null, stateful: true, export_formats: [object-tree], formats: {in: [], out: [ocsf]}}
   graph-store:         {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   tts:                 {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   context:             {stage: null, contract: context.py, stateful: false}

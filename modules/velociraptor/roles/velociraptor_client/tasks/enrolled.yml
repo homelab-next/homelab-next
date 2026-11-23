@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# The client writes its identity to its writeback file once the server accepted it: a running unit
+# that never enrolled (wrong authority, wrong address) is the failure this finds.
+- name: Name the writeback file
+  ansible.builtin.set_fact:
+    velociraptor_client_writeback: >-
+      {{ (velociraptor_client_config_text | from_yaml).Client.writeback_linux | default(velociraptor_client_default_writeback) }}
+  no_log: true
+  tags: [health]
+
+- name: Wait for the client's identity
+  ansible.builtin.slurp:
+    src: "{{ velociraptor_client_writeback }}"
+  register: velociraptor_client_identity
+  until: velociraptor_client_identity.content is defined and (velociraptor_client_identity.content | b64decode) is search('client_id:\s*C\.[0-9a-f]{16}')
+  retries: "{{ ((velociraptor_client_ready_timeout | int) / 5) | int }}"
+  delay: 5
+  failed_when: false
+  no_log: true
+  tags: [health]
+
+- name: The client enrolled
+  ansible.builtin.assert:
+    that:
+      - velociraptor_client_identity.content is defined
+      - (velociraptor_client_identity.content | b64decode) is search('client_id:\s*C\.[0-9a-f]{16}')
+    fail_msg: >-
+      velociraptor client: no client identity in {{ velociraptor_client_writeback }} after
+      {{ velociraptor_client_ready_timeout }} seconds: the client did not enrol (the authority or the
+      address in its configuration is not the server's: journalctl -u {{ velociraptor_client_service }})
+  tags: [health]

@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# The containers reach each other by their compose service names on the project's own network.
+wazuh_service_names: [manager, indexer, dashboard]
+wazuh_indexer_user: admin
+wazuh_dashboard_user: kibanaserver
+wazuh_api_user: wazuh-wui
+wazuh_syslog_container_port: 514
+wazuh_container_agent_port: 1514
+wazuh_container_enrollment_port: 1515
+wazuh_container_api_port: 55000
+wazuh_container_indexer_port: 9200
+wazuh_container_dashboard_port: 5601
+# the certificate subjects the indexer's security plugin names (admin and node DNs, README)
+wazuh_cert_subject_base: "/C=US/L=California/O=Wazuh/OU=Wazuh"
+wazuh_cert_days: 3650
+wazuh_cert_key_bits: 2048
+wazuh_cert_dir_mode: "0750"
+wazuh_manager_repository: "{{ wazuh_manager_image.split('@')[0].rsplit(':', 1)[0] }}"
+wazuh_manager_tag: "{{ wazuh_manager_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+wazuh_manager_digest: "{{ wazuh_manager_image.split('@')[1] | default('') }}"
+wazuh_indexer_repository: "{{ wazuh_indexer_image.split('@')[0].rsplit(':', 1)[0] }}"
+wazuh_indexer_tag: "{{ wazuh_indexer_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+wazuh_indexer_digest: "{{ wazuh_indexer_image.split('@')[1] | default('') }}"
+wazuh_dashboard_repository: "{{ wazuh_dashboard_image.split('@')[0].rsplit(':', 1)[0] }}"
+wazuh_dashboard_tag: "{{ wazuh_dashboard_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+wazuh_dashboard_digest: "{{ wazuh_dashboard_image.split('@')[1] | default('') }}"
+wazuh_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+wazuh_tag_pattern: '^[0-9]+\.[0-9]+\.[0-9]+\Z'
+wazuh_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+wazuh_cidr_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}/(1[6-9]|2[0-9])\Z'
+wazuh_name_pattern: '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\Z'
+wazuh_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+wazuh_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+wazuh_url_pattern: '^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~%/-]*)?\Z'
+wazuh_source_pattern: '^svc:[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+wazuh_det_pattern: '^det:[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+# a password the env_file and the product's own policy accept: no quote, no space, no character a
+# shell or YAML would read, with a lower, an upper, a digit and one of . - ~ (the manager API's
+# policy wants a non-word character)
+wazuh_login_form: '^[A-Za-z0-9._~-]{16,64}\Z'
+# the enrolment password: a shared secret typed by agents, so the same alphabet
+wazuh_enrollment_pattern: '^[A-Za-z0-9._~-]{16,64}\Z'
+# a whole Authorization header value: a scheme and a credential, printable ASCII, no line break
+wazuh_auth_pattern: '^[A-Za-z][A-Za-z0-9-]{0,15} [\x21-\x7e]{16,512}\Z'
+wazuh_native_file_pattern: '^[a-z0-9][a-z0-9_-]{0,63}\.xml\Z'
+# the names the indexer's certificate carries: its compose service names, localhost (the health
+# hook runs inside the container) and the site's extra names (an IPv4 address is an IP entry)
+wazuh_indexer_san: >-
+  {{ (['DNS:indexer', 'DNS:wazuh.indexer', 'DNS:localhost']
+      + (wazuh_indexer_cert_names | select('match', wazuh_ipv4_pattern) | map('regex_replace', '^', 'IP:') | list)
+      + (wazuh_indexer_cert_names | reject('match', wazuh_ipv4_pattern) | map('regex_replace', '^', 'DNS:') | list))
+     | unique | join(',') }}
+# a real newline for the config lines curl reads from its standard input (a Jinja string literal keeps "\n" as two characters)
+wazuh_nl: "\n"
+wazuh_bs: "\\"

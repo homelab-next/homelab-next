@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+# The module's own artifact definition is loaded by the server from its own directory at start, so
+# no principal ever uploads one. Copied, never removed.
+- name: Put the module's custom artifact definitions where the server loads them
+  ansible.builtin.copy:
+    src: "custom_artifacts/{{ item }}"
+    dest: "{{ velociraptor_server_data_root }}/custom_artifacts/{{ item }}"
+    owner: "{{ velociraptor_server_owner }}"
+    group: "{{ velociraptor_server_group }}"
+    mode: "0644"
+  loop:
+    - Custom.Linux.Persistence.ConfigHunt.yaml
+
+# The password reaches only the env_file (0600) and only the first start reads it (the stock
+# entrypoint adds the administrator then; the start guard never runs it again).
+- name: Read the administrator's first password
+  ansible.builtin.set_fact:
+    velociraptor_server_secret_env:
+      velociraptor:
+        VELOCIRAPTOR_INITIAL_ADMIN_PASSWORD: "{{ lookup('hnx_secret', velociraptor_server_admin_login_ref) }}"
+  no_log: true
+
+- name: Render and start the server
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ velociraptor_server_app.compose_app_name }}"
+    compose_app_dir: "{{ velociraptor_server_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ velociraptor_server_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ velociraptor_server_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ velociraptor_server_app.compose_app_owner }}"
+    compose_app_group: "{{ velociraptor_server_app.compose_app_group }}"
+    compose_app_start: "{{ velociraptor_server_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ velociraptor_server_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ velociraptor_server_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ velociraptor_server_secret_env }}"
+  no_log: true
+
+- name: Wait for the server to write its configuration and listen (the first start generates it)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ velociraptor_server_dir }}/docker-compose.yml", exec, -T, velociraptor,
+           sh, -c, "test -s /etc/velociraptor/server.config.yaml && nc -z localhost 8000"]
+  register: velociraptor_server_up
+  until: velociraptor_server_up.rc == 0
+  retries: "{{ ((velociraptor_server_ready_timeout | int) / 5) | int }}"
+  delay: 5
+  changed_when: false
+  when: velociraptor_server_start | bool
+
+- name: Refuse to go on when the server never wrote its configuration
+  ansible.builtin.assert:
+    that: velociraptor_server_up.rc | default(1) == 0
+    fail_msg: "velociraptor: the server wrote no configuration and opened no port within {{ velociraptor_server_ready_timeout }} seconds (docker compose logs velociraptor)"
+  when: velociraptor_server_start | bool
+
+- name: Refuse a certificate authority that is not the recorded one (LL-087), and record the first
+  ansible.builtin.include_tasks: ca.yml
+  when: velociraptor_server_start | bool
+
+- name: Make the hunt principal (collect rights only)
+  ansible.builtin.include_tasks: principal.yml
+  when: velociraptor_server_start | bool
+
+- name: Write the client configuration for the endpoint role
+  ansible.builtin.include_tasks: client_config.yml
+  when: velociraptor_server_start | bool
+
+- name: Install the cycle, the check and their timer
+  ansible.builtin.include_tasks: host.yml

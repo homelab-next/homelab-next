@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Copy the server state (the export)
+      ansible.builtin.include_tasks: copy_out.yml
+  tags: [export]

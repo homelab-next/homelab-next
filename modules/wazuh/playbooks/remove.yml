@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the manager's state and the hot index (export_first), stop and remove the containers,
+# and delete the env_files (the passwords). The data root (with the export and the CA in it) and the
+# rest of the compose project are kept for the operator to archive or delete; the decommission audit
+# (module.yml lifecycle.remove.audit) checks nothing still names the service. The agents' keys are in
+# the export: removing the module and its data root ends every enrolment.
+- name: Remove the SIEM provider
+  hosts: mod_wazuh_server
+  become: true
+  tasks:
+    - name: Export the manager's state and the hot index first
+      ansible.builtin.include_role:
+        name: wazuh
+        tasks_from: export
+    - name: Stop and remove the containers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ wazuh_dir | default('/opt/compose/wazuh') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credentials the containers were given
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ wazuh_dir | default('/opt/compose/wazuh') }}/secrets/manager.env"
+        - "{{ wazuh_dir | default('/opt/compose/wazuh') }}/secrets/dashboard.env"

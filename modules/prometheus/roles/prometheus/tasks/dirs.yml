@@ -13,6 +13,7 @@
     - {path: "{{ prometheus_data_root }}/tsdb", owner: "{{ prometheus_uid | int }}", group: "{{ prometheus_gid | int }}", mode: "0700"}
     - {path: "{{ prometheus_data_root }}/config", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
     - {path: "{{ prometheus_data_root }}/config/{{ prometheus_generated_dir }}", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
+    - {path: "{{ prometheus_data_root }}/config/blackbox", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
     - {path: "{{ prometheus_data_root }}/scrape-credentials", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
     - {path: "{{ prometheus_data_root }}/export", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
   loop_control:
