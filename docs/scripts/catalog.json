@@ -224,6 +224,46 @@
     },
     {
       "exit": {
+        "0": "stopped, or with --once one round done",
+        "1": "a round failed and --once was given",
+        "2": "usage error"
+      },
+      "id": "ci-runner-feeder",
+      "inputs": "--repo, --host, --ssh-key, --labels; the forge token from HNX_CI_FORGE_TOKEN, or the forge CLI's own stored login (--token-command)",
+      "kind": "service",
+      "language": "python",
+      "outputs": "registrations pushed over SSH to the host's forced command; deleted orphan registrations; the runner-selection variable",
+      "owner": "platform",
+      "path": "modules/ci-runner/roles/ci_runner/files/hnx_ci_feeder.py",
+      "purpose": "Keep the CI runner host's spool supplied with single-use runner registrations minted with a repository-admin credential that never leaves the trusted side, remove registrations that were orphaned, and turn the repository's pool switch on only while the pool answers.",
+      "status": "active",
+      "trigger": [
+        "manual",
+        "role:ci_runner"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the slot ran one VM to its end, or found no registration and waits for the next start",
+        "1": "the request was refused (a bad name, a bad registration, an unknown command)",
+        "2": "the configuration or the golden image is missing or invalid"
+      },
+      "id": "ci-runner-slot",
+      "inputs": "the JSON config named by HNX_CI_CONFIG (slot.json); the spool directory; SSH_ORIGINAL_COMMAND for the feed side",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-ci-slot",
+      "kind": "service",
+      "language": "python",
+      "outputs": "one VM run per slot run; the slot directory's contents (its state); the last console log per slot; spool files (feed side)",
+      "owner": "platform",
+      "path": "modules/ci-runner/roles/ci_runner/files/hnx_ci_slot.py",
+      "purpose": "Run one CI job slot - claim one single-use runner registration from the spool, boot a throwaway VM from the pinned golden image with it, wait for the VM to power off after its one job, then destroy every file of it; also the forced command the registration feeder reaches over SSH (put, status).",
+      "status": "active",
+      "trigger": [
+        "role:ci_runner"
+      ]
+    },
+    {
+      "exit": {
         "0": "the run finished (the scanner's own status is in last-run)"
       },
       "id": "clamav-scan",
