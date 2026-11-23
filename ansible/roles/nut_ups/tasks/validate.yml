@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value lands in NUT configuration or a script: refuse anything that could add a line.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - nut_ups_name is match(nut_ups_word_pattern)
+      - nut_ups_monitor_user is match(nut_ups_word_pattern)
+      - nut_ups_driver is match(nut_ups_word_pattern)
+      - nut_ups_vendorid is match('^[0-9a-f]{4}\Z')
+      - nut_ups_productid is match('^[0-9a-f]{4}\Z')
+      - nut_ups_description is match('^[A-Za-z0-9 ._()/-]*\Z')
+      - nut_ups_shutdown_charge_percent | int >= 0 and nut_ups_shutdown_charge_percent | int <= 90
+      - nut_ups_shutdown_cmd is match("^[A-Za-z0-9 /._:+'-]+\Z")
+      - nut_ups_cut_power is boolean
+      - nut_ups_textfile_dir is match(nut_ups_path_pattern)
+      - nut_ups_state_dir is match(nut_ups_path_pattern)
+      - nut_ups_conf_dir is match(nut_ups_path_pattern)
+      - nut_ups_libexec_dir is match(nut_ups_path_pattern)
+      - nut_ups_systemd_dir is match(nut_ups_path_pattern)
+      - nut_ups_health_max_age_seconds | int > 0
+    fail_msg: >-
+      nut_ups: a plain UPS and user name, the UPS's four-hex-digit USB vendor and product id, a
+      charge percent between 0 and 90, a plain shutdown command and plain absolute paths
+  tags: [health, readiness]
