@@ -30,6 +30,8 @@
       - ci_runner_build_timeout_s | int >= 300
       - ci_runner_hosted_os_name is match('^[a-z0-9]{1,20}\Z')
       - ci_runner_extra_packages | reject('match', '^[a-z0-9][a-z0-9.+-]{0,80}\Z') | list | length == 0
+      - (ci_runner_go_url == '' and ci_runner_go_sha256 == '') or (ci_runner_go_url is match('^https://[^\s\x27"]+\Z') and ci_runner_go_sha256 is match('^[0-9a-f]{64}\Z'))
+      - ci_runner_pipx_packages | reject('match', '^[A-Za-z0-9][A-Za-z0-9._-]{0,80}(==[A-Za-z0-9.+!-]{1,40})?\Z') | list | length == 0
       - ci_runner_egress_tcp_ports | length >= 1
       - (ci_runner_egress_tcp_ports + ci_runner_egress_udp_ports) | map('int') | select('lt', 1) | list | length == 0
       - (ci_runner_egress_tcp_ports + ci_runner_egress_udp_ports) | map('int') | select('gt', 65535) | list | length == 0

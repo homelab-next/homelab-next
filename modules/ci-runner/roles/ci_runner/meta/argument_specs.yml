@@ -113,6 +113,19 @@ argument_specs:
         description: Distribution packages added to the golden image beyond the toolchain.
         default: []
         elements: str
+      ci_runner_go_url:
+        type: str
+        description: 'A Go release archive (https) put on the PATH of the golden image; empty: none.'
+        default: ''
+      ci_runner_go_sha256:
+        type: str
+        description: The sha256 of that archive (required with the URL).
+        default: ''
+      ci_runner_pipx_packages:
+        type: list
+        elements: str
+        description: Command-line tools (name==version) installed with pipx onto the golden image's PATH.
+        default: []
       ci_runner_egress_tcp_ports:
         type: list
         description: TCP ports the job VMs may reach on public addresses.

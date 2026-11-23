@@ -44,6 +44,11 @@ ci_runner_build_timeout_s: 3600
 ci_runner_hosted_os_name: ubuntu24
 # packages added to the golden image beyond the toolchain the role always installs
 ci_runner_extra_packages: []
+# a Go release archive put on the PATH (https URL and sha256 together; empty: none), as hosted images carry one
+ci_runner_go_url: ""
+ci_runner_go_sha256: ""
+# command-line tools installed with pipx onto the PATH (name==version), as hosted images carry some
+ci_runner_pipx_packages: []
 
 # --- the host's egress table (the job VMs' traffic leaves as ci_runner_user) -----------------------
 # TCP and UDP ports the VMs may reach on public addresses; everything private, link-local,
