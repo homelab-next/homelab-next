@@ -143,6 +143,9 @@ jobs:
           HNX_REQUIRE_MODULES: ${{ matrix.python.require-modules }}
           HNX_REQUIRE_TOOLS: ${{ matrix.python.require-tools }}
           SHARD: ${{ matrix.shard }}
+          # a test's own clock stretches when four workers share the runner's cores: roles summed 19155 s against 14800 serially
+          # (2026-11-23), a runaway suite still doubles that
+          HNX_SUITE_BUDGET_SCALE: "1.5"
         run: >-
           sudo -E env "PATH=$PATH" "HOME=$HOME" "USER=$(id -un)" "LOGNAME=$(id -un)" unshare --net --
           sh -c 'ip link set lo up && u=$1 g=$2 && shift 2 &&
