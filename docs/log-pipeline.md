@@ -1,6 +1,6 @@
 ---
 summary: 'The log-pipeline contract: hnx_runtime from the guest model by the address the collector saw, hnx_tlp from the route''s declaration; never the event.'
-summary_of: outline:sha256:a49158449fd20cc4
+summary_of: outline:sha256:7543602e919b4903
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The log pipeline and its labels

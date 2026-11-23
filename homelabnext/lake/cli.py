@@ -39,6 +39,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from homelabnext._cliargs import iso_when, load_doc
+
 from .census import CensusConfig, CensusError, census, config_from, dark
 from .errors import LakeError
 
@@ -72,25 +74,7 @@ def fixture_schema(table: str, source_columns: Sequence[str], time_column: str):
 
 
 def _load(path: str) -> Any:
-    p = Path(path)
-    try:
-        if p.suffix == ".json":
-            return json.loads(p.read_text(encoding="utf-8"))
-        from homelabnext._yaml import load_unique
-
-        return load_unique(p, _Usage)
-    except (OSError, ValueError) as exc:
-        raise _Usage(f"cannot read {p}: {exc}") from exc
-
-
-def _when(text: str) -> datetime:
-    try:
-        t = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not an ISO 8601 time: {text!r}") from None
-    if t.utcoffset() is None:
-        raise argparse.ArgumentTypeError(f"{text!r} has no UTC offset (write Z or +00:00)")
-    return t
+    return load_doc(path, _Usage)
 
 
 def _secret_from_file(path: str, what: str) -> str:
@@ -135,7 +119,7 @@ def _lake(
             tc = census_cfg.time_column
             if tc not in r:
                 raise _Usage(f"{fixture}: row {i} has no {tc!r}")
-            r[tc] = _when(str(r[tc]))
+            r[tc] = iso_when(str(r[tc]))
             r["uid"] = f"fixture-{i}"
             by_table.setdefault(t, []).append(r)
         for t, rs in by_table.items():
@@ -265,7 +249,7 @@ def _parser() -> argparse.ArgumentParser:
     sc.add_argument("--settings", help="with --fixture: the settings file (census, dark)")
     sc.add_argument("--criterion", choices=("all", *CRITERIA), default="all")
     sc.add_argument(
-        "--now", type=_when, help="the clock (ISO 8601 with offset); default the real time"
+        "--now", type=iso_when, help="the clock (ISO 8601 with offset); default the real time"
     )
     sc.add_argument("--state", help="the paging state file (overrides settings state)")
     sc.add_argument(
