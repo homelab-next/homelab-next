@@ -422,6 +422,12 @@ def serve(
                     continue
                 if not chunk:
                     break
+                # a stream that never pauses (a backlog being read) never reaches the timeout
+                # branch: the status is written here too, or it reads stale while rows flow
+                if time.monotonic() - last >= interval:
+                    tables.refresh()
+                    write_status(status, tables, counters, {"listening": True})
+                    last = time.monotonic()
                 buf += chunk
                 while b"\n" in buf:
                     raw, buf = buf.split(b"\n", 1)
