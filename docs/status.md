@@ -216,9 +216,11 @@ Some products issue a bearer token only for a login that expires in hours (a for
 and password). `status_hub_logins` lists them, each `{name, service, path, username, password_ref}`;
 a root-run timer (`hnx-hub-login-token.timer`, every 4 hours by default) runs the helper, which posts
 the form to the registry row's url + `path` over verified https (no redirect, no proxy from the
-environment, a password file only root reads) and writes the answer to `<status_hub_issued_dir>/<name>`
-by rename, as a file only the hub's user reads (mode 0600, created that way), so a failed login leaves the previous token in place. A source's `auth: {secret:
-"secret:<name>"}` then reads that file. The login account should be read-only where the product
+environment, a password file only root reads) and writes the answer to `<status_hub_issued_dir>/hub-login/<name>`
+by rename, as a file only the hub's user reads (mode 0600, created that way), so a failed login leaves the previous token in place. A source's `auth` then reads that file
+by the login's name in the one store area `hub-login` (the login `flow-reader` is
+`{secret: "secret:hub-login/flow-reader"}`), so its reference has the area-and-name shape of any
+other store reference. The login account should be read-only where the product
 allows; where it has a single user (the product's own limit) the credential is the administrator's,
 held in a root-only file on the hub's host and never in the unit's environment.
 
