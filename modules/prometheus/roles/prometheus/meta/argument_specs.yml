@@ -114,6 +114,14 @@ argument_specs:
         type: str
         description: "Whole seconds after which a probe has failed (shorter than the interval)."
         default: "10s"
+      prometheus_probe_ca_ref: &probe_ca_ref
+        type: str
+        description: "A secret reference to a private CA's PEM the probes trust beside the system roots (empty: the system roots only)."
+        default: ""
+      prometheus_probe_system_roots: &probe_system_roots
+        type: path
+        description: "The host's system root bundle, the base of the probes' trust bundle."
+        default: /etc/ssl/certs/ca-certificates.crt
       prometheus_alert_probe_down_for: &alert_probe_down_for
         type: str
         description: "How long a probe must keep failing before ProbeDown fires."
@@ -250,6 +258,8 @@ argument_specs:
       prometheus_probe_exclude: *probe_exclude
       prometheus_probe_interval: *probe_interval
       prometheus_probe_timeout: *probe_timeout
+      prometheus_probe_ca_ref: *probe_ca_ref
+      prometheus_probe_system_roots: *probe_system_roots
       prometheus_alert_probe_down_for: *alert_probe_down_for
       prometheus_blackbox_image: *blackbox_image
       prometheus_blackbox_mem_limit: *blackbox_mem_limit
@@ -303,6 +313,8 @@ argument_specs:
       prometheus_probe_exclude: *probe_exclude
       prometheus_probe_interval: *probe_interval
       prometheus_probe_timeout: *probe_timeout
+      prometheus_probe_ca_ref: *probe_ca_ref
+      prometheus_probe_system_roots: *probe_system_roots
       prometheus_alert_probe_down_for: *alert_probe_down_for
       prometheus_blackbox_image: *blackbox_image
       prometheus_blackbox_mem_limit: *blackbox_mem_limit
@@ -354,6 +366,8 @@ argument_specs:
       prometheus_probe_exclude: *probe_exclude
       prometheus_probe_interval: *probe_interval
       prometheus_probe_timeout: *probe_timeout
+      prometheus_probe_ca_ref: *probe_ca_ref
+      prometheus_probe_system_roots: *probe_system_roots
       prometheus_alert_probe_down_for: *alert_probe_down_for
       prometheus_blackbox_image: *blackbox_image
       prometheus_blackbox_mem_limit: *blackbox_mem_limit
@@ -410,6 +424,8 @@ argument_specs:
       prometheus_probe_exclude: *probe_exclude
       prometheus_probe_interval: *probe_interval
       prometheus_probe_timeout: *probe_timeout
+      prometheus_probe_ca_ref: *probe_ca_ref
+      prometheus_probe_system_roots: *probe_system_roots
       prometheus_alert_probe_down_for: *alert_probe_down_for
       prometheus_blackbox_image: *blackbox_image
       prometheus_blackbox_mem_limit: *blackbox_mem_limit
