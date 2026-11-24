@@ -104,7 +104,8 @@ def write_atomic(path: str, data: bytes, group: str | None) -> None:
         os.makedirs(directory, mode=0o750)
         os.chown(directory, -1, gid)
     tmp = os.path.join(directory, f".pull-{secrets.token_hex(8)}")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
+    # created owner-only; widened to the collector's group only once it is that group's (as role last_run does)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)

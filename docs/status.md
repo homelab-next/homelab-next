@@ -1,6 +1,6 @@
 ---
 summary: 'The read-only status hub: sources, views, status.json, events, agent activity, the collector, the mTLS edge hop, Approvals and the register pages.'
-summary_of: outline:sha256:c5dc55eccbaabe6a
+summary_of: outline:sha256:a2abca1cd516f58b
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Status hub: one read-only place for activity and status
