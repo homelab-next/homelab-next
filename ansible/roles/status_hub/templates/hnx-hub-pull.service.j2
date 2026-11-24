@@ -1,0 +1,33 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role status_hub); local changes are overwritten.
+# Pulls the producers' status files (ADR-0049 decision 7; docs/status.md "Pulled status files").
+[Unit]
+Description=homelab-next status hub: pull the producers' status files ({{ status_hub_logical_id }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# the job's last-run record (role last_run), written on start and again on stop, whatever the outcome
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ status_hub_last_run_dir }} --group {{ status_hub_last_run_group }} --job timer:status_hub/hnx-hub-pull --unit %n --calendar "{{ status_hub_pulls_oncalendar }}" --delay 30
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/hnx-hub/hnx-hub-pull --config {{ status_hub_pull_dir }}/pulls.json
+TimeoutStartSec=240
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ status_hub_last_run_dir }} --group {{ status_hub_last_run_group }} --job timer:status_hub/hnx-hub-pull --unit %n --calendar "{{ status_hub_pulls_oncalendar }}" --delay 30
+UMask=0027
+
+# root only for the key file; hardened: writes only under the status root
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{ status_hub_root_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
