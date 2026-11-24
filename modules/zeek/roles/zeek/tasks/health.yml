@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means, for every capture: its unit is active, the stats heartbeat was written within the
+# age bound, packets were processed in the last window and drops are under the bound. Read-only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Each capture unit is active
+      ansible.builtin.command:
+        argv: ["{{ zeek_systemctl_cli }}", is-active, "hnx-zeek-{{ item.slug }}.service"]
+      loop: "{{ zeek_capture_interfaces }}"
+      loop_control: {label: "{{ item.slug }}"}
+      changed_when: false
+      check_mode: false
+    - name: Look at each stats heartbeat
+      ansible.builtin.stat:
+        path: "{{ zeek_log_root }}/{{ item.slug }}/stats.log"
+      loop: "{{ zeek_capture_interfaces }}"
+      loop_control: {label: "{{ item.slug }}"}
+      register: zeek_stats_files
+    - name: The heartbeat is being written
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - (now().timestamp() | int) - (item.stat.mtime | int) <= zeek_stats_max_age_seconds | int
+        fail_msg: "zeek: {{ item.item.slug }}: stats.log was not written in the last {{ zeek_stats_max_age_seconds }} seconds (the capture is stopped or wedged)"
+      loop: "{{ zeek_stats_files.results }}"
+      loop_control: {label: "{{ item.item.slug }}"}
+    - name: Read the newest heartbeat lines
+      ansible.builtin.command:
+        argv: [tail, -n, "{{ zeek_stats_window | int }}", "{{ zeek_log_root }}/{{ item.slug }}/stats.log"]
+      loop: "{{ zeek_capture_interfaces }}"
+      loop_control: {label: "{{ item.slug }}"}
+      register: zeek_stats_tail
+      changed_when: false
+      check_mode: false
+    - name: Packets were processed and drops are under the bound
+      vars:
+        _rows: "{{ item.stdout_lines | map('from_json') | list }}"
+        _proc: "{{ _rows | map(attribute='pkts_proc') | map('int') | sum }}"
+        _drop: "{{ _rows | map(attribute='pkts_dropped', default=0) | map('int') | sum }}"
+      ansible.builtin.assert:
+        that:
+          - _proc | int > 0
+          - (_drop | int) <= (_proc | int) * (zeek_max_drop_ratio | float)
+        fail_msg: >-
+          zeek: {{ item.item.slug }}: {{ _proc }} packet(s) processed and {{ _drop }} dropped over the last
+          {{ zeek_stats_window }} heartbeats (bound {{ zeek_max_drop_ratio }}); a mirror that stopped, or a
+          capture too slow for the load
+      loop: "{{ zeek_stats_tail.results }}"
+      loop_control: {label: "{{ item.item.slug }}"}
+  tags: [health]

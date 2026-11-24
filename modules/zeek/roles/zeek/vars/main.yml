@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+zeek_id_pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+zeek_slug_pattern: '^[a-z][a-z0-9-]{0,30}\Z'
+zeek_iface_pattern: '^[A-Za-z0-9][A-Za-z0-9._@-]{0,14}\Z'
+zeek_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+zeek_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+zeek_package_name_pattern: '^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*\Z'
+zeek_package_version_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z'
+# the scripts loaded on every capture: JSON logs, a flow id shared with the IDS, the stats heartbeat,
+# the self-signed field, the module's own settings, then the installed packages
+zeek_load_scripts:
+  - local
+  - policy/tuning/json-logs.zeek
+  - policy/protocols/conn/community-id-logging
+  - policy/misc/stats
+  - site/self-signed.zeek
+  - site/hnx-local.zeek
+  - packages
+zeek_container_site_dir: /usr/local/zeek/share/zeek/site
+zeek_container_log_dir: /zeek-logs
+zeek_image_tag: "{{ zeek_base_image.split('@')[0].rsplit(':', 1)[1] }}-{{ (zeek_base_image ~ zeek_script_packages | to_json(sort_keys=True) ~ (lookup('ansible.builtin.file', role_path ~ '/files/self-signed.zeek'))) | hash('sha256') | truncate(10, True, '') }}"
+zeek_image: "{{ zeek_local_repo }}:{{ zeek_image_tag }}"

@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install and converge the monitor: build the local image from the pinned base and packages (only
+# when its inputs changed), write one unit per capture interface, then start or restart a unit only
+# when its definition or the image changed. A failed build stops the run before any unit is touched,
+# so a running capture is never restarted onto a missing image.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Preflight the engine and the capture interfaces
+  ansible.builtin.include_tasks: readiness.yml
+
+- name: Create the build and log directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ zeek_build_dir }}", mode: "0755"}
+    - {path: "{{ zeek_log_root }}", mode: "0755"}
+
+- name: Create one log directory per capture
+  ansible.builtin.file:
+    path: "{{ zeek_log_root }}/{{ item.slug }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ zeek_capture_interfaces }}"
+  loop_control: {label: "{{ item.slug }}"}
+
+- name: Render the build context
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ zeek_build_dir }}/{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - {src: build-context.j2, dest: Dockerfile}
+    - {src: hnx-local.zeek.j2, dest: hnx-local.zeek}
+  register: zeek_context
+
+- name: Copy the self-signed field script
+  ansible.builtin.copy:
+    src: self-signed.zeek
+    dest: "{{ zeek_build_dir }}/self-signed.zeek"
+    mode: "0644"
+  register: zeek_script
+
+- name: Is the image built
+  ansible.builtin.command:
+    argv: ["{{ zeek_docker_cli }}", image, inspect, --format, "{{ '{{.Id}}' }}", "{{ zeek_image }}"]
+  register: zeek_image_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: zeek_build_local | bool
+
+- name: Build the image from the pinned base and packages
+  ansible.builtin.command:
+    argv: ["{{ zeek_docker_cli }}", build, -t, "{{ zeek_image }}", "{{ zeek_build_dir }}"]
+  register: zeek_built
+  changed_when: true
+  when: zeek_build_local | bool and zeek_image_state.rc != 0
+
+- name: Write one capture unit per interface
+  ansible.builtin.template:
+    src: unit.service.j2
+    dest: "{{ zeek_unit_dir }}/hnx-zeek-{{ item.slug }}.service"
+    mode: "0644"
+  loop: "{{ zeek_capture_interfaces }}"
+  loop_control: {label: "{{ item.slug }}"}
+  register: zeek_units
+
+- name: Write the rotation rule
+  ansible.builtin.template:
+    src: logrotate.j2
+    dest: "{{ zeek_logrotate_dir }}/hnx-zeek"
+    mode: "0644"
+
+- name: Enable and start each capture
+  ansible.builtin.systemd:
+    name: "hnx-zeek-{{ item.slug }}.service"
+    enabled: true
+    state: started
+    daemon_reload: "{{ zeek_units is changed }}"
+  loop: "{{ zeek_capture_interfaces }}"
+  loop_control: {label: "{{ item.slug }}"}
+  when: zeek_service_manage | bool
+
+- name: Restart the captures when a unit, the script or the image changed
+  ansible.builtin.systemd:
+    name: "hnx-zeek-{{ item.slug }}.service"
+    state: restarted
+  loop: "{{ zeek_capture_interfaces }}"
+  loop_control: {label: "{{ item.slug }}"}
+  when: >-
+    zeek_service_manage | bool and
+    (zeek_units is changed or zeek_context is changed or zeek_script is changed or zeek_built is changed)
