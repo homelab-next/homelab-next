@@ -152,7 +152,9 @@ def test_the_manifest_names_the_one_secret_and_internet_egress_and_no_public_rou
         {"host": "server", "to": ["internet"], "purpose": manifest["egress"][0]["purpose"]}
     ]
     host = manifest["requires"]["hosts"][0]
-    assert host["role"] == "server" and host["kind"] == "vm" and host["guest"]["baselines"] == ["base"]
+    assert (
+        host["role"] == "server" and host["kind"] == "vm" and host["guest"]["baselines"] == ["base"]
+    )
     assert host["footprint"] == {"cpu": 1, "memory_mb": 1024, "disk_gb": 5}
     assert "data" not in manifest  # nothing to export
     assert manifest["lifecycle"]["remove"]["export_first"] is False
@@ -168,7 +170,7 @@ def test_the_manifest_names_the_one_secret_and_internet_egress_and_no_public_rou
 def test_the_image_is_pinned_by_tag_and_digest_and_the_tag_is_the_product_version():
     defaults = ld.load_yaml(MODULE / "roles" / MID / "defaults" / "main.yml")
     version = str(ld.load_yaml(MODULE / "module.yml")["product"]["version"])
-    repo, tag, digest = re.fullmatch(
+    repo, tag, _digest = re.fullmatch(
         r"([^@:]+(?:/[^@:]+)*):([^@:]+)@(sha256:[0-9a-f]{64})", defaults[P + "image"]
     ).groups()
     assert tag == version and repo.startswith("docker.io/")
@@ -226,7 +228,9 @@ def test_a_guest_without_the_base_baseline_is_refused(tmp_path, capsys):
 # ----------------------------------------------------------------------------- the probe
 
 
-def test_the_probe_reads_the_health_path_and_one_json_search_from_the_resolved_endpoint(monkeypatch):
+def test_the_probe_reads_the_health_path_and_one_json_search_from_the_resolved_endpoint(
+    monkeypatch,
+):
     from homelabnext.conform.adapters.web_search import make
 
     monkeypatch.delenv("HNX_ENDPOINT_WEB_SEARCH", raising=False)

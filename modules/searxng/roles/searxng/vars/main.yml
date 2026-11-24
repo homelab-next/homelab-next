@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
 searxng_container_port: 8080
+# the container probes its own health path on its own loopback name
+searxng_container_probe_host: localhost
 # where the config directory is mounted in the container (the product reads settings.yml there)
 searxng_container_config: /etc/searxng
 searxng_repository: "{{ searxng_image.split('@')[0].rsplit(':', 1)[0] }}"

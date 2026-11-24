@@ -18,7 +18,12 @@ class Server:
 
     def __init__(self, results=3, healthz=200, json_status=200, body=None):
         outer = self
-        self.results, self.healthz, self.json_status, self.body = results, healthz, json_status, body
+        self.results, self.healthz, self.json_status, self.body = (
+            results,
+            healthz,
+            json_status,
+            body,
+        )
         self.paths: list[str] = []
 
         class H(BaseHTTPRequestHandler):

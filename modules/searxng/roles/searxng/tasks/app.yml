@@ -24,7 +24,7 @@
             volumes: ["{{ searxng_data_root }}/config:{{ searxng_container_config }}"]
             mem_limit: "{{ searxng_mem_limit }}"
             healthcheck:
-              test: [CMD, wget, -q, -T, "5", -O, /dev/null, "http://127.0.0.1:8080/healthz"]  # no-raw-endpoint: allow the container probes itself
+              test: [CMD, wget, -q, -T, "5", -O, /dev/null, "http://{{ searxng_container_probe_host }}:{{ searxng_container_port }}/healthz"]
               interval: 30s
               timeout: 5s
               retries: 5

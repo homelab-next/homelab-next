@@ -87,7 +87,7 @@ def test_main_renders_one_narrow_container_and_the_settings_file(tmp_path):
     assert app["security_opt"] == ["no-new-privileges:true"] and "privileged" not in app
     assert app["ports"] == [GUEST + ":8095:8080"]
     assert app["user"] == f"{os.getuid()}:{os.getgid()}"
-    assert app["volumes"] == [f"{tmp_path}/data/config:/etc/searxng"]
+    assert app["volumes"] == [f"{tmp_path}/data/config:/etc/{MID}"]
     assert "environment" not in app or KEY not in json.dumps(app["environment"])
     cfg = tmp_path / "data" / "config"
     assert oct((cfg / "settings.yml").stat().st_mode & 0o777) == "0o600"
@@ -171,9 +171,9 @@ def test_every_task_that_touches_the_secret_hides_it():
     for path in sorted((ROLE_DIR / "tasks").glob("*.yml")):
         for task in _tasks(yaml.safe_load(path.read_text())):
             text = json.dumps(task)
-            if "hnx_secret" in text or "settings.yml" in text and "template" in text:
+            if "hnx_secret" in text or ("settings.yml" in text and "template" in text):
                 seen += 1
-                assert task.get("no_log") is True or _probe_only(task), (path.name, task.get("name"))
+                assert task.get("no_log") is True, (path.name, task.get("name"))
     assert seen >= 2
 
 
@@ -183,11 +183,6 @@ def _tasks(doc):
             yield from _tasks(t["block"])
         else:
             yield t
-
-
-def _probe_only(task: dict) -> bool:
-    """The reference probe keeps only whether a lookup resolved, and says so under no_log too."""
-    return task.get("no_log") is True
 
 
 BAD = [
@@ -231,7 +226,9 @@ def test_a_reference_with_no_value_is_named_and_nothing_is_written(tmp_path):
     assert not (tmp_path / "app").exists() and not (tmp_path / "data").exists()
 
 
-@pytest.mark.parametrize("value", ["short", "k" * 31, "has space " + "k" * 30, "k" * 20 + '"' + "k" * 20])
+@pytest.mark.parametrize(
+    "value", ["short", "k" * 31, "has space " + "k" * 30, "k" * 20 + '"' + "k" * 20]
+)
 def test_a_too_short_or_malformed_secret_is_refused_and_never_printed(tmp_path, value):
     r = run_role(tmp_path, ROLE, "main", dv(tmp_path), env={KEY_ENV: value})
     out = r.stdout + r.stderr
@@ -289,7 +286,7 @@ def test_health_asks_the_query_the_site_names(tmp_path):
         r = _health(tmp_path, front, health_query="lab health")
         paths = list(front.paths)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert paths[-1] == "/search?q=lab+health&format=json" or paths[-1] == "/search?q=lab%20health&format=json"
+    assert paths[-1] in ("/search?q=lab+health&format=json", "/search?q=lab%20health&format=json")
 
 
 def test_health_fails_when_the_search_returns_no_results(tmp_path):
@@ -304,7 +301,9 @@ def test_health_passes_an_empty_search_only_when_the_site_says_it_may_be_empty(t
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-@pytest.mark.parametrize("kw", [{"body": "not json"}, {"body": {"x": 1}}, {"body": {"results": "x"}}])
+@pytest.mark.parametrize(
+    "kw", [{"body": "not json"}, {"body": {"x": 1}}, {"body": {"results": "x"}}]
+)
 def test_health_fails_on_a_body_that_is_not_a_result_list_even_when_empty_is_allowed(tmp_path, kw):
     with Server(**kw) as front:
         r = _health(tmp_path, front, health_require_results=False)
