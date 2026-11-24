@@ -157,6 +157,8 @@ Rules the parser enforces (fatally, all problems at once):
   other byte is kept, the file is re-parsed to prove it) and refuses a page with no authored
   summary; `--restamp-all PATH...` exists only for a migration. A **generated** summary
   (`summary_generated: true`) is exempt, because its generator's `--check` keeps it current.
+  **A merge conflict on a `summary_of:` line**: take either side, reread the summary if the
+  headings changed, then run `python3 -m homelabnext.registers summaries --restamp <path>`; never hand-merge the digest.
   **Register records are exempt too**: a record is structured fields, not a heading outline, its
   summary is part of its review digest, and any change to the record already invalidates its
   reviews, so a second stamp would add nothing.

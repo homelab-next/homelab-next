@@ -384,6 +384,19 @@ guarantee rests on branch protection requiring pull requests. `python tools/expe
 4. Adapter for a real product, kept behind the same contract and `live`-marked where it needs a server.
 5. ADR if the contract introduces a new rule.
 
+## Merge conflicts in shared files
+
+Several files are touched by many PRs at once. Resolve them the same way every time:
+
+- `docs/scripts/catalog.md` / `catalog.json` (generated): take either side, then run
+  `python3 -m homelabnext.cli scripts catalog`. Rows are sorted by id, one per line; the totals line
+  is the usual collision and regenerating fixes it. Never use a `merge=union` attribute on the JSON.
+- `trigger:` in a script header: one entry per line; on a conflict keep the union of both sides.
+- `docs/README.md` index (generated): take either side, run `python3 -m homelabnext.cli docs index generate`.
+- A page's `summary_of:` line: take either side, then
+  `python3 -m homelabnext.registers summaries --restamp <path>`.
+- `CHANGELOG.md`: keep both sides' entries.
+
 ## Pull requests
 
 Small, one concern, green `make check`. Describe what a reviewer can run. The maintainers read each
