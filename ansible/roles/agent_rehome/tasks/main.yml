@@ -25,6 +25,7 @@
             force: false
           loop: ["{{ agent_rehome_config_file }}", "{{ agent_rehome_key_file }}", "{{ agent_rehome_password_file }}"]
           failed_when: false
+          no_log: true  # the loop names the password file
 
         - name: Stop the agent
           ansible.builtin.command:
