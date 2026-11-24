@@ -10,7 +10,9 @@ import json
 import os
 import re
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -30,12 +32,16 @@ def test_no_template_reads_a_naive_utc_now_as_an_epoch():
 
 
 @pytest.mark.requires_tool("ansible-playbook")
-def test_now_timestamp_is_the_epoch_on_a_controller_that_is_not_on_utc(tmp_path):
+def test_a_naive_datetime_is_read_as_local_time_so_only_a_local_now_gives_the_epoch(tmp_path):
+    """A fixed naive datetime, as now() (local) and now(utc=true) (UTC) both return one: under a
+    non-UTC zone its .timestamp() is the epoch of that wall time IN THAT ZONE. So a local now gives
+    the epoch and a UTC now is off by the zone's offset. No clock is read."""
+    wall = "2026-11-24 07:00:00"
     play = tmp_path / "p.yml"
     play.write_text(
         "- hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n"
         "    - ansible.builtin.debug:\n"
-        "        msg: \"{{ now().timestamp() | int }} {{ lookup('pipe', 'date -u +%s') }}\"\n"
+        f"        msg: \"{{{{ ('{wall}' | to_datetime).timestamp() | int }}}}\"\n"
     )
     env = {**os.environ, "TZ": "America/Chicago", "ANSIBLE_STDOUT_CALLBACK": "json"}
     r = subprocess.run(
@@ -46,8 +52,9 @@ def test_now_timestamp_is_the_epoch_on_a_controller_that_is_not_on_utc(tmp_path)
         cwd=tmp_path,
     )
     assert r.returncode == 0, r.stdout + r.stderr
-    # the epoch the template computes against the system's own epoch, both read in the play
-    got, epoch = map(
-        int, json.loads(r.stdout)["plays"][0]["tasks"][0]["hosts"]["localhost"]["msg"].split()
-    )
-    assert abs(got - epoch) < 120
+    got = int(json.loads(r.stdout)["plays"][0]["tasks"][0]["hosts"]["localhost"]["msg"])
+    naive = datetime.strptime(wall, "%Y-%m-%d %H:%M:%S")
+    as_local = int(naive.replace(tzinfo=ZoneInfo("America/Chicago")).timestamp())
+    as_utc = int(naive.replace(tzinfo=UTC).timestamp())
+    assert got == as_local  # read as local wall time: correct for now(), which returns local time
+    assert got - as_utc == 6 * 3600  # the skew now(utc=true).timestamp() carries in that zone
