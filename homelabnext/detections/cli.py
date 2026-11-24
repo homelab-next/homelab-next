@@ -9,8 +9,10 @@ from pathlib import Path
 
 import yaml
 
+from homelabnext._yaml import safe_load as _yaml_safe_load
+
 from . import attack, coverage, detmap, lint
-from .adapters import Target, UnsupportedConstruct, get_backend
+from .adapters import BindingError, Target, UnsupportedConstruct, get_backend, load_bindings
 from .runner import compiled_backends, run_all, run_compiled
 from .sigma import load_mapping, load_rules
 
@@ -70,13 +72,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="send the native fixtures through the engine's rule tester",
     )
-    rp.add_argument("--manager-url", help="the manager API (https://host:port); with --native")
+    rp.add_argument(
+        "--engine",
+        action="store_true",
+        help="send the Sigma rules' engine fixtures through the engine's rule tester",
+    )
+    rp.add_argument(
+        "--manager-url", help="the manager API (https://host:port); with --native or --engine"
+    )
     rp.add_argument(
         "--ca", help="the manager's certificate (verification is never off); with --native"
     )
     rp.add_argument("--user", help="the manager API account; with --native")
     mp = sub.add_parser("map")
     mp.add_argument("--check", action="store_true")
+    mp.add_argument(
+        "--base",
+        type=int,
+        default=detmap.DEFAULT_BASE,
+        help="the first engine number of a new map (an existing map continues after its highest)",
+    )
     cv = sub.add_parser("coverage", help="ATT&CK coverage from rules whose fixtures pass (D-04)")
     cv.add_argument("--out", type=Path, help="write the report here (default: stdout)")
     cv.add_argument("--check", type=Path, help="fail unless this golden report is current")
@@ -84,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     ln.add_argument("paths", nargs="*", type=Path)
     cp = sub.add_parser("compile")
     cp.add_argument("backend")
+    cp.add_argument("--out", type=Path, help="write the bundle here (default: stdout)")
     vt = sub.add_parser(
         "validate-techniques",
         help="check each rule's ATT&CK ids against an engine's known-id snapshot",
@@ -109,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
         probs = native.lint_native(root, sigma)
         print("\n".join(probs) or "native lint ok")
         return 1 if probs else 0
-    if a.cmd == "run" and a.native:
+    if a.cmd == "run" and (a.native or a.engine):
         import os
 
         from . import native
@@ -121,7 +137,15 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        probs, ran = native.run_native(root, native.ManagerLogtest(a.manager_url, a.user, pw, a.ca))
+        tester = native.ManagerLogtest(a.manager_url, a.user, pw, a.ca)
+        if a.engine:
+            from . import engine
+
+            m = detmap.load(mapfile) if mapfile.exists() else {"entries": {}}
+            probs, ran = engine.run_engine(root, load_rules(root), m["entries"], tester)
+            print("\n".join(probs) or f"engine fixtures ok ({ran} through the engine)")
+            return 1 if probs or ran == 0 else 0
+        probs, ran = native.run_native(root, tester)
         print("\n".join(probs) or f"native fixtures ok ({ran} through the engine)")
         return 1 if probs or ran == 0 else 0
     if a.cmd == "lint":
@@ -143,7 +167,9 @@ def main(argv: list[str] | None = None) -> int:
             probs = detmap.check_current(rules, existing or {"entries": {}})
             print("\n".join(probs) or "det map current")
             return 1 if probs else 0
-        mapfile.write_text(detmap.dump(detmap.generate(rules, existing)), encoding="utf-8")
+        mapfile.write_text(
+            detmap.dump(detmap.generate(rules, existing, base=a.base)), encoding="utf-8"
+        )
         print(f"wrote {mapfile}")
         return 0
     if a.cmd == "coverage":
@@ -169,21 +195,39 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "compile":
         m = detmap.load(mapfile) if mapfile.exists() else {"entries": {}}
         fm = mapping_for(root, a.backend)
-        tgt = Target(a.backend, load_mapping(fm), m["entries"])
+        try:
+            bindings = load_bindings(
+                _yaml_safe_load(fm.read_text(encoding="utf-8")) if fm is not None else None
+            )
+        except BindingError as exc:
+            print(f"{fm}: {exc}", file=sys.stderr)
+            return 2
+        tgt = Target(a.backend, load_mapping(fm), m["entries"], logsources=bindings)
         be = get_backend(a.backend)
-        # an unsupported (inert) or deprecated rule is tested but never shipped to an engine;
-        # a rule this engine cannot express is reported and left out, never aborting the bundle
-        arts, skipped = [], []
+        # an unsupported (inert) or deprecated rule is tested but never shipped to an engine; a
+        # rule awaiting its source is compiled (so a port the engine cannot take shows now, not on
+        # the day the source is enrolled) and left out; a rule this engine cannot express is
+        # reported and left out, never aborting the bundle
+        arts, skipped, waiting = [], [], []
         for r in load_rules(root):
-            if not r.deployable:
+            if not r.deployable and not r.awaiting_source:
                 continue
             try:
-                arts.append(be.compile(r, tgt))
+                art = be.compile(r, tgt)
             except UnsupportedConstruct as exc:
                 skipped.append(f"{r.det_id}: not expressible in {a.backend} ({exc})")
-        sys.stdout.write(
-            be.bundle(arts) if hasattr(be, "bundle") else "\n".join(x.content for x in arts)
-        )
+                continue
+            (waiting if r.awaiting_source else arts).append(art)
+        text = be.bundle(arts) if hasattr(be, "bundle") else "\n".join(x.content for x in arts)
+        if a.out:
+            tmp = a.out.with_name(a.out.name + ".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            tmp.replace(a.out)
+            print(f"wrote {a.out} ({len(arts)} rule(s))", file=sys.stderr)
+        else:
+            sys.stdout.write(text)
+        for art in waiting:
+            print(f"awaiting source, compiled and left out: {art.det_id}", file=sys.stderr)
         for line in skipped:
             print(f"left out of the bundle: {line}", file=sys.stderr)
         return 1 if skipped else 0
