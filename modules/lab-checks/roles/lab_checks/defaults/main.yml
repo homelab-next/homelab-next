@@ -34,3 +34,14 @@ lab_checks_last_run_group: root
 lab_checks_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
 # restore: the directory a prior export wrote
 lab_checks_restore_source: ""
+# The results reader (ADR-0049 decision 7, "The results transport"): the public keys (type, base64, an optional comment)
+# that may fetch the last results document over SSH, e.g. the status hub's pull key. Each is installed with `restrict` and a
+# forced command that prints that one file, read-only; the account has a locked password and reads a copy the unit publishes
+# after every run (group-readable to the account alone). Empty: no account, no copy, nothing changes.
+lab_checks_results_readers: []
+# the client addresses each reader key is accepted from (sshd `from=`; empty: any address the guest firewall admits)
+lab_checks_results_reader_from: []
+lab_checks_reader_user: hnx-lab-results
+# the group sshd allows (role ssh_hardening's AllowGroups) the account joins; empty: none
+lab_checks_reader_ssh_group: hnx-ssh
+lab_checks_reader_home: /var/lib/hnx-lab-results
