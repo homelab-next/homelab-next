@@ -103,6 +103,28 @@ argument_specs:
         type: path
         description: The shared last-run writer.
         default: /usr/local/libexec/homelabnext/hnx-last-run
+      lab_checks_results_readers:
+        type: list
+        elements: str
+        description: Public keys (type, base64, optional comment) that may fetch the last results document over SSH (the status hub's pull key); each is restricted to a forced command printing that one file. Empty, no reader account.
+        default: []
+      lab_checks_results_reader_from:
+        type: list
+        elements: str
+        description: The client addresses each reader key is accepted from (sshd from=); empty, any address the firewall admits.
+        default: []
+      lab_checks_reader_user:
+        type: str
+        description: The reader account (locked password; its keys run only the forced command).
+        default: hnx-lab-results
+      lab_checks_reader_ssh_group:
+        type: str
+        description: The group sshd allows that the reader account joins (empty, none).
+        default: hnx-ssh
+      lab_checks_reader_home:
+        type: path
+        description: The reader account's home, holding its keys and the published copy of the results document.
+        default: /var/lib/hnx-lab-results
   readiness:
     short_description: Refuse to go on without the secret in its form, hnx and systemd on the host.
     options: *id001

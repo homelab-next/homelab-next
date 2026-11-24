@@ -13,7 +13,7 @@
 # a check run before the group exists cannot name it (chgrp needs it): it shows the mode change alone
 - name: The results' group as this run can name it
   ansible.builtin.set_fact:
-    lab_checks_results_reader: >-
+    lab_checks_results_read_group: >-
       {{ lab_checks_results_group
          if lab_checks_results_group and not (ansible_check_mode and lab_checks_results_group_made is changed)
          else lab_checks_owner_group }}
@@ -32,7 +32,7 @@
     - {path: "{{ lab_checks_auth_dir }}", mode: "0700"}
     - {path: "{{ lab_checks_data_root }}", mode: "0750"}
     - path: "{{ lab_checks_results_dir }}"
-      group: "{{ lab_checks_results_reader }}"
+      group: "{{ lab_checks_results_read_group }}"
       mode: "{{ '02750' if lab_checks_results_group else '0750' }}"
     - {path: "{{ lab_checks_state_dir }}", mode: "0700"}
   loop_control:
@@ -51,7 +51,7 @@
     path: "{{ lab_checks_results_file }}"
     state: file
     owner: "{{ lab_checks_owner }}"
-    group: "{{ lab_checks_results_reader }}"
+    group: "{{ lab_checks_results_read_group }}"
     mode: "{{ '0640' if lab_checks_results_group else '0600' }}"
   when: lab_checks_results_stat.stat.exists | default(false)
   tags: [health, upgrade]
