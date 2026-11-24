@@ -7,9 +7,9 @@ Description=homelabnext hardware metrics (control hardware-metrics)
 Type=oneshot
 # the job's last-run record (role last_run), written on start and again on stop, whatever
 # the outcome; a writer problem never changes the job's own result (the - prefix)
-ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ hardware_metrics_last_run_dir }} --group {{ hardware_metrics_last_run_group }} --job timer:hardware_metrics/{{ hardware_metrics_unit }} --unit %n --calendar "{{ hardware_metrics_interval }}" --delay 0
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ hardware_metrics_last_run_dir }} --group {{ hardware_metrics_last_run_group }} --job timer:hardware_metrics/hnx-hardware-metrics --unit %n --calendar "{{ hardware_metrics_interval }}" --delay 0
 ExecStart=/usr/local/libexec/homelabnext/hnx-hardware-metrics --config {{ hardware_metrics_config }}
-ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ hardware_metrics_last_run_dir }} --group {{ hardware_metrics_last_run_group }} --job timer:hardware_metrics/{{ hardware_metrics_unit }} --unit %n --calendar "{{ hardware_metrics_interval }}" --delay 0
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ hardware_metrics_last_run_dir }} --group {{ hardware_metrics_last_run_group }} --job timer:hardware_metrics/hnx-hardware-metrics --unit %n --calendar "{{ hardware_metrics_interval }}" --delay 0
 Nice=10
 TimeoutStartSec=120
 # read-only everywhere but the metrics file's directory and the last-run record; the board
