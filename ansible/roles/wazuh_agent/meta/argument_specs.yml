@@ -24,7 +24,7 @@ argument_specs:
         elements: str
         description: Primary-key fingerprints (40 upper-case hex digits) the repository's signing key must carry; the key is refused otherwise.
         default: ["0DCFCA5547B19D2A6099506096B3EE5F29111145"]
-      wazuh_agent_enrollment_ref:
+      wazuh_agent_enrollment_ref: &enroll_ref
         type: str
         description: Secret reference (secret:<name>) of the manager's enrollment password, resolved by the hnx_secret lookup.
         default: secret:siem/enrollment-password
@@ -49,6 +49,35 @@ argument_specs:
         type: path
         description: Where the backup and upgrade hooks write their records.
         default: /var/lib/homelabnext/wazuh-agent
+      wazuh_agent_rehome: &rehome
+        type: bool
+        description: Move an agent already enrolled with another manager to the registry's (tasks/rehome.yml); off by default.
+        default: false
+      wazuh_agent_rehome_stamp: &rehome_stamp
+        type: str
+        description: The suffix of the re-home backups (*.pre-rehome-<stamp>).
+      wazuh_agent_config_group: &config_group
+        type: str
+        description: The group that reads the agent's key and enrolment password.
+        default: wazuh
+      wazuh_agent_systemctl_cli: &systemctl
+        type: str
+        description: systemctl, for the re-home's stop and start.
+        default: systemctl
+      wazuh_agent_auth_cli: &auth_cli
+        type: str
+        description: The agent's enrolment command (agent-auth), which reads <home>/etc/authd.pass.
+  rehome:
+    short_description: Move an agent enrolled with another manager to the registry's manager (backups, re-enrolment); an agent already there is left alone.
+    options:
+      wazuh_agent_manager_id: *manager
+      wazuh_agent_state_file: *state
+      wazuh_agent_enrollment_ref: *enroll_ref
+      wazuh_agent_enrollment_port: *enroll_port
+      wazuh_agent_rehome_stamp: *rehome_stamp
+      wazuh_agent_config_group: *config_group
+      wazuh_agent_systemctl_cli: *systemctl
+      wazuh_agent_auth_cli: *auth_cli
   health:
     short_description: Fail unless the agent reports itself connected to the manager the registry names for it (its configuration must name that manager).
     options:
