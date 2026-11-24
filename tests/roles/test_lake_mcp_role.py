@@ -158,6 +158,12 @@ def test_health_fails_when_the_server_cannot_read_the_lake(tmp_path):
     assert r.returncode != 0
 
 
+def test_health_runs_the_check_as_the_account_without_become_user():
+    """Becoming an unprivileged user needs ACL tools a guest may lack; the check runs under runuser instead."""
+    text = (Path(ROLE) / "tasks" / "health.yml").read_text()
+    assert "become_user:" not in text and "'runuser', '-u', lake_mcp_user, '--'" in text
+
+
 def test_readiness_needs_the_command_and_the_secret(tmp_path):
     v = role_vars(tmp_path)
     r = run_role(tmp_path, ROLE, "readiness", v, env=ENV)
