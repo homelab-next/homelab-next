@@ -54,8 +54,9 @@ def _dump(doc) -> str:
 
 
 def bound_row() -> dict:
-    """The module's row as the overlay binds it: the guest as host, the product's version, and
-    the site's own public name and CA secret in the two fields whose value is the site's."""
+    """The module's row as the overlay binds it: the guest as host, the product's version, the
+    site's own public name and CA secret in the two fields whose value is the site's, and its realm
+    in the health path."""
     row = ld.load_yaml(MODULE / "registry" / "services.yml")["services"]["idp"]
     version = str(ld.load_yaml(MODULE / "module.yml")["product"]["version"])
     return {
@@ -64,6 +65,8 @@ def bound_row() -> dict:
         "version": version,
         "public_hostname": "sso.lab.example",
         "edge_tls": {"ca": "secret:pki/lab-ca", "server_name": "idp.svc.example.internal"},
+        # the site's realm in the health path's :realm segment
+        "health": {**row["health"], "path": row["health"]["path"].replace("/:realm/", "/lab/")},
     }
 
 
@@ -334,3 +337,17 @@ def test_a_failed_set_up_leaves_no_scratch_realm(tmp_path, monkeypatch):
         with pytest.raises(KeycloakError, match="boom"):
             _target_factory()()
         assert kc.realms == {}
+
+
+def test_the_health_path_is_the_sites_realm_and_an_unfilled_one_is_named(tmp_path, capsys):
+    """The contributed health path is the realm's discovery document with the realm the site's
+    (the edge publishes only the site's realm); a registry that copies the parameter unfilled is
+    named."""
+    row = ld.load_yaml(MODULE / "registry" / "services.yml")["services"]["idp"]
+    assert row["health"]["path"] == "/realms/:realm/.well-known/openid-configuration"
+    ov = overlay(tmp_path)
+    reg = ld.load_yaml(ov / "lab" / "services.yml")
+    reg["services"]["idp"]["health"] = copy.deepcopy(row["health"])
+    (ov / "lab" / "services.yml").write_text(_dump(reg))
+    code, out = _check(ov, capsys)
+    assert code == 1 and "registry: services.idp.health: keycloak (instance idp) contributes" in out

@@ -436,3 +436,39 @@ def test_a_malformed_site_value_for_a_declared_field_is_named(field, value):
     reg["services"]["samples"][field] = value
     got = rr.row_problems(SITE, mr.selected(SITE, TREE.mods), rows, reg)
     assert len(got) == 1 and f"services.samples.{field}:" in got[0] and "is not one" in got[0]
+
+
+# ------------------------------------------------------- a site segment of a health path (:name)
+
+SITE_SEGMENT_HEALTH = {"kind": "http", "path": "/realms/:realm/.well-known/openid-configuration"}
+
+
+def _segment_problems(path: str, **extra) -> list[str]:
+    rows = _with_public_store({"health": SITE_SEGMENT_HEALTH})
+    reg = lab_registry()
+    reg["services"]["samples"]["health"] = {"kind": "http", "path": path, **extra}
+    return rr.row_problems(SITE, mr.selected(SITE, TREE.mods), rows, reg)
+
+
+def test_a_site_segment_of_a_contributed_health_path_takes_the_sites_value():
+    """An IdP's health is its realm's discovery document; the realm's name is the site's."""
+    assert _segment_problems("/realms/lab/.well-known/openid-configuration") == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/realms/.well-known/openid-configuration",  # the segment left empty
+        "/realms/a/b/.well-known/openid-configuration",  # more than one segment
+        "/realms/lab/.well-known/other",  # the rest of the path differs
+        "/realms/:realm/.well-known/openid-configuration",  # the parameter itself, unfilled
+    ],
+)
+def test_only_the_named_segment_is_the_sites(path):
+    got = _segment_problems(path)
+    assert len(got) == 1 and got[0].startswith("services.samples.health:")
+
+
+def test_the_rest_of_a_site_segment_health_is_still_compared():
+    got = _segment_problems("/realms/lab/.well-known/openid-configuration", expect_status=204)
+    assert len(got) == 1 and got[0].startswith("services.samples.health:")
