@@ -146,17 +146,27 @@ def _dirs_check(tmp_path: Path, group: str) -> dict[str, dict]:
         "lab_checks_data_root": str(data),
     }
     tasks = yaml.safe_load((ROLE / "tasks" / "dirs.yml").read_text())
+    names = [t["name"] for t in tasks]
+    for i, t in enumerate(tasks):  # each task's result, kept for the dump below
+        t.setdefault("register", f"_r{i}")
+    out_file = tmp_path / "results.json"
+    regs = [t["register"] for t in tasks]
+    dump = (
+        "{{ {"
+        + ", ".join(f"{n!r}: {r}" for n, r in zip(names, regs, strict=True))
+        + "} | to_json }}"
+    )
+    tasks.append({"name": "dump", "check_mode": False,
+                  "ansible.builtin.copy": {"dest": str(out_file), "content": dump}})  # fmt: skip
     play = [{"hosts": "localhost", "connection": "local", "gather_facts": False,
              "vars": pvars, "tasks": tasks}]  # fmt: skip
     (tmp_path / "p.yml").write_text(yaml.safe_dump(play))
-    env = dict(os.environ, ANSIBLE_STDOUT_CALLBACK="json", ANSIBLE_LOAD_CALLBACK_PLUGINS="1")
     r = subprocess.run(
         ["ansible-playbook", "-i", "localhost,", "--check", "--diff", str(tmp_path / "p.yml")],
-        capture_output=True, text=True, cwd=tmp_path, env=env, check=False,
+        capture_output=True, text=True, cwd=tmp_path, check=False,
     )  # fmt: skip
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr
-    out = json.loads(r.stdout)
-    return {t["task"]["name"]: t["hosts"]["localhost"] for t in out["plays"][0]["tasks"]}
+    return json.loads(out_file.read_text())
 
 
 def test_by_default_the_results_stay_roots_alone():

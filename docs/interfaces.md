@@ -599,7 +599,7 @@ change until its ADR is accepted):
 | `strategy/strategy` | 2.0 | `schemas/strategy/strategy.schema.json` | stable |
 | `workflows/deploy` | 1.0 | `schemas/workflows/deploy.schema.json` | stable |
 | `workflows/pack` | 1.0 | `schemas/workflows/pack.schema.json` | stable |
-| `workflows/stackstorm` | 1.1 | `schemas/workflows/stackstorm.schema.json` | stable |
+| `workflows/stackstorm` | 1.2 | `schemas/workflows/stackstorm.schema.json` | stable |
 <!-- /hnx:gen -->
 
 ## 6. Version policy
