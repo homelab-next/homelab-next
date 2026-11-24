@@ -39,11 +39,12 @@
         fail_msg: "lake-mcp: authorized_keys holds a line that is not restricted to the forced command, or a key the settings do not name"
       vars:
         _lines: "{{ (lake_mcp_keys_file.content | b64decode).splitlines() | reject('match', '^\\s*(#|$)') | list }}"
+    # as the service account through runuser, not become_user, becoming an unprivileged user makes Ansible hand its module
+    # files over with ACLs, which a guest without the acl tools refuses (chmod: invalid mode 'A+user:...'), first seen live
     - name: The server signs in and lists the allowed tables (as the service account)
       ansible.builtin.command:
-        argv: ["{{ lake_mcp_hnx_bin }}", lake, mcp, --config, "{{ lake_mcp_config_file }}", --check]
-      become: "{{ lake_mcp_check_as_user | bool }}"
-      become_user: "{{ lake_mcp_user }}"
+        argv: "{{ (['runuser', '-u', lake_mcp_user, '--'] if lake_mcp_check_as_user | bool else [])
+                  + [lake_mcp_hnx_bin, 'lake', 'mcp', '--config', lake_mcp_config_file, '--check'] }}"
       register: lake_mcp_check
       changed_when: false
       check_mode: false
