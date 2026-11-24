@@ -328,6 +328,14 @@ def test_caddy_adapts_the_role_caddyfile_with_the_generated_sites(tmp_path):
     ]
     (health,) = [s for s in servers.values() if s["listen"] == [f"{LOOPBACK}:8081"]]
     assert health["routes"][0]["match"] == [{"host": [LOOPBACK]}]
+    # the default logger redacts credentials in the request's query and headers
+    enc = doc["logging"]["logs"]["default"]["encoder"]
+    assert enc["format"] == "filter" and enc["wrap"]["format"] == "json"
+    assert enc["fields"]["request>uri"]["filter"] == "query"
+    assert {"type": "replace", "parameter": "ApiKey", "value": "REDACTED"} in enc["fields"][
+        "request>uri"
+    ]["actions"]
+    assert enc["fields"]["request>headers>Cookie"]["filter"] == "replace"
 
 
 # ----------------------------------------------------------------------------- lint
