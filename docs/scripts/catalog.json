@@ -360,6 +360,27 @@
     },
     {
       "exit": {
+        "0": "every job dumped and verified (or the manifest lists no supported engine)",
+        "1": "at least one job failed; the last good dump of that service is untouched",
+        "2": "bad arguments or a refused path"
+      },
+      "id": "compose-app-export-run",
+      "inputs": "the manifest the role renders (--manifest)",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-export-run",
+      "kind": "job",
+      "language": "python",
+      "outputs": "<export dir>/<service>/<database>.dump or all-databases.sql, <export dir>/listing.sha256 and manifest.json (mode 0600, directories 0700); the previous dump of a service is kept once as <service>.prev",
+      "owner": "platform",
+      "path": "ansible/roles/compose_app/files/hnx-export-run.py",
+      "purpose": "Take the application-consistent dump of every database engine a compose application runs (ADR-0042 decision 2, ADR-0008 decision 1) into the application's export directory, where the guest's image backup picks it up.",
+      "status": "active",
+      "trigger": [
+        "role:compose_app",
+        "timer:compose_app/export"
+      ]
+    },
+    {
+      "exit": {
         "0": "all capabilities pass",
         "1": "some capability lacks a passing test",
         "2": "the report could not be produced"
@@ -1257,11 +1278,11 @@
         "timer:aide/scan",
         "timer:caddy/acme-renew",
         "timer:clamav/scan",
+        "timer:compose_app/export",
         "timer:context/reindex",
         "timer:honeypot/lake",
         "timer:honeypot/report",
         "timer:intel_ingest/intel-ingest",
-        "timer:lab_checks/lab-checks",
         "timer:lynis/scan",
         "timer:media_automation/cleanup-downloads",
         "timer:media_automation/rename-cleanup",
@@ -1272,6 +1293,7 @@
         "timer:nut_ups/hnx-nut-ups-check",
         "timer:openbao/acme-renew",
         "timer:prometheus/alerts",
+        "timer:restore_drill/drill",
         "timer:rkhunter/scan",
         "timer:status_hub/hnx-hub-collect",
         "timer:status_hub/hnx-hub-login-token",
@@ -1979,6 +2001,27 @@
         "pre-commit:register-ids-check-dupes",
         "pre-commit:register-ids-check-lost",
         "pre-commit:register-ids-check-uids"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the drill verified",
+        "1": "the drill failed or did not verify (recorded; the teardown still ran)",
+        "2": "bad arguments, an unreadable config or nothing to drill"
+      },
+      "id": "restore-drill",
+      "inputs": "the config the role renders (--config) and its env file (the backup server's API token secret, its certificate fingerprint, the notifier token)",
+      "installs_to": "/usr/local/sbin/hnx-restore-drill",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the records file (drills.json, with a guests and a services mapping), one notifier message per change of a guest's state",
+      "owner": "platform",
+      "path": "ansible/roles/restore_drill/files/hnx-restore-drill.py",
+      "purpose": "Restore the latest backup of one guest (rotating, alternating the primary and the second copy) to scratch space, check the image and the application exports inside it, destroy the scratch and record pass or fail (ADR-0042 decision 3, ADR-0008 decision 2).",
+      "status": "active",
+      "trigger": [
+        "role:restore_drill",
+        "timer:restore_drill/drill"
       ]
     },
     {

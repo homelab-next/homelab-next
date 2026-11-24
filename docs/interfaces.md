@@ -170,7 +170,7 @@ imports its package lazily). Current names, in that order: `registry`, `new`, `g
 `registers`, `invariants`, `strategy`, `projects`, `records`, `orchestration`, `reviews`, `ids`, `decide`, `models`,
 `golden`,
 `site`, `guests`, `schema-check`, `secrets`, `swap`, `conform`, `decommission`, `cutover`, `docs`, `agent`, `workflows`,
-`scripts`, `events`, `status`, `publishing`, `graph`, `mcp`, `broker`, `codemode`, `modules`, `custom`,
+`recovery`, `scripts`, `events`, `status`, `publishing`, `graph`, `mcp`, `broker`, `codemode`, `modules`, `custom`,
 `ssh-ca`, `lake`, `logbursts`, `novelty`.
 `parity` is a library only (the swap runner calls it; no sub-command).
 Exit codes everywhere: `0` ok, `1` a check failed, `2` misconfiguration or bad input, `>=100` the

@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role compose_app); local changes are overwritten.
+[Unit]
+Description=Database dump of {{ compose_app_name }}, nightly, before the guest's image backup
+
+[Timer]
+OnCalendar={{ compose_app_export_calendar }}
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

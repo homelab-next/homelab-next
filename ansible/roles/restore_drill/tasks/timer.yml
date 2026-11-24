@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: Apache-2.0
+# The rotating restore-drill timer (ADR-0042 decision 3): installs the drill command, its config
+# and credentials, and a daily timer that drills the most overdue guest from the copy drilled the
+# longest ago, records the result in the records file and tells the notifier when a guest's state
+# changes. Opt-in with restore_drill_timer.
+- name: Validate the timer's inputs
+  ansible.builtin.assert:
+    that:
+      - restore_drill_pbs_authid is match('^[A-Za-z0-9._-]+@[a-z]+![A-Za-z0-9._-]+\Z')
+      - restore_drill_client_cli is match('^[A-Za-z0-9._/-]+\Z')
+      - restore_drill_stores | length > 0
+      - restore_drill_stores | select('match', '^[a-z0-9][a-z0-9_-]*\Z') | list | length == restore_drill_stores | length
+      - restore_drill_namespace is match('^[A-Za-z0-9_-]*\Z')
+      - restore_drill_secret_env.PBS_PASSWORD | default('') | length > 0
+      - restore_drill_expect_export | difference(restore_drill_guests | map(attribute='id') | list) | length == 0
+      - restore_drill_vmids.keys() | difference(restore_drill_guests | map(attribute='id') | list) | length == 0
+      - restore_drill_config_file is match('^/[A-Za-z0-9._/-]+\Z') and restore_drill_scratch_dir is match('^/[A-Za-z0-9._/-]{2,}\Z')
+    fail_msg: >-
+      restore_drill timer: the backup server's token id (user@realm!token), at least one store, plain
+      store and namespace names, the token's secret in restore_drill_secret_env.PBS_PASSWORD, and
+      expect_export and vmids that name guests of restore_drill_guests
+  no_log: true
+
+- name: Work out each guest's vm id
+  ansible.builtin.set_fact:
+    restore_drill_config_guests: >-
+      {%- set out = [] -%}
+      {%- for g in restore_drill_guests -%}
+      {%- set vmid = restore_drill_vmids[g.id] | default(-1) | int -%}
+      {%- set _ = out.append({'id': g.id, 'name': g.name, 'vmid': vmid, 'expect_export': g.id in restore_drill_expect_export}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Refuse a guest with no vm id
+  ansible.builtin.assert:
+    that: restore_drill_config_guests | selectattr('vmid', 'lt', 100) | list | length == 0
+    fail_msg: "restore_drill timer: a guest has no vm id: name every guest of restore_drill_guests in restore_drill_vmids"
+
+- name: Create the directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ restore_drill_cli | dirname }}", mode: "0755"}
+    - {path: "{{ restore_drill_config_file | dirname }}", mode: "0700"}
+    - {path: "{{ restore_drill_state_file | dirname }}", mode: "0750"}
+    - {path: "{{ restore_drill_scratch_dir }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the drill command
+  ansible.builtin.copy:
+    src: hnx-restore-drill.py
+    dest: "{{ restore_drill_cli }}"
+    mode: "0755"
+
+- name: Write the drill's config
+  ansible.builtin.copy:
+    content: "{{ restore_drill_config | to_nice_json(sort_keys=true) }}\n"
+    dest: "{{ restore_drill_config_file }}"
+    mode: "0600"
+  vars:
+    restore_drill_config:
+      client_cli: "{{ restore_drill_client_cli }}"
+      authid: "{{ restore_drill_pbs_authid }}"
+      host: "{{ restore_drill_pbs_host }}"
+      stores: "{{ restore_drill_stores }}"
+      namespace: "{{ restore_drill_namespace }}"
+      guests: "{{ restore_drill_config_guests }}"
+      state_file: "{{ restore_drill_state_file }}"
+      scratch_dir: "{{ restore_drill_scratch_dir }}"
+      min_free_gb: "{{ restore_drill_min_free_gb | int }}"
+      interval_days: "{{ restore_drill_interval_days | int }}"
+      max_snapshot_age_h: "{{ restore_drill_max_snapshot_age_h | int }}"
+      max_export_age_h: "{{ restore_drill_max_export_age_h | int }}"
+      env_file: "{{ restore_drill_env_file }}"
+      notify: "{{ {'url': restore_drill_notify_url, 'topic': restore_drill_notify_topic} if restore_drill_notify_url | length > 0 else {} }}"
+
+- name: Write the credentials the drill reads (owner-only)
+  ansible.builtin.copy:
+    content: "{% for k, v in restore_drill_secret_env | dictsort %}{{ k }}='{{ v }}'\n{% endfor %}"
+    dest: "{{ restore_drill_env_file }}"
+    mode: "0600"
+  no_log: true
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ restore_drill_last_run_dir }}"
+    last_run_group: "{{ restore_drill_last_run_group }}"
+    last_run_writer: "{{ restore_drill_last_run_writer }}"
+
+- name: Write the service and timer units
+  ansible.builtin.template:
+    src: "drill.{{ item }}.j2"
+    dest: "{{ restore_drill_unit_dir }}/hnx-restore-drill.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: restore_drill_units
+
+- name: Ask whether the timer is enabled
+  ansible.builtin.command:
+    argv: ["{{ restore_drill_systemctl_cli }}", is-enabled, hnx-restore-drill.timer]
+  register: restore_drill_timer_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd (units changed)
+  ansible.builtin.command:
+    argv: ["{{ restore_drill_systemctl_cli }}", daemon-reload]
+  when: restore_drill_units is changed
+  changed_when: true
+
+- name: Enable and start the timer
+  ansible.builtin.command:
+    argv: ["{{ restore_drill_systemctl_cli }}", enable, --now, hnx-restore-drill.timer]
+  when: restore_drill_units is changed or restore_drill_timer_enabled.stdout | default('') | trim != 'enabled'
+  changed_when: true
