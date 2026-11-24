@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""modules/velociraptor's client role downloads the pinned release on the controller into
-``velociraptor_client_controller_cache``: the directory is created first (owner only), under the
+"""The endpoint-agent module's client role downloads the pinned release on the controller into
+its controller cache directory: the directory is created first (owner only), under the
 same condition as the download, so a fresh controller is not a hand step."""
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-TASKS = ROOT / "modules/velociraptor/roles/velociraptor_client/tasks/binary.yml"
+(TASKS,) = ROOT.glob("modules/*/roles/*_client/tasks/binary.yml")
 
 
 def test_the_download_directory_is_created_before_the_fetch_under_the_same_condition():
@@ -19,7 +19,8 @@ def test_the_download_directory_is_created_before_the_fetch_under_the_same_condi
     fetch = next(i for i, t in enumerate(tasks) if "ansible.builtin.get_url" in t)
     assert mkdir < fetch
     d, f = tasks[mkdir], tasks[fetch]
-    assert d["ansible.builtin.file"]["path"] == "{{ velociraptor_client_controller_cache }}"
+    assert d["ansible.builtin.file"]["path"].endswith("_client_controller_cache }}")
+    assert f["ansible.builtin.get_url"]["dest"].startswith(d["ansible.builtin.file"]["path"])
     assert d["ansible.builtin.file"]["state"] == "directory"
     assert d["ansible.builtin.file"]["mode"] == "0700"
     for key in ("delegate_to", "become", "run_once", "when"):
