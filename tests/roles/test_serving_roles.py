@@ -1193,7 +1193,7 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
         {"open_webui_extra_env": {"RAG_OPENAI_API_BASE_URL": "http://gpu-01.example.internal"}},
         {"open_webui_extra_env": {"RAG_EMBEDDING_ENGINE": "openai"}},
         {"open_webui_extra_env": {"ENABLE_WEB_SEARCH": "true"}},
-        {"open_webui_extra_env": {"WEB_SEARCH_ENGINE": "custom"}},
+        {"open_webui_extra_env": {"WEB_SEARCH_ENGINE": "searxng"}},
         {"open_webui_extra_env": {"IMAGES_OPENAI_API_KEY": "key-fake"}},
         {"open_webui_extra_env": {"AUDIO_STT_ENGINE": "openai"}},
         {"open_webui_extra_env": {"ENABLE_PERSISTENT_CONFIG": "true"}},
