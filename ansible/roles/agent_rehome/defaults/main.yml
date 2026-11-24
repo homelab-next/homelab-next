@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Re-home an endpoint agent that is already enrolled with ANOTHER manager (opt-in:
+# agent_rehome_enabled, which an agent role's main.yml honours). The deployment variables of an
+# agent install only act on a first install, so the package cannot do it: back up the
+# configuration, the key and the enrolment password, point the configuration at the manager, write
+# the enrolment password from the secret store (never on an argv), empty the key, enrol with the
+# enrolment command (which reads the password file) and start the agent. An agent already on the
+# registry's manager is left alone. Rollback: stop the agent, restore the three
+# *.pre-rehome-<stamp> files, start it (the old manager still holds the old key).
+# The site names the agent's files, service and commands (the role carries no product name).
+agent_rehome_enabled: false
+agent_rehome_stamp: "{{ now(utc=true).strftime('%Y%m%d') }}"
+agent_rehome_config_group: root
+agent_rehome_systemctl_cli: systemctl
