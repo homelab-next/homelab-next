@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: The service group
+  ansible.builtin.group:
+    name: "{{ lake_mcp_group }}"
+    system: true
+
+# A login shell is needed for sshd to run the key's forced command (sshd runs it with the account's
+# shell); the password stays locked, and every key the role installs carries `restrict` and the command.
+- name: The service account (locked password; the forced command is all a key runs)
+  ansible.builtin.user:
+    name: "{{ lake_mcp_user }}"
+    group: "{{ lake_mcp_group }}"
+    groups: "{{ [lake_mcp_ssh_group] if lake_mcp_ssh_group != '' else omit }}"
+    append: true
+    system: true
+    shell: /bin/sh
+    home: "{{ lake_mcp_home }}"
+    create_home: false
+    password: "!"
+
+- name: The directories (the credentials and the keys are the account's alone)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ lake_mcp_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ lake_mcp_home }}", owner: "{{ lake_mcp_root_owner }}", mode: "0755"}
+    - {path: "{{ lake_mcp_ssh_dir }}", owner: "{{ lake_mcp_user }}", mode: "0700"}
+    - {path: "{{ lake_mcp_config_dir }}", owner: "{{ lake_mcp_root_owner }}", mode: "0755"}
+    - {path: "{{ lake_mcp_cred_dir }}", owner: "{{ lake_mcp_user }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"

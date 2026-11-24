@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# The restricted keys: each line is `restrict,command="<hnx> lake mcp --config <settings>"[,from=...] <key>`.
+# `restrict` turns off the pty and every forwarding (port, agent, X11) and the user rc; the forced
+# command ignores whatever the client asks to run. An empty list leaves the file empty (no key logs in).
+- name: The authorized keys (forced command, no pty, no forwarding)
+  ansible.builtin.copy:
+    dest: "{{ lake_mcp_ssh_dir }}/authorized_keys"
+    content: |
+      # Managed by homelabnext (module lake-mcp); local changes are overwritten.
+      {% for key in lake_mcp_authorized_keys %}
+      {{ lake_mcp_key_options }} {{ key }}
+      {% endfor %}
+    owner: "{{ lake_mcp_user }}"
+    group: "{{ lake_mcp_group }}"
+    mode: "0600"

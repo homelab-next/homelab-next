@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - lake_mcp_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - lake_mcp_catalog is match(lake_mcp_ident_pattern)
+      - lake_mcp_schemas is sequence and lake_mcp_schemas is not string and lake_mcp_schemas | length > 0
+      - lake_mcp_schemas | reject('match', lake_mcp_ident_pattern) | list | length == 0
+      - lake_mcp_lake_user is match(lake_mcp_engine_user_pattern)
+      - lake_mcp_lake_query_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - lake_mcp_endpoint == '' or lake_mcp_endpoint is match('^https://[a-z0-9.-]+(:[0-9]{1,5})?/?\Z')
+      - lake_mcp_reader_cred is match(lake_mcp_ref_pattern)
+      - lake_mcp_ca_ref == '' or lake_mcp_ca_ref is match(lake_mcp_ref_pattern)
+      - lake_mcp_max_rows | int >= 1 and lake_mcp_max_rows | int <= 5000
+      - lake_mcp_timeout_s | int >= 1 and lake_mcp_timeout_s | int <= 300
+      - lake_mcp_user is match(lake_mcp_name_pattern)
+      - lake_mcp_group is match(lake_mcp_name_pattern)
+      - lake_mcp_ssh_group == '' or lake_mcp_ssh_group is match(lake_mcp_name_pattern)
+      - >-
+        [lake_mcp_home, lake_mcp_config_dir, lake_mcp_hnx_bin] | reject('match', lake_mcp_path_pattern) | list | length == 0
+      - lake_mcp_authorized_keys is sequence and lake_mcp_authorized_keys is not string
+      - lake_mcp_authorized_keys | reject('match', lake_mcp_key_pattern) | list | length == 0
+      - lake_mcp_ssh_from is sequence and lake_mcp_ssh_from is not string
+      - lake_mcp_ssh_from | reject('match', lake_mcp_from_pattern) | list | length == 0
+    fail_msg: >-
+      lake-mcp: a registry-style id, a plain catalog name and at least one plain schema name, an engine user name,
+      an https endpoint (or the registry row), secret references (never values), max_rows 1-5000 and timeout_s 1-300,
+      plain account and group names, absolute canonical paths, bare public keys (type, base64, an optional plain
+      comment: never an options prefix, the role writes the options) and plain client addresses are required
+  tags: [health, backup, restore, export, upgrade, readiness]

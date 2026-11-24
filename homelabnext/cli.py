@@ -289,7 +289,8 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     ),
     "lake": (
         "commands over the lake: source-census (every source against its own cadence, and all "
-        "classes dark; pages a newly flagged set only; the source-census module's criteria)",
+        "classes dark; pages a newly flagged set only; the source-census module's criteria) | mcp "
+        "(the read-only lake MCP server over stdio, signed in as its own reader)",
         lambda a: importlib.import_module("homelabnext.lake.cli").main(a),
     ),
     "logbursts": (

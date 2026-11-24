@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The read-only lake MCP server (hnx lake mcp): its settings, the reader's engine password as an owner-only file, the service account, and the restricted SSH keys whose forced command starts it over stdio."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

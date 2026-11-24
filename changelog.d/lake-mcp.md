@@ -1,0 +1,4 @@
+---
+group: Added
+---
+`hnx lake mcp` (catalog id `hnx-lake`, `examples/mcp/hnx-lake.yml`, first-party entry `lake-mcp`): the read-only lake MCP server, `list_tables`, `describe_table` and `query` (one SELECT, refused client-side otherwise by `homelabnext.lake.readonly.select_only`; `:name` parameters bound by the engine; a row cap that cancels the query, a client deadline and the engine's `query_max_execution_time`), signed in as its own reader from an owner-only password file; `--check` signs in and lists the allowed tables for a health hook. `modules/lake-mcp` installs it on a guest as its own account and starts it over SSH stdio from keys restricted to that one command (`restrict`, forced command, optional `from=`). The engine client takes a row cap and deadline (`execute(max_rows=, deadline=)`, cancelling the query) and session properties; `make_clients` passes reviewed `engine_options` through to it.

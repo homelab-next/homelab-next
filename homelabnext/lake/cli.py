@@ -25,6 +25,15 @@ is retried next run.  The titles are constant and carry no counts (the body does
 
 Exit: 0 every criterion passes (a warning included), 1 one failed, 2 usage or settings,
 100 could not measure.
+
+``hnx lake mcp --config FILE [--check]``
+
+serves the read-only lake MCP server over stdio (:mod:`homelabnext.lake.mcp_tools`, catalog id
+``hnx-lake``): ``list_tables``, ``describe_table`` and ``query`` (one SELECT, bound ``:name``
+parameters, row and time limits), signed in to the engine as the settings' own reader.  ``--check``
+serves nothing: it loads the settings, signs in and lists the allowed schemas' tables, prints one
+line and exits 0, 2 on bad settings, 100 when the engine could not be read (a deploy's health
+hook).  The MCP SDK is the ``mcp`` extra (``pip install 'homelabnext[mcp]'``).
 """
 
 from __future__ import annotations
@@ -255,7 +264,45 @@ def _parser() -> argparse.ArgumentParser:
     sc.add_argument(
         "--no-notify", action="store_true", help="evaluate and print; page nobody, keep no state"
     )
+    mc = sub.add_parser("mcp", help="the read-only lake MCP server over stdio")
+    mc.add_argument("--config", required=True, help="the settings file (YAML)")
+    mc.add_argument(
+        "--check",
+        action="store_true",
+        help="sign in and list the allowed tables once, then exit (serves nothing)",
+    )
     return ap
+
+
+def _mcp(ns: argparse.Namespace) -> int:
+    from .mcp_tools import LakeReader, SettingsError, engine_for, load_settings
+
+    try:
+        settings = load_settings(ns.config)
+    except SettingsError as exc:
+        raise _Usage(str(exc)) from None
+    if ns.check:
+        from homelabnext.mcp.server import sdk_missing
+
+        try:
+            got = LakeReader(engine_for(settings), settings).list_tables()
+        except LakeError as exc:
+            print(f"hnx lake mcp: could not read the lake: {exc}", file=sys.stderr)
+            return 100
+        sdk = "missing (pip install 'homelabnext[mcp]')" if sdk_missing() else "present"
+        print(
+            f"hnx lake mcp: ok, signed in as {settings.user}, {len(got['tables'])} table(s) in "
+            f"{settings.catalog}.{{{','.join(settings.schemas)}}}; MCP SDK {sdk}"
+        )
+        return 0 if sdk == "present" else 2
+    from homelabnext.mcp.server import sdk_missing
+
+    if sdk_missing():
+        raise _Usage("the MCP SDK is not installed (pip install 'homelabnext[mcp]')")
+    from .mcp_tools import serve
+
+    serve(settings)
+    return 0
 
 
 def _source_census(
@@ -323,6 +370,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if ns.cmd == "source-census":
             return _source_census(ns)
+        if ns.cmd == "mcp":
+            return _mcp(ns)
     except _Usage as exc:
         print(f"hnx lake: {exc}", file=sys.stderr)
         return 2

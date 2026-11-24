@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+# The read-only lake MCP server (docs/modules.md; README.md beside this file; ADR-0030: an agent reads the
+# lake through a read-only MCP server, acting stays with the broker). `hnx lake mcp` (catalog id hnx-lake,
+# examples/mcp/hnx-lake.yml) runs on a guest the site picks, as its own service account, and signs in to
+# the lake-query slot as its own engine reader; a client starts it over SSH stdio with a key restricted to
+# that one command (no pty, no forwarding), so the agent's machine needs no route to the query engine and
+# never holds the reader's password. Every real value (the guest, the catalog, the keys, the secret) is
+# the site's: the overlay's lab/modules.yml and secret store.
+manifest_version: "1.0"
+id: lake-mcp
+kind: feature
+title: Read-only lake MCP server
+description: The first-party read-only MCP server over the lake-query slot (list_tables, describe_table,
+  query, one SELECT with bound parameters under row and time limits), signed in to the engine as its own
+  reader and started over SSH stdio by restricted keys whose forced command is the server.
+owner: data-team
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+requires:
+  capabilities:
+    - cap: cap:lake-query
+      version: "1.0"
+      purpose: the server reads the lake through the query endpoint as its own reader (SELECT only, the site's access rules decide what)
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the reader's engine password (and a private CA) are read by name at deploy time
+  hosts:
+    - role: server
+      kind: any
+      footprint: {cpu: 0.5, memory_mb: 256, disk_gb: 1}
+      roles: [role:lake_mcp]
+      purpose: runs the server for each client session as its own service account (the runtime release with the mcp extra, role hnx_runtime, is applied first)
+egress: none
+contributes:
+  roles:
+    - file: roles/lake_mcp
+  preflight:
+    - {role: role:lake_mcp, hook: readiness}
+  docs:
+    - file: README.md
+config:
+  catalog:
+    type: string
+    description: the query engine's catalog the server reads; a catalog the engine itself holds read-only refuses every write and table procedure whoever asks, which the file rules alone cannot
+    overlay: required
+  reader_password:
+    type: secret
+    description: the lake-query login's password of the server's own engine reader (the site's access rules let it read, and nothing else)
+    default: secret:lake-mcp/reader-password
+    overlay: required
+  max_rows:
+    type: integer
+    description: the most rows a query returns (1-5000)
+    default: 500
+    overlay: optional
+  timeout_s:
+    type: integer
+    description: a statement's time limit in seconds (1-300), client-side and the engine's own
+    default: 60
+    overlay: optional
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "the server is code in the runtime release (hnx lake mcp): the role's upgrade hook proves the installed release answers it and records the release; the settings and keys converge after"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: false
+    discard_reason: the server keeps no data (its settings and keys are rendered from the overlay, its password is in the secret store)
+    audit: [inventory, playbooks, live-refs, secret-names, contributions]
