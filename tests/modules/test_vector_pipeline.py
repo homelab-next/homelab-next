@@ -19,6 +19,7 @@ remap, proved without any container.
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
 import os
 import socket
@@ -616,6 +617,52 @@ def test_the_daemon_labels_what_it_is_sent_and_hands_every_row_on_even_when_vect
     finally:
         stop.set()
         th.join(timeout=10)
+        assert not th.is_alive()
+
+
+def test_the_status_stays_fresh_while_a_stream_never_pauses(tmp_path):
+    """A backlog arrives without a pause long enough for the socket timeout: the status is still
+    written every interval while the rows flow."""
+    _, listen, forward, status, th, stop = _serve(tmp_path)
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(forward)
+    srv.listen(1)
+    drained = threading.Event()
+
+    def drain():
+        conn, _ = srv.accept()
+        conn.settimeout(0.5)
+        while not drained.is_set():
+            with contextlib.suppress(TimeoutError):
+                if not conn.recv(65536):
+                    break
+        conn.close()
+
+    dt = threading.Thread(target=drain, daemon=True)
+    dt.start()
+    th.start()
+    try:
+        deadline = time.monotonic() + 10
+        while not os.path.exists(listen) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(listen)
+        line = (json.dumps({"route": "vector/siem-alerts", "event": alert(MODEL)}) + "\n").encode()
+        seen = set()
+        end = time.monotonic() + 2.0
+        while time.monotonic() < end:  # a line every 20 ms: never a 1 s pause
+            client.sendall(line)
+            if status.exists():
+                seen.add(json.loads(status.read_text())["time"])
+            time.sleep(0.02)
+        assert len(seen) >= 3, seen  # rewritten while the stream ran (interval 0.2 s)
+        assert sidecar.healthcheck(status, 1) == 0
+        client.close()
+    finally:
+        drained.set()
+        stop.set()
+        th.join(timeout=10)
+        srv.close()
         assert not th.is_alive()
 
 
