@@ -14,6 +14,7 @@ real Prometheus 2.54.1 and Uptime Kuma 1.23.16 (scrape-target ``instance`` label
 from __future__ import annotations
 
 import copy
+import json
 import re
 import threading
 from urllib.parse import parse_qs, urlsplit
@@ -22,23 +23,29 @@ import pytest
 import yaml
 from status_helpers import REGISTRY, T0, FakeHttp, endpoint, fixture, spec
 
-from homelabnext.registry.model import RegistryError, build_registry
+from homelabnext.registry.model import RegistryError, build_registry, status_source_problems
 from homelabnext.status import CollectContext, Scheduler, SourceResult, apply_mapping
 from homelabnext.status.collectors import COLLECTORS, CollectError
 from homelabnext.status.mapping import MappingError
 from homelabnext.status.model import iso, parse_iso
 from homelabnext.status.products import (
+    automation_shadow,
     kuma_heartbeat_path,
     nifi,
     nifi_bulletin_path,
     prometheus_alerts,
     prometheus_query,
+    source_problems,
     stackstorm,
     threshold_state,
     uptime_kuma,
 )
 
 FAKE_KEY = "fake-st2-api-key-0000"
+EXEC_KIND = "poll-stackstorm"
+EXEC_HEADER = "St2-Api-Key"
+EXEC_SECRET = "secret:stackstorm/status-token"
+EXEC_AUTH = {"secret": EXEC_SECRET, "header": EXEC_HEADER}
 RAW_QUERY = 'up{instance="localhost:9090"}'  # no-raw-endpoint: allow the input the registry refuses
 UP_QUERY = {"query": "up", "item": "instance", "thresholds": {"fail": 0, "direction": "below"}}
 
@@ -331,10 +338,9 @@ def test_stackstorm_sends_the_api_key_from_the_secret_store_and_the_window_query
 
 def test_an_unresolved_credential_is_an_error_and_nothing_is_sent():
     http = _st2_http()
-    s = spec(kind="poll-stackstorm", path="/api/v1/executions", mapping={},
-             auth={"secret": "secret:stackstorm/status-token", "header": "St2-Api-Key"})  # fmt: skip
+    s = spec(kind="poll-stackstorm", path="/api/v1/executions", mapping={}, auth=EXEC_AUTH)
     with pytest.raises(CollectError, match="auth credential did not resolve"):
-        COLLECTORS["poll-stackstorm"].collect(s, _ctx(http))
+        COLLECTORS[EXEC_KIND].collect(s, _ctx(http))
     assert http.calls == []
 
 
@@ -576,3 +582,79 @@ def test_the_status_page_path_is_parsed_without_backtracking():
             kuma_heartbeat_path(bad)
     with pytest.raises(MappingError):
         kuma_heartbeat_path("/api/status-page/" * 50_000 + "x!")  # returns at once
+
+
+# ---------------------------------------------------------------- StackStorm shadow evidence
+def test_automation_shadow_counts_would_act_quiet_and_failed_runs_per_rule():
+    drafts = automation_shadow(fixture("automation-shadow-steps"), {}, T0)
+    by = {d.item: d for d in drafts}
+    assert _items(drafts) == {
+        "shadow:cti-schedule-fresh": "ok",
+        "shadow:cti-schedule-publish": "ok",
+        "shadow:watch-llm-server": "warn",
+        "shadow": "ok",
+    }  # a running step is evidence neither way; a record older than the window drops out
+    fresh = by["shadow:cti-schedule-fresh"]
+    assert fresh.value == 2
+    assert fresh.summary == (
+        "2 would-act, 0 quiet, 0 failed in the last 7d 0h; "
+        "first 2026-09-21T12:00:01Z, latest 2026-09-21T13:00:02Z"
+    )
+    watch = by["shadow:watch-llm-server"]
+    assert watch.value == 0 and watch.summary.startswith("0 would-act, 1 quiet, 1 failed")
+    assert by["shadow"].value == 3
+    assert by["shadow"].summary == "3 shadow record(s) from 3 rule(s) in the last 7d 0h"
+
+
+def test_automation_shadow_ignores_other_actions_and_refuses_unreadable_records():
+    other = copy.deepcopy(fixture("automation-shadow-steps"))
+    for ex in other:
+        ex["action"]["ref"] = "core.noop"
+    assert _items(automation_shadow(other, {}, T0)) == {"shadow": "ok"}
+    nopack = copy.deepcopy(fixture("automation-shadow-steps"))
+    nopack[0]["parameters"] = {}
+    with pytest.raises(MappingError, match="names no pack"):
+        automation_shadow(nopack, {}, T0)
+    with pytest.raises(MappingError, match="list of executions"):
+        automation_shadow({"faultstring": "nope"}, {}, T0)
+
+
+def test_automation_shadow_pages_the_step_executions_with_the_key():
+    class Pages(FakeHttp):
+        def get(self, url, timeout, headers=None):
+            self.calls.append(url)
+            self.headers.append(dict(headers or {}))
+            offset = int(_query(url)["offset"])
+            rows = fixture("automation-shadow-steps")[offset : offset + 3]
+            return 200, json.dumps(rows).encode()
+
+    http = Pages()
+    s = spec(kind=EXEC_KIND, path="/api/v1/executions",
+             mapping={"builtin": "automation-shadow", "limit": 3},
+             auth=EXEC_AUTH)  # fmt: skip
+    ctx = _ctx(http, secrets={EXEC_SECRET: FAKE_KEY})
+    drafts = COLLECTORS[EXEC_KIND].collect(s, ctx)
+    assert {d.item: d.value for d in drafts}["shadow"] == 3
+    assert len(http.calls) == 3  # 3 + 3 + 1 executions: the short page ends the paging
+    assert http.headers == [{EXEC_HEADER: FAKE_KEY}] * 3
+    first = _query(http.calls[0])
+    assert first == {
+        "action": "homelabnext.step", "limit": "3", "offset": "0", "sort_desc": "true",
+        "timestamp_gt": iso(T0 - 604800),
+        "include_attributes": "id,action,status,start_timestamp,parameters,result",
+    }  # fmt: skip
+    assert _query(http.calls[2])["offset"] == "6"
+
+
+def test_automation_shadow_registry_rules():
+    def src(mapping):
+        return {"id": "s", "kind": EXEC_KIND, "target": {"path": "/api/v1/executions"},
+                "mapping": mapping}  # fmt: skip
+
+    assert source_problems(src({"builtin": "automation-shadow", "window_s": 604800}), "w") == []
+    assert source_problems(src({"builtin": "table-snapshot-age"}), "w") != []
+    assert source_problems(src({"builtin": "automation-shadow", "states": {}}), "w") != []
+    doc = {"svc": {"protocol": "https", "status_sources": [
+        {"id": "x", "kind": "poll-http-json", "target": {"path": "/x"}, "interval_s": 60,
+         "mapping": {"builtin": "automation-shadow"}}]}}  # fmt: skip
+    assert any("is for " + EXEC_KIND + " only" in p for p in status_source_problems(doc))

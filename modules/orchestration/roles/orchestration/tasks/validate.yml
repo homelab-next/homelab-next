@@ -159,7 +159,10 @@
       - orchestration_job_units | reject('mapping') | list | length == 0
       - >-
         orchestration_job_units | map('dict2items') | flatten | map(attribute='key')
-        | reject('in', ['name', 'jobs', 'lanes']) | list | length == 0
+        | reject('in', ['name', 'jobs', 'lanes', 'overlap']) | list | length == 0
+      - >-
+        orchestration_job_units | selectattr('overlap', 'defined') | map(attribute='overlap')
+        | map('string') | reject('in', ['wait', 'skip']) | list | length == 0
       - orchestration_job_units | map(attribute='name', default='') | map('string') | reject('match', orchestration_job_set_pattern) | list | length == 0
       - orchestration_job_units | map(attribute='name') | unique | list | length == orchestration_job_units | length
       - orchestration_job_units | map(attribute='jobs', default='') | reject('mapping') | list | length == 0
@@ -200,10 +203,10 @@
       - orchestration_dispatch_table_owner_uid | int >= 0
       - orchestration_dispatch_tail_bytes | int >= 256 and orchestration_dispatch_tail_bytes | int <= 262144
     fail_msg: >-
-      orchestration: orchestration_job_units is a list of {name, jobs, lanes}: a distinct name
+      orchestration: orchestration_job_units is a list of {name, jobs, lanes, overlap}: a distinct name
       (a slug of up to 24 characters, the unit set hnx-<name>@ and its group hnx-job-<name>), jobs mapping one or more agent keys
       (a profile's agent_key) to a job (a slug of up to 48 characters), each agent key declared by one
-      set only, and lanes a non-empty subset of real and shadow; job units need
+      set only, lanes a non-empty subset of real and shadow, and overlap wait (the default) or skip; job units need
       orchestration_runner_dispatch: true; the log, run and polkit directories are
       canonical absolute paths of three components or more, each set's group hnx-<service>_<set> is at
       most 32 characters, and the dispatcher's tail is 256 to 262144 bytes

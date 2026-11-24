@@ -14,7 +14,7 @@ this module **deploys** it, it does not define it.
 | Why containers | StackStorm 3.9 packages target Ubuntu 22.04 and Rocky 9; the lab's base is Debian 13 |
 | Runs as | `compose_app`, every container in the module's role slice (`cgroup_parent`), no capability but `st2web`'s four (nginx starts as root), `no-new-privileges`, every image pinned by tag **and** digest |
 | Row | `automation` (`impl: stackstorm`), http, port 9101, `auth: own`, **no public route** |
-| Status | the hub's existing `poll-stackstorm` reader (`status_sources` on the row; fixture `tests/status/fixtures/stackstorm-executions.json`) |
+| Status | the hub's existing `poll-stackstorm` reader (`status_sources` on the row; fixture `tests/status/fixtures/stackstorm-executions.json`), and `stackstorm-shadow` (built-in `automation-shadow`, schema 2.14): the shadow evidence per rule over 7 days, for promotion reviews |
 | Shadow first | every rule ships **disabled** and every pack rule is in **shadow mode** (it records the broker request it would make and sends nothing) |
 
 ## What runs where
