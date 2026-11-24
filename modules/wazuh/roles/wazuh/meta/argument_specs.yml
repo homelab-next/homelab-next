@@ -148,6 +148,18 @@ argument_specs:
         description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
           hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
         default: ''
+      wazuh_sigma_roots:
+        type: list
+        elements: str
+        description: 'Sigma detection roots on the controller, proved (lint, fixtures, det map) and compiled with
+          their mappings/wazuh.yml bindings; each loads as hnx-zz-sigma-<n>.xml after the native files; empty: none.'
+        default: []
+      wazuh_hnx_cli:
+        type: list
+        elements: str
+        description: The controller's hnx command as a list (an hnx entry point, or an absolute python running
+          homelabnext.cli).
+        default: [hnx]
       wazuh_detection_ids:
         type: dict
         description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
@@ -342,6 +354,18 @@ argument_specs:
         description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
           hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
         default: ''
+      wazuh_sigma_roots:
+        type: list
+        elements: str
+        description: 'Sigma detection roots on the controller, proved (lint, fixtures, det map) and compiled with
+          their mappings/wazuh.yml bindings; each loads as hnx-zz-sigma-<n>.xml after the native files; empty: none.'
+        default: []
+      wazuh_hnx_cli:
+        type: list
+        elements: str
+        description: The controller's hnx command as a list (an hnx entry point, or an absolute python running
+          homelabnext.cli).
+        default: [hnx]
       wazuh_detection_ids:
         type: dict
         description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
@@ -536,6 +560,18 @@ argument_specs:
         description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
           hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
         default: ''
+      wazuh_sigma_roots:
+        type: list
+        elements: str
+        description: 'Sigma detection roots on the controller, proved (lint, fixtures, det map) and compiled with
+          their mappings/wazuh.yml bindings; each loads as hnx-zz-sigma-<n>.xml after the native files; empty: none.'
+        default: []
+      wazuh_hnx_cli:
+        type: list
+        elements: str
+        description: The controller's hnx command as a list (an hnx entry point, or an absolute python running
+          homelabnext.cli).
+        default: [hnx]
       wazuh_detection_ids:
         type: dict
         description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
@@ -729,6 +765,18 @@ argument_specs:
         description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
           hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
         default: ''
+      wazuh_sigma_roots:
+        type: list
+        elements: str
+        description: 'Sigma detection roots on the controller, proved (lint, fixtures, det map) and compiled with
+          their mappings/wazuh.yml bindings; each loads as hnx-zz-sigma-<n>.xml after the native files; empty: none.'
+        default: []
+      wazuh_hnx_cli:
+        type: list
+        elements: str
+        description: The controller's hnx command as a list (an hnx entry point, or an absolute python running
+          homelabnext.cli).
+        default: [hnx]
       wazuh_detection_ids:
         type: dict
         description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
@@ -922,6 +970,18 @@ argument_specs:
         description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
           hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
         default: ''
+      wazuh_sigma_roots:
+        type: list
+        elements: str
+        description: 'Sigma detection roots on the controller, proved (lint, fixtures, det map) and compiled with
+          their mappings/wazuh.yml bindings; each loads as hnx-zz-sigma-<n>.xml after the native files; empty: none.'
+        default: []
+      wazuh_hnx_cli:
+        type: list
+        elements: str
+        description: The controller's hnx command as a list (an hnx entry point, or an absolute python running
+          homelabnext.cli).
+        default: [hnx]
       wazuh_detection_ids:
         type: dict
         description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
@@ -1115,6 +1175,18 @@ argument_specs:
         description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
           hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
         default: ''
+      wazuh_sigma_roots:
+        type: list
+        elements: str
+        description: 'Sigma detection roots on the controller, proved (lint, fixtures, det map) and compiled with
+          their mappings/wazuh.yml bindings; each loads as hnx-zz-sigma-<n>.xml after the native files; empty: none.'
+        default: []
+      wazuh_hnx_cli:
+        type: list
+        elements: str
+        description: The controller's hnx command as a list (an hnx entry point, or an absolute python running
+          homelabnext.cli).
+        default: [hnx]
       wazuh_detection_ids:
         type: dict
         description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
@@ -1312,6 +1384,18 @@ argument_specs:
         description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
           hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
         default: ''
+      wazuh_sigma_roots:
+        type: list
+        elements: str
+        description: 'Sigma detection roots on the controller, proved (lint, fixtures, det map) and compiled with
+          their mappings/wazuh.yml bindings; each loads as hnx-zz-sigma-<n>.xml after the native files; empty: none.'
+        default: []
+      wazuh_hnx_cli:
+        type: list
+        elements: str
+        description: The controller's hnx command as a list (an hnx entry point, or an absolute python running
+          homelabnext.cli).
+        default: [hnx]
       wazuh_detection_ids:
         type: dict
         description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed

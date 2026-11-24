@@ -69,6 +69,49 @@
       siem: native rule and decoder files are named like my-rule.xml (lower case, digits, - and _,
       .xml), in rules/ and decoders/ of {{ wazuh_native_dir }}; they are installed as hnx-<name>.xml
 
+- name: The site's Sigma rules, proved and compiled on the controller (docs/detections.md, "The Sigma lane on the engine")
+  when: wazuh_sigma_roots | length > 0
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  block:
+    - name: A scratch directory for the compiled bundles
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: hnx-wazuh-sigma-
+      register: wazuh_sigma_scratch
+      changed_when: false
+
+    - name: Prove each root (lint, the fixtures through the reference evaluator and the compiled form, the det map current)
+      ansible.builtin.command:
+        argv: "{{ wazuh_hnx_cli + ['detections', '--root', item.0, item.1] + (['--check'] if item.1 == 'map' else []) }}"
+      loop: "{{ wazuh_sigma_roots | product(['lint', 'run', 'map']) | list }}"
+      loop_control:
+        label: "{{ item.1 }} {{ item.0 }}"
+      changed_when: false
+
+    - name: Compile each root's bundle for this engine (a rule it cannot express fails the deploy)
+      ansible.builtin.command:
+        argv: "{{ wazuh_hnx_cli + ['detections', '--root', item, 'compile', 'wazuh', '--out',
+                  wazuh_sigma_scratch.path ~ '/zz-sigma-' ~ idx ~ '.xml'] }}"
+      loop: "{{ wazuh_sigma_roots }}"
+      loop_control:
+        index_var: idx
+      changed_when: false
+
+- name: The Sigma bundles to load (after every native file, so a rule's parent is loaded first)
+  ansible.builtin.set_fact:
+    wazuh_sigma_wanted: >-
+      {{ range(wazuh_sigma_roots | length) | map('string') | map('regex_replace', '^(.*)$', 'rules/zz-sigma-\\1.xml') | list }}
+    wazuh_native_wanted: >-
+      {{ wazuh_native_wanted + (range(wazuh_sigma_roots | length) | map('string')
+         | map('regex_replace', '^(.*)$', 'rules/zz-sigma-\\1.xml') | list) }}
+
+- name: Refuse a native file that takes a Sigma bundle's name
+  ansible.builtin.assert:
+    that: wazuh_native_wanted | select('match', '^rules/zz-sigma-') | list | length == wazuh_sigma_roots | length
+    fail_msg: "siem: native rule files named zz-sigma-*.xml are reserved for the compiled Sigma bundles"
+
 - name: Stage the native directories on the guest
   ansible.builtin.file:
     path: "{{ wazuh_data_root }}/config/native/{{ item }}"
@@ -85,8 +128,28 @@
     owner: "{{ wazuh_owner }}"
     group: "{{ wazuh_group }}"
     mode: "0640"
-  loop: "{{ wazuh_native_wanted }}"
+  loop: "{{ wazuh_native_wanted | difference(wazuh_sigma_wanted) }}"
   register: wazuh_native_staged
+
+- name: Stage the compiled Sigma bundles
+  ansible.builtin.copy:
+    src: "{{ wazuh_sigma_scratch.path }}/{{ item | basename }}"
+    dest: "{{ wazuh_data_root }}/config/native/{{ item }}"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0640"
+  loop: "{{ wazuh_sigma_wanted }}"
+  register: wazuh_sigma_staged
+
+- name: Remove the controller's scratch directory
+  ansible.builtin.file:
+    path: "{{ wazuh_sigma_scratch.path }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  changed_when: false
+  when: wazuh_sigma_scratch.path is defined
 
 - name: Find what is staged
   ansible.builtin.find:
