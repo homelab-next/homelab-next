@@ -196,7 +196,10 @@ def test_the_siem_agent_reads_each_captures_event_streams_and_only_those():
     )
     pfx = role.name
     defaults = yaml.safe_load((role / "defaults/main.yml").read_text())
-    out = jinja2.Template((role / "templates/siem-localfile.xml.j2").read_text()).render(
+    env = jinja2.Environment(
+        autoescape=True
+    )  # the block is XML: escaping is what the agent should get
+    out = env.from_string((role / "templates/siem-localfile.xml.j2").read_text()).render(
         {
             f"{pfx}_capture_interfaces": [{"slug": "mirror"}, {"slug": "guests"}],
             f"{pfx}_siem_streams": defaults[f"{pfx}_siem_streams"],
