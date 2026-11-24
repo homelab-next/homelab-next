@@ -88,6 +88,14 @@ argument_specs:
         type: dict
         description: "Extra non-secret settings, each named in the core role's allowlist (open_webui_allowed_env)."
         default: {}
+      openwebui_web_search_id:
+        type: str
+        description: "Registry id of the lab's metasearch service (capability web-search); empty keeps web search off."
+        default: ""
+      openwebui_web_search_result_count:
+        type: int
+        description: "Results a web search puts in front of the model (1 to 20)."
+        default: 5
       openwebui_export_dir:
         type: path
         description: "Open-format export target."
