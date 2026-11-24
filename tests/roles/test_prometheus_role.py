@@ -891,6 +891,51 @@ def test_a_second_run_with_probes_changes_nothing(tmp_path):
     assert "changed=0" in again.stdout, again.stdout
 
 
+LAB_CA = "-----BEGIN CERTIFICATE-----\nTEST-LAB-CA\n-----END CERTIFICATE-----"
+
+
+def _with_ca(tmp_path: Path, **kw):
+    roots = tmp_path / "roots.pem"
+    roots.write_text("-----BEGIN CERTIFICATE-----\nTEST-ROOT\n-----END CERTIFICATE-----\n")
+    v = pvars(
+        tmp_path,
+        prometheus_probes_enabled=True,
+        prometheus_probe_ca_ref="secret:prometheus/probe-ca",
+        prometheus_probe_system_roots=str(roots),
+        **kw,
+    )
+    return run_steps(tmp_path, RENDER, v, {**SECRETS, "HNX_SECRET_PROMETHEUS_PROBE_CA": LAB_CA})
+
+
+def test_a_named_lab_ca_is_trusted_beside_the_system_roots(tmp_path):
+    """Services on the lab's internal certificates are verified, not refused: both probe modules
+    name one bundle of the system roots plus the lab CA (a public name still verifies); nothing is
+    skipped, and a second run changes nothing."""
+    r = _with_ca(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    bundle = (tmp_path / "data/config/blackbox/probe-ca.pem").read_text()
+    assert bundle.index("TEST-ROOT") < bundle.index("TEST-LAB-CA")
+    text = (tmp_path / "data/config/blackbox/blackbox.yml").read_text()
+    mods = yaml.safe_load(text)["modules"]
+    for m in ("http_edge", "http_2xx"):
+        assert mods[m]["http"]["tls_config"] == {"ca_file": "/etc/blackbox/probe-ca.pem"}
+    assert "insecure_skip_verify" not in text
+    again = _with_ca(tmp_path)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+def test_without_a_lab_ca_the_probes_use_the_system_roots(tmp_path):
+    assert render(tmp_path, prometheus_probes_enabled=True).returncode == 0
+    mods = yaml.safe_load((tmp_path / "data/config/blackbox/blackbox.yml").read_text())["modules"]
+    assert all("tls_config" not in m["http"] for m in mods.values())
+    assert not (tmp_path / "data/config/blackbox/probe-ca.pem").exists()
+
+
+def test_a_probe_ca_that_is_not_a_secret_reference_is_refused(tmp_path):
+    r = render(tmp_path, prometheus_probes_enabled=True, prometheus_probe_ca_ref="/etc/ca.pem")
+    assert r.returncode != 0
+
+
 def test_the_exporter_image_is_pinned_by_tag_and_a_full_digest():
     name, digest = BLACKBOX_IMAGE.split("@")
     assert ":" in name.rsplit("/", 1)[1] and not name.endswith(":latest")
