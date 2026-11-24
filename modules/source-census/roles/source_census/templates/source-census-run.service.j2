@@ -1,0 +1,22 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (module source-census): units/fleet_units.yml source-census-run, installed by the role.
+[Unit]
+Description=Daily source census and all-classes-dark check, paging a newly flagged set only
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ source_census_user }}
+Group={{ source_census_group }}
+EnvironmentFile={{ source_census_env_file }}
+# the timer's runs are reported to the shared last-run record (the writer runs privileged: +)
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ source_census_last_run_dir }} --group {{ source_census_last_run_group }} --job timer:source_census/source-census-run --unit %n --calendar "{{ source_census_oncalendar }}" --delay 600
+ExecStart=/opt/hnx/bin/hnx lake source-census --config {{ source_census_config_file }}
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ source_census_last_run_dir }} --group {{ source_census_last_run_group }} --job timer:source_census/source-census-run --unit %n --calendar "{{ source_census_oncalendar }}" --delay 600
+TimeoutStartSec=600
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths={{ source_census_state_dir }}

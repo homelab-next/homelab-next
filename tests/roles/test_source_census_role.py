@@ -181,11 +181,12 @@ def test_converge_is_idempotent(tmp_path):
     assert r.returncode == 0 and r.stdout.count("changed=0") == 2, r.stdout
 
 
-def test_main_runs_validate_then_dirs_then_credentials_then_settings():
+def test_main_runs_validate_then_dirs_then_credentials_then_settings_then_the_optional_unit():
     steps = yaml.safe_load((Path(ROLE) / "tasks" / "main.yml").read_text())
     assert [t["ansible.builtin.include_tasks"] for t in steps] == [
-        "validate.yml", "dirs.yml", "credentials.yml", "config.yml",
+        "validate.yml", "dirs.yml", "credentials.yml", "config.yml", "units.yml",
     ]  # fmt: skip
+    assert steps[-1]["when"] == "source_census_install_unit | bool"  # off unless the site asks
 
 
 def test_the_state_is_the_service_users_alone_and_the_credentials_are_private():
@@ -277,3 +278,60 @@ def test_upgrade_records_the_release(tmp_path):
     assert json.loads((tmp_path / "var" / "state" / "release.json").read_text()) == {
         "runtime": "hnx 9.9.9"
     }
+
+
+def test_the_lake_ca_file_reaches_the_settings(tmp_path):
+    """A private CA for the query endpoint is in the settings the command reads (``lake.ca_file``),
+    and absent (the system roots) when none is set."""
+    ca = str(tmp_path / "lab-ca.pem")
+    assert converge(tmp_path, source_census_lake_ca_file=ca).returncode == 0
+    doc = census_cli._load(str(tmp_path / "etc" / "census.yml"))
+    assert doc["lake"]["ca_file"] == ca
+
+
+def test_no_lake_ca_file_means_the_system_roots(tmp_path):
+    assert converge(tmp_path).returncode == 0
+    doc = yaml.safe_load((tmp_path / "etc" / "census.yml").read_text())
+    assert "ca_file" not in doc["lake"]
+
+
+def test_the_installed_unit_runs_the_command_with_the_endpoints_in_its_environment(tmp_path):
+    """A site without a fleet scheduler has the role install the module's daily unit: the service
+    runs the census as the service user with the endpoints (resolved from the registry, no secret)
+    in its environment file, and the timer is armed once."""
+    from rolerun import calls, logging_fake
+
+    (tmp_path / "etc").mkdir(exist_ok=True)
+    (tmp_path / "units").mkdir()
+    v = role_vars(
+        tmp_path,
+        source_census_install_unit=True,
+        source_census_unit_dir=str(tmp_path / "units"),
+        source_census_systemctl_cli=logging_fake(tmp_path, "systemctl"),
+        # the example registry's rows for the two lake services
+        source_census_last_run_dir=str(tmp_path / "last-run"),
+        source_census_last_run_group=USER,
+        source_census_last_run_writer=str(tmp_path / "bin" / "hnx-last-run"),
+        source_census_lake_query_id="query-core",
+        source_census_lake_catalog_id="lake-catalog",
+    )
+    r = run_role(tmp_path, ROLE, "units", v, env=ENV)
+    assert r.returncode == 0, r.stdout + r.stderr
+    svc = (tmp_path / "units" / "hnx-source-census-run.service").read_text()
+    assert f"User={USER}" in svc
+    assert "ExecStart=/opt/hnx/bin/hnx lake source-census --config " in svc  # the runtime release
+    assert f"EnvironmentFile={tmp_path / 'etc' / 'census.env'}" in svc
+    assert (
+        "--job timer:source_census/source-census-run" in svc
+    )  # its runs reach the last-run record
+    env = (tmp_path / "etc" / "census.env").read_text()
+    for name in ("LAKE_QUERY", "LAKE_CATALOG"):
+        assert f"HNX_ENDPOINT_{name}=http" in env
+    assert PASSWORD not in env and TOKEN not in env
+    assert (
+        "OnCalendar=*-*-* 07:15:00 UTC"
+        in (tmp_path / "units" / "hnx-source-census-run.timer").read_text()
+    )
+    assert "systemctl enable --now hnx-source-census-run.timer" in calls(tmp_path)
+    again = run_role(tmp_path, ROLE, "units", v, env=ENV)
+    assert again.returncode == 0 and calls(tmp_path).count("systemctl daemon-reload") == 1

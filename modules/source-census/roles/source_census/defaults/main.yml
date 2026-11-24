@@ -28,3 +28,16 @@ source_census_dark_tables: []
 source_census_dark_hours: 24
 source_census_export_dir: /var/lib/hnx-modules/source-census/export
 source_census_restore_source: ""
+# The daily unit (units/fleet_units.yml, source-census-run): a site whose fleet scheduler renders the
+# module's scheduler_jobs leaves this off; a site without one has the role install the same unit and
+# its timer (with the endpoints in its environment file).
+source_census_install_unit: false
+source_census_oncalendar: "*-*-* 07:15:00 UTC"
+source_census_lake_query_id: lake-query
+source_census_lake_catalog_id: lake-catalog
+source_census_unit_dir: /etc/systemd/system
+source_census_systemctl_cli: systemctl
+# the installed unit reports its runs to the shared last-run record (role last_run)
+source_census_last_run_dir: /var/lib/homelabnext/last-run
+source_census_last_run_group: root
+source_census_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
