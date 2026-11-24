@@ -113,6 +113,15 @@ One writer per `(table, source)` is assumed.
   (one row each, however many values), so a noisy entity can be set aside before a per-value
   read. The query engine's
   own row filters for every other reader come from `hnx modules render` (`lake-access.json`).
+* The read-only lake MCP server (`mcp_tools.py`, `hnx lake mcp`, catalog id `hnx-lake`,
+  `modules/lake-mcp`) hands an agent `list_tables`, `describe_table` and `query`. `readonly.select_only`
+  refuses anything but one `SELECT` (or `WITH ... SELECT`) before it is sent (no `;` outside a
+  literal, no bare write verb such as `INSERT`, `CALL`, `ALTER` or `EXECUTE`, no `SHOW` or `EXPLAIN`);
+  parameters are `:name`, bound by the engine; the engine client's `max_rows` cancels the query
+  past the cap and `deadline` past the time limit, and the session carries the engine's own
+  `query_max_execution_time`. It signs in as its own reader, so the engine's access rules (and, for
+  a lake, a catalog the engine holds read-only) are the control and the gate only the first line.
+  It reads at `red`: its reader is the operator's, through a key only the operator holds.
 * An existing table that differs from the generated schema raises `SchemaMismatch`; nothing is written.
 * Endpoints come from `homelabnext.registry`; an unset endpoint raises `EndpointNotConfigured`.
   There is no literal default.

@@ -25,6 +25,13 @@ What it does, and what the tests pin without a server:
   (Trino string literals have no backslash escapes), ``datetime`` becomes ``TIMESTAMP '...
   UTC'``, lists ``ARRAY[...]``, :class:`Row` values ``ROW(...)``; anything else is refused.
 
+A statement may be bounded (``execute(max_rows=, deadline=)``): once more than ``max_rows`` rows
+have arrived the client stops reading, cancels the query (``DELETE`` of its ``nextUri``,
+best-effort) and returns the first ``max_rows`` with ``truncated`` set; once ``deadline`` seconds
+have passed it cancels the query and raises :class:`~.errors.LakeError`.  ``session`` sets session
+properties (``X-Trino-Session``) on every statement, e.g. ``query_max_execution_time``, so the
+engine enforces a limit of its own as well.
+
 A client that signs in (``auth``) sends ``Authorization`` on every request, the ``nextUri`` reads
 included; :func:`password_auth` builds the HTTP Basic value the engine's password authenticator
 reads, for the login :func:`engine_login` names.  Such a client should pass ``opener=``
@@ -71,6 +78,9 @@ INT64 = (-(2**63), 2**63 - 1)
 HEADER = "X-Trino-"
 CLIENT_TAGS = f"{HEADER}Client-Tags"
 _TAG = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+#: a session property name and value (``X-Trino-Session`` is a comma-separated ``name=value`` list)
+_SESSION_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}(?:\.[a-z][a-z0-9_]{0,63})?")
+_SESSION_VALUE = re.compile(r"[A-Za-z0-9._:-]{1,64}")
 _NOT_FOUND = {"TABLE_NOT_FOUND", "SCHEMA_NOT_FOUND", "CATALOG_NOT_FOUND", "COLUMN_NOT_FOUND"}
 
 
@@ -242,6 +252,8 @@ class QueryResult:
     rows: list[dict[str, Any]] = field(default_factory=list)
     update_type: str | None = None
     update_count: int | None = None
+    #: ``max_rows`` cut the result short (the query was cancelled after the rows returned)
+    truncated: bool = False
 
 
 class TrinoHTTP:
@@ -261,6 +273,8 @@ class TrinoHTTP:
         retries: int = 5,
         sleep: Callable[[float], None] = time.sleep,
         opener: urllib.request.OpenerDirector | None = None,
+        session: Mapping[str, str] | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ):
         parts = urllib.parse.urlsplit(base_url)
         if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -277,6 +291,13 @@ class TrinoHTTP:
         #: a client that signs in passes :func:`homelabnext._http.credential_opener` (no
         #: redirect, no proxy)
         self._opener = opener
+        self._monotonic = monotonic
+        self._session = ""
+        for name, value in (session or {}).items():
+            if not (_SESSION_NAME.fullmatch(str(name)) and _SESSION_VALUE.fullmatch(str(value))):
+                raise LakeError(f"not a session property: {str(name)[:64]!r}")
+        if session:
+            self._session = ",".join(f"{k}={v}" for k, v in session.items())
 
     def __repr__(self) -> str:
         return f"TrinoHTTP(<endpoint>, user={self.user!r})"
@@ -294,6 +315,8 @@ class TrinoHTTP:
             h[f"{HEADER}Schema"] = self.schema
         if client_tags:
             h[CLIENT_TAGS] = ",".join(client_tags)
+        if self._session:
+            h[f"{HEADER}Session"] = self._session
         if self._auth is not None:
             tok = self._auth()
             if tok:
@@ -337,13 +360,40 @@ class TrinoHTTP:
             raise LakeError("Trino reply is not an object")
         return doc
 
+    def cancel(self, next_uri: str) -> None:
+        """Cancel a running query: ``DELETE`` of its ``nextUri`` (same origin only), best-effort.
+        A failure is ignored: the engine also ends a query nobody reads any more."""
+        p = urllib.parse.urlsplit(next_uri)
+        if (p.scheme, p.netloc.lower()) != self._origin:
+            return
+        req = urllib.request.Request(next_uri, headers=self._headers(), method="DELETE")
+        send = self._opener.open if self._opener is not None else safe_urlopen
+        try:
+            with send(req, timeout=self._timeout):
+                pass
+        except (urllib.error.URLError, OSError, ValueError):
+            pass
+
     def execute(
-        self, sql: str, args: Sequence[Any] = (), *, client_tags: Sequence[str] = ()
+        self,
+        sql: str,
+        args: Sequence[Any] = (),
+        *,
+        client_tags: Sequence[str] = (),
+        max_rows: int | None = None,
+        deadline: float | None = None,
     ) -> QueryResult:
         """Run one statement (``?`` placeholders bound to ``args``) to completion.
 
         ``client_tags`` are sent in the :data:`CLIENT_TAGS` header; a tag holding a comma, white
-        space or a control character is refused (the header is a comma-separated list)."""
+        space or a control character is refused (the header is a comma-separated list).
+        ``max_rows`` stops reading after that many rows (``truncated`` is set and the query is
+        cancelled); ``deadline`` (seconds) cancels the query and raises once it has passed."""
+        if max_rows is not None and (type(max_rows) is not int or max_rows < 0):
+            raise LakeError("max_rows is a non-negative integer")
+        if deadline is not None and not deadline > 0:
+            raise LakeError("deadline is a positive number of seconds")
+        until = None if deadline is None else self._monotonic() + deadline
         for tag in client_tags:
             if type(tag) is not str or not _TAG.fullmatch(tag):
                 raise LakeError(f"not a client tag: {tag!r}")
@@ -374,6 +424,17 @@ class TrinoHTTP:
             if doc.get("updateCount") is not None:
                 res.update_count = int(doc["updateCount"])
             nxt = doc.get("nextUri")
+            if max_rows is not None and len(res.rows) > max_rows:
+                del res.rows[max_rows:]
+                res.truncated = True
+                if nxt:
+                    self.cancel(nxt)
+                return res
             if not nxt:
                 return res
+            if until is not None and self._monotonic() > until:
+                self.cancel(nxt)
+                raise LakeError(
+                    f"the statement ran past its {deadline:g} s limit and was cancelled"
+                )
             doc = self._request(nxt, None)

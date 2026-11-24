@@ -35,7 +35,7 @@ from __future__ import annotations
 import os
 import re
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from homelabnext._http import check_plaintext, credential_opener, is_loopback
@@ -97,6 +97,12 @@ def _url(
     return ep.url
 
 
+#: what ``engine_options`` may set on the engine client (make_clients)
+ENGINE_OPTIONS = frozenset(
+    {"catalog", "schema", "source", "timeout", "max_bytes", "session", "monotonic"}
+)
+
+
 def make_clients(
     *,
     domain: str | None = None,
@@ -110,10 +116,18 @@ def make_clients(
     credential: str | None = None,
     catalog_credential: str | None = None,
     ca_file: str | None = None,
+    engine_options: Mapping[str, Any] | None = None,
 ) -> tuple[Any, RestCatalog]:
     """The engine client and the catalog client :func:`make_lake` reads and writes through, as
     ``user`` (see the module doc for ``credential`` and ``catalog_credential``); nothing is sent
-    while they are built."""
+    while they are built.  ``engine_options`` are the engine client's own settings among
+    :data:`ENGINE_OPTIONS` (a session catalog and schema, session properties, the per-request
+    timeout, the reply size bound); never its endpoint, user, sign-in or opener, which are this
+    function's to set."""
+    extra = dict(engine_options or {})
+    unknown = sorted(set(extra) - ENGINE_OPTIONS)
+    if unknown:
+        raise AdapterConfigError(f"engine_options: not an engine setting {unknown}")
     wh = warehouse or os.environ.get(warehouse_env, "")
     if not wh:
         raise LookupError(f"no warehouse: pass warehouse= or set {warehouse_env}")
@@ -151,7 +165,7 @@ def make_clients(
     if catalog_credential is not None:
         token, ref = _secret(catalog_credential, "catalog_credential"), catalog_credential
         bearer = lambda: f"Bearer {_header_safe(token(), ref)}"  # noqa: E731
-    engine = TrinoHTTP(query_url, user=user, auth=auth, opener=opener)
+    engine = TrinoHTTP(query_url, user=user, auth=auth, opener=opener, **extra)
     catalog = RestCatalog(
         catalog_url,
         warehouse=wh,

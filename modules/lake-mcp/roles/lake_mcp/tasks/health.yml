@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy: the settings, the reader's credential and the keys are in place with the right modes, every
+# key carries the forced command and `restrict`, and the server's own --check, run as the service
+# account, signs in to the engine and lists the allowed tables (it serves nothing). Reads only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Stat the settings, the credential and the keys
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ lake_mcp_config_file }}"
+        - "{{ lake_mcp_cred_dir }}/reader-password"
+        - "{{ lake_mcp_ssh_dir }}/authorized_keys"
+      register: lake_mcp_stats
+    - name: They exist
+      ansible.builtin.assert:
+        that: item.stat.exists
+        fail_msg: "lake-mcp: {{ item.item }} is missing"
+      loop: "{{ lake_mcp_stats.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+    - name: The credential and the keys are 0600 (sshd and the server refuse anything wider)
+      ansible.builtin.assert:
+        that: item.stat.mode == '0600'
+        fail_msg: "lake-mcp: {{ item.item }} is not 0600"
+      loop: "{{ lake_mcp_stats.results[1:] }}"
+      loop_control:
+        label: "{{ item.item }}"
+    - name: Read the keys file
+      ansible.builtin.slurp:
+        src: "{{ lake_mcp_ssh_dir }}/authorized_keys"
+      register: lake_mcp_keys_file
+    - name: Every key line is restricted to the forced command
+      ansible.builtin.assert:
+        that:
+          - _lines | length == lake_mcp_authorized_keys | length
+          - _lines | reject('match', '^restrict,command="' ~ (lake_mcp_command | regex_escape) ~ '"[ ,]') | list | length == 0
+        fail_msg: "lake-mcp: authorized_keys holds a line that is not restricted to the forced command, or a key the settings do not name"
+      vars:
+        _lines: "{{ (lake_mcp_keys_file.content | b64decode).splitlines() | reject('match', '^\\s*(#|$)') | list }}"
+    - name: The server signs in and lists the allowed tables (as the service account)
+      ansible.builtin.command:
+        argv: ["{{ lake_mcp_hnx_bin }}", lake, mcp, --config, "{{ lake_mcp_config_file }}", --check]
+      become: "{{ lake_mcp_check_as_user | bool }}"
+      become_user: "{{ lake_mcp_user }}"
+      register: lake_mcp_check
+      changed_when: false
+      check_mode: false
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ lake_mcp_check.stdout | trim }}"
+  tags: [health]

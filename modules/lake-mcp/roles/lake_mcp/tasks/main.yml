@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Create the service account and the directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Write the reader's credential (and the CA)
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Write the settings
+  ansible.builtin.include_tasks: config.yml
+
+- name: Install the restricted keys
+  ansible.builtin.include_tasks: access.yml

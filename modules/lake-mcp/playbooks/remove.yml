@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: the keys first (no client can start the server any more), then the settings and the credential.
+# The account is kept (a system account; removing it is the operator's call), with its home emptied of keys.
+- name: Remove the lake MCP server
+  hosts: mod_lake_mcp_server
+  become: true
+  tasks:
+    - name: Remove the keys, the settings and the credential
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/hnx-modules/lake-mcp/.ssh/authorized_keys
+        - /etc/hnx-modules/lake-mcp/lake-mcp.yml
+        - /etc/hnx-modules/lake-mcp/credentials
+        - /etc/hnx-modules/lake-mcp/lake-ca.pem

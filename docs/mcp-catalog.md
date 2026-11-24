@@ -163,10 +163,11 @@ entry N)`.
   (a filesystem server's roots, say);
 - a **first-party** server runs this checkout's code: `bin: hnx` with an `entry` from a fixed
   allowlist in code (`servers.HNX_ENTRIES`: `mcp-serve` is `hnx mcp serve`, `broker-mcp` is `hnx
-  broker mcp`, the subcommands that serve MCP on stdio), whose `args` may hold only that entry's
+  broker mcp`, `codemode-mcp` is `hnx codemode mcp`, `lake-mcp` is `hnx lake mcp`, the subcommands
+  that serve MCP on stdio), whose `args` may hold only that entry's
   flags, each once and with a value (`--root`, `--registry`, `--scope-from-profile`, `--policy`,
-  `--lock`; `--socket`; `--scope-from-profile` only with `--policy` and `--lock`; the path flags
-  `--root`, `--registry`, `--policy`, `--lock` and `--socket` absolute, since a relative one resolves in the
+  `--lock`; `--socket`; `--index`; `--config`; `--scope-from-profile` only with `--policy` and `--lock`; the path flags
+  `--root`, `--registry`, `--policy`, `--lock`, `--socket`, `--index` and `--config` absolute, since a relative one resolves in the
   client's working directory; `--scope-from-profile` is the `{profile_file}` template, and render
   refuses a `profile_file` that is not absolute and writes the profile's resolved path when none is
   given), so no record reaches `invariants run --plugins-dir`, `--notify-cmd`,
