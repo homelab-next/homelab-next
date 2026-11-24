@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (searxng_target_image, tag and digest), then
+# converge with the new pin. The service keeps no data, so nothing is exported first.
+#   ansible-playbook -i <inventory> modules/searxng/playbooks/upgrade.yml -e searxng_target_image=<ref>
+- name: Upgrade SearXNG
+  hosts: mod_searxng_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: searxng
+        tasks_from: upgrade
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: searxng
+      vars:
+        searxng_image: "{{ searxng_target_image }}"

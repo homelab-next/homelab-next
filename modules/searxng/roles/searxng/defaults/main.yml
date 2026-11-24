@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# SearXNG, the web-search provider (modules/searxng): one container, stateless. The settings file is
+# rendered from these variables and the one secret key, read by name at deploy and written only into
+# that 0600 file.
+# searxng_logical_id (required): the instance's registry id, e.g. search
+searxng_image: "docker.io/searxng/searxng:2026.11.9-57ff753ad@sha256:287af61f1a13e86d02974fcde91a3413a9945788de38b61ffbc491d81a19bcc2"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# guest firewall admits only the named callers
+searxng_bind: "{{ ansible_host }}"
+searxng_port: 8095
+searxng_dir: /opt/compose/searxng
+searxng_owner: root
+searxng_group: root
+# the module's data root on its host: config/ holds the rendered settings (the container's)
+searxng_data_root: /var/lib/hnx-modules/searxng
+# the container's user and group: the image's own (it owns the config directory)
+searxng_uid: 977
+searxng_gid: 977
+searxng_key_ref: secret:searxng/secret-key
+# ported from the old instance: safe search off (0), 1 moderate, 2 strict
+searxng_safe_search: 0
+searxng_instance_name: SearXNG
+# seconds each engine request may take (the product's outgoing.request_timeout)
+searxng_request_timeout: 3.0
+# engine names to disable; every other engine keeps its default (use_default_settings: true merges
+# an engines entry into the default engine of that name by name)
+searxng_engines_disabled: []
+searxng_mem_limit: 768m
+searxng_start: true
+searxng_validate_with_docker: true
+searxng_health_timeout: 20
+# the query the health hook searches for, and whether a search with no results fails health (it
+# does: a metasearch whose every engine is blocked answers 200 with nothing, which is not healthy)
+searxng_health_query: debian
+searxng_health_require_results: true

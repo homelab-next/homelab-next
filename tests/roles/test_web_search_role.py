@@ -145,16 +145,17 @@ def test_a_changed_setting_restarts_a_running_container_and_an_unchanged_one_doe
     env = {**SECRETS, **_docker(tmp_path)}
     log = tmp_path / "docker.log"
     restarts = lambda: [x for x in log.read_text().splitlines() if " restart" in x]  # noqa: E731
-    first = dv(tmp_path, start=True)
-    assert run_role(tmp_path, ROLE, "main", first, env=env).returncode == 0
-    assert restarts() == []  # a first run creates the container with the file in place
-    changed = dv(tmp_path, start=True, safe_search=1)
-    again = run_role(tmp_path, ROLE, "main", changed, env=env)
-    assert again.returncode == 0, again.stdout + again.stderr
-    assert len(restarts()) == 1  # a bind-mounted file is read at start: the new one needs a restart
-    same = run_role(tmp_path, ROLE, "main", changed, env=env)
-    assert same.returncode == 0 and "changed=0" in same.stdout, same.stdout
-    assert len(restarts()) == 1
+    with Server() as front:
+        live = {"bind": LOOPBACK, "port": front.addr[1], "start": True}
+        assert run_role(tmp_path, ROLE, "main", dv(tmp_path, **live), env=env).returncode == 0
+        assert restarts() == []  # a first run creates the container with the file in place
+        changed = dv(tmp_path, safe_search=1, **live)
+        again = run_role(tmp_path, ROLE, "main", changed, env=env)
+        assert again.returncode == 0, again.stdout + again.stderr
+        assert len(restarts()) == 1  # a bind-mounted file is read at start: the new one needs it
+        same = run_role(tmp_path, ROLE, "main", changed, env=env)
+        assert same.returncode == 0 and "changed=0" in same.stdout, same.stdout
+        assert len(restarts()) == 1
 
 
 def test_the_containers_join_the_role_slice_the_module_play_names(tmp_path):
@@ -196,7 +197,7 @@ BAD = [
     ({"bind": "0.0.0.0"}, "not all interfaces"),
     ({"bind": "search.example.internal"}, "not all interfaces"),
     ({"port": 0}, "a port"),
-    ({"uid": 0}, "uid and gid of 1000 or more"),
+    ({"uid": 0}, "never root"),
     ({"data_root": "/srv"}, "canonical directories"),
     ({"data_root": "/var/lib/../etc/x"}, "canonical directories"),
     ({"key_ref": "not-a-ref"}, "secret: reference"),
@@ -206,7 +207,7 @@ BAD = [
     ({"request_timeout": 120}, "request_timeout"),
     ({"instance_name": ""}, "instance name"),
     ({"instance_name": "x" * 100}, "instance name"),
-    ({"engines_disabled": "bing"}, "engine names"),
+    ({"engines_disabled": {"bing": True}}, "engines_disabled"),
     ({"engines_disabled": ["ok", "bad: name"]}, "engine names"),
     ({"engines_disabled": ["bing", "bing"]}, "engine names"),
     ({"health_query": ""}, "health query"),

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to export (the service keeps no data; its settings are re-rendered by main and its secret key is in the secret store)
+  ansible.builtin.debug:
+    msg: searxng keeps no data of its own; re-running main writes the settings again
+  tags: [export]
