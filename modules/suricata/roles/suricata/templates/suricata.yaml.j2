@@ -75,6 +75,21 @@ af-packet:
 
 app-layer:
   protocols:
+    # the bundled decoder-event rules (and ET rules) name the ICS protocols: a parser left disabled
+    # fails those rules and the whole load (suricata -T, 7.0); detection only, never logged on its own
+    modbus:
+      enabled: detection-only
+      detection-ports:
+        dp: 502
+    dnp3:
+      enabled: detection-only
+      detection-ports:
+        dp: 20000
+    enip:
+      enabled: detection-only
+      detection-ports:
+        dp: 44818
+        sp: 44818
     tls:
       enabled: yes
       ja3-fingerprints: auto
