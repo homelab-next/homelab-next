@@ -16,9 +16,11 @@ from __future__ import annotations
 import copy
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.modules import cli as mcli
@@ -397,3 +399,56 @@ def test_the_sigma_lane_is_proved_and_compiled_on_the_controller_and_loads_after
     v = role_text("tasks", "validate.yml")
     assert f"{P}sigma_roots | reject('match', {P}path_pattern)" in v
     assert f"{P}hnx_cli is sequence" in v
+
+
+def _sigma_play(tmp_path, roots: list[str]) -> subprocess.CompletedProcess:
+    """The role's Sigma tasks (the controller block, the wanted list, the name check) run for
+    real with a stand-in hnx that writes the bundle compile names; then every staged source the
+    stage task would copy must exist on the controller."""
+    import json
+    import stat
+
+    tasks = yaml.safe_load(role_text("tasks", "rules.yml"))
+    i = next(n for n, t in enumerate(tasks) if "block" in t and "Sigma" in t["name"])
+    picked = tasks[i : i + 3]  # the block, the wanted list, the reserved-name check
+    fake = tmp_path / "hnx"
+    log = tmp_path / "calls.jsonl"
+    fake.write_text(
+        "#!/usr/bin/env python3\nimport json, sys\n"
+        f"open({str(log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "a = sys.argv[1:]\n"
+        "if 'compile' in a: open(a[a.index('--out') + 1], 'w').write('<group/>')\n"
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    check = {
+        "name": "every bundle the stage task copies exists",
+        "ansible.builtin.assert": {
+            "that": [
+                "(" + P + "sigma_scratch.path ~ '/' ~ (item | basename)) is file",
+                "item is match('^rules/zz-sigma-[0-9]+[.]xml$')",
+            ]
+        },
+        "loop": "{{ " + P + "sigma_wanted }}",
+    }
+    play = [{
+        "hosts": "localhost", "connection": "local", "gather_facts": False,
+        "vars": {P + "sigma_roots": roots, P + "hnx_cli": [str(fake)],
+                 P + "native_wanted": ["rules/native-one.xml"]},
+        "tasks": [*picked, check, {"ansible.builtin.debug": {"var": P + "sigma_wanted"}}],
+    }]  # fmt: skip
+    (tmp_path / "p.yml").write_text(yaml.safe_dump(play))
+    r = subprocess.run(["ansible-playbook", "-i", "localhost,", str(tmp_path / "p.yml")],
+                       capture_output=True, text=True, cwd=tmp_path)  # fmt: skip
+    r.calls = [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
+    return r
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+def test_the_sigma_bundles_are_compiled_to_the_names_the_stage_task_copies(tmp_path):
+    roots = [str(tmp_path / "a" / "detections"), str(tmp_path / "b" / "detections")]
+    r = _sigma_play(tmp_path, roots)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "rules/zz-sigma-0.xml" in r.stdout and "rules/zz-sigma-1.xml" in r.stdout
+    assert sorted((c[2], c[3]) for c in r.calls) == sorted(
+        (root, verb) for root in roots for verb in ("lint", "run", "map", "compile")
+    )
