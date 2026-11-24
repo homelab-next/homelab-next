@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""modules/velociraptor: the clients dial the PUBLISHED frontend port (not the container's), and an
+"""The endpoint-agent module: the clients dial the PUBLISHED frontend port (not the
+container's), and an
 enrolment counts only when the server itself sees the client (a client writes its identity file
 before it ever reaches a server)."""
 
@@ -14,12 +15,16 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-ROLES = ROOT / "modules/velociraptor/roles"
-SCRIPT = ROLES / "velociraptor_server/files/hnx_velociraptor.py"
-spec = importlib.util.spec_from_file_location("hnx_velociraptor", SCRIPT)
-vr = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(vr)
+SERVERS = ROOT.glob("modules/*/roles/*_server/files/hnx_*.py")
+(SERVER,) = (f for f in SERVERS if "def seen_problems" in f.read_text())
+ROLE = SERVER.parents[1].name  # the server role's name, which prefixes its variables
+PREFIX = ROLE.removesuffix("_server")
+ROLES = SERVER.parents[2]
+SPEC = importlib.util.spec_from_file_location("hnx_endpoint_agent", SERVER)
+vr = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(vr)
 
+TEXT = "{{ " + PREFIX + "_server_client_config_text }}"
 NOW = 1_800_000_000.0
 CID = "C.0123456789abcdef"
 
@@ -62,7 +67,7 @@ def test_the_client_id_argument_is_checked_before_any_query():
 @pytest.mark.requires_tool("ansible-playbook")
 @pytest.mark.parametrize(("published", "container"), [(8001, 8000), (8000, 8000)])
 def test_the_client_configuration_dials_the_published_port(tmp_path, published, container):
-    tasks = yaml.safe_load((ROLES / "velociraptor_server/tasks/client_config.yml").read_text())
+    tasks = yaml.safe_load((ROLES / ROLE / "tasks/client_config.yml").read_text())
     (rewrite,) = [t for t in tasks if "ansible.builtin.set_fact" in t]
     (check,) = [t for t in tasks if "ansible.builtin.assert" in t]
     host = "sensor.example.internal"
@@ -72,12 +77,12 @@ def test_the_client_configuration_dials_the_published_port(tmp_path, published, 
     )
     play = [{
         "hosts": "localhost", "connection": "local", "gather_facts": False,
-        "vars": {"velociraptor_server_frontend_hostname": host,
-                 "velociraptor_server_container_frontend_port": container,
-                 "velociraptor_server_frontend_port": published,
-                 "velociraptor_server_client_config": {"stdout": printed}},
+        "vars": {f"{PREFIX}_server_frontend_hostname": host,
+                 f"{PREFIX}_server_container_frontend_port": container,
+                 f"{PREFIX}_server_frontend_port": published,
+                 f"{PREFIX}_server_client_config": {"stdout": printed}},
         "tasks": [rewrite, {"ansible.builtin.assert": check["ansible.builtin.assert"]},
-                  {"ansible.builtin.copy": {"content": "{{ velociraptor_server_client_config_text }}",
+                  {"ansible.builtin.copy": {"content": TEXT,
                                             "dest": str(tmp_path / "out.yaml")}}],
     }]  # fmt: skip
     (tmp_path / "p.yml").write_text(yaml.safe_dump(play))
