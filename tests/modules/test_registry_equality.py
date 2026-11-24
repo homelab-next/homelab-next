@@ -476,7 +476,7 @@ def test_the_rest_of_a_site_segment_health_is_still_compared():
 
 # ------------------------------------------------- site sign-in (auth own -> idp with oidc)
 
-_CALLBACK = {"redirect_uris": ["https://data.lab.example:9000/callback"]}
+_CALLBACK = {"redirect_uris": ["https://data.lab.example/callback"]}
 
 
 def _own_rows():
@@ -521,7 +521,7 @@ def test_oidc_a_module_declares_is_compared():
     rows[STORE]["object-store"]["oidc"] = _CALLBACK
     reg = lab_registry()
     reg["services"]["samples"].update(
-        auth="own", oidc={"redirect_uris": ["https://data.lab.example:9000/other"]}
+        auth="own", oidc={"redirect_uris": ["https://data.lab.example/other"]}
     )
     sel = mr.selected(SITE, TREE.mods)
     got = rr.row_problems(SITE, sel, rows, reg)
