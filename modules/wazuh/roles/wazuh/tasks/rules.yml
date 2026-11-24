@@ -101,11 +101,14 @@
 
 - name: The Sigma bundles to load (after every native file, so a rule's parent is loaded first)
   ansible.builtin.set_fact:
+    # no regular-expression backreference here: inside a folded scalar the replacement's backslash reaches the filter
+    # doubled and the name came out as a literal zz-sigma-\\1.xml (the first live deploy, 2026-11-24)
     wazuh_sigma_wanted: >-
-      {{ range(wazuh_sigma_roots | length) | map('string') | map('regex_replace', '^(.*)$', 'rules/zz-sigma-\\1.xml') | list }}
+      {{ range(wazuh_sigma_roots | length) | map('string') | map('regex_replace', '^', 'rules/zz-sigma-')
+         | map('regex_replace', '$', '.xml') | list }}
     wazuh_native_wanted: >-
-      {{ wazuh_native_wanted + (range(wazuh_sigma_roots | length) | map('string')
-         | map('regex_replace', '^(.*)$', 'rules/zz-sigma-\\1.xml') | list) }}
+      {{ wazuh_native_wanted + (range(wazuh_sigma_roots | length) | map('string') | map('regex_replace', '^', 'rules/zz-sigma-')
+         | map('regex_replace', '$', '.xml') | list) }}
 
 - name: Refuse a native file that takes a Sigma bundle's name
   ansible.builtin.assert:
