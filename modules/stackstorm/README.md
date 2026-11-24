@@ -88,6 +88,14 @@ hashes from the package index's JSON API, and regenerate `roles/stackstorm/files
    (`constraints/ci.txt`), `stackstorm_hnx_bootstrap` (`constraints/bootstrap.txt`);
    `stackstorm_events_endpoint` (`tls://...`), `stackstorm_events_ca_file`,
    `stackstorm_events_api_prefix` (the bridge account's import prefix, `JS.HNX.API` in the lab);
+   or, while the bus listens on loopback on its own host (role `events_bus` has no TLS listener),
+   the **bus forward**: `stackstorm_events_forward_enabled: true`, `stackstorm_events_endpoint`
+   `nats://<loopback>:<a free local port>` (the forward's end on this guest), `stackstorm_events_forward_host`,
+   `stackstorm_events_forward_host_key` (the bus host's public key line, pinned),
+   `stackstorm_events_forward_remote` (`<the bus's loopback address>:<port>`, as the bus host sees it)
+   and the key's secret (`stackstorm_events_forward_key_ref`); the bus host gets the matching login
+   in `events_bus_forward_logins` (its public key and this guest's address as `from`) and admits
+   SSH from this guest;
    `stackstorm_broker_host`, `stackstorm_broker_host_key` (the broker host's public key line,
    pinned), `stackstorm_broker_ssh_user`; `stackstorm_enabled_rules` (empty: all off);
    `stackstorm_operator_users` as wanted. The memory budget below is the default; the budget

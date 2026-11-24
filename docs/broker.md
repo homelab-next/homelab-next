@@ -752,6 +752,22 @@ bus by `broker_relay_events_id` (capability `events`; the endpoint defaults to t
 loopback, the bus having no TLS listener yet), the hub's allowed host by its own row's
 `public_hostname`.
 
+**A bus client on another host** (the StackStorm event bridge) reaches the loopback bus through an
+SSH local forward: `events_bus_forward_logins` declares one login per client (`user`, its one
+`ed25519`: the base64 of its one ssh-ed25519 public key, `from`: the client's addresses). Each is a system account with no shell
+and a locked password, in sshd's allow group, whose root-owned `authorized_keys` line is
+`restrict,port-forwarding,permitopen="<the bus>",from="<from>",command="/bin/false" <key>`, and a
+sshd `Match User` block (a drop-in under `sshd_config.d`; a Match block in an included file ends
+with the file) allows `AllowTcpForwarding local` with `PermitOpen` the bus's own listen address and
+port and nothing else: no TTY, no remote forward (`PermitListen none`), no socket, agent or X11
+forward, no tunnel, `ForceCommand /bin/false`. The drop-in is staged and goes live only after
+`sshd -t` passes and `sshd -T` shows each login held to exactly that; the health hook reads the
+same settings from the live configuration. The forward is transport only: the client still signs in
+to the bus as its own bus user, whose allow-list is unchanged. This is fewer moving parts than a
+TLS listener, which NATS would apply to every client on its one client port (the relay's loopback
+connection included), and it opens no new listener: the host's sshd, admitted from the client's
+address alone.
+
 * **The manifest and its handlers are validated before they are installed.** Both are staged
   under `<config>/staged/` (`manifest.yml` and `handlers/`, so the staged manifest's `handlers/`
   paths and digests resolve against the staged handlers), checked by the release's own `hnx

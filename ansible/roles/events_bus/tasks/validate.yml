@@ -128,3 +128,46 @@
     fail_msg: >-
       events_bus: events_bus_monitor_user is empty or a user name of its own (not one of
       events_bus_users), with its password as events_bus_monitor_password_ref (secret:<name>)
+
+# A forward login lands in a sshd Match block, an authorized_keys line and a user account: refuse
+# anything that could add an option, a line or a second key, any source that is not a host or a
+# narrow range, and any name that is already someone else's (the service's own account, root, the
+# account the deploy connects as).
+- name: Validate the forward logins
+  ansible.builtin.assert:
+    that:
+      - events_bus_forward_logins is sequence and events_bus_forward_logins is not string
+      - events_bus_forward_logins | map(attribute='user', default='') | unique | length == events_bus_forward_logins | length
+      - events_bus_forward_ssh_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - events_bus_forward_home is match('^/[A-Za-z0-9._/-]+\Z') and events_bus_forward_home.split('/') | length > 3
+      - events_bus_forward_sshd_dropin is match('^/etc/ssh/sshd_config\.d/[A-Za-z0-9._-]+\.conf\Z')
+      - events_bus_sshd_main_config is match('^/[A-Za-z0-9._/-]+\Z')
+    fail_msg: >-
+      events_bus: events_bus_forward_logins is a list of distinct users, the ssh group a group name,
+      the home root an absolute path at least three levels deep and the drop-in a .conf under
+      /etc/ssh/sshd_config.d
+
+- name: Validate each forward login
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.keys() | difference(['user', 'ed25519', 'from', 'state']) | length == 0
+      - item.user is defined and item.user is match('^[a-z][a-z0-9-]{0,31}\Z')
+      - item.user not in ['root', events_bus_user, ansible_user | default('root'), ansible_user_id | default('root')]
+      - item.state | default('present') in ['present', 'absent']
+      - >-
+        item.state | default('present') == 'absent'
+        or (item.ed25519 is defined and item.ed25519 is string and item.ed25519 is match('^AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}\Z'))
+      - >-
+        item.state | default('present') == 'absent'
+        or (item['from'] is defined and item['from'] is sequence and item['from'] is not string and item['from'] | length > 0
+            and item['from'] | select('match', '^[0-9]{1,3}(\.[0-9]{1,3}){3}(/(2[4-9]|3[0-2]))?\Z|^[0-9a-f:]+(/(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-8]))?\Z') | list | length
+               == item['from'] | length
+            and item['from'] | map('regex_replace', '/.*$', '') | select('in', ['0.0.0.0', '::']) | list | length == 0)
+    fail_msg: >-
+      events_bus: forward login {{ item.user | default('?') }}: a user name of its own (not root, the
+      bus's account or the deploy's), `ed25519`: the base64 of one ssh-ed25519 public key (no type, no comment), and
+      `from`: the client's addresses (a host, or an IPv4 /24 or IPv6 /64 at the widest); nothing else
+  loop: "{{ events_bus_forward_logins }}"
+  loop_control:
+    label: "{{ item.user | default('?') }}"

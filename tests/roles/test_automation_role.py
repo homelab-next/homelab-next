@@ -114,6 +114,14 @@ SECRET_VALUES = {
     "webhook-key": _fake("webhook-key"),
     "status-token": _fake("status-token"),
     "events-password": _fake("events-password"),
+    "events-ssh-key": "\n".join(
+        [
+            f"{'-' * 5}BEGIN OPENSSH PRIVATE KEY{'-' * 5}",
+            "ZXZlbnRz",
+            f"{'-' * 5}END OPENSSH PRIVATE KEY{'-' * 5}",
+            "",
+        ]
+    ),
     "broker-ssh-key": "\n".join(
         [
             f"{'-' * 5}BEGIN OPENSSH PRIVATE KEY{'-' * 5}",
@@ -642,6 +650,77 @@ def test_the_bridge_unit_posts_to_loopback_and_carries_no_secret():
         v("events_api_prefix"): "", v("bridge_state_dir"): "/v",
     })  # fmt: skip
     assert "--events-ca-file" not in plain and "--events-api-prefix" not in plain
+
+
+#: the bus forward's ends, built rather than written: this guest's loopback end and the bus as its
+#: own host sees it (role events_bus listens on loopback)
+LOOPBACK = str(ipaddress.IPv4Address((127 << 24) | 1))
+#: the bus forward's unit, as the role names it (the one place it is set)
+TUNNEL_UNIT = re.search(
+    r"name: (hnx-[a-z0-9]+-events-tunnel\.service)",
+    (ROLE_DIR / "tasks" / "events_tunnel.yml").read_text(),
+).group(1)
+BUS_FORWARD = {
+    v("events_forward_enabled"): True, v("events_forward_host"): BUS_HOST,
+    v("events_forward_host_key"): f"{BUS_HOST} ssh-ed25519 {'B' * 40}",
+    v("events_forward_remote"): f"{LOOPBACK}:{BUS_PORT}",
+    v("events_endpoint"): f"nats://{LOOPBACK}:{BUS_PORT + 10000}",
+}  # fmt: skip
+
+
+def test_the_bus_forward_pins_the_host_key_and_binds_loopback_only():
+    unit = _render(
+        "events-tunnel.service.j2",
+        **{
+            v("events_forward_user"): "hnx-ev", v("events_forward_ssh_port"): 22,
+            v("events_forward_ssh_user"): "bus-fwd", v("events_forward_host"): BUS_HOST,
+            v("events_forward_remote"): f"{LOOPBACK}:{BUS_PORT}",
+            v("events_forward_local"): f"{LOOPBACK}:{BUS_PORT + 10000}",
+            v("events_forward_state_dir"): "/etc/hnx-ev",
+        },
+    )  # fmt: skip
+    for must in ("-o StrictHostKeyChecking=yes", "-o IdentitiesOnly=yes", "-o BatchMode=yes",
+                 "-o ExitOnForwardFailure=yes", "-o GlobalKnownHostsFile=/dev/null",
+                 "-o UserKnownHostsFile=/etc/hnx-ev/known_hosts", "-i /etc/hnx-ev/events.key",
+                 f"-L {LOOPBACK}:{BUS_PORT + 10000}:{LOOPBACK}:{BUS_PORT}", f"bus-fwd@{BUS_HOST}",
+                 "User=hnx-ev", "NoNewPrivileges=yes", "ProtectSystem=strict", "Restart=always"):  # fmt: skip
+        assert must in unit, must
+    assert "-N -T" in unit and "password" not in unit.lower() and "ssh-ed25519" not in unit
+    # the bridge starts after the forward when the forward is on, and does not wait on it otherwise
+    common = {
+        v("bridge_user"): "b", v("events_endpoint"): f"nats://{LOOPBACK}:{BUS_PORT + 10000}",
+        v("bridge_conf_dir"): "/e", v("hnx_cli"): "/opt/hnx/bin/hnx", v("port"): 9101, v("bind"): GUEST,
+        v("events_stream"): "S", v("events_subject_prefix"): "lab", v("events_user"): "u",
+        v("events_login_ref"): ref("events-password"), v("events_ca_file"): "",
+        v("events_api_prefix"): "", v("bridge_state_dir"): "/v",
+    }  # fmt: skip
+    after = _render("bridge.service.j2", **common, **{v("events_forward_enabled"): True})
+    assert TUNNEL_UNIT in after.split("[Service]")[0]
+    assert TUNNEL_UNIT not in _render("bridge.service.j2", **common)
+
+
+def test_the_bus_forward_needs_its_inputs_and_a_loopback_bridge_endpoint(tmp_path):
+    base = pv(tmp_path, **{v("bridge_enabled"): True}, **BUS_FORWARD)
+    results = run_cases(tmp_path, ROLE, "validate", base, [
+        {},
+        {v("events_endpoint"): f"tls://{BUS_HOST}:{BUS_PORT}"},  # the forward is the bridge's way
+        {v("events_endpoint"): f"nats://{LOOPBACK}"},  # no port to bind
+        {v("bridge_enabled"): False},
+        {v("events_forward_host_key"): "no key line"},
+        {v("events_forward_host"): ""},
+        {v("events_forward_remote"): f"{BUS_HOST}:{BUS_PORT}"},  # the bus host's loopback only
+        {v("events_forward_remote"): ""},
+        {v("events_forward_key_ref"): ref("broker-ssh-key")},  # a key of its own
+        {v("events_forward_user"): DEFAULTS[v("bridge_user")]},  # the bridge never reads the key
+        {v("events_ca_file"): "/etc/ca.pem"},
+    ], env=SECRETS, parallel=True)  # fmt: skip
+    assert results[0] == (False, ""), results[0]
+    assert [i for i, (failed, _) in enumerate(results[1:], 1) if not failed] == []
+    # the forward's key is one more reference the run needs, by name
+    env = {k: val for k, val in SECRETS.items() if k != secret_env_name(ref("events-ssh-key"))}
+    r = run_role(tmp_path, ROLE, "credentials", base, env=env)
+    assert r.returncode != 0 and ref("events-ssh-key") in r.stdout + r.stderr
+    assert run_role(tmp_path, ROLE, "credentials", base, env=SECRETS).returncode == 0
 
 
 def _first_the_bridge_and_forward_inputs_are_required_when_they_are_on(tmp_path):
