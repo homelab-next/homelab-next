@@ -36,3 +36,11 @@ zeek_siem_agent_manage: true
 zeek_siem_agent_conf: /var/ossec/etc/ossec.conf
 zeek_siem_agent_unit: ""
 zeek_siem_streams: [conn, dns, ssl, http, ssh, files, x509, notice, weird]
+# The predecessor this module replaced on the host, retired once the module owns the captures
+# (zeek_service_manage): its units are disabled and stopped first (a watchdog timer would revive
+# its containers), then its containers are kept from restarting and stopped, and its SIEM agent
+# localfile blocks (blockinfile marker text, without BEGIN/END) are removed, so every event is read
+# once, from this module's log directory. Empty: nothing to retire.
+zeek_retired_units: []
+zeek_retired_containers: []
+zeek_retired_siem_markers: []
