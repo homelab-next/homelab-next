@@ -12,7 +12,7 @@ ROLES := $(wildcard ansible/roles/*)
 PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 
-.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval models-canary agent-lint prompts-lint memory-replay injection-check injection-report injection-eval workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke lab-broker
+.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval models-canary agent-lint prompts-lint memory-replay injection-check injection-report injection-eval workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check changelog-compile constraints clean lab-up lab-down lab-smoke lab-broker
 
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-canary agent-lint prompts-lint memory-replay injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check licence-check clean"
@@ -429,6 +429,10 @@ leak-scan-history:
 
 changelog-check:
 	$(PY) tools/check_changelog.py
+
+# fold changelog.d/ fragments into CHANGELOG.md [Unreleased] and delete them (run when cutting a release)
+changelog-compile:
+	$(PY) tools/changelog_compile.py
 
 # ADR-0011 decision 4 against what is pinned and deployed: every package constraints/ pins and
 # every compose image has a reviewed licence in tools/licences.yml, and no linked one is copyleft

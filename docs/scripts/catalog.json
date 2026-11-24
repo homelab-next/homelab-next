@@ -213,6 +213,25 @@
     },
     {
       "exit": {
+        "0": "folded (or nothing to fold), or --check found every fragment well formed",
+        "1": "a fragment is malformed or CHANGELOG.md has no [Unreleased] section; nothing was changed",
+        "2": "a path cannot be read or written"
+      },
+      "id": "changelog-compile",
+      "inputs": "the fragment files of the changelog.d directory, and CHANGELOG.md",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the updated CHANGELOG.md; the folded fragments are removed; one line per fragment on stdout",
+      "owner": "maintainers",
+      "path": "tools/changelog_compile.py",
+      "purpose": "Fold the per-PR fragments in changelog.d/ into the [Unreleased] section of CHANGELOG.md and delete them.",
+      "status": "active",
+      "trigger": [
+        "make:changelog-compile"
+      ]
+    },
+    {
+      "exit": {
         "0": "both sections present",
         "1": "a section is missing",
         "2": "the version or CHANGELOG.md cannot be read"
