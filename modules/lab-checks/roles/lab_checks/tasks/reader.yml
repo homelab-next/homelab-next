@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: Apache-2.0
+# The results reader (ADR-0049 decision 7, "The results transport"): an account whose only keys are restricted
+# to a forced command printing the published copy of the last results document. It reads nothing else: the
+# data root stays root's, and the unit publishes the copy (0640, group the reader's) after every run.
+- name: The reader's group
+  ansible.builtin.group:
+    name: "{{ lab_checks_reader_user }}"
+    system: true
+  when: lab_checks_results_readers | length > 0
+
+# a login shell is needed for sshd to run the forced command; the password stays locked
+- name: The reader account (locked password; the forced command is all a key runs)
+  ansible.builtin.user:
+    name: "{{ lab_checks_reader_user }}"
+    group: "{{ lab_checks_reader_user }}"
+    groups: "{{ [lab_checks_reader_ssh_group] if lab_checks_reader_ssh_group != '' else omit }}"
+    append: true
+    system: true
+    shell: /bin/sh
+    home: "{{ lab_checks_reader_home }}"
+    create_home: false
+    password: "!"
+  when: lab_checks_results_readers | length > 0
+
+- name: The reader's directories (the copy is root's, readable by the reader; the keys are the reader's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ lab_checks_reader_user }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ lab_checks_reader_home }}", owner: root, mode: "0750"}
+    - {path: "{{ lab_checks_reader_home }}/.ssh", owner: "{{ lab_checks_reader_user }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  when: lab_checks_results_readers | length > 0
+
+- name: The reader keys (forced command, no pty, no forwarding)
+  ansible.builtin.copy:
+    dest: "{{ lab_checks_reader_home }}/.ssh/authorized_keys"
+    content: |
+      # {{ lab_checks_marker }}; local changes are overwritten.
+      {% for key in lab_checks_results_readers %}
+      {{ lab_checks_reader_options }} {{ key }}
+      {% endfor %}
+    owner: "{{ lab_checks_reader_user }}"
+    group: "{{ lab_checks_reader_user }}"
+    mode: "0600"
+  when: lab_checks_results_readers | length > 0
+
+- name: Look for the current results document
+  ansible.builtin.stat:
+    path: "{{ lab_checks_results_file }}"
+  register: lab_checks_reader_src
+  when: lab_checks_results_readers | length > 0
+
+- name: Publish the current results for the reader now (the unit does it after each run; same content, by rename)
+  ansible.builtin.copy:
+    src: "{{ lab_checks_results_file }}"
+    dest: "{{ lab_checks_reader_file }}"
+    remote_src: true
+    owner: root
+    group: "{{ lab_checks_reader_user }}"
+    mode: "0640"
+  when: lab_checks_results_readers | length > 0 and lab_checks_reader_src.stat.exists | default(false)

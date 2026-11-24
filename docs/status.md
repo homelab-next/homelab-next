@@ -224,6 +224,22 @@ other store reference. The login account should be read-only where the product
 allows; where it has a single user (the product's own limit) the credential is the administrator's,
 held in a root-only file on the hub's host and never in the unit's environment.
 
+#### Pulled status files
+
+A `poll-file` source reads a file under the status root, so something has to put it there. For a file
+produced on another host (the invariants runner's results document, ADR-0049 decision 7 "The results
+transport") the hub **pulls**: `status_hub_pulls` lists `{name, host, user, host_key, dest}`, and a
+root-run timer (`hnx-hub-pull.timer`, every 5 minutes by default) dials each registry `host` (its
+registry address) as `user` with the key `status_hub_pull_key_ref` (a root-only file, never in a unit's
+environment), checks the host against the pinned `host_key` (strict, no other key accepted) and sends
+**no command**: the producer's key line is `restrict` with a forced command that prints one file
+(lab-checks' `lab_checks_results_readers`). The answer must be a non-empty JSON object under a size cap;
+it is written to `<status_hub_root_dir>/<dest>` (mode 0640, the hub's group) by rename, so a failed pull
+leaves the previous file, which then reads stale at the source's `stale_after_s`. The `dest` is the
+hub's own configuration for the host it dialled, never a name the stream supplies. The producer never
+reaches the hub: only the hub's address needs SSH to the producer. Short-lived certificates instead of a
+static key (ADR-0049) can replace the key without changing the producer's forced command.
+
 ## 3. Views (`examples/status/views.yml`)
 
 ```yaml
