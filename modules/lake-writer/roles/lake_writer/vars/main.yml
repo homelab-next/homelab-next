@@ -53,6 +53,7 @@ lake_writer_script_env:
   HNX_LW_CATALOG_CREDENTIAL: "{{ lake_writer_bearer_alias if lake_writer_catalog_bearer_ref != '' else '' }}"
   HNX_LW_LAKE_CA_FILE: "{{ lake_writer_ca_file if lake_writer_lake_ca_ref != '' else '' }}"
   HNX_LW_S3_REGION: "{{ lake_writer_s3_region }}"
+  HNX_LW_S3_ALLOW_PLAINTEXT: "{{ 'true' if lake_writer_object_store_allow_plaintext | bool else 'false' }}"
   HNX_ENDPOINT_LAKE_QUERY: "{{ lake_writer_effective_lake_query_url | default('') }}"
   HNX_ENDPOINT_LAKE_CATALOG: "{{ lake_writer_effective_lake_catalog_url | default('') }}"
   HNX_ENDPOINT_OBJECT_STORE: "{{ lake_writer_effective_object_store_url | default('') }}"

@@ -53,6 +53,9 @@ lake_writer_lake_ca_ref: ""
 # the object store's staging bucket: a key pair that may read, list and delete in it and nothing else
 lake_writer_object_store_id: ""
 lake_writer_object_store_url: ""
+# true: the object store may be plain http (S3 requests are signed: the secret key is never sent, the
+# key id and the batches are); default false, https only
+lake_writer_object_store_allow_plaintext: false
 lake_writer_s3_id_ref: secret:lake-writer/s3-access-key
 lake_writer_s3_key_ref: secret:lake-writer/s3-secret-key
 
