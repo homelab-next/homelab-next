@@ -554,3 +554,13 @@ def test_only_the_generated_prelude_is_excluded_under_examples_codemode(tmp_path
         "examples/codemode/triage/deeper/prelude.py",
         "examples/codemode/triage/helper.py",
     ]
+
+
+def test_block_list_trigger_header_parses_and_last_run_lists_one_per_line() -> None:
+    """A header may spell `trigger` as a block list (one caller per line, so concurrent PRs merge)."""
+    text = "# hnx-script:\n#   id: x\n#   trigger:\n#     - role:a\n#     - timer:a/b\n"
+    assert find_header(text)["trigger"] == ["role:a", "timer:a/b"]
+    src = pathlib.Path("ansible/roles/last_run/files/hnx-last-run.py").read_text(encoding="utf-8")
+    assert "#   trigger: [" not in src
+    triggers = find_header(src)["trigger"]
+    assert triggers == sorted(triggers) and len(triggers) > 10
