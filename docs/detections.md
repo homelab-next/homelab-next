@@ -205,5 +205,5 @@ missing, a `<location>` with regular-expression characters and no `type="pcre2"`
 never matches), and a count above the baseline (only a reviewed change raises it). `python -m
 homelabnext.detections run --native --manager-url URL --ca FILE` (the account's password in
 `HNX_MANAGER_API_PASSWORD`) sends every fixture through the manager's own rule tester
-(`PUT /logtest`) and fails on a missed must-fire or a fired must-not-fire. Native fixtures are not
+(`PUT /logtest`) and fails on a missed must-fire or a fired must-not-fire. The runner keeps itself under 240 requests a minute (the manager API refuses past 300 with 429) and, on a 429 anyway, waits `Retry-After` or backs off 2, 4, 8 ... seconds, five tries. Native fixtures are not
 orphans to the Sigma lint. An entry whose events the rule tester cannot reach (a file-integrity event comes from the agent's own daemon, not as a log line) says `proof: live` and a `live_test` (the steps and the alert that proves it) instead of fixtures; the engine run skips it, and the post-deploy live test is its proof. Native rules count in the engine's own coverage only.
