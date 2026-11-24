@@ -219,7 +219,13 @@ needs the new server's authority and address. The order, one endpoint at a time:
    name the same default identity file, and two clients on one identity file would share a client id and keys
    across two authorities. Set all four in the site's group variables before the first run (the defaults
    would overwrite the old binary, configuration and unit).
-3. **Enrol with the second config and verify.** The role waits for the new client's identity. Then, on the new
+3. **Enrol with the second config and verify.** The role waits for the new client's identity (written
+   locally before the client reaches any server, so on its own it proves nothing) and, with
+   `velociraptor_client_server_host` set to the server's inventory name, for the **server's own sighting**
+   of that client id (`hnx-velociraptor client-seen`, delegated to the server). The client configuration the
+   server role writes dials the **published** frontend port (`velociraptor_server_frontend_port`, e.g. 8001
+   beside an old server on 8000), the same authority and nonce. Set `velociraptor_server_health_min_clients`
+   once the fleet is enrolled, so the server's health counts enrolled, fresh clients. Then, on the new
    server, `velociraptor/clients-enrolled` counts it and `velociraptor/clients-fresh` holds, and the next hunt
    returns that host's rows in `results/hunts/`. Compare against the old server's view of the same host.
 4. **Then remove the old.** Only after the new client has been fresh across at least one hunt: stop and

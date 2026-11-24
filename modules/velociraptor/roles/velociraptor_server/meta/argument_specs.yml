@@ -27,6 +27,10 @@ argument_specs:
         type: int
         description: "Host port of the GUI (its own sign-in; the registry's gui row)."
         default: 8890
+      velociraptor_server_health_min_clients: &health_min_clients
+        type: int
+        description: "Health also requires this many enrolled clients seen within the stale window (0: not counted)."
+        default: 0
       velociraptor_server_dir: &dir
         type: path
         description: 'The compose project directory.'
@@ -132,6 +136,7 @@ argument_specs:
       velociraptor_server_bind: *bind
       velociraptor_server_frontend_port: *frontend_port
       velociraptor_server_gui_port: *gui_port
+      velociraptor_server_health_min_clients: *health_min_clients
       velociraptor_server_dir: *dir
       velociraptor_server_owner: *owner
       velociraptor_server_group: *group
@@ -165,6 +170,7 @@ argument_specs:
       velociraptor_server_bind: *bind
       velociraptor_server_frontend_port: *frontend_port
       velociraptor_server_gui_port: *gui_port
+      velociraptor_server_health_min_clients: *health_min_clients
       velociraptor_server_dir: *dir
       velociraptor_server_owner: *owner
       velociraptor_server_group: *group
@@ -198,6 +204,7 @@ argument_specs:
       velociraptor_server_bind: *bind
       velociraptor_server_frontend_port: *frontend_port
       velociraptor_server_gui_port: *gui_port
+      velociraptor_server_health_min_clients: *health_min_clients
       velociraptor_server_dir: *dir
       velociraptor_server_owner: *owner
       velociraptor_server_group: *group
@@ -231,6 +238,7 @@ argument_specs:
       velociraptor_server_bind: *bind
       velociraptor_server_frontend_port: *frontend_port
       velociraptor_server_gui_port: *gui_port
+      velociraptor_server_health_min_clients: *health_min_clients
       velociraptor_server_dir: *dir
       velociraptor_server_owner: *owner
       velociraptor_server_group: *group
@@ -268,6 +276,7 @@ argument_specs:
       velociraptor_server_bind: *bind
       velociraptor_server_frontend_port: *frontend_port
       velociraptor_server_gui_port: *gui_port
+      velociraptor_server_health_min_clients: *health_min_clients
       velociraptor_server_dir: *dir
       velociraptor_server_owner: *owner
       velociraptor_server_group: *group
@@ -305,6 +314,7 @@ argument_specs:
       velociraptor_server_bind: *bind
       velociraptor_server_frontend_port: *frontend_port
       velociraptor_server_gui_port: *gui_port
+      velociraptor_server_health_min_clients: *health_min_clients
       velociraptor_server_dir: *dir
       velociraptor_server_owner: *owner
       velociraptor_server_group: *group

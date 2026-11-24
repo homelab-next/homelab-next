@@ -11,21 +11,35 @@
   check_mode: false
   no_log: true
 
+# The server builds its dial addresses from the frontend's port INSIDE the container; the clients
+# reach the port it is PUBLISHED on (velociraptor_server_frontend_port, which may differ: a second
+# server beside an old one on the same host). The same configuration (authority, nonce) with the
+# published port: no new authority, nothing re-initialised.
+- name: The client configuration dials the published port
+  ansible.builtin.set_fact:
+    velociraptor_server_client_config_text: >-
+      {{ velociraptor_server_client_config.stdout
+         | replace('://' ~ velociraptor_server_frontend_hostname ~ ':' ~ (velociraptor_server_container_frontend_port | string) ~ '/',
+                   '://' ~ velociraptor_server_frontend_hostname ~ ':' ~ (velociraptor_server_frontend_port | string) ~ '/') }}
+  no_log: true
+
 - name: The server printed a real client configuration
   ansible.builtin.assert:
     that:
-      - "'ca_certificate' in velociraptor_server_client_config.stdout"
-      - "'BEGIN CERTIFICATE' in velociraptor_server_client_config.stdout"
-      - ('server_urls' in velociraptor_server_client_config.stdout)
-      - (velociraptor_server_frontend_hostname ~ ':' ~ (velociraptor_server_container_frontend_port | string)) in velociraptor_server_client_config.stdout
+      - "'ca_certificate' in velociraptor_server_client_config_text"
+      - "'BEGIN CERTIFICATE' in velociraptor_server_client_config_text"
+      - ('server_urls' in velociraptor_server_client_config_text)
+      - ('://' ~ velociraptor_server_frontend_hostname ~ ':' ~ (velociraptor_server_frontend_port | string) ~ '/') in velociraptor_server_client_config_text
+      - velociraptor_server_frontend_port | int == velociraptor_server_container_frontend_port | int
+        or ('://' ~ velociraptor_server_frontend_hostname ~ ':' ~ (velociraptor_server_container_frontend_port | string) ~ '/') not in velociraptor_server_client_config_text
     fail_msg: >-
       velociraptor: the client configuration the server printed has no authority or does not dial
-      {{ velociraptor_server_frontend_hostname }} (the name is fixed when the server first starts)
+      {{ velociraptor_server_frontend_hostname }}:{{ velociraptor_server_frontend_port }} (the name is fixed when the server first starts)
   no_log: true
 
 - name: Write the client configuration (no private key in it)
   ansible.builtin.copy:
-    content: "{{ velociraptor_server_client_config.stdout }}\n"
+    content: "{{ velociraptor_server_client_config_text }}\n"
     dest: "{{ velociraptor_server_data_root }}/client/client.config.yaml"
     owner: "{{ velociraptor_server_owner }}"
     group: "{{ velociraptor_server_client_config_group }}"
