@@ -293,7 +293,7 @@ Each is a deliberately broken fake (`hnx conform run lake-query --target broken:
 Target-file factories for the lake capabilities on real products.
 
 - Target file: [`compose/lab-in-a-box/targets/lake-query.yml`](../../compose/lab-in-a-box/targets/lake-query.yml) (target `lab-in-a-box`)
-- Factory: `make_lake(*, namespace: str='auto', trino_catalog: str='iceberg', schemas: Any=None, ensure: bool=True, **clients: Any) -> TrinoRestLake`
+- Factory: `make_lake(*, namespace: str='auto', trino_catalog: str='iceberg', schemas: Any=None, ensure: bool=True, evolve_additive: bool=False, **clients: Any) -> TrinoRestLake`
 - Config in the target: `{domain: example.internal, namespace: auto, trino_catalog: iceberg}`
 
 <details><summary>Full adapter notes</summary>
@@ -365,7 +365,7 @@ Depended on by: [orchestrator](../systems/orchestrator.md) ([[systems/orchestrat
    def make(**config) -> LakeClient: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.lake:make_lake` is `make_lake(*, namespace: str='auto', trino_catalog: str='iceberg', schemas: Any=None, ensure: bool=True, **clients: Any) -> TrinoRestLake`.
+   The factory this repository ships: `homelabnext.conform.adapters.lake:make_lake` is `make_lake(*, namespace: str='auto', trino_catalog: str='iceberg', schemas: Any=None, ensure: bool=True, evolve_additive: bool=False, **clients: Any) -> TrinoRestLake`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

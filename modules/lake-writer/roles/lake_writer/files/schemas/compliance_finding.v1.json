@@ -129,6 +129,11 @@
         "red"
       ],
       "description": "The row's TLP 2.0 label (ADR-0033 decision 5), set from the event's labels.hnx_tlp by the log pipeline; the lake refuses a row without one. Not an OCSF attribute."
+    },
+    "compliance_status": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "The configuration assessment's result for the check (passed, failed, not applicable), as the source graded it."
     }
   }
 }

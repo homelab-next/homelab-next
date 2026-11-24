@@ -483,6 +483,8 @@ def open_lake(cfg, schemas, *, ensure):
         namespace=cfg.namespace,
         schemas=[schemas[t] for t in cfg.tables],
         ensure=ensure,
+        # its own fresh soc tables only: a pinned column added later reaches an existing table
+        evolve_additive=ensure,
         domain=cfg.domain,
         warehouse=cfg.warehouse,
         user=cfg.user,
