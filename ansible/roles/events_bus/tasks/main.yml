@@ -170,3 +170,7 @@
 - name: Refuse any push consumer on the bus (the provisioner creates pull durables only)
   ansible.builtin.include_tasks: push_consumers.yml
   when: events_bus_start | bool
+
+- name: Install the forward logins (a client on another host reaches the loopback bus through SSH)
+  ansible.builtin.include_tasks: forward_logins.yml
+  when: events_bus_forward_logins | length > 0
