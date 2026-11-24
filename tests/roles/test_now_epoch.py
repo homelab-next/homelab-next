@@ -10,7 +10,6 @@ import json
 import os
 import re
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
@@ -35,7 +34,8 @@ def test_now_timestamp_is_the_epoch_on_a_controller_that_is_not_on_utc(tmp_path)
     play = tmp_path / "p.yml"
     play.write_text(
         "- hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n"
-        '    - ansible.builtin.debug:\n        msg: "{{ now().timestamp() | int }}"\n'
+        "    - ansible.builtin.debug:\n"
+        "        msg: \"{{ now().timestamp() | int }} {{ lookup('pipe', 'date -u +%s') }}\"\n"
     )
     env = {**os.environ, "TZ": "America/Chicago", "ANSIBLE_STDOUT_CALLBACK": "json"}
     r = subprocess.run(
@@ -46,5 +46,8 @@ def test_now_timestamp_is_the_epoch_on_a_controller_that_is_not_on_utc(tmp_path)
         cwd=tmp_path,
     )
     assert r.returncode == 0, r.stdout + r.stderr
-    got = int(json.loads(r.stdout)["plays"][0]["tasks"][0]["hosts"]["localhost"]["msg"])
-    assert abs(got - time.time()) < 120
+    # the epoch the template computes against the system's own epoch, both read in the play
+    got, epoch = map(
+        int, json.loads(r.stdout)["plays"][0]["tasks"][0]["hosts"]["localhost"]["msg"].split()
+    )
+    assert abs(got - epoch) < 120
