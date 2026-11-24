@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: stop and disable the timer, then remove the units, the credentials and the scripts, and reload systemd.
+# The data root (the last results and the paging state; both derived) is kept for the operator to delete. The
+# decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the module.
+- name: Remove the continuous lab checks
+  hosts: mod_lab_checks_runner
+  become: true
+  tasks:
+    - name: Export the documents first
+      ansible.builtin.include_role:
+        name: lab_checks
+        tasks_from: export
+    - name: Stop and disable the timer (a no-op when it is not there)
+      ansible.builtin.systemd_service:
+        name: "hnx-{{ lab_checks_logical_id }}.timer"
+        state: stopped
+        enabled: false
+      failed_when: false
+    - name: Remove the units, the credentials and the scripts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/etc/systemd/system/hnx-{{ lab_checks_logical_id }}.service"
+        - "/etc/systemd/system/hnx-{{ lab_checks_logical_id }}.timer"
+        - "{{ lab_checks_config_dir | default('/etc/hnx/' ~ lab_checks_logical_id) }}/credentials"
+        - /usr/local/libexec/homelabnext/hnx-lab-probe
+        - /usr/local/libexec/homelabnext/hnx-lab-notify
+    - name: Reload systemd
+      ansible.builtin.command:
+        argv: [systemctl, daemon-reload]
+      changed_when: true

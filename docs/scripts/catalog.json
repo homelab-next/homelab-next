@@ -989,6 +989,44 @@
     },
     {
       "exit": {
+        "0": "the notify service accepted the message",
+        "1": "it did not (the runner then keeps the state and retries next run)",
+        "2": "bad arguments or configuration"
+      },
+      "id": "lab-checks-notify",
+      "inputs": "--config FILE TITLE BODY (the config is JSON: url, topic, token_file)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one POST to <url>/<topic>",
+      "owner": "platform",
+      "path": "modules/lab-checks/roles/lab_checks/files/hnx-lab-notify",
+      "purpose": "Publish one page (title, body) from the invariants runner to the notify service's topic, with the publish token read from an owner-only file.",
+      "status": "active",
+      "trigger": [
+        "role:lab_checks"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the probe held",
+        "1": "the thing probed is wrong or absent (a failed criterion)",
+        "100": "the probe could not measure (bad usage, an unreadable record, the metrics API unreachable)"
+      },
+      "id": "lab-checks-probe",
+      "inputs": "http URL [--status N,N] [--ca FILE] [--timeout S] | tcp HOST PORT [--timeout S] | dns RESOLVER NAME [--type A] [--expect ADDR] [--timeout S] [--port N] | prom BASE_URL QUERY (--min N | --max N | --eq N) [--empty fail|zero] | lastrun DIR JOB MAX_AGE_S [--now EPOCH]",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line of evidence on stdout (the reason on a failure)",
+      "owner": "platform",
+      "path": "modules/lab-checks/roles/lab_checks/files/hnx-lab-probe",
+      "purpose": "Small read-only probes a lab criterion's observable runs (an HTTP status, a TCP connect, a DNS answer, a metrics value, a last-run record); each exits by the invariants runner's semantics.",
+      "status": "active",
+      "trigger": [
+        "role:lab_checks"
+      ]
+    },
+    {
+      "exit": {
         "0": "stopped cleanly"
       },
       "id": "lab-fake-cases",
@@ -1223,6 +1261,7 @@
         "timer:honeypot/lake",
         "timer:honeypot/report",
         "timer:intel_ingest/intel-ingest",
+        "timer:lab_checks/lab-checks",
         "timer:lynis/scan",
         "timer:media_automation/cleanup-downloads",
         "timer:media_automation/rename-cleanup",

@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy, in an open format: the last results document and the paging state (JSON) under
+# <data root>/export/<stamp>/, built beside its final name and renamed into place. Both are derived; the
+# register is the site's own file.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Name this export
+      ansible.builtin.set_fact:
+        lab_checks_export_stamp: "{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}"
+    - name: Build the export beside its final name
+      ansible.builtin.file:
+        path: "{{ lab_checks_export_dir }}/.{{ lab_checks_export_stamp }}.incoming"
+        state: directory
+        owner: "{{ lab_checks_owner }}"
+        group: "{{ lab_checks_owner_group }}"
+        mode: "0700"
+    - name: Look for the documents
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      register: lab_checks_export_files
+      loop:
+        - {path: "{{ lab_checks_results_file }}", name: results.json}
+        - {path: "{{ lab_checks_state_file }}", name: state.json}
+    - name: Copy what exists into it
+      ansible.builtin.copy:
+        src: "{{ item.item.path }}"
+        dest: "{{ lab_checks_export_dir }}/.{{ lab_checks_export_stamp }}.incoming/{{ item.item.name }}"
+        remote_src: true
+        owner: "{{ lab_checks_owner }}"
+        group: "{{ lab_checks_owner_group }}"
+        mode: "0600"
+      loop: "{{ lab_checks_export_files.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+    - name: Rename it into place
+      ansible.builtin.command:
+        argv: [mv, -T, "{{ lab_checks_export_dir }}/.{{ lab_checks_export_stamp }}.incoming", "{{ lab_checks_export_dir }}/{{ lab_checks_export_stamp }}"]
+      changed_when: true
+  tags: [export]

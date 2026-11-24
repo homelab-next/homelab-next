@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# One owner each: everything is root's (the run needs to read lane directories under an unprivileged
+# account's mode 0700 and is hardened instead); the credentials directory and the state are root-only.
+- name: Create the directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ lab_checks_owner }}"
+    group: "{{ lab_checks_owner_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ lab_checks_bin_dir }}", mode: "0755"}
+    - {path: "{{ lab_checks_config_dir }}", mode: "0755"}
+    - {path: "{{ lab_checks_auth_dir }}", mode: "0700"}
+    - {path: "{{ lab_checks_data_root }}", mode: "0750"}
+    - {path: "{{ lab_checks_results_dir }}", mode: "0750"}
+    - {path: "{{ lab_checks_state_dir }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [health, upgrade]

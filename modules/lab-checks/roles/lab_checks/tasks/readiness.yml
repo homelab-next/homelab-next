@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless every dependency is there before anything is written: systemd, python3 and hnx on the
+# host, the register on the controller and the token in its form.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Look for systemd, hnx and the register
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: lab_checks_prereqs
+      loop: ["/run/systemd/system", "{{ lab_checks_hnx_bin }}"]
+    - name: They are there
+      ansible.builtin.assert:
+        that: lab_checks_prereqs.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: "lab-checks: missing {{ lab_checks_prereqs.results | rejectattr('stat.exists') | map(attribute='item') | list }} (the host must run systemd and carry hnx, which another module installs: place this module on a guest that has it)"
+    - name: The register is a readable file on the controller
+      ansible.builtin.assert:
+        that: lookup('ansible.builtin.file', lab_checks_register_src) | length > 0
+        fail_msg: "lab-checks: the register {{ lab_checks_register_src }} is not a readable, non-empty file on the controller"
+    - name: The interpreter the scripts run is there
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "import json, ssl, urllib.request"]
+      changed_when: false
+  tags: [readiness]
