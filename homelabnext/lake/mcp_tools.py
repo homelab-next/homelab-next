@@ -371,37 +371,40 @@ class LakeReader:
         }
 
 
+def _answer(fn: Callable[[], Any], error: Callable[[str], Exception]) -> str:
+    """One tool's result as a JSON text block; a refusal or an engine error as a tool error."""
+    try:
+        result = fn()
+    except QueryRefused as exc:
+        raise error(f"refused: {exc}") from None
+    except LakeError as exc:
+        raise error(f"the lake answered: {exc}") from None
+    return json.dumps(result, sort_keys=True, separators=(",", ":"), default=str)
+
+
 def build_server(reader: LakeReader) -> Any:
     """An SDK server exposing exactly :data:`TOOLS` over ``reader``."""
-    from homelabnext.mcp.server import hints, new_server, register, tool_error
+    from homelabnext.mcp import server as sdk
 
-    server = new_server(SERVER_NAME, INSTRUCTIONS)
-    ro = hints(read_only=True)
-
-    def run(fn: Callable[[], Any]) -> str:
-        try:
-            return json.dumps(fn(), sort_keys=True, separators=(",", ":"), default=str)
-        except QueryRefused as exc:
-            raise tool_error(f"refused: {exc}") from None
-        except LakeError as exc:
-            raise tool_error(f"the lake answered: {exc}") from None
+    mcp_server = sdk.new_server(SERVER_NAME, INSTRUCTIONS)
+    read_only = sdk.hints(read_only=True)
 
     def tool(fn):
-        return register(server, TOOLS[fn.__name__], ro)(fn)
+        return sdk.register(mcp_server, TOOLS[fn.__name__], read_only)(fn)
 
     @tool
     def list_tables(schema: str = "") -> str:
-        return run(lambda: reader.list_tables(schema or None))
+        return _answer(lambda: reader.list_tables(schema or None), sdk.tool_error)
 
     @tool
     def describe_table(table: str) -> str:
-        return run(lambda: reader.describe_table(table))
+        return _answer(lambda: reader.describe_table(table), sdk.tool_error)
 
     @tool
     def query(sql: str, params: dict[str, Any] | None = None, max_rows: int = 0) -> str:
-        return run(lambda: reader.query(sql, params, max_rows or None))
+        return _answer(lambda: reader.query(sql, params, max_rows or None), sdk.tool_error)
 
-    return server
+    return mcp_server
 
 
 def serve(settings: Settings) -> None:
