@@ -52,7 +52,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from .base import AdapterBase
-from .ddl import _trino_type, trino_ddl
+from .ddl import _trino_type, add_column_sql, trino_ddl
 from .errors import LakeError, SchemaMismatch, UnknownTable, check_replay_source, claimed_source
 from .protocol import Mark, TableInfo, WriteResult
 from .rest_catalog import CommitConflict, RestCatalog, current_schema_fields, current_snapshot
@@ -141,6 +141,7 @@ class TrinoRestLake(AdapterBase):
         schemas: Iterable[TableSchema] | Mapping[str, TableSchema] | None = None,
         named_queries: Mapping[str, str] | None = None,
         ensure: bool = True,
+        evolve_additive: bool = False,
         max_query_length: int = MAX_QUERY_LENGTH,
         ledger_size: int = LEDGER_SIZE,
     ):
@@ -163,6 +164,7 @@ class TrinoRestLake(AdapterBase):
         self._ns = namespace
         self._cat = trino_catalog
         self._named = dict(named_queries or {})
+        self._evolve = bool(evolve_additive)
         trino.catalog, trino.schema = trino_catalog, namespace
         if ensure and self._setup_key() not in _ENSURED:
             self.ensure_tables()
@@ -196,9 +198,27 @@ class TrinoRestLake(AdapterBase):
             s = self._schema(n)
             ddl = trino_ddl(s, catalog=self._cat, schema_name=self._ns).strip().rstrip(";")
             self._trino.execute(ddl)
-            self._check_schema(s, self._rest.load_table(self._ns, s.name))
+            meta = self._rest.load_table(self._ns, s.name)
+            if self._evolve:
+                meta = self._add_missing_optional(s, meta)
+            self._check_schema(s, meta)
         if names is None:
             _ENSURED.add(self._setup_key())
+
+    def _add_missing_optional(self, s: TableSchema, meta: Mapping[str, Any]) -> Mapping[str, Any]:
+        """With ``evolve_additive``: add the pinned OPTIONAL columns an existing table lacks
+        (``ADD COLUMN``, nothing else), only when that is the table's whole difference; any other
+        difference is left for the schema check to refuse.  A new nullable column changes no row."""
+        have = {f["name"] for f in current_schema_fields(meta)}
+        missing = [c for c in s.columns if c.name not in have]
+        if not missing or any(c.required for c in missing):
+            return meta
+        rest = rest_schema_diffs(s, current_schema_fields(meta))
+        if len(rest) != len(missing) or not all(d.startswith("missing column:") for d in rest):
+            return meta
+        for c in missing:
+            self.query(add_column_sql(c, catalog=self._cat, schema_name=self._ns, table=s.name))
+        return self._rest.load_table(self._ns, s.name)
 
     def _schema(self, table: str) -> TableSchema:
         n = table_name(table)

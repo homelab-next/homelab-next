@@ -789,3 +789,27 @@ def test_a_corrupt_or_oversized_gzip_is_refused_whole(lake, store, schemas, tmp_
     monkeypatch.setattr(lw, "MAX_INFLATED", 10)
     store.put(BUCKET, lw.staging_key(PREFIX, "dns_activity", T0, "big"), gzip.compress(b"x" * 100))
     assert make(lake, store, schemas, tmp_path).run()["rows_rejected"] == 1
+
+
+# ---------------------------------------------------------------- the contract with the pipeline
+GOLDEN = ROOT / "tests" / "modules" / "golden" / "log-pipeline" / "expected.json"
+
+
+def test_every_row_the_log_pipeline_stages_is_one_the_writer_takes(schemas):
+    """The log pipeline's golden rows (each route, each table it stages) go through the writer's
+    own preparation without a rejection: the two modules' table contract is the same (a staged
+    column the writer's schema lacks rejected every raw-archive row on the lab's first run)."""
+    golden = json.loads(GOLDEN.read_text())
+    seen = set()
+    for route, events in golden.items():
+        for staged in events:
+            for item in staged:
+                table, row = item["table"], item["row"]
+                if table not in schemas:
+                    continue  # a class the writer does not own yet: staged, not committed
+                seen.add(table)
+                line = json.dumps(row).encode() + b"\n"
+                rows, rejects = lw.prepare(schemas[table], line)
+                assert rejects == [], (route, table, rejects)
+                assert len(rows) == 1
+    assert "raw_archive" in seen

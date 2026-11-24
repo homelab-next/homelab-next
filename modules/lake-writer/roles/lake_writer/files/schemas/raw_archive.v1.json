@@ -82,6 +82,21 @@
         "red"
       ],
       "description": "The row's TLP 2.0 label (ADR-0033 decision 5), set from the event's labels.hnx_tlp by the log pipeline; the lake refuses a row without one. Not an OCSF attribute."
+    },
+    "route": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "The log pipeline's route the event arrived on (its dataset, the TLP declaration's key)."
+    },
+    "source_kind": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "The kind of source the pipeline judged the event to be (the remap it took)."
+    },
+    "raw": {
+      "type": "string",
+      "maxLength": 65536,
+      "description": "The whole event as the pipeline received it (JSON, labels removed), cut at 64 KiB."
     }
   }
 }
