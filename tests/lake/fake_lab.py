@@ -353,6 +353,16 @@ class FakeLab:
         if m:
             self.lakes.setdefault(m.group(1), FakeLake(self.schemas))
             return [], [], {"updateType": "CREATE SCHEMA"}
+        m = re.match(
+            r'ALTER TABLE "\w+"\."(\w+)"\."(\w+)" ADD COLUMN IF NOT EXISTS "(\w+)" (\w+)\Z', sql
+        )
+        if m:  # only what an additive schema evolution sends: a nullable top-level column
+            tns, t, col, _typ = m.groups()
+            fields = self.tables[(tns, t)]["schemas"][0]["fields"]
+            if all(f["name"] != col for f in fields):
+                (c,) = [c for c in self.schemas[t].columns if c.name == col]
+                fields.append(_ice(c, itertools.count(max(f["id"] for f in fields) + 1), False))
+            return [], [], {"updateType": "ADD COLUMN"}
         m = re.match(r'CREATE TABLE IF NOT EXISTS "\w+"\."(\w+)"\."(\w+)" \(', sql)
         if m:
             tns, t = m.groups()

@@ -163,11 +163,23 @@ def _trino_type(col: Column) -> str:
     return "ROW(" + ", ".join(f"{_q(f.name)} {_trino_type(f)}" for f in col.fields) + ")"
 
 
+def _column_sql(col: Column) -> str:
+    """A column as the engine's DDL declares it (name and type, no constraint)."""
+    return f"{_q(col.name)} {_trino_type(col)}"
+
+
+def add_column_sql(col: Column, *, catalog: str, schema_name: str, table: str) -> str:
+    """``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` for one nullable column (additive evolution)."""
+    return (
+        f"ALTER TABLE {_q(catalog)}.{_q(schema_name)}.{_q(table)} "
+        f"ADD COLUMN IF NOT EXISTS {_column_sql(col)}"
+    )
+
+
 def trino_ddl(schema: TableSchema, *, catalog: str, schema_name: str) -> str:
     """``CREATE TABLE IF NOT EXISTS`` for the Trino Iceberg connector."""
     cols = ",\n".join(
-        f"    {_q(c.name)} {_trino_type(c)}" + (" NOT NULL" if c.required else "")
-        for c in schema.columns
+        f"    {_column_sql(c)}" + (" NOT NULL" if c.required else "") for c in schema.columns
     )
     return (
         f"CREATE TABLE IF NOT EXISTS {_q(catalog)}.{_q(schema_name)}.{_q(schema.name)} (\n{cols}\n)\n"

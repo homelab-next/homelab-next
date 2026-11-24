@@ -112,3 +112,16 @@ def test_the_ics_parsers_the_bundled_rules_name_are_enabled_for_detection():
 def test_the_include_the_configuration_names_is_the_placeholder_s_file():
     conf = next((ROLE / "templates").glob("*.yaml.j2")).read_text()
     assert "include: {{ " + PFX + "_groups_file }}" in conf
+
+
+def test_the_command_socket_is_where_the_command_client_and_the_unit_look():
+    """The command client's default path, which the distribution unit's reload and stop use too:
+    a socket in a directory nothing creates fails to bind, and every client call misses it."""
+    conf = yaml.safe_load(
+        "\n".join(
+            line
+            for line in next((ROLE / "templates").glob("*.yaml.j2")).read_text().splitlines()
+            if "{{" not in line and "{%" not in line and not line.startswith(("%", "{#"))
+        )
+    )
+    assert conf["unix-command"]["filename"] == f"/run/{PFX}-command.socket"
