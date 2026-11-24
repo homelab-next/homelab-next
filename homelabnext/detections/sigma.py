@@ -52,6 +52,11 @@ LEVELS = ("informational", "low", "medium", "high", "critical")
 #: shipped enrichment sets), so it is tested but neither counted as coverage nor deployed
 STATUSES = ("stable", "test", "experimental", "deprecated", "unsupported")
 OPS = {"contains", "startswith", "endswith", "re"}
+#: ``hnx_source``: whether the telemetry a rule reads is collected today. ``awaiting-source`` is a
+#: rule ported and tested on its fixtures whose source (an endpoint class, a log) is not enrolled
+#: yet: like ``unsupported`` it is neither compiled into an engine bundle nor counted as coverage,
+#: and flipping it to ``live`` (or removing the key) is the change that ships it once data flows.
+SOURCES = ("live", "awaiting-source")
 
 
 class RuleError(ValueError):
@@ -91,10 +96,19 @@ class Rule:
         return str(self.raw.get("status", "experimental"))
 
     @property
+    def source(self) -> str:
+        """``hnx_source``: ``live`` (the default) or ``awaiting-source`` (see ``SOURCES``)."""
+        return str(self.raw.get("hnx_source", "live"))
+
+    @property
+    def awaiting_source(self) -> bool:
+        return self.source == "awaiting-source"
+
+    @property
     def deployable(self) -> bool:
-        """Compiled into an engine bundle and counted as coverage: not ``unsupported`` (inert)
-        and not ``deprecated``."""
-        return self.status not in ("unsupported", "deprecated")
+        """Compiled into an engine bundle and counted as coverage: not ``unsupported`` (inert),
+        not ``deprecated`` and not ``awaiting-source`` (its telemetry is not collected yet)."""
+        return self.status not in ("unsupported", "deprecated") and not self.awaiting_source
 
     @property
     def attack_techniques(self) -> list[str]:

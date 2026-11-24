@@ -18,3 +18,30 @@ fields:
   UrlDomain: url.domain
   DestinationIp: destination.ip
   Message: message
+  # endpoint process, registry, image-load, service and logon fields (the Sigma taxonomy's names
+  # for a Windows endpoint's event log); fixtures for rules on them use these paths
+  OriginalFileName: process.pe.original_file_name
+  ParentCommandLine: process.parent.command_line
+  TargetObject: registry.path
+  Details: registry.data.strings
+  ImageLoaded: dll.path
+  Signed: dll.code_signature.signed
+  SignatureStatus: dll.code_signature.status
+  Hashes: process.hash.all
+  ServiceName: service.name
+  ImagePath: service.executable
+  Initiated: network.initiated
+  DestinationPort: destination.port
+  SourceIp: source.ip
+  RuleName: rule.name
+  User: user.name
+  EventID: event.code
+  LogonType: winlog.logon.type
+  TargetUserName: user.target.name
+  IpAddress: source.ip
+  # web-proxy taxonomy (the request line a network sensor's HTTP log carries)
+  c-uri: url.original
+  cs-host: url.domain
+  cs-method: http.request.method
+  # a network sensor's alert: the signature number that fired
+  SignatureId: rule.id

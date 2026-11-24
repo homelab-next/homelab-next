@@ -36,8 +36,9 @@ python -m homelabnext.detections coverage [--out F | --check F] | validate-techn
 ```
 
 Backends implement `compile(rule, target) -> Artifact` (`adapters.py`). `generic` emits an
-engine-neutral query; `wazuh` is an offline XML stub (SERVER: loading it into a manager and
-`logtest` are not implemented here); `run` also evaluates the stub's compiled rules on every
+engine-neutral query; `wazuh` compiles to the engine's rule XML, chained per logsource through the
+bindings in `mappings/wazuh.yml` (the SIEM module loads the bundle; `run --engine` proves it through
+the manager's rule tester, docs/detections.md "The Sigma lane on the engine"); `run` also evaluates the backend's compiled rules on every
 fixture and fails where they disagree with the reference evaluator (docs/detections.md). Supported Sigma subset is documented in `sigma.py`; aggregations
 are deliberately rejected. Fixtures contain synthetic data only; example rules are original works
 built on well-known public technique ideas.
