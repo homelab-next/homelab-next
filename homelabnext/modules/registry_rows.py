@@ -41,11 +41,12 @@ __all__ = ["SITE_BOUND_FIELDS", "SITE_FIELDS", "Expected", "expected_rows", "row
 #: the fields of a registry row that are the lab's, not the module's: compared only when the
 #: module's row sets them.  ``standing`` (ADR-0039: whether this row is the capability's primary,
 #: an eval, retiring or legacy, with its ``until`` and ``why``), ``backup_job`` (the lab's backup
-#: schedule) and ``scope`` (the writer-tool scope, which only narrows what agents file about the
-#: service).  Never ``clients``: extra zones widen who may reach the service (firewall edges, the
+#: schedule), ``scope`` (the writer-tool scope, which only narrows what agents file about the
+#: service) and ``status_sources`` (what the site's status hub collects about the row: the site
+#: decides what it watches, a module need not know the hub).  Never ``clients``: extra zones widen who may reach the service (firewall edges, the
 #: agent access map), so a registry that adds them differs from the module, and the module must
 #: say so too
-SITE_FIELDS = frozenset({"standing", "backup_job", "scope"})
+SITE_FIELDS = frozenset({"standing", "backup_job", "scope", "status_sources"})
 
 #: the fields whose *value* is the site's but whose *presence* is the module's: a module that
 #: publishes a row (an IdP's sign-in pages) declares ``public_hostname`` (and, for a ``tls:
