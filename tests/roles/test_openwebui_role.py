@@ -47,6 +47,8 @@ services:
            tls: none}
   other: {capability: notify, impl: x, host: gate-01, protocol: http, port: 80, tls: none,
           public_hostname: other.example.internal}
+  search: {capability: web-search, impl: metasearch, host: gate-01, protocol: http, port: 8095,
+           tls: none}
 """
 # secrets are short obviously-fake words, long enough only where the role checks a length
 GW = "g" * 40
@@ -156,6 +158,63 @@ def test_a_second_run_changes_nothing(tmp_path):
 @first_run(lambda tmp, over, needle: {"role": ROLE, "tasks_from": "main",
                                       "extra_vars": vs(tmp, **over), "env": ENV})  # fmt: skip
 def test_main_refuses_what_the_module_forbids(first, over, needle):
+    r, tmp = first
+    assert r.returncode != 0 and needle in r.stdout, (over, r.stdout[-1500:])
+    assert not (tmp / "app" / "docker-compose.yml").exists()
+
+
+# ------------------------------------------------------------------------------ web search
+@first_run(lambda tmp: {"role": ROLE, "tasks_from": "main", "env": ENV,
+                        "extra_vars": vs(tmp, openwebui_web_search_id="search",
+                                         openwebui_web_search_result_count=7)})  # fmt: skip
+def test_main_turns_web_search_on_through_the_lab_metasearch_service_only(first):
+    r, tmp = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    env = yaml.safe_load((tmp / "app" / "docker-compose.yml").read_text())["services"][
+        "open-webui"
+    ]["environment"]
+    assert env["ENABLE_WEB_SEARCH"] == "true" and env["WEB_SEARCH_ENGINE"] == "searxng"
+    # the row's alias and port, from the registry, and the JSON search path
+    search = "http://{}:{}/search".format("web-search.svc.example.internal", 8095)
+    assert env["SEARXNG_QUERY_URL"] == search
+    # snippets only: no result page is fetched from this container and nothing is embedded
+    assert env["BYPASS_WEB_SEARCH_WEB_LOADER"] == "true"
+    assert env["BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL"] == "true"
+    assert env["WEB_SEARCH_RESULT_COUNT"] == "7"
+    # everything else that calls out stays off
+    assert env["ENABLE_LOCAL_WEB_FETCH"] == "false" and env["OFFLINE_MODE"] == "true"
+    assert env["ENABLE_TOOL_SERVERS"] == "false"
+
+
+def test_web_search_stays_off_without_a_service(tmp_path):
+    r = run_role(tmp_path, ROLE, "main", vs(tmp_path), env=ENV)
+    assert r.returncode == 0, r.stdout + r.stderr
+    env = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"][
+        "open-webui"
+    ]["environment"]
+    assert env["ENABLE_WEB_SEARCH"] == "false"
+    assert not any(k.startswith(("SEARXNG_", "WEB_SEARCH_", "BYPASS_WEB_")) for k in env)
+
+
+@pytest.mark.parametrize(
+    ("over", "needle"),
+    [
+        ({"openwebui_web_search_id": "other"}, "metasearch service only"),  # not web-search
+        ({"openwebui_web_search_id": "gate"}, "not the gateway"),  # the gateway itself
+        ({"openwebui_web_search_id": "Not An Id"}, "web search id"),
+        (
+            {"openwebui_web_search_id": "search", "openwebui_web_search_result_count": 0},
+            "result count of 1 to 20",
+        ),
+        (
+            {"openwebui_web_search_id": "search", "openwebui_web_search_result_count": 21},
+            "result count of 1 to 20",
+        ),
+    ],
+)
+@first_run(lambda tmp, over, needle: {"role": ROLE, "tasks_from": "main",
+                                      "extra_vars": vs(tmp, **over), "env": ENV})  # fmt: skip
+def test_main_refuses_a_web_search_that_is_not_the_lab_metasearch_service(first, over, needle):
     r, tmp = first
     assert r.returncode != 0 and needle in r.stdout, (over, r.stdout[-1500:])
     assert not (tmp / "app" / "docker-compose.yml").exists()

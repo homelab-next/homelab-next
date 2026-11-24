@@ -41,7 +41,8 @@ option defaults to the old behaviour, its tests still pass):
 2. it could send no header: the gateway needs `X-HNX-TLP` and `X-HNX-Tag` (below);
 3. it had no sign-in but local accounts (`OAUTH_*`/`OPENID_*` are reserved names for extra settings,
    on purpose) and no break-glass administrator;
-4. web search was only "not set"; it is now fixed `false`.
+4. web search was only "not set"; it is now fixed `false` unless the site names the lab's
+   metasearch service (below).
 
 The module role (`roles/openwebui`) maps `openwebui_*` onto `open_webui_*` in one place
 (`tasks/map.yml`), adds the module's policy (`tasks/validate.yml`: the sign-in and the administrator
@@ -131,8 +132,16 @@ returns to) and a stricter `health`.
   feature" limit), so the likely route is a Tool or an agent outside the container. Tools and
   Functions run admin-supplied Python in the container and are off by environment. Decide that
   with the Paperless module's author, not here.
-- **Web search** is off and cannot be enabled by an extra setting (a reserved name). Turning it on
-  needs a grant of internet egress and a role change, deliberately.
+- **Web search** is off unless the site names the lab's own metasearch service
+  (`openwebui_web_search_id`, a registry row of capability `web-search`, e.g. the `searxng`
+  module). It cannot be enabled by an extra setting (a reserved name), nor pointed at any other
+  engine. When on, Open WebUI asks that service for JSON results (`/search`) and answers from the
+  results' **snippets only**: `BYPASS_WEB_SEARCH_WEB_LOADER` and
+  `BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL` are set, so the container fetches no result page and
+  embeds nothing, and needs no internet egress (the metasearch guest holds that grant). The chat
+  guest's firewall must admit the service's port. In native function-calling mode the model also
+  gets the built-in `search_web` and `fetch_url` tools; `fetch_url` is bounded by the guest's
+  firewall (it can reach nothing outside the lab).
 - **Enforce the no-egress rule in the network.** The container is on a bridge network, so
   `egress: none` is what the app is configured to do, not a network rule (`hnx modules check`
   warns). The control is the per-VM firewall in the overlay: the guest may reach the gateway, the
@@ -180,7 +189,8 @@ The overlay carries every real value ([selection](../../docs/modules/selection.m
    (`https://<public_hostname>`), `openwebui_oidc_issuer_url` (`https://<sso name>/realms/<realm>`),
    `openwebui_oidc_client_secret_ref` (the generator's reference for the row's client secret),
    `openwebui_admin_email`; optionally `openwebui_gateway_tlp`, `openwebui_gateway_tag_prefix`,
-   `openwebui_extra_env`.
+   `openwebui_extra_env`, `openwebui_web_search_id` (the metasearch row; add it to the chat row's
+   `upstreams`) and `openwebui_web_search_result_count`.
 7. **Apply**: the firewall rules (three applies, see the cutover notes), `docker_engine`, the realm,
    the edge, then the rendered `modules.yml` twice (the second `changed=0`), then `checks/openwebui.yml`.
 8. **First sign-in**: the break-glass administrator signs in with the form once to prove it works
