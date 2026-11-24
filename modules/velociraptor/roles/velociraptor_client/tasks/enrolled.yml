@@ -45,7 +45,7 @@
           - "{{ (velociraptor_client_identity.content | b64decode | regex_search('client_id:\\s*(C\\.[0-9a-f]{16})', '\\1')) | first }}"
           - --max-age-s
           - "{{ velociraptor_client_seen_max_age_s | int }}"
-      delegate_to: "{{ velociraptor_client_server_host }}"
+      delegate_to: "{{ velociraptor_client_server_host | default(inventory_hostname, true) }}"
       become: true
       register: velociraptor_client_seen
       until: velociraptor_client_seen.rc == 0
