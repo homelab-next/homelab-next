@@ -26,6 +26,8 @@
     open_webui_group: "{{ openwebui_group }}"
     open_webui_mem_limit: "{{ openwebui_mem_limit }}"
     open_webui_extra_env: "{{ openwebui_extra_env }}"
+    open_webui_web_search_id: "{{ openwebui_web_search_id }}"
+    open_webui_web_search_result_count: "{{ openwebui_web_search_result_count }}"
     open_webui_export_dir: "{{ openwebui_export_dir }}"
     open_webui_start: "{{ openwebui_start }}"
     open_webui_validate_with_docker: "{{ openwebui_validate_with_docker }}"

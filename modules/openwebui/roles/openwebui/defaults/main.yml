@@ -25,6 +25,11 @@ openwebui_dir: /opt/compose/openwebui
 openwebui_owner: root
 openwebui_group: root
 openwebui_mem_limit: 2g
+# optional web search through the lab's metasearch service: its registry id (capability web-search;
+# empty: web search stays off) and how many results go in front of the model. Answers are made from
+# the results' snippets: this container fetches no result page and embeds nothing
+openwebui_web_search_id: ""
+openwebui_web_search_result_count: 5
 # extra, non-secret settings from the core role's allowlist (open_webui_allowed_env)
 openwebui_extra_env: {}
 openwebui_export_dir: /var/backups/compose/openwebui/export

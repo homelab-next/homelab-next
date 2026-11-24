@@ -62,6 +62,14 @@ wazuh_syslog_port: 5514
 # decoders/*.xml, loaded into the manager as hnx-<name>.xml after the manager's own configuration
 # test passes; the previous set is put back when the test or the restart fails. Empty: none.
 wazuh_native_dir: ""
+# the Sigma lane (docs/detections.md, "The Sigma lane on the engine"): detection roots on the controller
+# (sigma/, fixtures/, engine_fixtures/, mappings/wazuh.yml with the site's logsource bindings, det_map.yml).
+# Each is proved on the controller (lint, its fixtures through the reference evaluator and the compiled form,
+# the det map current), compiled, and loaded as hnx-zz-sigma-<n>.xml after every native file (a rule's
+# parent is loaded first), under the same configuration test and rollback. Empty: none.
+wazuh_sigma_roots: []
+# the controller's hnx command as a list (an hnx entry point, or an absolute python running homelabnext.cli)
+wazuh_hnx_cli: [hnx]
 # the detection a rule number belongs to ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
 # here is raised as det:wazuh-rule-<number>
 wazuh_detection_ids: {}

@@ -384,6 +384,37 @@ def test_the_predecessors_agent_blocks_are_removed_and_the_modules_own_stays(tmp
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
+@pytest.mark.parametrize(
+    "units,containers,runs",
+    [(["old.timer"], [], True), ([], ["old-ctr"], True), ([], [], False)],
+)
+def test_the_retire_condition_is_a_boolean_ansible_accepts(tmp_path, units, containers, runs):
+    """main's condition is evaluated as Ansible does (a list is not a boolean there: the run
+    stops), with the module owning the captures and each list set or not."""
+    import subprocess
+
+    from rolerun import _invocation
+
+    tasks = yaml.safe_load((ROLE_DIR / "tasks" / "main.yml").read_text())
+    retire = next(t for t in tasks if t.get("name", "").startswith("Retire the predecessor"))
+    cmd, env = _invocation(
+        tmp_path,
+        ROLE,
+        "validate",
+        {
+            P + "service_manage": True,
+            P + "retired_units": units,
+            P + "retired_containers": containers,
+        },
+    )
+    play = yaml.safe_load((tmp_path / "play.yml").read_text())
+    play[0]["tasks"] = [{"ansible.builtin.debug": {"msg": "RETIRE-RUNS"}, "when": retire["when"]}]
+    (tmp_path / "play.yml").write_text(yaml.safe_dump(play))
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert ("RETIRE-RUNS" in r.stdout) is runs
+
+
 def test_nothing_is_retired_before_the_module_owns_the_captures():
     tasks = yaml.safe_load((ROLE_DIR / "tasks" / "main.yml").read_text())
     retire = next(t for t in tasks if t.get("name", "").startswith("Retire the predecessor"))
