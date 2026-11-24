@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# sshd -T for each present forward login, from its first address: a local TCP forward to the bus
+# alone, no TTY, no socket forward, no remote forward, the forced command; and admitted by
+# AllowGroups. Used before a new drop-in goes live and by the health hook on the live one.
+- name: Print the effective configuration for each forward login
+  ansible.builtin.command:
+    argv:
+      - "{{ events_bus_sshd_cli }}"
+      - -T
+      - -f
+      - "{{ events_bus_forward_config }}"
+      - -C
+      - "user={{ item.user }},host=forward-probe,addr={{ item['from'][0] | regex_replace('/.*$', '') }}"
+  register: events_bus_forward_effective
+  changed_when: false
+  check_mode: false  # read-only
+  loop: "{{ events_bus_forward_present }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Fail unless each login may forward to the bus and do nothing else
+  vars:
+    events_bus_forward_settings: "{{ dict(item.stdout | regex_findall('(?m)^(\\S+) (.*)$')) }}"
+    events_bus_forward_groups: "{{ (events_bus_forward_settings.allowgroups | default('')).split() }}"
+  ansible.builtin.assert:
+    that:
+      - events_bus_forward_settings.allowtcpforwarding | default('') == 'local'
+      - events_bus_forward_settings.permitopen | default('') == events_bus_forward_target
+      - events_bus_forward_settings.permitlisten | default('') == 'none'
+      - events_bus_forward_settings.allowstreamlocalforwarding | default('') == 'no'
+      - events_bus_forward_settings.permittty | default('') == 'no'
+      - events_bus_forward_settings.permittunnel | default('') == 'no'
+      - events_bus_forward_settings.allowagentforwarding | default('') == 'no'
+      - events_bus_forward_settings.x11forwarding | default('') == 'no'
+      - events_bus_forward_settings.forcecommand | default('') == '/bin/false'
+      - events_bus_forward_groups | length == 0 or events_bus_forward_ssh_group in events_bus_forward_groups
+    fail_msg: >-
+      events_bus: under {{ events_bus_forward_config }} the forward login {{ item.item.user }} would
+      not be held to a local forward to {{ events_bus_forward_target }} alone, or sshd's AllowGroups
+      does not admit {{ events_bus_forward_ssh_group }}
+  loop: "{{ events_bus_forward_effective.results }}"
+  loop_control:
+    label: "{{ item.item.user }}"

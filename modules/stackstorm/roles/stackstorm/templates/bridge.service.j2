@@ -2,8 +2,8 @@
 # Managed by homelabnext (role stackstorm); local changes are overwritten.
 [Unit]
 Description=homelab-next event bridge (bus -> StackStorm webhook)
-After=network-online.target docker.service
-Wants=network-online.target
+After=network-online.target docker.service{{ ' hnx-st2-events-tunnel.service' if (stackstorm_events_forward_enabled | default(false) | string | lower) in ['true', 'yes', 'on', '1'] else '' }}
+Wants=network-online.target{{ ' hnx-st2-events-tunnel.service' if (stackstorm_events_forward_enabled | default(false) | string | lower) in ['true', 'yes', 'on', '1'] else '' }}
 
 [Service]
 User={{ stackstorm_bridge_user }}

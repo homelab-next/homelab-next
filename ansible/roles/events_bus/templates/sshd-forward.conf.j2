@@ -1,0 +1,19 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role events_bus, service {{ events_bus_logical_id }}); local changes are overwritten.
+# One Match block per forward login: a local TCP forward to the bus ({{ events_bus_forward_target }})
+# and nothing else. A Match block in an included file ends with the file, so nothing here reaches
+# any other account.
+{% for f in events_bus_forward_present %}
+Match User {{ f.user }}
+    AllowTcpForwarding local
+    PermitOpen {{ events_bus_forward_target }}
+    PermitListen none
+    AllowStreamLocalForwarding no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTTY no
+    PermitTunnel no
+    GatewayPorts no
+    PermitUserRC no
+    ForceCommand /bin/false
+{% endfor %}

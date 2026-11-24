@@ -36,6 +36,9 @@ stackstorm_unit_dir: /etc/systemd/system
 stackstorm_broker_state_dir: /etc/hnx-st2-broker
 stackstorm_broker_group: hnx-st2-clients
 stackstorm_bridge_conf_dir: /etc/hnx-st2-bridge
+stackstorm_events_forward_state_dir: /etc/hnx-st2-events
+# the forward's loopback end on this guest: the bridge's endpoint without its scheme
+stackstorm_events_forward_local: "{{ stackstorm_events_endpoint | regex_replace('^nats://', '') }}"
 # StreamLocalBindMask is an umask: the socket's mode is its complement
 stackstorm_broker_socket_masks: {"0660": "0117", "0600": "0177"}
 stackstorm_broker_socket_mask: "{{ stackstorm_broker_socket_masks[stackstorm_broker_socket_mode] }}"

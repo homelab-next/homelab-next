@@ -631,6 +631,14 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 ```
 
+While the bus listens on loopback on its own host (the `events_bus` role has no TLS listener),
+the module's **bus forward** carries the bridge there instead: `stackstorm_events_forward_enabled`
+keeps `ssh -N -L <loopback>:<port>:<the bus>` up as `hnx-st2-events-tunnel.service` (its own user,
+the bus host's key pinned), as a login the bus host's `events_bus_forward_logins` holds to that one
+forward ([broker.md](broker.md#deploying-with-ansible)), and the bridge's endpoint is the forward's
+loopback end (`nats://<loopback>:<port>`, which the adapter accepts in plaintext because it is
+loopback; the leg between the hosts is SSH). The bridge's unit starts after the forward.
+
 It needs the `nats` extra (`pip install 'homelabnext[nats]'`). Over `tls://` it does the TLS
 handshake first, so the bus's `tls` block needs `handshake_first: true` (nats-server 2.10.3 or
 later; broker.md has the line): a client that waits for the server to ask for TLS would send its

@@ -128,6 +128,12 @@
         label: "{{ item.method }} {{ item.path }} as {{ item.ref }}"
       changed_when: false
       no_log: true
+    - name: The bus forward runs
+      ansible.builtin.command:
+        argv: [systemctl, is-active, hnx-st2-events-tunnel.service]
+      changed_when: false
+      check_mode: false
+      when: stackstorm_events_forward_enabled | bool
     - name: The event bridge runs
       ansible.builtin.command:
         argv: [systemctl, is-active, hnx-st2-bridge.service]
