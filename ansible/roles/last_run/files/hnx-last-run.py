@@ -33,6 +33,7 @@
 #     - timer:source_census/source-census-run
 #     - timer:status_hub/hnx-hub-collect
 #     - timer:status_hub/hnx-hub-login-token
+#     - timer:status_hub/hnx-hub-pull
 #     - timer:trino/lake-maintenance
 #     - timer:trivy/scan
 #     - timer:velociraptor_server/cycle

@@ -57,6 +57,15 @@ arrives. Start it again: no page (a standing red). Make it pass and start it: on
 criterion. This is the module's positive control; the same sequence is in `tests/modules/test_lab_checks_scripts.py`
 against the runner itself.
 
+## Delivering the results to the status hub
+
+Set `lab_checks_results_readers` to the status hub's pull public key (and `lab_checks_results_reader_from` to the hub's
+address): the role adds a locked account (`hnx-lab-results`, in the group sshd allows) whose key runs only
+`/bin/cat <the published copy>` under `restrict`, and the unit publishes a copy of each run's results document
+(0640, the account's group, by rename) beside the account's keys; the results and the paging state stay root's. The hub
+pulls it with `status_hub_pulls` (`docs/status.md` "Pulled status files") into its `invariants` `poll-file` source. Health
+then also checks the copy is recent.
+
 ## Hooks
 
 * **readiness**: systemd, `hnx` and the register are present, the token has its form.

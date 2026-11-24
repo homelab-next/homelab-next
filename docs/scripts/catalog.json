@@ -949,6 +949,27 @@
     },
     {
       "exit": {
+        "0": "every entry pulled",
+        "1": "at least one entry failed (its previous file is left as it was)",
+        "2": "usage or configuration error"
+      },
+      "id": "hub-pull",
+      "inputs": "--config FILE: JSON {key_file, known_hosts, root, group, ssh?: PATH, entries: [{name, address, user, dest}]}",
+      "installs_to": "/usr/local/libexec/hnx-hub/hnx-hub-pull",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line per entry on stdout (name, ok and the size, or the error class); each document is written to <root>/<dest> (0640, group the collector's) by rename; nothing is written for a document that is not a JSON object",
+      "owner": "platform",
+      "path": "ansible/roles/status_hub/files/hnx-hub-pull.py",
+      "purpose": "Pull each producer host's status file (for example the invariants runner's results document) over SSH to a restricted account whose forced command streams that one file read-only, and file it under the status root at the path the hub's own configuration names, so a poll-file source has something to read.",
+      "status": "active",
+      "trigger": [
+        "role:status_hub",
+        "timer:status_hub/hnx-hub-pull"
+      ]
+    },
+    {
+      "exit": {
         "0": "walked every type to the end",
         "1": "a type failed (its checkpoint is saved; the next run resumes)",
         "2": "paused at the wall-clock cap or on a signal (progress, not failure)"
@@ -1361,6 +1382,7 @@
         "timer:source_census/source-census-run",
         "timer:status_hub/hnx-hub-collect",
         "timer:status_hub/hnx-hub-login-token",
+        "timer:status_hub/hnx-hub-pull",
         "timer:trino/lake-maintenance",
         "timer:trivy/scan",
         "timer:velociraptor_server/cycle"

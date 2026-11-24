@@ -19,3 +19,7 @@ lab_checks_unit: "hnx-{{ lab_checks_logical_id }}.service"
 lab_checks_timer: "hnx-{{ lab_checks_logical_id }}.timer"
 lab_checks_forms:
   publisher: '^[A-Za-z0-9_-]{8,128}\Z'
+# the copy of the results document the reader account's forced command prints (published by the unit after each run)
+lab_checks_reader_file: "{{ lab_checks_reader_home }}/{{ lab_checks_logical_id }}.hourly.json"
+lab_checks_reader_options: >-
+  restrict,command="/bin/cat {{ lab_checks_reader_file }}"{{ (',from="' ~ (lab_checks_results_reader_from | join(',')) ~ '"') if lab_checks_results_reader_from | length > 0 else '' }}

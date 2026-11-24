@@ -95,6 +95,19 @@ argument_specs:
         type: str
         description: "The refresh timer's calendar (tokens last hours)."
         default: "*-*-* 00/4:15:00 UTC"
+      status_hub_pulls:
+        type: list
+        elements: dict
+        description: "Status files pulled from producer hosts (ADR-0049 decision 7): each {name, host (a registry host), user, host_key (the producer's pinned SSH host key, '<type> <base64>'), dest (a relative .json path under status_hub_root_dir)}. A root-run timer dials each host with status_hub_pull_key_ref; the account's forced command decides what is printed, and the hub files it at dest, never at a name the stream supplies. Needs status_hub_collect."
+        default: []
+      status_hub_pull_key_ref:
+        type: str
+        description: "secret: reference of the pull timer's SSH private key (OpenSSH form), written root-only; required with status_hub_pulls and not also in status_hub_secret_refs."
+        default: ""
+      status_hub_pulls_oncalendar:
+        type: str
+        description: "The pull timer's calendar (never a monotonic timer, LL-041)."
+        default: "*-*-* *:00/5:30 UTC"
       status_hub_endpoints:
         type: dict
         description: "Capability -> scheme://host:port the collector uses instead of the registry alias (HNX_ENDPOINT_<CAPABILITY>), for a product whose certificate does not carry the alias name. The name must still verify against the CA bundle."
