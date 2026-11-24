@@ -71,6 +71,10 @@ credentials:
     identity: private-key
     holder: provider
     purpose: the key of the ssh forward to the broker's socket, restricted on the broker host to that forward and mapped by the broker to the pack's actor
+  - secret: secret:stackstorm/events-ssh-key
+    identity: private-key
+    holder: provider
+    purpose: the key of the ssh forward to a loopback-only bus on another host (optional, stackstorm_events_forward_enabled), restricted on the bus host to that one local forward
 identifiers:
   - {kind: secret-name, name: stackstorm, on_remove: keep}
 requires:
