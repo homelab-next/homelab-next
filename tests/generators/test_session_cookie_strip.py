@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The edge's session-cookie deletion must leave a Cookie header a strict parser accepts."""
 
 import re
