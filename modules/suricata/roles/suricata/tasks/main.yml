@@ -79,7 +79,7 @@
           %YAML 1.1
           ---
           # placeholder (role suricata, first install): suricata_enroll replaces this file before the deploy gate
-          HOME_NET: "[127.0.0.1]"
+          HOME_NET: "[::1]"
           EXTERNAL_NET: "!$HOME_NET"
         mode: "0644"
         force: false
