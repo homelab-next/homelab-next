@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value lands in a unit file, a JSON configuration or a command line: refuse anything that could add a line.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - hardware_metrics_collectors is defined
+      - hardware_metrics_collectors is sequence and hardware_metrics_collectors is not string
+      - hardware_metrics_collectors | length > 0
+      - hardware_metrics_collectors | difference(hardware_metrics_known_collectors) | length == 0
+      - hardware_metrics_collectors | unique | length == hardware_metrics_collectors | length
+      - hardware_metrics_textfile_dir is match(hardware_metrics_path_pattern)
+      - hardware_metrics_conf_dir is match(hardware_metrics_path_pattern)
+      - hardware_metrics_libexec_dir is match(hardware_metrics_path_pattern)
+      - hardware_metrics_systemd_dir is match(hardware_metrics_path_pattern)
+      - hardware_metrics_last_run_dir is match(hardware_metrics_path_pattern)
+      - hardware_metrics_drm_dir is match(hardware_metrics_path_pattern)
+      - hardware_metrics_pci_dir is match(hardware_metrics_path_pattern)
+      - hardware_metrics_proc_dir is match(hardware_metrics_path_pattern)
+      - hardware_metrics_journal_cli is match(hardware_metrics_cli_pattern)
+      - hardware_metrics_expect_gpu_processes is boolean
+      - hardware_metrics_guest_conf_dirs is sequence and hardware_metrics_guest_conf_dirs is not string
+      - hardware_metrics_guest_conf_dirs | reject('match', hardware_metrics_path_pattern) | list | length == 0
+      - hardware_metrics_last_run_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - hardware_metrics_interval is match(hardware_metrics_calendar_pattern)
+      - hardware_metrics_node | string is match(hardware_metrics_node_pattern)
+      - hardware_metrics_zpool_cli is match(hardware_metrics_cli_pattern)
+      - hardware_metrics_ipmitool_cli is match(hardware_metrics_cli_pattern)
+      - hardware_metrics_nvidia_smi_cli is match(hardware_metrics_cli_pattern)
+      - hardware_metrics_guests_cli is match(hardware_metrics_cli_pattern)
+      - hardware_metrics_health_max_age_seconds | int >= 60
+      - hardware_metrics_install_packages is boolean
+    fail_msg: >-
+      hardware_metrics: collectors must be a non-empty list without repeats of
+      {{ hardware_metrics_known_collectors | join(', ') }}; plain absolute paths, plain command names,
+      a plain systemd calendar, a host name for the node and a health age of at least 60 seconds
+  tags: [health, readiness]

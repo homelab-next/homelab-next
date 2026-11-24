@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: Apache-2.0
+# Split from main so it runs without the package install (and in the tests, against fake commands).
+- name: Validate the settings
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Ensure the configuration, libexec and textfile directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: ["{{ hardware_metrics_conf_dir }}", "{{ hardware_metrics_libexec_dir }}", "{{ hardware_metrics_textfile_dir }}"]
+
+- name: Install the collector
+  ansible.builtin.copy:
+    src: hnx-hardware-metrics.py
+    dest: "{{ hardware_metrics_script }}"
+    mode: "0755"
+
+- name: Write the collector's configuration
+  ansible.builtin.copy:
+    dest: "{{ hardware_metrics_config }}"
+    mode: "0644"
+    content: "{{ hardware_metrics_settings | to_nice_json }}\n"
+  vars:
+    hardware_metrics_settings:
+      collectors: "{{ hardware_metrics_collectors }}"
+      textfile_dir: "{{ hardware_metrics_textfile_dir }}"
+      zpool_cli: "{{ hardware_metrics_zpool_cli }}"
+      ipmitool_cli: "{{ hardware_metrics_ipmitool_cli }}"
+      nvidia_smi_cli: "{{ hardware_metrics_nvidia_smi_cli }}"
+      guests_cli: "{{ hardware_metrics_guests_cli }}"
+      guest_conf_dirs: "{{ hardware_metrics_guest_conf_dirs }}"
+      drm_dir: "{{ hardware_metrics_drm_dir }}"
+      pci_dir: "{{ hardware_metrics_pci_dir }}"
+      proc_dir: "{{ hardware_metrics_proc_dir }}"
+      journal_cli: "{{ hardware_metrics_journal_cli }}"
+      expect_gpu_processes: "{{ hardware_metrics_expect_gpu_processes | bool }}"
+      node: "{{ hardware_metrics_node | string }}"
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ hardware_metrics_last_run_dir }}"
+    last_run_group: "{{ hardware_metrics_last_run_group }}"
+    last_run_writer: "{{ hardware_metrics_last_run_writer }}"
+
+- name: Install the collector's service and timer
+  ansible.builtin.template:
+    src: "{{ hardware_metrics_unit }}.{{ item }}.j2"
+    dest: "{{ hardware_metrics_systemd_dir }}/{{ hardware_metrics_unit }}.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: hardware_metrics_units
+
+- name: Reload systemd when a unit changed
+  ansible.builtin.command:
+    argv: ["{{ hardware_metrics_systemctl_cli }}", daemon-reload]
+  when: hardware_metrics_units is changed
+  changed_when: true
+
+# The first run writes the metrics before the first timer tick; a collector that fails is visible in
+# the file (hw_collector_up 0) and fails health, not this step: only a run that wrote nothing fails.
+- name: Run the collector once so the metrics exist before the first timer tick
+  ansible.builtin.command:
+    argv: ["{{ hardware_metrics_script }}", --config, "{{ hardware_metrics_config }}"]
+  register: hardware_metrics_first
+  changed_when: false
+  when: not ansible_check_mode

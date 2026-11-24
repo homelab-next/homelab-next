@@ -52,6 +52,8 @@
           - prometheus_loaded_rule_health | length == 0
           - "'node' in prometheus_active_jobs"
           - not (prometheus_probes_enabled | bool) or 'probe' in prometheus_active_jobs
+          - not (prometheus_llm_probes_on | bool) or 'llm-probe' in prometheus_active_jobs
+          - not (prometheus_snmp_enabled | bool) or prometheus_snmp_targets | map(attribute='host') | map('regex_replace', '^', 'snmp-') | difference(prometheus_active_jobs) | length == 0
         fail_msg: >-
           prometheus: the running service does not match its configuration (last reload ok:
           {{ prometheus_runtime.reloadConfigSuccess }}; retention {{ prometheus_runtime.storageRetention | default('?') }},
