@@ -12,7 +12,7 @@
       register: alert_intake_systemd_stat
     - name: The host runs systemd
       ansible.builtin.assert:
-        that: alert_intake_systemd_stat.stat.isreg | default(false)
+        that: alert_intake_systemd_stat.stat.isdir | default(false)
         fail_msg: "alert-intake: the host does not run systemd (the webhook is a unit)"
     - name: The interpreter the unit runs is there
       ansible.builtin.command:
