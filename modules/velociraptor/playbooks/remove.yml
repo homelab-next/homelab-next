@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: stop the endpoints' clients first (a client that outlives its server retries forever),
+# then export the server state (export_first), stop and remove the container and its timer. The
+# data root (with the export in it, and the configuration with the authority), the compose project
+# and the endpoints' binary and configuration are kept for the operator to archive or delete; the
+# decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the service.
+- name: Stop the endpoint clients
+  hosts: mod_velociraptor_endpoint
+  become: true
+  tasks:
+    - name: Stop and disable the client unit (a no-op when there never was one)
+      ansible.builtin.systemd_service:
+        name: velociraptor-client.service
+        state: stopped
+        enabled: false
+      failed_when: false
+
+- name: Remove the endpoint-forensics server
+  hosts: mod_velociraptor_server
+  become: true
+  tasks:
+    - name: Export the server state first
+      ansible.builtin.include_role:
+        name: velociraptor_server
+        tasks_from: export
+    - name: Stop and remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ velociraptor_server_dir | default('/opt/compose/velociraptor') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credential the container was given (the administrator's first password)
+      ansible.builtin.file:
+        path: "{{ velociraptor_server_dir | default('/opt/compose/velociraptor') }}/secrets/velociraptor.env"
+        state: absent
+    - name: Stop and disable the cycle's timer (a no-op when there never was one)
+      ansible.builtin.systemd_service:
+        name: hnx-velociraptor-server-cycle.timer
+        state: stopped
+        enabled: false
+      failed_when: false
+    - name: Remove the cycle's units
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/hnx-velociraptor-server-cycle.timer
+        - /etc/systemd/system/hnx-velociraptor-server-cycle.service
+    - name: Reload systemd (the units are gone)
+      ansible.builtin.command:
+        argv: [systemctl, daemon-reload]
+      changed_when: true

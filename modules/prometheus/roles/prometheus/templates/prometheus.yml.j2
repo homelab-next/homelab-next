@@ -26,3 +26,24 @@ scrape_configs:
     file_sd_configs:
       - files:
           - {{ prometheus_container_config_dir }}/{{ prometheus_generated_dir }}/node_targets.yml
+{% if prometheus_probes_enabled | bool %}
+
+  # HTTP(S) up/down probes through the blackbox exporter beside this service: the target list is
+  # rendered from the registry (it overwrites the file); each entry's module label picks the probe
+  - job_name: probe
+    metrics_path: /probe
+    scrape_interval: {{ prometheus_probe_interval }}
+    scrape_timeout: {{ prometheus_probe_timeout }}
+    file_sd_configs:
+      - files:
+          - {{ prometheus_container_config_dir }}/{{ prometheus_generated_dir }}/probe_targets.yml
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [module]
+        target_label: __param_module
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: {{ prometheus_blackbox_service }}:{{ prometheus_blackbox_port }}
+{% endif %}

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The metrics generator's host-metrics target list (the ``node_targets`` option): every host of
 this registry on one port, less the hosts that run no exporter; absent when the option is not
-given, so the generator's existing output is byte-for-byte unchanged."""
+given, so the generator's existing output is byte-for-byte unchanged.  Below it: the HTTP(S) probe
+target list (the ``probe_targets`` option)."""
 
 from __future__ import annotations
 
@@ -90,3 +91,115 @@ def test_the_cli_flags_render_the_list_and_exclude_needs_the_port(tmp_path):
         io.StringIO(), err,
     )  # fmt: skip
     assert code == 2 and "--node-exporter-port" in err.getvalue()
+
+
+# ----------------------------------------------------------------------------- HTTP(S) probe targets
+# The ``probe_targets`` option: a row published at the edge is probed by its edge name, a row with an
+# http health endpoint by the name it answers by, any other row not at all; absent without the option.
+
+LISTING = "prometheus/probe_targets.yml"
+
+
+def _render_probes(spec):
+    return generate(REG, ["prometheus"], {"probe_targets": spec})["prometheus"]
+
+
+def _entries(spec=None):
+    return yaml.safe_load(_render_probes({} if spec is None else spec)[LISTING])
+
+
+def _by_service(entries):
+    return {e["labels"]["service"]: e for e in entries}
+
+
+def test_no_option_renders_no_probe_list():
+    assert LISTING not in generate(REG, ["prometheus"])["prometheus"]
+
+
+def test_the_other_files_do_not_change_with_the_probe_option():
+    plain = generate(REG, ["prometheus"])["prometheus"]
+    both = _render_probes({})
+    assert {k: v for k, v in both.items() if k != LISTING} == plain
+
+
+def test_a_row_published_at_the_edge_is_probed_by_its_edge_name():
+    rows = [s for s in REG.rows("primary", "eval") if s.public_hostname]
+    assert rows, "the example registry has edge rows"
+    got = _by_service(_entries())
+    for s in rows:
+        e = got[s.name]
+        assert e["targets"][0].startswith(f"https://{s.public_hostname}/")
+        assert e["labels"]["via"] == "edge" and e["labels"]["module"] == "http_edge"
+
+
+def test_a_row_with_an_http_health_endpoint_is_probed_by_the_name_it_answers_by():
+    rows = [
+        s
+        for s in REG.rows("primary", "eval")
+        if s.health.get("kind") == "http" and not s.public_hostname
+    ]
+    assert rows
+    got = _by_service(_entries())
+    for s in rows:
+        e = got[s.name]
+        assert e["targets"] == [f"{s.scheme}://{REG.address_of(s)}:{s.port}{s.health['path']}"]
+        assert e["labels"]["via"] == "service"
+        assert e["labels"]["expect_status"] == str(s.health.get("expect_status", 200))
+
+
+def test_a_row_neither_routed_nor_http_checked_is_not_probed():
+    got = _by_service(_entries())
+    for s in REG.rows("primary", "eval"):
+        probed = bool(s.public_hostname) or s.health.get("kind") == "http"
+        assert (s.name in got) is probed, s.name
+
+
+def test_an_excluded_row_is_left_out_and_the_rest_unchanged():
+    all_ = _by_service(_entries())
+    gone = sorted(all_)[0]
+    rest = _by_service(_entries({"exclude": [gone]}))
+    assert gone not in rest and set(rest) == set(all_) - {gone}
+
+
+def test_every_target_is_one_http_or_https_url():
+    for e in _entries():
+        assert len(e["targets"]) == 1 and e["targets"][0].split("://")[0] in ("http", "https")
+        assert e["labels"]["module"] in ("http_edge", "http_2xx")
+
+
+def test_probe_output_is_deterministic():
+    assert _render_probes({}) == _render_probes({})
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"extra": 1},
+        {"exclude": "idp"},
+        {"exclude": [1]},
+        {"exclude": ["no-such-row"]},
+        "all",
+    ],
+)
+def test_a_malformed_probe_spec_is_refused(spec):
+    with pytest.raises(GeneratorRefusal, match="probe_targets"):
+        _render_probes(spec)
+
+
+def test_the_cli_flags_render_the_list_and_exclude_needs_the_flag(tmp_path):
+    gone = sorted(_by_service(_entries()))[0]
+    out, err = io.StringIO(), io.StringIO()
+    code = registry_cli.main(
+        ["generate", str(EXAMPLE), str(tmp_path), "--only", "prometheus",
+         "--probe-targets", "--probe-exclude", gone],
+        out, err,
+    )  # fmt: skip
+    assert code == 0, err.getvalue()
+    listed = _by_service(yaml.safe_load((tmp_path / LISTING).read_text()))
+    assert gone not in listed and listed
+    err = io.StringIO()
+    code = registry_cli.main(
+        ["generate", str(EXAMPLE), str(tmp_path / "x"), "--probe-exclude", gone],
+        io.StringIO(), err,
+    )  # fmt: skip
+    assert code == 2 and "--probe-targets" in err.getvalue()

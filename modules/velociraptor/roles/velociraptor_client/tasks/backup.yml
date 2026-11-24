@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# The client keeps no data of its own to back up: its configuration is the server's generated one
+# (in the secret store) and its identity file is re-created when it enrols again (as a new client).
+- name: Say what a backup of this role holds
+  ansible.builtin.debug:
+    msg: "velociraptor client: nothing to back up (configuration from the secret store; identity re-created on enrolment)"
+  tags: [backup]

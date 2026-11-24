@@ -1236,7 +1236,8 @@
         "timer:prometheus/alerts",
         "timer:rkhunter/scan",
         "timer:trino/lake-maintenance",
-        "timer:trivy/scan"
+        "timer:trivy/scan",
+        "timer:velociraptor_server/cycle"
       ]
     },
     {
@@ -2130,6 +2131,191 @@
       "trigger": [
         "timer:trivy/scan",
         "role:trivy"
+      ]
+    },
+    {
+      "exit": {
+        "0": "imported"
+      },
+      "id": "vector-log-pipeline-adapter",
+      "inputs": "the suite's observed addresses and events",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the suite's verdict inputs",
+      "owner": "platform",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/log_pipeline.py",
+      "purpose": "Drive the sidecar's labelling path for the log-pipeline conformance suite.",
+      "status": "active",
+      "trigger": [
+        "role:vector"
+      ]
+    },
+    {
+      "exit": {
+        "0": "imported"
+      },
+      "id": "vector-ocsf",
+      "inputs": "a labelled event, its kind and a seed",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "rows per OCSF table",
+      "owner": "platform",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/ocsf.py",
+      "purpose": "Remap one labelled event into the rows of its OCSF classes for the sidecar.",
+      "status": "active",
+      "trigger": [
+        "role:vector"
+      ]
+    },
+    {
+      "exit": {
+        "0": "imported"
+      },
+      "id": "vector-package",
+      "inputs": "nothing (imported, never run)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "nothing",
+      "owner": "platform",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/__init__.py",
+      "purpose": "Mark the vector module's package, the directory the sidecar and its remap are imported from on the guest.",
+      "status": "active",
+      "trigger": [
+        "role:vector"
+      ]
+    },
+    {
+      "exit": {
+        "0": "stopped cleanly"
+      },
+      "id": "vector-sidecar",
+      "inputs": "the aggregator's events on a local socket and the rendered label tables",
+      "kind": "service",
+      "language": "python",
+      "outputs": "labelled OCSF rows on the forward socket and a status file",
+      "owner": "platform",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/sidecar.py",
+      "purpose": "Label and remap every event the Vector aggregator hands over, with the core library's own label rules, and forward the rows.",
+      "status": "active",
+      "trigger": [
+        "role:vector"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the property holds",
+        "1": "the property does not hold",
+        "100": "could not measure (no status file, an unknown schema, or one older than its own bound: the cycle that writes it has stopped)",
+        "2": "usage error (an unknown criterion)"
+      },
+      "id": "velociraptor-check",
+      "inputs": "the status file written by the module's hunt cycle (the criterion's name and, optionally, a path)",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-velociraptor-check",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line of evidence",
+      "owner": "platform",
+      "path": "modules/velociraptor/roles/velociraptor_server/files/hnx_velociraptor_check.py",
+      "purpose": "Decide whether the endpoint-forensics server is up, has clients enrolled and has heard from one recently, from the status file the hunt cycle writes.",
+      "status": "active",
+      "trigger": [
+        "role:velociraptor_server"
+      ]
+    },
+    {
+      "exit": {
+        "0": "done",
+        "1": "the server could not be reached or refused, a catalog or definition was refused, or a tree check failed (the reason on stderr and in the status file)",
+        "2": "usage error"
+      },
+      "id": "velociraptor-forensics",
+      "inputs": "the module's config file, the allow-list catalog, the forensics server's API (as the module's own hunt principal, through the server container) and the status and state directories",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-velociraptor",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the status file, the hunt state, one JSONL file per finished hunt under the results directory, and listed exports",
+      "owner": "platform",
+      "path": "modules/velociraptor/roles/velociraptor_server/files/hnx_velociraptor.py",
+      "purpose": "Run the endpoint-forensics module's baseline hunt cycle (start one hunt over the allow-listed artifacts, collect it once into JSONL for the log pipeline, record the fleet's state), check its allow-list and hunt principal, and export or import its server state.",
+      "status": "active",
+      "trigger": [
+        "timer:velociraptor_server/cycle",
+        "role:velociraptor_server"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the forwarder's own exit code",
+        "2": "usage error or an unreadable alert (from the forwarder)"
+      },
+      "id": "wazuh-alert-entry",
+      "inputs": "ALERT_FILE API_KEY HOOK_URL (the integration daemon's arguments)",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "nothing of its own; the forwarder's output",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/custom-hnx-alert",
+      "purpose": "The integration daemon's entry point for the alert webhook; hands the alert file, api key and hook url to the product's own Python running the forwarder.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh",
+        "script:wazuh-alert-forward"
+      ]
+    },
+    {
+      "exit": {
+        "0": "delivered, held for the next run, or refused as permanent (the reason on stderr)",
+        "2": "usage error or an unreadable alert"
+      },
+      "id": "wazuh-alert-forward",
+      "inputs": "ALERT_FILE API_KEY HOOK_URL (the integration daemon's arguments); hnx-alert.json (source, tlp, detections) and hnx-alert.auth (the Authorization header value) beside the script",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one CloudEvents JSON POST to HOOK_URL; undelivered events in the outbox directory; a line on stderr per outcome",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/custom-hnx-alert.py",
+      "purpose": "Post each SIEM alert at or above the integration's level to the events forwarder as a homelabnext.alert.created event, and keep what could not be delivered for the next run.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh"
+      ]
+    },
+    {
+      "exit": {
+        "0": "exported or restored",
+        "1": "the indexer refused a call, or the source is not what a restore needs (the reason on stderr)",
+        "2": "usage error or an unsafe path"
+      },
+      "id": "wazuh-index-export",
+      "inputs": "export|restore --url URL --ca FILE --dir DIR [--pattern P] [--user U]; the account's password in HNX_INDEXER_PASSWORD",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON line on stdout, {files: [{key, docs}]} (export) or {indices, docs} (restore); the files under DIR (0600)",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/hnx_wazuh_index.py",
+      "purpose": "Export the SIEM's hot index (the alerts indices) to one JSON-lines file per index, and load such files back, through the indexer's own API.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the set is in place and tested (changed or not)",
+        "1": "the new set was refused by the configuration test or the restart and the previous set is back",
+        "2": "usage error or an unsafe path"
+      },
+      "id": "wazuh-rules-sync",
+      "inputs": "sync --stage DIR --etc DIR --compose FILE --prev DIR [--force-restart]; digest --etc DIR | --stage DIR",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON line on stdout, {changed, digest, files}; the reason on stderr when refused",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/hnx_wazuh_rules.py",
+      "purpose": "Load the site's native rule and decoder files into the SIEM manager, test them with the manager's own configuration test before it restarts, and put the previous set back when the test or the restart fails.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh"
       ]
     },
     {

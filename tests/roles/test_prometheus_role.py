@@ -813,3 +813,195 @@ def test_a_receiver_on_another_host_passes_the_placement_check(tmp_path):
 def test_a_malformed_heartbeat_setting_is_refused(tmp_path, over):
     r = render(tmp_path, **over)
     assert r.returncode != 0 and "prometheus: a registry id" in r.stdout + r.stderr
+
+
+# ----------------------------------------------------------------------------- HTTP(S) probes
+
+BLACKBOX_IMAGE = yaml.safe_load(
+    (MODULE / "roles" / "prometheus" / "defaults" / "main.yml").read_text()
+)["prometheus_blackbox_image"]
+
+
+def _probe_expected() -> list:
+    return generate(load(REGISTRY), ["prometheus"], {"probe_targets": {}})["prometheus"][
+        "prometheus/probe_targets.yml"
+    ]
+
+
+def test_probes_are_off_by_default_nothing_probe_is_rendered(tmp_path):
+    assert render(tmp_path).returncode == 0
+    cfg = yaml.safe_load((tmp_path / "data/config/prometheus.yml").read_text())
+    assert "probe" not in [j["job_name"] for j in cfg["scrape_configs"]]
+    rules = yaml.safe_load((tmp_path / "data/config/rules.yml").read_text())
+    assert "ProbeDown" not in {x["alert"] for g in rules["groups"] for x in g["rules"]}
+    assert not (tmp_path / "data/config/generated/probe_targets.yml").exists()
+
+
+def test_probes_on_render_the_target_list_the_job_the_modules_and_the_rule(tmp_path):
+    r = render(tmp_path, prometheus_probes_enabled=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    data = tmp_path / "data/config"
+    # the installed list is exactly the generator's for this registry
+    assert (data / "generated/probe_targets.yml").read_text() == _probe_expected()
+    cfg = yaml.safe_load((data / "prometheus.yml").read_text())
+    job = next(j for j in cfg["scrape_configs"] if j["job_name"] == "probe")
+    assert job["metrics_path"] == "/probe"
+    assert job["file_sd_configs"] == [{"files": ["/etc/prometheus/generated/probe_targets.yml"]}]
+    assert {"source_labels": ["module"], "target_label": "__param_module"} in job["relabel_configs"]
+    assert {"target_label": "__address__", "replacement": "blackbox:9115"} in job["relabel_configs"]
+    rules = yaml.safe_load((data / "rules.yml").read_text())
+    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
+    assert by["ProbeDown"]["expr"] == "probe_success == 0"
+    assert by["ProbeDown"]["for"] == "5m" and by["ProbeDown"]["labels"]["severity"] == "critical"
+    mods = yaml.safe_load((data / "blackbox/blackbox.yml").read_text())["modules"]
+    assert set(mods) == {"http_edge", "http_2xx"}
+    assert 502 not in mods["http_edge"]["http"]["valid_status_codes"]
+    assert mods["http_edge"]["http"]["no_follow_redirects"] is True
+    assert "insecure_skip_verify" not in (data / "blackbox/blackbox.yml").read_text()
+
+
+def test_the_probe_exclusion_and_alert_window_are_settings(tmp_path):
+    gone = sorted(e["labels"]["service"] for e in yaml.safe_load(_probe_expected()))[0]
+    r = render(
+        tmp_path,
+        prometheus_probes_enabled=True,
+        prometheus_probe_exclude=[gone],
+        prometheus_alert_probe_down_for="7m",
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    got = yaml.safe_load((tmp_path / "data/config/generated/probe_targets.yml").read_text())
+    assert gone not in {e["labels"]["service"] for e in got}
+    rules = yaml.safe_load((tmp_path / "data/config/rules.yml").read_text())
+    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
+    assert by["ProbeDown"]["for"] == "7m"
+
+
+def test_turning_probes_off_again_removes_the_target_list(tmp_path):
+    assert render(tmp_path, prometheus_probes_enabled=True).returncode == 0
+    listing = tmp_path / "data/config/generated/probe_targets.yml"
+    assert listing.exists()
+    assert render(tmp_path).returncode == 0
+    assert not listing.exists()
+
+
+def test_a_second_run_with_probes_changes_nothing(tmp_path):
+    assert render(tmp_path, prometheus_probes_enabled=True).returncode == 0
+    again = render(tmp_path, prometheus_probes_enabled=True)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "changed=0" in again.stdout, again.stdout
+
+
+def test_the_exporter_image_is_pinned_by_tag_and_a_full_digest():
+    name, digest = BLACKBOX_IMAGE.split("@")
+    assert ":" in name.rsplit("/", 1)[1] and not name.endswith(":latest")
+    assert len(digest) == len("sha256:") + 64 and digest.startswith("sha256:")
+
+
+def _first_main_probes(tmp_path):
+    return {
+        "role": ROLE,
+        "tasks_from": "main",
+        "extra_vars": pvars(
+            tmp_path, prometheus_probes_enabled=True, prometheus_unit_dir=str(tmp_path / "units")
+        ),
+        "env": SECRETS,
+    }
+
+
+@first_run(_first_main_probes)
+def test_the_compose_file_has_the_exporter_by_digest_read_only_and_unpublished(first):
+    r, tmp_path = first
+    assert "Resolve the notify endpoint" in r.stdout + r.stderr, r.stdout + r.stderr
+    doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
+    svc = doc["services"]["blackbox"]
+    assert svc["image"] == BLACKBOX_IMAGE
+    assert svc["read_only"] is True and "ports" not in svc
+    assert svc["cap_drop"] == ["ALL"]
+    assert any(v.endswith("/etc/blackbox:ro") for v in svc["volumes"])
+    assert doc["services"]["prometheus"]["image"] == IMAGE
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"prometheus_probes_enabled": "maybe"},
+        {"prometheus_probe_exclude": "idp"},
+        {"prometheus_probe_exclude": ["Not A Row"]},
+        {"prometheus_probe_interval": "1h"},
+        {"prometheus_probe_timeout": "0s"},
+        {"prometheus_probe_timeout": "90s"},
+        {"prometheus_probe_timeout": "10 seconds"},
+        {"prometheus_alert_probe_down_for": "5 minutes"},
+        {"prometheus_blackbox_image": "docker.io/prom/blackbox-exporter:latest"},
+        {"prometheus_blackbox_mem_limit": "lots"},
+    ],
+    ids=lambda o: next(iter(o)) + "=" + str(next(iter(o.values()))),
+)
+def test_a_malformed_probe_setting_is_refused(tmp_path, over):
+    r = run_steps(tmp_path, ["validate"], pvars(tmp_path, **over), SECRETS)
+    assert r.returncode != 0, r.stdout
+    assert "prometheus: a registry id" in r.stdout, r.stdout
+
+
+PROBE_RULE_TESTS = """\
+rule_files: [/etc/prometheus/rules.yml]
+evaluation_interval: 1m
+tests:
+  - name: a probe that fails for the whole window fires, one that recovered or is new does not
+    interval: 1m
+    input_series:
+      - {series: 'probe_success{job="probe", service="a", instance="https://a.example.internal/"}', values: '0x15'}
+      - {series: 'probe_success{job="probe", service="b", instance="https://b.example.internal/"}', values: '0x3 1x12'}
+      - {series: 'probe_success{job="probe", service="c", instance="https://c.example.internal/"}', values: '1x15'}
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ProbeDown
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: ProbeDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: probe, service: a, instance: "https://a.example.internal/"}
+            exp_annotations: {summary: "a is down: the probe of https://a.example.internal/ has failed"}
+      - eval_time: 12m
+        alertname: ProbeDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: probe, service: a, instance: "https://a.example.internal/"}
+            exp_annotations: {summary: "a is down: the probe of https://a.example.internal/ has failed"}
+"""
+
+
+def test_probedown_fires_after_five_minutes_and_clears_on_recovery(tmp_path):
+    require_tool("docker")
+    assert render(tmp_path, prometheus_probes_enabled=True).returncode == 0
+    work = tmp_path / "rules"
+    work.mkdir()
+    shutil.copy(tmp_path / "data/config/rules.yml", work / "rules.yml")
+    (work / "tests.yml").write_text(PROBE_RULE_TESTS)
+    for p in (work, work / "rules.yml", work / "tests.yml"):
+        p.chmod(0o755 if p.is_dir() else 0o644)
+    r = _promtool(
+        tmp_path, "test", "rules", "/etc/prometheus/tests.yml", mounts={work: "/etc/prometheus"}
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_probe_configuration_passes_the_products_own_checks(tmp_path):
+    docker = require_tool("docker")
+    assert render(tmp_path, prometheus_probes_enabled=True).returncode == 0
+    data = tmp_path / "data"
+    for p in data.rglob("*"):
+        p.chmod(0o755 if p.is_dir() else 0o644)
+    data.chmod(0o755)
+    r = _promtool(
+        tmp_path,
+        "check", "config", "/etc/prometheus/prometheus.yml",
+        mounts={data / "config": "/etc/prometheus",
+                data / "scrape-credentials": "/etc/hnx/scrape-credentials"},
+    )  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    bb = subprocess.run(
+        [docker, "run", "--rm", "-v", f"{data / 'config/blackbox'}:/etc/blackbox:ro",
+         BLACKBOX_IMAGE, "--config.file=/etc/blackbox/blackbox.yml", "--config.check"],
+        capture_output=True, text=True, timeout=300,
+    )  # fmt: skip
+    assert bb.returncode == 0, bb.stdout + bb.stderr

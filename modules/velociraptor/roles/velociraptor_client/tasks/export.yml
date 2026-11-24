@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Say what an export of this role holds
+  ansible.builtin.debug:
+    msg: "velociraptor client: no data to export (the module's data is the server's)"
+  tags: [export]

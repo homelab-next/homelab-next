@@ -15,7 +15,8 @@ prometheus_ref_pattern: '^secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*\Z'
 prometheus_duration_pattern: '^[1-9][0-9]{0,3}[smhdwy]\Z'
 prometheus_interval_pattern: '^[1-9][0-9]{0,3}[sm]\Z'
 # the rules the role ships, by name (health proves each is loaded)
-prometheus_rule_names: [Watchdog, TargetDown, NoTargets, DiskAlmostFull, FilesystemReadOnly, MemoryPressure, UpsOnBattery, UpsLowBattery, UpsMonitorDown, UpsUnreadable, UpsCheckStale]
+prometheus_base_rule_names: [Watchdog, TargetDown, NoTargets, DiskAlmostFull, FilesystemReadOnly, MemoryPressure, UpsOnBattery, UpsLowBattery, UpsMonitorDown, UpsUnreadable, UpsCheckStale]
+prometheus_rule_names: "{{ prometheus_base_rule_names + (['ProbeDown'] if prometheus_probes_enabled | bool else []) }}"
 # where the forwarder and its token are installed (the service's ExecStart names the script)
 prometheus_alert_script: /usr/local/libexec/homelabnext/prometheus-alert-notify
 prometheus_notify_auth_file: /etc/homelabnext/prometheus-notify.auth
@@ -26,3 +27,9 @@ prometheus_alert_schedules: {"*-*-* *:*:00 UTC": 60, "*-*-* *:*:00,30 UTC": 30}
 prometheus_alert_interval_seconds: "{{ prometheus_alert_schedules[prometheus_alert_schedule] }}"
 prometheus_alert_ignore_pattern: '^[A-Za-z0-9_/.|^$*+()-]{0,200}\Z'
 prometheus_getent_cli: getent
+# the probe exporter: its port inside the compose network, where it reads its modules, and the file
+# the generator renders the targets to
+prometheus_blackbox_port: 9115
+prometheus_container_blackbox_dir: /etc/blackbox
+prometheus_probe_targets_file: prometheus/probe_targets.yml
+prometheus_blackbox_service: blackbox

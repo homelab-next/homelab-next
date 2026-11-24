@@ -45,6 +45,18 @@ write_files:
       PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install '{{ spec }}'
 {% endfor %}
       install -d -o runner -g runner -m 0755 /opt/hostedtoolcache /home/runner/actions-runner
+{% for tc in ci_runner_toolcache_pythons %}
+      # a Python in the tool cache, as on a hosted image: the setup action finds it and downloads nothing
+      tc=$(mktemp -d)
+      curl -fsSL --retry 5 -o "$tc/python.tar.gz" '{{ tc.url }}'
+      echo '{{ tc.sha256 }}  '"$tc/python.tar.gz" | sha256sum -c -
+      tar -xzf "$tc/python.tar.gz" -C "$tc"
+      (cd "$tc" && AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache bash ./setup.sh)
+      rm -rf "$tc"
+{% endfor %}
+{% if ci_runner_toolcache_pythons %}
+      chown -R runner:runner /opt/hostedtoolcache
+{% endif %}
       curl -fsSL --retry 5 -o /tmp/agent.tar.gz '{{ ci_runner_agent_url }}'
       echo '{{ ci_runner_agent_sha256 }}  /tmp/agent.tar.gz' | sha256sum -c -
       runuser -u runner -- tar -xzf /tmp/agent.tar.gz -C /home/runner/actions-runner

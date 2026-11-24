@@ -1,0 +1,20 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+{{ {
+  'docker_cli': 'docker',
+  'compose_file': velociraptor_server_dir ~ '/docker-compose.yml',
+  'service': 'velociraptor',
+  'api_config': velociraptor_server_api_config_path,
+  'server_config': velociraptor_server_config_path,
+  'principal': velociraptor_server_hunt_principal,
+  'catalog': velociraptor_server_catalog_file,
+  'state_dir': velociraptor_server_data_root ~ '/state',
+  'results_dir': velociraptor_server_data_root ~ '/results/hunts',
+  'status_file': velociraptor_server_data_root ~ '/status/fleet.json',
+  'frontend_port': velociraptor_server_container_frontend_port,
+  'gui_port': velociraptor_server_container_gui_port,
+  'stale_after_minutes': velociraptor_server_stale_after_minutes | int,
+  'min_clients': velociraptor_server_min_clients | int,
+  'hunt_interval_hours': velociraptor_server_hunt_interval_hours | int,
+  'collect_after_minutes': velociraptor_server_collect_after_minutes | int,
+  'max_age_minutes': velociraptor_server_max_status_age_minutes | int
+} | to_nice_json(sort_keys=True) }}

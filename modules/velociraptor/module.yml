@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+# The endpoint-forensics provider on Velociraptor (docs/modules.md; README.md beside this file;
+# ADR-0049 decision 4): the forensics server as one compose_app container, its generated
+# configuration and certificate authority kept on a data volume and never regenerated, a hunt
+# principal that can only collect an allow-listed artifact set, and the client baseline control for
+# the endpoints. The server is an authority (a hunt can run commands on every client): this
+# manifest is human-approve, and every action that changes an endpoint is a remote-admin broker
+# action, never the module's. Every real value (the guests, their addresses, the names, the secret
+# values) is the site's: the overlay's lab/modules.yml, lab/services.yml, group variables and
+# secret store.
+manifest_version: "1.0"
+id: velociraptor
+kind: provider
+title: Endpoint forensics on Velociraptor
+description: "Fills the endpoint-forensics slot with Velociraptor: one container whose server configuration and certificate authority persist and are never regenerated, a hunt principal that only collects an allow-listed artifact set, a baseline hunt cycle writing JSONL for the log pipeline, a checksummed client baseline, and capture-health criteria."
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: velociraptor
+  version: 0.77.1
+licence:
+  kind: open-source
+  spdx: AGPL-3.0-only
+credentials:
+  - secret: secret:velociraptor/admin-password
+    identity: password
+    holder: provider
+    purpose: the administrator's GUI password, set on the first start only (a later change is made in the product)
+  - secret: secret:velociraptor/client-config
+    identity: certificate
+    holder: granted
+    purpose: the client configuration the server generated (client/client.config.yaml; its authority, dial addresses and nonce, no private key); the endpoint role refuses an empty or placeholder one
+identifiers:
+  - {kind: secret-name, name: velociraptor, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the administrator's password and the client configuration are read by name at deploy time
+  hosts:
+    - role: server
+      kind: any
+      footprint: {cpu: 2, memory_mb: 4096, disk_gb: 60}
+      roles: [role:velociraptor_server]
+      purpose: runs the server container (docker_engine first, compose_app renders it); its configuration with the authority, datastore, hunt results and exports live on this disk
+    - role: endpoint
+      kind: any
+      footprint: {cpu: 1, memory_mb: 256, disk_gb: 1}
+      roles: [role:velociraptor_client]
+      purpose: the client baseline control on every endpoint the site wants hunted; it dials the server's clients' port and takes no inbound connection
+provides:
+  slots:
+    endpoint-forensics:
+      adapter: homelabnext.conform.adapters.endpoint_forensics:make
+      provisional: true
+      reason: "no contract yet (and a privileged slot is never provisional, so the slot cannot be privileged until it has one); the standard is the probe the health hook makes: the clients' port serves the certificate, the GUI refuses an unauthenticated request"
+      migration: {formats: [object-tree], export: role:velociraptor_server, import: role:velociraptor_server}
+egress: none
+contributes:
+  roles:
+    - file: roles/velociraptor_server
+    - file: roles/velociraptor_client
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:velociraptor_server, hook: readiness}
+    - {role: role:velociraptor_client, hook: readiness}
+  invariants:
+    - file: invariants/criteria.yml
+  docs:
+    - file: README.md
+data:
+  - id: server-state
+    kind: state
+    description: The server configuration with its certificate authority and the hunt principal's credential (etc/) and the datastore, copied as a sha256-listed tree with the server stopped. Losing the configuration orphans every client.
+    export: {formats: [object-tree], via: role:velociraptor_server}
+    import: {formats: [object-tree], via: role:velociraptor_server}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest) of the server, together with the endpoint role's release and checksum (the two must be the same release): validated and recorded, the state exported, then converged; the start guard keeps the configuration, so the new image cannot rotate the certificate authority"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

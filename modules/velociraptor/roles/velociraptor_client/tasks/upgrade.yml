@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# A bump of the client's release: the target must have a pinned sha256 in this role. The server's
+# image is bumped with it (the releases must match); set velociraptor_client_version to the target.
+- block:
+    - name: Refuse a target release the role has no pinned checksum for
+      ansible.builtin.assert:
+        that:
+          - velociraptor_client_target_version in velociraptor_client_checksums
+        fail_msg: "velociraptor client: no pinned sha256 for {{ velociraptor_client_target_version }}; pinned: {{ velociraptor_client_checksums.keys() | list }}"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+  tags: [upgrade]

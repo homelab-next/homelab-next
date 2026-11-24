@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: Apache-2.0
+# The log-pipeline provider on Vector (docs/modules.md; README.md beside this file): the SOC's
+# aggregator. Vector owns the transport (syslog 514/udp and 6514/tcp+TLS, the sensors' vector
+# protocol on 6000, the Wazuh manager's alert and archive files); a sidecar beside it sets
+# labels.hnx_runtime and labels.hnx_tlp with the core library's own rules (never from the event),
+# remaps to OCSF, and Vector stages the batches in the object store for the lake writer. The raw
+# syslog goes on, unchanged, to the manager's syslog input so its decoders keep working. Every real
+# value (the guest, the addresses, the secret values, the rendered label tables) is the site's:
+# the overlay's lab/modules.yml, lab/services.yml, group variables and secret store.
+manifest_version: "1.0"
+id: vector
+kind: provider
+title: Log pipeline on Vector
+description: Fills the log-pipeline slot with a Vector aggregator and an enrichment sidecar that
+  runs the core library's runtime and TLP label rules, remaps to OCSF (nine classes plus a labelled
+  raw archive) with severity from OCSF severity_id, and stages the batches in the object store;
+  proved by the log-pipeline conformance suite through the module's adapter.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: vector-aggregator
+  display: Vector aggregator
+  version: 0.46.1
+licence:
+  kind: open-source
+  spdx: MPL-2.0
+credentials:
+  - secret: secret:vector/s3-access-key
+    identity: key-id
+    holder: provider
+    purpose: the object store's key id the aggregator writes staged batches with (the staging bucket's key, the same value as the object store's own access key for it)
+  - secret: secret:vector/s3-secret-key
+    identity: password
+    holder: provider
+    purpose: the object store's key secret for the staging bucket
+  - secret: secret:vector/tls-cert
+    identity: cert
+    holder: provider
+    purpose: the PEM chain the 6514 syslog-over-TLS listener and the sensors' listener present
+  - secret: secret:vector/tls-key
+    identity: private-key
+    holder: provider
+    purpose: the private key of that certificate; written to a 0600 file the container reads
+identifiers:
+  - {kind: secret-name, name: vector, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the object store key pair and the listener certificate are read by name at deploy time
+    - cap: cap:object-store
+      version: "1.0"
+      purpose: the staging bucket the batches are written to for the lake writer
+  hosts:
+    - role: aggregator
+      kind: vm
+      footprint: {cpu: 1, memory_mb: 1536, disk_gb: 10}
+      guest:
+        baselines: [base]
+      roles: [role:vector]
+      purpose: runs the Vector aggregator and the enrichment sidecar (docker_engine applied first, compose_app renders them); on the SIEM guest, beside the manager whose alert files it tails
+provides:
+  slots:
+    log-pipeline:
+      formats:
+        - {format: ocsf, version: 1.3.0}
+      adapter: hnx_modules.vector.log_pipeline:make
+      conformance:
+        target: conformance/target.yml
+egress: none
+contributes:
+  roles:
+    - file: roles/vector
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:vector, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: staging
+    kind: object-prefix
+    prefix: vector/staging/
+    via: {cap: cap:object-store}
+    description: The staged OCSF batches (gzipped newline-delimited JSON, one prefix per table, hour-partitioned) the lake writer commits to the lake; the raw archive is one of the tables. Rows are kept until the lake writer has committed them and its own retention has passed.
+    export: {formats: [object-tree], via: role:vector}
+    import: {formats: [object-tree], via: role:vector}
+    retention: {days: 14}
+  - id: state
+    kind: state
+    description: The aggregator's file checkpoints (where it has read in each Wazuh stream); its disk buffers are not exported (a replayed batch is a no-op in the lake, whose rows are keyed by content).
+    export: {formats: [object-tree], via: role:vector}
+    import: {formats: [object-tree], via: role:vector}
+    retention: {keep: transient}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest) of the Vector image: the role's upgrade hook validates and records it, the checkpoints are exported, then it converges"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

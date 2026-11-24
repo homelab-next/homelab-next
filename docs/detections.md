@@ -1,6 +1,6 @@
 ---
-summary: 'Detections authored in a Sigma subset: layout, ATT&CK coverage counted only from tested rules, ATT&CK-id validation, known-id snapshots and writing tests.'
-summary_of: outline:sha256:64e5dbedaeb5f722
+summary: 'Detections as Sigma: layout, ATT&CK coverage from tested rules, known-id snapshots, writing tests, and native engine rules (reasons, lint, proof).'
+summary_of: outline:sha256:593e901c1cb08da1
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Detections
@@ -181,3 +181,29 @@ assert problems == [], "\n".join(problems)
 The validator duck-types on `det_id` and `attack_techniques`; call sites that already hold a
 backend's `known_technique_ids()` set can pass that set directly instead of constructing a
 snapshot.
+
+## Native rules (ADR-0006 decision 4, ADR-0049 decision 2)
+
+A detection is Sigma unless Sigma cannot carry it. A native rule is the engine's own rule or decoder
+file, with a stated reason from a closed list: `engine-correlation` (frequency, timeframe, same-field
+or parent-rule chains), `decoder` (it reads a field only the engine's decoder produces),
+`list-lookup` (an engine-side list) or `stock-override` (it changes the level of, or silences, a
+rule the product ships; human-approve, and it names the stock rule ids it changes). The layout, in
+a detections root (the SIEM module's, or the overlay module's for the lab's own rules):
+
+```
+native/index.yml                  the registry: schema, engine, range, one entry per file
+native/rules/<name>.xml           the engine's rule files
+native/decoders/<name>.xml        the engine's decoder files
+native/native.baseline.json       the ratchet: {"count": N, "stock-override": M}
+fixtures/<slug>/{must_fire,must_not_fire}/*.json   raw engine input: {event, location, format, rule_id}
+```
+
+`python -m homelabnext.detections lint --native` fails on a missing or unlisted reason, a det id a
+Sigma rule also has, a rule number outside the module's range or declared twice, a fixture kind
+missing, a `<location>` with regular-expression characters and no `type="pcre2"` (it loads clean and
+never matches), and a count above the baseline (only a reviewed change raises it). `python -m
+homelabnext.detections run --native --manager-url URL --ca FILE` (the account's password in
+`HNX_MANAGER_API_PASSWORD`) sends every fixture through the manager's own rule tester
+(`PUT /logtest`) and fails on a missed must-fire or a fired must-not-fire. Native fixtures are not
+orphans to the Sigma lint. An entry whose events the rule tester cannot reach (a file-integrity event comes from the agent's own daemon, not as a log line) says `proof: live` and a `live_test` (the steps and the alert that proves it) instead of fixtures; the engine run skips it, and the post-deploy live test is its proof. Native rules count in the engine's own coverage only.

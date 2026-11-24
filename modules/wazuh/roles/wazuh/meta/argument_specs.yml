@@ -1,0 +1,1371 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the SIEM manager, the indexer and the dashboard as compose_app containers.
+    options:
+      wazuh_logical_id:
+        type: str
+        description: The instance's registry id (the service rows the site binds).
+        required: true
+      wazuh_manager_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the manager image; the tag is the product version
+          (X.Y.Z).
+        default: docker.io/wazuh/wazuh-manager:4.14.9@sha256:9d07740f780024600101d759ddab9a4413bdcb3412ccb81dccc143b3cdc702a2
+      wazuh_indexer_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the indexer image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-indexer:4.14.9@sha256:08a8d5a0f0416bdd97ca421b1b72fae97224c8fd99a143500b28b536ff6ac98c
+      wazuh_dashboard_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dashboard image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-dashboard:4.14.9@sha256:8c003c6e08151d962e2ed541a6a1a86ac723f01b5d5678fc53dcbe544e739e7a
+      wazuh_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      wazuh_agent_port:
+        type: int
+        description: Host port of the manager's agent event port (the siem-source row's port).
+        default: 1514
+      wazuh_enrollment_port:
+        type: int
+        description: Host port of the manager's enrolment service.
+        default: 1515
+      wazuh_api_port:
+        type: int
+        description: Host port of the manager's API.
+        default: 55000
+      wazuh_indexer_port:
+        type: int
+        description: Host port of the indexer's API (the hot-index row's port).
+        default: 9200
+      wazuh_dashboard_port:
+        type: int
+        description: Host port of the dashboard (plain http; the edge publishes it).
+        default: 5601
+      wazuh_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/wazuh
+      wazuh_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      wazuh_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      wazuh_data_root:
+        type: path
+        description: 'The module''s data root: manager/, indexer/, certs/, config/ and export/.'
+        default: /var/lib/hnx-modules/wazuh
+      wazuh_indexer_uid:
+        type: int
+        description: User id the indexer runs as (the image's).
+        default: 1000
+      wazuh_indexer_gid:
+        type: int
+        description: Group id the indexer runs as (the image's).
+        default: 1000
+      wazuh_dashboard_uid:
+        type: int
+        description: User id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_dashboard_gid:
+        type: int
+        description: Group id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_manager_gid:
+        type: int
+        description: The manager's service group inside its container; the log pipeline joins it (group_add)
+          to read the alert and archive streams.
+        default: 999
+      wazuh_indexer_heap:
+        type: str
+        description: 'The indexer''s JVM heap (like 8g): half its container limit.'
+        default: 8g
+      wazuh_indexer_mem_limit:
+        type: str
+        description: The indexer container's memory limit.
+        default: 16g
+      wazuh_manager_mem_limit:
+        type: str
+        description: The manager container's memory limit.
+        default: 6g
+      wazuh_dashboard_mem_limit:
+        type: str
+        description: The dashboard container's memory limit.
+        default: 2g
+      wazuh_enrollment_ref:
+        type: str
+        description: Secret reference of the agents' enrolment password.
+        default: secret:wazuh/enrollment-password
+      wazuh_indexer_admin_ref:
+        type: str
+        description: Secret reference of the indexer's administrator password.
+        default: secret:wazuh/indexer-admin-password
+      wazuh_dashboard_login_ref:
+        type: str
+        description: Secret reference of the dashboard's service account password on the indexer.
+        default: secret:wazuh/dashboard-password
+      wazuh_api_login_ref:
+        type: str
+        description: Secret reference of the manager API's service account password.
+        default: secret:wazuh/api-password
+      wazuh_alert_auth_ref:
+        type: str
+        description: Secret reference of the whole Authorization header value the alert integration sends
+          (read only when wazuh_alert_forward_url is set).
+        default: secret:wazuh/alert-forwarder-auth
+      wazuh_indexer_cert_names:
+        type: list
+        description: Extra names and IPv4 addresses the indexer's certificate carries (the guest's address,
+          for a consumer of the hot-index row).
+        default:
+        - '{{ wazuh_bind }}'
+        elements: str
+      wazuh_network_subnet:
+        type: str
+        description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
+        default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
+      wazuh_syslog_allowed_ips:
+        type: list
+        description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
+          CIDRs); empty: no syslog listener.'
+        default: []
+        elements: str
+      wazuh_syslog_port:
+        type: int
+        description: Host port of the manager's syslog input (UDP), when it has one.
+        default: 5514
+      wazuh_native_dir:
+        type: str
+        description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
+          hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
+        default: ''
+      wazuh_detection_ids:
+        type: dict
+        description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
+          is raised as det:wazuh-rule-<number>.'
+        default: {}
+      wazuh_alert_forward_url:
+        type: str
+        description: 'The events forwarder''s ingest URL the alert integration posts to; empty: no integration.'
+        default: ''
+      wazuh_alert_forward_level:
+        type: int
+        description: The lowest rule level the integration posts (1 to 15).
+        default: 12
+      wazuh_alert_source:
+        type: str
+        description: 'The svc: id the posted events carry as their source.'
+        default: svc:{{ wazuh_logical_id }}
+      wazuh_alert_tlp:
+        type: str
+        description: The TLP label the posted events carry (the source's declaration, never the event's).
+        default: red
+      wazuh_index_retention_days:
+        type: int
+        description: Days the hot index keeps an alerts index before it is deleted.
+        default: 30
+      wazuh_logs_keep_days:
+        type: int
+        description: Days the manager keeps its own rotated alert and archive logs.
+        default: 14
+      wazuh_start:
+        type: bool
+        description: Run docker compose up -d after rendering.
+        default: true
+      wazuh_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      wazuh_health_timeout:
+        type: int
+        description: Seconds a health call may take.
+        default: 15
+      wazuh_ready_timeout:
+        type: int
+        description: Seconds main waits for the indexer, the manager's API and the dashboard after a start.
+        default: 600
+  health:
+    short_description: Prove the daemons are live processes, the enrolment refuses a wrong password, the
+      API and the indexer answer, and the rules are the site's.
+    options:
+      wazuh_logical_id:
+        type: str
+        description: The instance's registry id (the service rows the site binds).
+        required: true
+      wazuh_manager_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the manager image; the tag is the product version
+          (X.Y.Z).
+        default: docker.io/wazuh/wazuh-manager:4.14.9@sha256:9d07740f780024600101d759ddab9a4413bdcb3412ccb81dccc143b3cdc702a2
+      wazuh_indexer_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the indexer image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-indexer:4.14.9@sha256:08a8d5a0f0416bdd97ca421b1b72fae97224c8fd99a143500b28b536ff6ac98c
+      wazuh_dashboard_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dashboard image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-dashboard:4.14.9@sha256:8c003c6e08151d962e2ed541a6a1a86ac723f01b5d5678fc53dcbe544e739e7a
+      wazuh_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      wazuh_agent_port:
+        type: int
+        description: Host port of the manager's agent event port (the siem-source row's port).
+        default: 1514
+      wazuh_enrollment_port:
+        type: int
+        description: Host port of the manager's enrolment service.
+        default: 1515
+      wazuh_api_port:
+        type: int
+        description: Host port of the manager's API.
+        default: 55000
+      wazuh_indexer_port:
+        type: int
+        description: Host port of the indexer's API (the hot-index row's port).
+        default: 9200
+      wazuh_dashboard_port:
+        type: int
+        description: Host port of the dashboard (plain http; the edge publishes it).
+        default: 5601
+      wazuh_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/wazuh
+      wazuh_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      wazuh_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      wazuh_data_root:
+        type: path
+        description: 'The module''s data root: manager/, indexer/, certs/, config/ and export/.'
+        default: /var/lib/hnx-modules/wazuh
+      wazuh_indexer_uid:
+        type: int
+        description: User id the indexer runs as (the image's).
+        default: 1000
+      wazuh_indexer_gid:
+        type: int
+        description: Group id the indexer runs as (the image's).
+        default: 1000
+      wazuh_dashboard_uid:
+        type: int
+        description: User id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_dashboard_gid:
+        type: int
+        description: Group id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_manager_gid:
+        type: int
+        description: The manager's service group inside its container; the log pipeline joins it (group_add)
+          to read the alert and archive streams.
+        default: 999
+      wazuh_indexer_heap:
+        type: str
+        description: 'The indexer''s JVM heap (like 8g): half its container limit.'
+        default: 8g
+      wazuh_indexer_mem_limit:
+        type: str
+        description: The indexer container's memory limit.
+        default: 16g
+      wazuh_manager_mem_limit:
+        type: str
+        description: The manager container's memory limit.
+        default: 6g
+      wazuh_dashboard_mem_limit:
+        type: str
+        description: The dashboard container's memory limit.
+        default: 2g
+      wazuh_enrollment_ref:
+        type: str
+        description: Secret reference of the agents' enrolment password.
+        default: secret:wazuh/enrollment-password
+      wazuh_indexer_admin_ref:
+        type: str
+        description: Secret reference of the indexer's administrator password.
+        default: secret:wazuh/indexer-admin-password
+      wazuh_dashboard_login_ref:
+        type: str
+        description: Secret reference of the dashboard's service account password on the indexer.
+        default: secret:wazuh/dashboard-password
+      wazuh_api_login_ref:
+        type: str
+        description: Secret reference of the manager API's service account password.
+        default: secret:wazuh/api-password
+      wazuh_alert_auth_ref:
+        type: str
+        description: Secret reference of the whole Authorization header value the alert integration sends
+          (read only when wazuh_alert_forward_url is set).
+        default: secret:wazuh/alert-forwarder-auth
+      wazuh_indexer_cert_names:
+        type: list
+        description: Extra names and IPv4 addresses the indexer's certificate carries (the guest's address,
+          for a consumer of the hot-index row).
+        default:
+        - '{{ wazuh_bind }}'
+        elements: str
+      wazuh_network_subnet:
+        type: str
+        description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
+        default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
+      wazuh_syslog_allowed_ips:
+        type: list
+        description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
+          CIDRs); empty: no syslog listener.'
+        default: []
+        elements: str
+      wazuh_syslog_port:
+        type: int
+        description: Host port of the manager's syslog input (UDP), when it has one.
+        default: 5514
+      wazuh_native_dir:
+        type: str
+        description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
+          hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
+        default: ''
+      wazuh_detection_ids:
+        type: dict
+        description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
+          is raised as det:wazuh-rule-<number>.'
+        default: {}
+      wazuh_alert_forward_url:
+        type: str
+        description: 'The events forwarder''s ingest URL the alert integration posts to; empty: no integration.'
+        default: ''
+      wazuh_alert_forward_level:
+        type: int
+        description: The lowest rule level the integration posts (1 to 15).
+        default: 12
+      wazuh_alert_source:
+        type: str
+        description: 'The svc: id the posted events carry as their source.'
+        default: svc:{{ wazuh_logical_id }}
+      wazuh_alert_tlp:
+        type: str
+        description: The TLP label the posted events carry (the source's declaration, never the event's).
+        default: red
+      wazuh_index_retention_days:
+        type: int
+        description: Days the hot index keeps an alerts index before it is deleted.
+        default: 30
+      wazuh_logs_keep_days:
+        type: int
+        description: Days the manager keeps its own rotated alert and archive logs.
+        default: 14
+      wazuh_start:
+        type: bool
+        description: Run docker compose up -d after rendering.
+        default: true
+      wazuh_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      wazuh_health_timeout:
+        type: int
+        description: Seconds a health call may take.
+        default: 15
+      wazuh_ready_timeout:
+        type: int
+        description: Seconds main waits for the indexer, the manager's API and the dashboard after a start.
+        default: 600
+  readiness:
+    short_description: Check the container engine, the credentials, the kernel setting and the tools before
+      the module is applied.
+    options:
+      wazuh_logical_id:
+        type: str
+        description: The instance's registry id (the service rows the site binds).
+        required: true
+      wazuh_manager_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the manager image; the tag is the product version
+          (X.Y.Z).
+        default: docker.io/wazuh/wazuh-manager:4.14.9@sha256:9d07740f780024600101d759ddab9a4413bdcb3412ccb81dccc143b3cdc702a2
+      wazuh_indexer_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the indexer image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-indexer:4.14.9@sha256:08a8d5a0f0416bdd97ca421b1b72fae97224c8fd99a143500b28b536ff6ac98c
+      wazuh_dashboard_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dashboard image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-dashboard:4.14.9@sha256:8c003c6e08151d962e2ed541a6a1a86ac723f01b5d5678fc53dcbe544e739e7a
+      wazuh_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      wazuh_agent_port:
+        type: int
+        description: Host port of the manager's agent event port (the siem-source row's port).
+        default: 1514
+      wazuh_enrollment_port:
+        type: int
+        description: Host port of the manager's enrolment service.
+        default: 1515
+      wazuh_api_port:
+        type: int
+        description: Host port of the manager's API.
+        default: 55000
+      wazuh_indexer_port:
+        type: int
+        description: Host port of the indexer's API (the hot-index row's port).
+        default: 9200
+      wazuh_dashboard_port:
+        type: int
+        description: Host port of the dashboard (plain http; the edge publishes it).
+        default: 5601
+      wazuh_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/wazuh
+      wazuh_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      wazuh_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      wazuh_data_root:
+        type: path
+        description: 'The module''s data root: manager/, indexer/, certs/, config/ and export/.'
+        default: /var/lib/hnx-modules/wazuh
+      wazuh_indexer_uid:
+        type: int
+        description: User id the indexer runs as (the image's).
+        default: 1000
+      wazuh_indexer_gid:
+        type: int
+        description: Group id the indexer runs as (the image's).
+        default: 1000
+      wazuh_dashboard_uid:
+        type: int
+        description: User id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_dashboard_gid:
+        type: int
+        description: Group id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_manager_gid:
+        type: int
+        description: The manager's service group inside its container; the log pipeline joins it (group_add)
+          to read the alert and archive streams.
+        default: 999
+      wazuh_indexer_heap:
+        type: str
+        description: 'The indexer''s JVM heap (like 8g): half its container limit.'
+        default: 8g
+      wazuh_indexer_mem_limit:
+        type: str
+        description: The indexer container's memory limit.
+        default: 16g
+      wazuh_manager_mem_limit:
+        type: str
+        description: The manager container's memory limit.
+        default: 6g
+      wazuh_dashboard_mem_limit:
+        type: str
+        description: The dashboard container's memory limit.
+        default: 2g
+      wazuh_enrollment_ref:
+        type: str
+        description: Secret reference of the agents' enrolment password.
+        default: secret:wazuh/enrollment-password
+      wazuh_indexer_admin_ref:
+        type: str
+        description: Secret reference of the indexer's administrator password.
+        default: secret:wazuh/indexer-admin-password
+      wazuh_dashboard_login_ref:
+        type: str
+        description: Secret reference of the dashboard's service account password on the indexer.
+        default: secret:wazuh/dashboard-password
+      wazuh_api_login_ref:
+        type: str
+        description: Secret reference of the manager API's service account password.
+        default: secret:wazuh/api-password
+      wazuh_alert_auth_ref:
+        type: str
+        description: Secret reference of the whole Authorization header value the alert integration sends
+          (read only when wazuh_alert_forward_url is set).
+        default: secret:wazuh/alert-forwarder-auth
+      wazuh_indexer_cert_names:
+        type: list
+        description: Extra names and IPv4 addresses the indexer's certificate carries (the guest's address,
+          for a consumer of the hot-index row).
+        default:
+        - '{{ wazuh_bind }}'
+        elements: str
+      wazuh_network_subnet:
+        type: str
+        description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
+        default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
+      wazuh_syslog_allowed_ips:
+        type: list
+        description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
+          CIDRs); empty: no syslog listener.'
+        default: []
+        elements: str
+      wazuh_syslog_port:
+        type: int
+        description: Host port of the manager's syslog input (UDP), when it has one.
+        default: 5514
+      wazuh_native_dir:
+        type: str
+        description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
+          hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
+        default: ''
+      wazuh_detection_ids:
+        type: dict
+        description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
+          is raised as det:wazuh-rule-<number>.'
+        default: {}
+      wazuh_alert_forward_url:
+        type: str
+        description: 'The events forwarder''s ingest URL the alert integration posts to; empty: no integration.'
+        default: ''
+      wazuh_alert_forward_level:
+        type: int
+        description: The lowest rule level the integration posts (1 to 15).
+        default: 12
+      wazuh_alert_source:
+        type: str
+        description: 'The svc: id the posted events carry as their source.'
+        default: svc:{{ wazuh_logical_id }}
+      wazuh_alert_tlp:
+        type: str
+        description: The TLP label the posted events carry (the source's declaration, never the event's).
+        default: red
+      wazuh_index_retention_days:
+        type: int
+        description: Days the hot index keeps an alerts index before it is deleted.
+        default: 30
+      wazuh_logs_keep_days:
+        type: int
+        description: Days the manager keeps its own rotated alert and archive logs.
+        default: 14
+      wazuh_start:
+        type: bool
+        description: Run docker compose up -d after rendering.
+        default: true
+      wazuh_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      wazuh_health_timeout:
+        type: int
+        description: Seconds a health call may take.
+        default: 15
+      wazuh_ready_timeout:
+        type: int
+        description: Seconds main waits for the indexer, the manager's API and the dashboard after a start.
+        default: 600
+  backup:
+    short_description: Write a consistent export into the data root, then back the data root up.
+    options:
+      wazuh_logical_id:
+        type: str
+        description: The instance's registry id (the service rows the site binds).
+        required: true
+      wazuh_manager_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the manager image; the tag is the product version
+          (X.Y.Z).
+        default: docker.io/wazuh/wazuh-manager:4.14.9@sha256:9d07740f780024600101d759ddab9a4413bdcb3412ccb81dccc143b3cdc702a2
+      wazuh_indexer_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the indexer image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-indexer:4.14.9@sha256:08a8d5a0f0416bdd97ca421b1b72fae97224c8fd99a143500b28b536ff6ac98c
+      wazuh_dashboard_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dashboard image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-dashboard:4.14.9@sha256:8c003c6e08151d962e2ed541a6a1a86ac723f01b5d5678fc53dcbe544e739e7a
+      wazuh_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      wazuh_agent_port:
+        type: int
+        description: Host port of the manager's agent event port (the siem-source row's port).
+        default: 1514
+      wazuh_enrollment_port:
+        type: int
+        description: Host port of the manager's enrolment service.
+        default: 1515
+      wazuh_api_port:
+        type: int
+        description: Host port of the manager's API.
+        default: 55000
+      wazuh_indexer_port:
+        type: int
+        description: Host port of the indexer's API (the hot-index row's port).
+        default: 9200
+      wazuh_dashboard_port:
+        type: int
+        description: Host port of the dashboard (plain http; the edge publishes it).
+        default: 5601
+      wazuh_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/wazuh
+      wazuh_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      wazuh_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      wazuh_data_root:
+        type: path
+        description: 'The module''s data root: manager/, indexer/, certs/, config/ and export/.'
+        default: /var/lib/hnx-modules/wazuh
+      wazuh_indexer_uid:
+        type: int
+        description: User id the indexer runs as (the image's).
+        default: 1000
+      wazuh_indexer_gid:
+        type: int
+        description: Group id the indexer runs as (the image's).
+        default: 1000
+      wazuh_dashboard_uid:
+        type: int
+        description: User id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_dashboard_gid:
+        type: int
+        description: Group id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_manager_gid:
+        type: int
+        description: The manager's service group inside its container; the log pipeline joins it (group_add)
+          to read the alert and archive streams.
+        default: 999
+      wazuh_indexer_heap:
+        type: str
+        description: 'The indexer''s JVM heap (like 8g): half its container limit.'
+        default: 8g
+      wazuh_indexer_mem_limit:
+        type: str
+        description: The indexer container's memory limit.
+        default: 16g
+      wazuh_manager_mem_limit:
+        type: str
+        description: The manager container's memory limit.
+        default: 6g
+      wazuh_dashboard_mem_limit:
+        type: str
+        description: The dashboard container's memory limit.
+        default: 2g
+      wazuh_enrollment_ref:
+        type: str
+        description: Secret reference of the agents' enrolment password.
+        default: secret:wazuh/enrollment-password
+      wazuh_indexer_admin_ref:
+        type: str
+        description: Secret reference of the indexer's administrator password.
+        default: secret:wazuh/indexer-admin-password
+      wazuh_dashboard_login_ref:
+        type: str
+        description: Secret reference of the dashboard's service account password on the indexer.
+        default: secret:wazuh/dashboard-password
+      wazuh_api_login_ref:
+        type: str
+        description: Secret reference of the manager API's service account password.
+        default: secret:wazuh/api-password
+      wazuh_alert_auth_ref:
+        type: str
+        description: Secret reference of the whole Authorization header value the alert integration sends
+          (read only when wazuh_alert_forward_url is set).
+        default: secret:wazuh/alert-forwarder-auth
+      wazuh_indexer_cert_names:
+        type: list
+        description: Extra names and IPv4 addresses the indexer's certificate carries (the guest's address,
+          for a consumer of the hot-index row).
+        default:
+        - '{{ wazuh_bind }}'
+        elements: str
+      wazuh_network_subnet:
+        type: str
+        description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
+        default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
+      wazuh_syslog_allowed_ips:
+        type: list
+        description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
+          CIDRs); empty: no syslog listener.'
+        default: []
+        elements: str
+      wazuh_syslog_port:
+        type: int
+        description: Host port of the manager's syslog input (UDP), when it has one.
+        default: 5514
+      wazuh_native_dir:
+        type: str
+        description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
+          hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
+        default: ''
+      wazuh_detection_ids:
+        type: dict
+        description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
+          is raised as det:wazuh-rule-<number>.'
+        default: {}
+      wazuh_alert_forward_url:
+        type: str
+        description: 'The events forwarder''s ingest URL the alert integration posts to; empty: no integration.'
+        default: ''
+      wazuh_alert_forward_level:
+        type: int
+        description: The lowest rule level the integration posts (1 to 15).
+        default: 12
+      wazuh_alert_source:
+        type: str
+        description: 'The svc: id the posted events carry as their source.'
+        default: svc:{{ wazuh_logical_id }}
+      wazuh_alert_tlp:
+        type: str
+        description: The TLP label the posted events carry (the source's declaration, never the event's).
+        default: red
+      wazuh_index_retention_days:
+        type: int
+        description: Days the hot index keeps an alerts index before it is deleted.
+        default: 30
+      wazuh_logs_keep_days:
+        type: int
+        description: Days the manager keeps its own rotated alert and archive logs.
+        default: 14
+      wazuh_start:
+        type: bool
+        description: Run docker compose up -d after rendering.
+        default: true
+      wazuh_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      wazuh_health_timeout:
+        type: int
+        description: Seconds a health call may take.
+        default: 15
+      wazuh_ready_timeout:
+        type: int
+        description: Seconds main waits for the indexer, the manager's API and the dashboard after a start.
+        default: 600
+  export:
+    short_description: Write the manager's state and the hot index to export/ in a neutral format.
+    options:
+      wazuh_logical_id:
+        type: str
+        description: The instance's registry id (the service rows the site binds).
+        required: true
+      wazuh_manager_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the manager image; the tag is the product version
+          (X.Y.Z).
+        default: docker.io/wazuh/wazuh-manager:4.14.9@sha256:9d07740f780024600101d759ddab9a4413bdcb3412ccb81dccc143b3cdc702a2
+      wazuh_indexer_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the indexer image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-indexer:4.14.9@sha256:08a8d5a0f0416bdd97ca421b1b72fae97224c8fd99a143500b28b536ff6ac98c
+      wazuh_dashboard_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dashboard image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-dashboard:4.14.9@sha256:8c003c6e08151d962e2ed541a6a1a86ac723f01b5d5678fc53dcbe544e739e7a
+      wazuh_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      wazuh_agent_port:
+        type: int
+        description: Host port of the manager's agent event port (the siem-source row's port).
+        default: 1514
+      wazuh_enrollment_port:
+        type: int
+        description: Host port of the manager's enrolment service.
+        default: 1515
+      wazuh_api_port:
+        type: int
+        description: Host port of the manager's API.
+        default: 55000
+      wazuh_indexer_port:
+        type: int
+        description: Host port of the indexer's API (the hot-index row's port).
+        default: 9200
+      wazuh_dashboard_port:
+        type: int
+        description: Host port of the dashboard (plain http; the edge publishes it).
+        default: 5601
+      wazuh_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/wazuh
+      wazuh_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      wazuh_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      wazuh_data_root:
+        type: path
+        description: 'The module''s data root: manager/, indexer/, certs/, config/ and export/.'
+        default: /var/lib/hnx-modules/wazuh
+      wazuh_indexer_uid:
+        type: int
+        description: User id the indexer runs as (the image's).
+        default: 1000
+      wazuh_indexer_gid:
+        type: int
+        description: Group id the indexer runs as (the image's).
+        default: 1000
+      wazuh_dashboard_uid:
+        type: int
+        description: User id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_dashboard_gid:
+        type: int
+        description: Group id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_manager_gid:
+        type: int
+        description: The manager's service group inside its container; the log pipeline joins it (group_add)
+          to read the alert and archive streams.
+        default: 999
+      wazuh_indexer_heap:
+        type: str
+        description: 'The indexer''s JVM heap (like 8g): half its container limit.'
+        default: 8g
+      wazuh_indexer_mem_limit:
+        type: str
+        description: The indexer container's memory limit.
+        default: 16g
+      wazuh_manager_mem_limit:
+        type: str
+        description: The manager container's memory limit.
+        default: 6g
+      wazuh_dashboard_mem_limit:
+        type: str
+        description: The dashboard container's memory limit.
+        default: 2g
+      wazuh_enrollment_ref:
+        type: str
+        description: Secret reference of the agents' enrolment password.
+        default: secret:wazuh/enrollment-password
+      wazuh_indexer_admin_ref:
+        type: str
+        description: Secret reference of the indexer's administrator password.
+        default: secret:wazuh/indexer-admin-password
+      wazuh_dashboard_login_ref:
+        type: str
+        description: Secret reference of the dashboard's service account password on the indexer.
+        default: secret:wazuh/dashboard-password
+      wazuh_api_login_ref:
+        type: str
+        description: Secret reference of the manager API's service account password.
+        default: secret:wazuh/api-password
+      wazuh_alert_auth_ref:
+        type: str
+        description: Secret reference of the whole Authorization header value the alert integration sends
+          (read only when wazuh_alert_forward_url is set).
+        default: secret:wazuh/alert-forwarder-auth
+      wazuh_indexer_cert_names:
+        type: list
+        description: Extra names and IPv4 addresses the indexer's certificate carries (the guest's address,
+          for a consumer of the hot-index row).
+        default:
+        - '{{ wazuh_bind }}'
+        elements: str
+      wazuh_network_subnet:
+        type: str
+        description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
+        default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
+      wazuh_syslog_allowed_ips:
+        type: list
+        description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
+          CIDRs); empty: no syslog listener.'
+        default: []
+        elements: str
+      wazuh_syslog_port:
+        type: int
+        description: Host port of the manager's syslog input (UDP), when it has one.
+        default: 5514
+      wazuh_native_dir:
+        type: str
+        description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
+          hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
+        default: ''
+      wazuh_detection_ids:
+        type: dict
+        description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
+          is raised as det:wazuh-rule-<number>.'
+        default: {}
+      wazuh_alert_forward_url:
+        type: str
+        description: 'The events forwarder''s ingest URL the alert integration posts to; empty: no integration.'
+        default: ''
+      wazuh_alert_forward_level:
+        type: int
+        description: The lowest rule level the integration posts (1 to 15).
+        default: 12
+      wazuh_alert_source:
+        type: str
+        description: 'The svc: id the posted events carry as their source.'
+        default: svc:{{ wazuh_logical_id }}
+      wazuh_alert_tlp:
+        type: str
+        description: The TLP label the posted events carry (the source's declaration, never the event's).
+        default: red
+      wazuh_index_retention_days:
+        type: int
+        description: Days the hot index keeps an alerts index before it is deleted.
+        default: 30
+      wazuh_logs_keep_days:
+        type: int
+        description: Days the manager keeps its own rotated alert and archive logs.
+        default: 14
+      wazuh_start:
+        type: bool
+        description: Run docker compose up -d after rendering.
+        default: true
+      wazuh_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      wazuh_health_timeout:
+        type: int
+        description: Seconds a health call may take.
+        default: 15
+      wazuh_ready_timeout:
+        type: int
+        description: Seconds main waits for the indexer, the manager's API and the dashboard after a start.
+        default: 600
+  restore:
+    short_description: Restore the manager's state and the hot index from an export.
+    options:
+      wazuh_logical_id:
+        type: str
+        description: The instance's registry id (the service rows the site binds).
+        required: true
+      wazuh_manager_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the manager image; the tag is the product version
+          (X.Y.Z).
+        default: docker.io/wazuh/wazuh-manager:4.14.9@sha256:9d07740f780024600101d759ddab9a4413bdcb3412ccb81dccc143b3cdc702a2
+      wazuh_indexer_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the indexer image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-indexer:4.14.9@sha256:08a8d5a0f0416bdd97ca421b1b72fae97224c8fd99a143500b28b536ff6ac98c
+      wazuh_dashboard_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dashboard image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-dashboard:4.14.9@sha256:8c003c6e08151d962e2ed541a6a1a86ac723f01b5d5678fc53dcbe544e739e7a
+      wazuh_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      wazuh_agent_port:
+        type: int
+        description: Host port of the manager's agent event port (the siem-source row's port).
+        default: 1514
+      wazuh_enrollment_port:
+        type: int
+        description: Host port of the manager's enrolment service.
+        default: 1515
+      wazuh_api_port:
+        type: int
+        description: Host port of the manager's API.
+        default: 55000
+      wazuh_indexer_port:
+        type: int
+        description: Host port of the indexer's API (the hot-index row's port).
+        default: 9200
+      wazuh_dashboard_port:
+        type: int
+        description: Host port of the dashboard (plain http; the edge publishes it).
+        default: 5601
+      wazuh_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/wazuh
+      wazuh_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      wazuh_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      wazuh_data_root:
+        type: path
+        description: 'The module''s data root: manager/, indexer/, certs/, config/ and export/.'
+        default: /var/lib/hnx-modules/wazuh
+      wazuh_indexer_uid:
+        type: int
+        description: User id the indexer runs as (the image's).
+        default: 1000
+      wazuh_indexer_gid:
+        type: int
+        description: Group id the indexer runs as (the image's).
+        default: 1000
+      wazuh_dashboard_uid:
+        type: int
+        description: User id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_dashboard_gid:
+        type: int
+        description: Group id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_manager_gid:
+        type: int
+        description: The manager's service group inside its container; the log pipeline joins it (group_add)
+          to read the alert and archive streams.
+        default: 999
+      wazuh_indexer_heap:
+        type: str
+        description: 'The indexer''s JVM heap (like 8g): half its container limit.'
+        default: 8g
+      wazuh_indexer_mem_limit:
+        type: str
+        description: The indexer container's memory limit.
+        default: 16g
+      wazuh_manager_mem_limit:
+        type: str
+        description: The manager container's memory limit.
+        default: 6g
+      wazuh_dashboard_mem_limit:
+        type: str
+        description: The dashboard container's memory limit.
+        default: 2g
+      wazuh_enrollment_ref:
+        type: str
+        description: Secret reference of the agents' enrolment password.
+        default: secret:wazuh/enrollment-password
+      wazuh_indexer_admin_ref:
+        type: str
+        description: Secret reference of the indexer's administrator password.
+        default: secret:wazuh/indexer-admin-password
+      wazuh_dashboard_login_ref:
+        type: str
+        description: Secret reference of the dashboard's service account password on the indexer.
+        default: secret:wazuh/dashboard-password
+      wazuh_api_login_ref:
+        type: str
+        description: Secret reference of the manager API's service account password.
+        default: secret:wazuh/api-password
+      wazuh_alert_auth_ref:
+        type: str
+        description: Secret reference of the whole Authorization header value the alert integration sends
+          (read only when wazuh_alert_forward_url is set).
+        default: secret:wazuh/alert-forwarder-auth
+      wazuh_indexer_cert_names:
+        type: list
+        description: Extra names and IPv4 addresses the indexer's certificate carries (the guest's address,
+          for a consumer of the hot-index row).
+        default:
+        - '{{ wazuh_bind }}'
+        elements: str
+      wazuh_network_subnet:
+        type: str
+        description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
+        default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
+      wazuh_syslog_allowed_ips:
+        type: list
+        description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
+          CIDRs); empty: no syslog listener.'
+        default: []
+        elements: str
+      wazuh_syslog_port:
+        type: int
+        description: Host port of the manager's syslog input (UDP), when it has one.
+        default: 5514
+      wazuh_native_dir:
+        type: str
+        description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
+          hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
+        default: ''
+      wazuh_detection_ids:
+        type: dict
+        description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
+          is raised as det:wazuh-rule-<number>.'
+        default: {}
+      wazuh_alert_forward_url:
+        type: str
+        description: 'The events forwarder''s ingest URL the alert integration posts to; empty: no integration.'
+        default: ''
+      wazuh_alert_forward_level:
+        type: int
+        description: The lowest rule level the integration posts (1 to 15).
+        default: 12
+      wazuh_alert_source:
+        type: str
+        description: 'The svc: id the posted events carry as their source.'
+        default: svc:{{ wazuh_logical_id }}
+      wazuh_alert_tlp:
+        type: str
+        description: The TLP label the posted events carry (the source's declaration, never the event's).
+        default: red
+      wazuh_index_retention_days:
+        type: int
+        description: Days the hot index keeps an alerts index before it is deleted.
+        default: 30
+      wazuh_logs_keep_days:
+        type: int
+        description: Days the manager keeps its own rotated alert and archive logs.
+        default: 14
+      wazuh_start:
+        type: bool
+        description: Run docker compose up -d after rendering.
+        default: true
+      wazuh_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      wazuh_health_timeout:
+        type: int
+        description: Seconds a health call may take.
+        default: 15
+      wazuh_ready_timeout:
+        type: int
+        description: Seconds main waits for the indexer, the manager's API and the dashboard after a start.
+        default: 600
+      wazuh_restore_source:
+        type: path
+        description: The export directory to restore from (the one with listing.jsonl).
+        required: true
+  upgrade:
+    short_description: Validate and record a pinned image bump of one of the three images.
+    options:
+      wazuh_logical_id:
+        type: str
+        description: The instance's registry id (the service rows the site binds).
+        required: true
+      wazuh_manager_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the manager image; the tag is the product version
+          (X.Y.Z).
+        default: docker.io/wazuh/wazuh-manager:4.14.9@sha256:9d07740f780024600101d759ddab9a4413bdcb3412ccb81dccc143b3cdc702a2
+      wazuh_indexer_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the indexer image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-indexer:4.14.9@sha256:08a8d5a0f0416bdd97ca421b1b72fae97224c8fd99a143500b28b536ff6ac98c
+      wazuh_dashboard_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dashboard image (the same release as the manager).
+        default: docker.io/wazuh/wazuh-dashboard:4.14.9@sha256:8c003c6e08151d962e2ed541a6a1a86ac723f01b5d5678fc53dcbe544e739e7a
+      wazuh_bind:
+        type: str
+        description: The guest's own IPv4 address every port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      wazuh_agent_port:
+        type: int
+        description: Host port of the manager's agent event port (the siem-source row's port).
+        default: 1514
+      wazuh_enrollment_port:
+        type: int
+        description: Host port of the manager's enrolment service.
+        default: 1515
+      wazuh_api_port:
+        type: int
+        description: Host port of the manager's API.
+        default: 55000
+      wazuh_indexer_port:
+        type: int
+        description: Host port of the indexer's API (the hot-index row's port).
+        default: 9200
+      wazuh_dashboard_port:
+        type: int
+        description: Host port of the dashboard (plain http; the edge publishes it).
+        default: 5601
+      wazuh_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/wazuh
+      wazuh_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      wazuh_group:
+        type: str
+        description: Group of the compose project, the data root and export/.
+        default: root
+      wazuh_data_root:
+        type: path
+        description: 'The module''s data root: manager/, indexer/, certs/, config/ and export/.'
+        default: /var/lib/hnx-modules/wazuh
+      wazuh_indexer_uid:
+        type: int
+        description: User id the indexer runs as (the image's).
+        default: 1000
+      wazuh_indexer_gid:
+        type: int
+        description: Group id the indexer runs as (the image's).
+        default: 1000
+      wazuh_dashboard_uid:
+        type: int
+        description: User id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_dashboard_gid:
+        type: int
+        description: Group id the dashboard runs as (the image's).
+        default: 1000
+      wazuh_manager_gid:
+        type: int
+        description: The manager's service group inside its container; the log pipeline joins it (group_add)
+          to read the alert and archive streams.
+        default: 999
+      wazuh_indexer_heap:
+        type: str
+        description: 'The indexer''s JVM heap (like 8g): half its container limit.'
+        default: 8g
+      wazuh_indexer_mem_limit:
+        type: str
+        description: The indexer container's memory limit.
+        default: 16g
+      wazuh_manager_mem_limit:
+        type: str
+        description: The manager container's memory limit.
+        default: 6g
+      wazuh_dashboard_mem_limit:
+        type: str
+        description: The dashboard container's memory limit.
+        default: 2g
+      wazuh_enrollment_ref:
+        type: str
+        description: Secret reference of the agents' enrolment password.
+        default: secret:wazuh/enrollment-password
+      wazuh_indexer_admin_ref:
+        type: str
+        description: Secret reference of the indexer's administrator password.
+        default: secret:wazuh/indexer-admin-password
+      wazuh_dashboard_login_ref:
+        type: str
+        description: Secret reference of the dashboard's service account password on the indexer.
+        default: secret:wazuh/dashboard-password
+      wazuh_api_login_ref:
+        type: str
+        description: Secret reference of the manager API's service account password.
+        default: secret:wazuh/api-password
+      wazuh_alert_auth_ref:
+        type: str
+        description: Secret reference of the whole Authorization header value the alert integration sends
+          (read only when wazuh_alert_forward_url is set).
+        default: secret:wazuh/alert-forwarder-auth
+      wazuh_indexer_cert_names:
+        type: list
+        description: Extra names and IPv4 addresses the indexer's certificate carries (the guest's address,
+          for a consumer of the hot-index row).
+        default:
+        - '{{ wazuh_bind }}'
+        elements: str
+      wazuh_network_subnet:
+        type: str
+        description: 'Pin the project''s network to this IPv4 CIDR (empty: docker picks one).'
+        default: ''
+      wazuh_json_decoder_excluded:
+        type: bool
+        description: 'Do not load the product''s generic JSON decoder file (0006-json_decoders.xml), so the site''s own decoders for JSON lines get first refusal; the site ships replacements for json and json-msgraph in its native decoders.'
+        default: false
+      wazuh_syslog_allowed_ips:
+        type: list
+        description: 'Sources the manager''s syslog input accepts, as it sees them (IPv4 addresses or
+          CIDRs); empty: no syslog listener.'
+        default: []
+        elements: str
+      wazuh_syslog_port:
+        type: int
+        description: Host port of the manager's syslog input (UDP), when it has one.
+        default: 5514
+      wazuh_native_dir:
+        type: str
+        description: 'A directory on the controller holding rules/*.xml and decoders/*.xml, loaded as
+          hnx-<name>.xml after the manager''s configuration test passes; empty: none.'
+        default: ''
+      wazuh_detection_ids:
+        type: dict
+        description: 'Rule number to detection id ({"<rule number>": "det:<slug>"}); an alert from a rule not listed
+          is raised as det:wazuh-rule-<number>.'
+        default: {}
+      wazuh_alert_forward_url:
+        type: str
+        description: 'The events forwarder''s ingest URL the alert integration posts to; empty: no integration.'
+        default: ''
+      wazuh_alert_forward_level:
+        type: int
+        description: The lowest rule level the integration posts (1 to 15).
+        default: 12
+      wazuh_alert_source:
+        type: str
+        description: 'The svc: id the posted events carry as their source.'
+        default: svc:{{ wazuh_logical_id }}
+      wazuh_alert_tlp:
+        type: str
+        description: The TLP label the posted events carry (the source's declaration, never the event's).
+        default: red
+      wazuh_index_retention_days:
+        type: int
+        description: Days the hot index keeps an alerts index before it is deleted.
+        default: 30
+      wazuh_logs_keep_days:
+        type: int
+        description: Days the manager keeps its own rotated alert and archive logs.
+        default: 14
+      wazuh_start:
+        type: bool
+        description: Run docker compose up -d after rendering.
+        default: true
+      wazuh_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      wazuh_health_timeout:
+        type: int
+        description: Seconds a health call may take.
+        default: 15
+      wazuh_ready_timeout:
+        type: int
+        description: Seconds main waits for the indexer, the manager's API and the dashboard after a start.
+        default: 600
+      wazuh_target_manager_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the manager image to move to (one target per run).
+        required: false
+      wazuh_target_indexer_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the indexer image to move to.
+        required: false
+      wazuh_target_dashboard_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dashboard image to move to.
+        required: false

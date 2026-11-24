@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: Apache-2.0
+# The host side: the cycle script and the check script, their config and the allow-list the script
+# reads, and the timer that runs the cycle. The script's config holds no secret: the hunt
+# principal's API configuration stays on the data volume and is read only inside the container.
+- name: Create the directories the host files go in
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ velociraptor_server_script | dirname }}", mode: "0755"}
+    - {path: "{{ velociraptor_server_config_dir }}", mode: "0755"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the cycle script and the check script
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "0755"
+  loop:
+    - {src: hnx_velociraptor.py, dest: "{{ velociraptor_server_script }}"}
+    - {src: hnx_velociraptor_check.py, dest: "{{ velociraptor_server_check_script }}"}
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Install the allow-list the script reads
+  ansible.builtin.copy:
+    src: baseline-artifacts.yml
+    dest: "{{ velociraptor_server_catalog_file }}"
+    mode: "0644"
+
+- name: Write the script's configuration
+  ansible.builtin.template:
+    src: velociraptor.json.j2
+    dest: "{{ velociraptor_server_config_file }}"
+    mode: "0644"
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ velociraptor_server_last_run_dir }}"
+    last_run_group: "{{ velociraptor_server_last_run_group }}"
+    last_run_writer: "{{ velociraptor_server_last_run_writer }}"
+
+- name: Write the service and timer units
+  ansible.builtin.template:
+    src: "cycle.{{ item }}.j2"
+    dest: "{{ velociraptor_server_unit_dir }}/hnx-velociraptor-server-cycle.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: velociraptor_server_units
+
+- name: Ask whether the cycle's timer is enabled
+  ansible.builtin.command:
+    argv: ["{{ velociraptor_server_systemctl_cli }}", is-enabled, hnx-velociraptor-server-cycle.timer]
+  register: velociraptor_server_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Ask whether the cycle's timer is started
+  ansible.builtin.command:
+    argv: ["{{ velociraptor_server_systemctl_cli }}", is-active, hnx-velociraptor-server-cycle.timer]
+  register: velociraptor_server_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd (units changed) and enable and start the timer (changed, or not both)
+  ansible.builtin.command:
+    argv: "{{ [velociraptor_server_systemctl_cli] + item }}"
+  vars:
+    velociraptor_server_owed: >-
+      {{ velociraptor_server_units is changed
+         or velociraptor_server_enabled.stdout | default('') | trim != 'enabled'
+         or velociraptor_server_active.stdout | default('') | trim != 'active' }}
+  loop: >-
+    {{ ([['daemon-reload']] if velociraptor_server_units is changed else [])
+       + ([['enable', '--now', 'hnx-velociraptor-server-cycle.timer']] if velociraptor_server_owed | bool else []) }}
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true

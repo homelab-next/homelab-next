@@ -52,7 +52,8 @@
   when: >-
     prometheus_start | bool and not ansible_check_mode and
     (prometheus_config_written is changed or prometheus_targets_written is changed
-     or prometheus_auths_written is changed or prometheus_auths_removed is changed)
+     or prometheus_auths_written is changed or prometheus_auths_removed is changed
+     or prometheus_probes_written is changed or prometheus_probes_removed is changed)
 
 - name: Reload the metrics service when its configuration or a credential changed
   ansible.builtin.command:
@@ -61,7 +62,8 @@
   when: >-
     prometheus_start | bool and not ansible_check_mode and
     (prometheus_config_written is changed or prometheus_targets_written is changed
-     or prometheus_auths_written is changed or prometheus_auths_removed is changed)
+     or prometheus_auths_written is changed or prometheus_auths_removed is changed
+     or prometheus_probes_written is changed or prometheus_probes_removed is changed)
 
 - name: Install the alert forwarder and its timer
   ansible.builtin.include_tasks: alerts.yml
