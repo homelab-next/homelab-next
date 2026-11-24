@@ -682,7 +682,8 @@ def map_event(
         "time": ev["_time"],
         "route": route,
         "source_kind": kind,
-        "location": _s(loc, 512),
+        # the census's source key: the manager's location, else the route (a sensor event has none)
+        "location": _s(loc or route, 512),
         "decoder_name": _s(_get(event, "decoder", "name"), 128),
         "agent_id": _s(_get(event, "agent", "id"), 64),
         "agent_name": _s(_get(event, "agent", "name"), 256),
