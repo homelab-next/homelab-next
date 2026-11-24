@@ -403,3 +403,48 @@ def test_a_host_without_a_golden_image_gets_no_registrations():
     forge, host = FakeForge(), FakeHost(_status(["waiting"], golden=None))
     feeder.Feeder(forge, host, _args()).round()
     assert host.puts == [] and forge.minted == []
+
+
+class _OtherForge(FakeForge):
+    def __init__(self, queued):
+        super().__init__()
+        self.queued = queued
+
+    def queued_jobs(self, labels):
+        return self.queued
+
+
+def test_another_repository_is_fed_only_against_its_queued_jobs():
+    other = _OtherForge(3)
+    labels = ["self-hosted", "linux", "x64", "ov"]
+    forge, host = FakeForge(), FakeHost(_status(["waiting"] * 6))
+    extras = [(other, labels, "ov")]
+    feeder.Feeder(forge, host, _args(extras=extras)).round()
+    mine = [n for n, _ in host.puts if n.startswith("hnx-ci-t-")]
+    theirs = [n for n, _ in host.puts if n.startswith("hnx-ci-ov-")]
+    assert len(theirs) == 3 and other.minted and other.minted[0][1] == tuple(labels)
+    assert len(mine) == 3 and forge.minted  # the room left: 6 idle + 1 buffer, 3 taken by the other
+    # its registrations in the spool or booting already cover its queue
+    st = _status(["waiting"] * 6, spooled=["hnx-ci-ov-x", "hnx-ci-ov-y", "hnx-ci-ov-z"])
+    other2, host2 = _OtherForge(3), FakeHost(st)
+    feeder.Feeder(FakeForge(), host2, _args(extras=[(other2, labels, "ov")])).round()
+    assert not [n for n, _ in host2.puts if n.startswith("hnx-ci-ov-")]
+    assert feeder.supply(st, "ov") == 3 and feeder.supply(st, "other") == 0
+
+
+def test_a_failing_demand_query_does_not_stop_the_main_feed(capsys):
+    class Broken(_OtherForge):
+        def queued_jobs(self, labels):
+            raise RuntimeError("api down")
+
+    forge, host = FakeForge(), FakeHost(_status(["waiting"]))
+    feeder.Feeder(forge, host, _args(extras=[(Broken(1), ["x"], "ov")])).round()
+    assert len(host.puts) == 1 and "ov demand failed" in capsys.readouterr().out
+
+
+def test_also_parses_and_refuses_a_malformed_spec():
+    a = feeder.parse(["--repo", "o/r", "--host", "h", "--ssh-key", "k",
+                      "--also", "o/ov=self-hosted,hnx-ci-overlay=ov"])  # fmt: skip
+    assert a.extras == [("o/ov", ["self-hosted", "hnx-ci-overlay"], "ov")]
+    with pytest.raises(SystemExit):
+        feeder.parse(["--repo", "o/r", "--host", "h", "--ssh-key", "k", "--also", "bad"])

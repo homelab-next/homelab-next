@@ -86,6 +86,20 @@ class Forge:
                 return out
             page += 1
 
+    def queued_jobs(self, labels: list[str]) -> int:
+        """Jobs of this repository waiting for a runner that carries all of ``labels``."""
+        want, n = set(labels), 0
+        for state in ("queued", "in_progress"):
+            doc = self.call("GET", f"/actions/runs?status={state}&per_page=100") or {}
+            for run in doc.get("workflow_runs", []):
+                jobs = self.call("GET", f"/actions/runs/{int(run['id'])}/jobs?per_page=100") or {}
+                n += sum(
+                    1
+                    for j in jobs.get("jobs", [])
+                    if j.get("status") == "queued" and want <= set(j.get("labels", []))
+                )
+        return n
+
     def delete_runner(self, rid: int) -> None:
         self.call("DELETE", f"/actions/runners/{int(rid)}")
 
@@ -164,6 +178,17 @@ def orphans(runners: list[dict], keep: set[str], prefix: str = PREFIX) -> list[d
     ]
 
 
+def supply(status: dict, tag: str) -> int:
+    """Registrations of one ``--also`` repository already spooled or held by a slot that has not
+    yet started a job (a booting VM): they will take its queued jobs."""
+    mark = f"{PREFIX}{tag}-"
+    n = sum(1 for x in status.get("spooled", []) if str(x).startswith(mark))
+    for s in status.get("slots", {}).values():
+        if s.get("state") == "booting" and str(s.get("runner", "")).startswith(mark):
+            n += 1
+    return n
+
+
 def new_name(tag: str) -> str:
     return f"{PREFIX}{tag}-{time.strftime('%m%d%H%M%S', time.gmtime())}-{secrets.token_hex(3)}"
 
@@ -171,6 +196,7 @@ def new_name(tag: str) -> str:
 class Feeder:
     def __init__(self, forge: Forge, host: Host, args, clock=time.monotonic):
         self.forge, self.host, self.args, self.clock = forge, host, args, clock
+        self.extras = list(getattr(args, "extras", []) or [])  # [(Forge, labels, tag)]
         self.last_live = clock()
         self.rounds = 0
         self.routed: str | None = None
@@ -198,14 +224,34 @@ class Feeder:
         elif self.clock() - self.last_live > self.args.down_after:
             self.route(self.args.off_value)
         if st.get("golden"):
-            for _ in range(wanted(st, self.args.buffer)):
+            room = wanted(st, self.args.buffer)
+            # another repository's registrations only against its queued jobs, first: its jobs
+            # wait for them, where the main repository's buffer is only a head start
+            for forge, labels, tag in self.extras:
+                try:
+                    need = forge.queued_jobs(labels) - supply(st, tag)
+                except Exception as e:  # its API failing must not stop the main repository's feed
+                    print(
+                        f"feeder: {tag} demand failed: {type(e).__name__}: {str(e)[:200]}",
+                        flush=True,
+                    )
+                    continue
+                for _ in range(
+                    max(0, min(need, st.get("slots_total", 0) - len(st.get("spooled", []))))
+                ):
+                    name = new_name(tag)
+                    self.host.put(name, forge.mint(name, labels))
+                    st.setdefault("spooled", []).append(name)
+                    room = max(0, room - 1)
+            for _ in range(room):
                 name = new_name(self.args.tag)
                 self.host.put(name, self.forge.mint(name, self.args.labels))
                 st.setdefault("spooled", []).append(name)
         if self.rounds % self.args.reap_every == 1 or self.args.reap_every == 1:
-            for r in orphans(self.forge.runners(), held(st)):
-                self.forge.delete_runner(r["id"])
-                print(f"feeder: removed orphan registration {r['name']}", flush=True)
+            for forge in [self.forge, *(e[0] for e in self.extras)]:
+                for r in orphans(forge.runners(), held(st)):
+                    forge.delete_runner(r["id"])
+                    print(f"feeder: removed orphan registration {r['name']}", flush=True)
 
 
 def token_from(args) -> str:
@@ -245,10 +291,24 @@ def parse(argv: list[str]):
     p.add_argument("--interval", type=float, default=15.0)
     p.add_argument("--reap-every", type=int, default=20)
     p.add_argument("--down-after", type=float, default=180.0)
+    p.add_argument(
+        "--also",
+        action="append",
+        default=[],
+        metavar="OWNER/NAME=LABELS=TAG",
+        help="a further repository the same slots serve (repeatable): registrations for it are "
+        "minted only against its queued jobs that carry LABELS (comma separated), named with TAG",
+    )
     p.add_argument("--token-command", nargs="+", default=["gh", "auth", "token"])
     p.add_argument("--once", action="store_true")
     a = p.parse_args(argv)
     a.labels = [x for x in a.labels.split(",") if x]
+    a.extras = []
+    for spec in a.also:
+        parts = spec.split("=")
+        if len(parts) != 3 or "/" not in parts[0] or not parts[2].isalnum():
+            p.error(f"bad --also {spec!r}: OWNER/NAME=LABEL,LABEL=TAG")
+        a.extras.append((parts[0], [x for x in parts[1].split(",") if x], parts[2]))
     if not a.labels or a.buffer < 0 or a.reap_every < 1 or not a.tag.isalnum():
         p.error("bad --labels, --buffer, --reap-every or --tag")
     return a
@@ -256,9 +316,9 @@ def parse(argv: list[str]):
 
 def main(argv: list[str]) -> int:
     args = parse(argv)
-    feeder = Feeder(
-        Forge(args.repo, token_from(args)), Host(args.host, args.ssh_key, args.known_hosts), args
-    )
+    token = token_from(args)
+    args.extras = [(Forge(repo, token), labels, tag) for repo, labels, tag in args.extras]
+    feeder = Feeder(Forge(args.repo, token), Host(args.host, args.ssh_key, args.known_hosts), args)
     while True:
         try:
             feeder.round()

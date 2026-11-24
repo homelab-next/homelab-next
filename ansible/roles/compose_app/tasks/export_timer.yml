@@ -59,18 +59,31 @@
 - name: Install the dump timer
   when: compose_app_export_jobs | length > 0
   block:
-    - name: Create the script directory and the export directory
+    - name: Create the script directory
       ansible.builtin.file:
-        path: "{{ item.path }}"
+        path: "{{ compose_app_export_script | dirname }}"
         state: directory
         owner: "{{ compose_app_owner }}"
         group: "{{ compose_app_group }}"
-        mode: "{{ item.mode }}"
-      loop:
-        - {path: "{{ compose_app_export_script | dirname }}", mode: "0755"}
-        - {path: "{{ compose_app_export_dir }}/db", mode: "0700"}
-      loop_control:
-        label: "{{ item.path }}"
+        mode: "0755"
+
+    # A module that bind-mounts export/db into its database container for its own export hook owns
+    # it as the database's user (keycloak, lakekeeper, openproject, intelowl, dfir-iris): the dump
+    # only creates the directory when it is missing and never changes an existing one's owner or
+    # mode, or each deploy would hand it back and forth (the dump runs as root and writes beneath it).
+    - name: Look for the export directory
+      ansible.builtin.stat:
+        path: "{{ compose_app_export_dir }}/db"
+      register: compose_app_export_db_dir
+
+    - name: Create the export directory when it is missing
+      ansible.builtin.file:
+        path: "{{ compose_app_export_dir }}/db"
+        state: directory
+        owner: "{{ compose_app_owner }}"
+        group: "{{ compose_app_group }}"
+        mode: "0700"
+      when: not compose_app_export_db_dir.stat.exists
 
     - name: Install the dump script
       ansible.builtin.copy:
