@@ -1062,8 +1062,16 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
 
         probe = socket.create_connection((LOOP, port), timeout=5)
         try:
-            raw = mon("/connz?auth=true")
-            assert [c for c in raw["connections"] if not c.get("authorized_user")], raw
+            # connect() returning only means the kernel completed the handshake: the server
+            # registers the connection when its accept loop gets to it. Poll /connz until the
+            # unauthenticated probe is listed (bounded), instead of reading it once
+            deadline = time.monotonic() + 10
+            while True:
+                raw = mon("/connz?auth=true")
+                if [c for c in raw["connections"] if not c.get("authorized_user")]:
+                    break
+                assert time.monotonic() < deadline, raw
+                time.sleep(0.05)
             assert hnx_bus.hnx_bus_account_problems(
                 mon("/accountz"), details, users, "hnx-events-admin", "HNX", "hnx-watch", raw,
                 API) == []  # fmt: skip
