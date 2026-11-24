@@ -55,7 +55,10 @@ def _count(rules: list[Rule], run: RunReport, refused: dict[str, str]) -> dict[s
     gaps: list[dict[str, str]] = []
     for rule in sorted(rules, key=lambda r: r.det_id):
         rr = by_det.get(rule.det_id)
-        if not rule.deployable:
+        if rule.awaiting_source:
+            # ported and tested, but nothing collects its telemetry yet: not deployed, not coverage
+            reason = "awaiting-source: its telemetry is not collected yet, so not coverage"
+        elif not rule.deployable:
             # an inert rule is tested, never counted: it cannot fire as shipped
             reason = f"status {rule.status}: not deployed, so not coverage"
         elif rule.det_id in refused:

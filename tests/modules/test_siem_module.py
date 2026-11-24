@@ -365,3 +365,35 @@ def test_the_indexer_heap_is_half_its_container_limit_by_default():
     d = defaults()
     gib = lambda v: int(v[:-1])  # noqa: E731
     assert gib(d[P + "indexer_heap"]) * 2 == gib(d[P + "indexer_mem_limit"])
+
+
+def test_the_sigma_lane_is_proved_and_compiled_on_the_controller_and_loads_after_the_native_files():
+    """docs/detections.md, "The Sigma lane on the engine": each root is linted, its fixtures run
+    (reference and compiled), its det map checked, then compiled; a bundle that cannot be built fails
+    the deploy, and it loads as zz-sigma-<n>.xml, after every native file (a rule's parent first),
+    through the same configuration test and rollback as the native files."""
+    d = defaults()
+    assert d[P + "sigma_roots"] == [] and d[P + "hnx_cli"] == ["hnx"]
+    tasks = yaml.safe_load(role_text("tasks", "rules.yml"))
+    block = next(t for t in tasks if "block" in t and "Sigma" in t["name"])
+    assert block["when"] == f"{P}sigma_roots | length > 0"
+    assert block["delegate_to"] == "localhost" and block["check_mode"] is False
+    prove, comp = block["block"][1], block["block"][2]
+    assert (
+        "product(['lint', 'run', 'map'])" in prove["loop"]
+        and "'--check'" in prove["ansible.builtin.command"]["argv"]
+    )
+    assert (
+        "'compile'" in comp["ansible.builtin.command"]["argv"]
+        and "'--out'" in comp["ansible.builtin.command"]["argv"]
+    )
+    assert "failed_when" not in comp and "ignore_errors" not in comp
+    text = role_text("tasks", "rules.yml")
+    assert "rules/zz-sigma-" in text
+    names = [t["name"] for t in tasks]
+    assert names.index("Stage the compiled Sigma bundles") < names.index(
+        "Test, load and restart (the previous set comes back when either fails)"
+    )
+    v = role_text("tasks", "validate.yml")
+    assert f"{P}sigma_roots | reject('match', {P}path_pattern)" in v
+    assert f"{P}hnx_cli is sequence" in v

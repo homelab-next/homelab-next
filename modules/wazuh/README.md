@@ -144,6 +144,24 @@ regular-expression characters needs `type="pcre2"` (an element without it loads 
 matches); a custom field name must be prefixed; the log collector drops lines over 64 KiB; the
 configuration must not reset `logall_json`.
 
+## The Sigma lane
+
+The site's Sigma rules (ADR-0006; `docs/detections.md`, "The Sigma lane on the engine") reach the
+manager through `wazuh_sigma_roots`: detection roots on the controller, each with `sigma/`, its
+fixtures, `engine_fixtures/`, `det_map.yml` and `mappings/wazuh.yml`, whose `logsources:` bindings
+name, per Sigma logsource, the engine base its rules chain from and the decoder's field names. On
+every run the role, on the controller and with the controller's `hnx` (`wazuh_hnx_cli`), lints each
+root, runs its fixtures (the reference evaluator and the compiled form), checks its det map, and
+compiles its bundle; any failure, including a rule the bindings cannot carry, stops the deploy before
+the manager sees anything. The bundle is installed as `hnx-zz-sigma-<n>.xml`, which sorts after
+every native file, so a rule's parent (a native base such as the sensors' HTTP classifier) is
+always loaded first, and it goes through the same configuration test, liveness check and rollback.
+A rule marked `hnx_source: awaiting-source` is compiled (a port the engine cannot take shows now)
+but not shipped. The site's `wazuh_detection_ids` carries the det map's numbers too, so an alert
+from a Sigma rule reaches the alert webhook under its `det:` id. After the load,
+`python -m homelabnext.detections run --engine` sends each deployed rule's engine fixtures (raw
+lines) through `PUT /logtest` and fails on a miss, a false positive, or a deployed rule with none.
+
 `wazuh_json_decoder_excluded` (default false) makes the manager skip the product's generic JSON decoder file
 (`0006-json_decoders.xml`). A site whose JSON logs (the Zeek sensors') have their own decoders needs it: otherwise the generic
 decoder claims every line that starts with `{`, answers rule 1002, and no rule keyed on the site's decoder fires. The file also
