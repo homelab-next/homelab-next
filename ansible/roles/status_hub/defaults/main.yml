@@ -80,6 +80,15 @@ status_hub_extra_ca_refs: []
 # bearer tokens a product only issues for a login: [{name, service, path, username, password_ref}]
 status_hub_logins: []
 status_hub_logins_oncalendar: "*-*-* 00/4:15:00 UTC"
+# Pulled status files (ADR-0049 decision 7, "The results transport"): the hub dials each producer
+# host as a restricted account whose forced command prints one file (the producer's role installs it,
+# e.g. lab-checks' results reader) and files the answer at <status_hub_root_dir>/<dest>, the path a
+# poll-file source reads. Each entry: {name, host (a registry host), user, host_key ("<type> <base64>",
+# the producer's SSH host key, pinned), dest (a relative .json path)}. A root-run timer; the private
+# key is one secret: reference (status_hub_pull_key_ref), a file for the helper, never environment.
+status_hub_pulls: []
+status_hub_pull_key_ref: ""
+status_hub_pulls_oncalendar: "*-*-* *:00/5:30 UTC"
 # Each timer run's last-run record (role last_run, docs/role-interface.md section 8): the shared
 # per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
 status_hub_last_run_dir: /var/lib/homelabnext/last-run

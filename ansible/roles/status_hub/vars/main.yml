@@ -40,3 +40,5 @@ status_hub_libexec_dir: /usr/local/libexec/hnx-hub
 # a reference shaped like every other store reference (an area and a name), so the leak scan reads it as a reference.
 status_hub_login_area: hub-login
 status_hub_login_dir: "{{ status_hub_issued_dir }}/{{ status_hub_login_area }}"
+# Pulled status files: the helper's directory (key, pinned host keys, configuration), root only.
+status_hub_pull_dir: "{{ status_hub_config_dir }}/pull"

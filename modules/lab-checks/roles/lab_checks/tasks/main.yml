@@ -9,5 +9,8 @@
 - name: Create the directories
   ansible.builtin.include_tasks: dirs.yml
 
+- name: The results reader (only with reader keys)
+  ansible.builtin.include_tasks: reader.yml
+
 - name: Write the scripts, the register, the pager's configuration and the units
   ansible.builtin.include_tasks: config.yml

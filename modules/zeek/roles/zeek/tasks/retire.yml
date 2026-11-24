@@ -9,6 +9,7 @@
   register: zeek_retired_enabled
   changed_when: false
   failed_when: false
+  check_mode: false  # read-only: a dry run must read the real state
 
 - name: The predecessor units still active
   ansible.builtin.command:
@@ -17,6 +18,7 @@
   register: zeek_retired_active
   changed_when: false
   failed_when: false
+  check_mode: false  # read-only: a dry run must read the real state
 
 - name: Disable and stop a predecessor unit
   ansible.builtin.command:
@@ -33,6 +35,7 @@
   register: zeek_retired_ctrs
   changed_when: false
   failed_when: false
+  check_mode: false  # read-only: a dry run must read the real state
 
 - name: Keep a predecessor container from restarting
   ansible.builtin.command:
