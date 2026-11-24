@@ -106,3 +106,17 @@ def test_the_shared_library_set_the_role_installs_is_exactly_what_the_script_imp
     loaded.add("_version.py")
     listed = yaml.safe_load((ROLE / "vars" / "main.yml").read_text())["alert_intake_shared_files"]
     assert len(loaded) > 5 and sorted(listed) == sorted(loaded), (sorted(listed), sorted(loaded))
+
+
+def test_the_readiness_hook_looks_for_systemd_as_a_directory():
+    # /run/systemd/system is a directory on every systemd host: a check for a regular file refused every
+    # real host at its first deploy (found 2026-11-23 on the lab's first placement)
+    tasks = yaml.safe_load((ROLE / "tasks" / "readiness.yml").read_text())
+    steps = tasks[0]["block"]
+    look = next(
+        i
+        for i, s in enumerate(steps)
+        if s.get("ansible.builtin.stat", {}).get("path") == "/run/systemd/system"
+    )
+    check = steps[look + 1]["ansible.builtin.assert"]["that"]
+    assert "stat.isdir" in check and "stat.isreg" not in check
