@@ -148,7 +148,10 @@ configuration must not reset `logall_json`.
 (`0006-json_decoders.xml`). A site whose JSON logs (the Zeek sensors') have their own decoders needs it: otherwise the generic
 decoder claims every line that starts with `{`, answers rule 1002, and no rule keyed on the site's decoder fires. The file also
 holds the `json` and `json-msgraph` decoders other stock rules rely on, so the site ships identical replacements in its native
-decoders (the overlay's `zeek-zjson-*.xml`).
+decoders (the overlay's `zeek-zjson-*.xml`). The exclusion is rendered only once the manager holds a native decoder that
+defines `<decoder name="json">`: on a first install the stack starts without it, the site's decoders are installed once the
+manager answers, and the role then renders the exclusion and restarts the manager once (a second run changes nothing). A
+site that asks for the exclusion and ships no such decoder is refused.
 
 `wazuh/rule-drift` compares the digest of what the manager has loaded
 (`hnx_wazuh_rules.py digest --etc`) with the digest of what the site wants (`--stage`): the health

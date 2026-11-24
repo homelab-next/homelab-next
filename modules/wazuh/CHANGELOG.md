@@ -11,3 +11,4 @@
 - Native rules loaded with the manager's configuration test and a rollback, an alert integration, a
   retention policy, health that checks live processes, export and restore.
 - `wazuh_json_decoder_excluded` (default false): the manager skips the product's generic JSON decoder file so a site's own decoders for JSON lines (Zeek) get first refusal; the site ships replacements for `json` and `json-msgraph` as native decoders.
+- `wazuh_json_decoder_excluded` is applied only after the site's replacement `json` decoder is installed: a first install no longer starts the manager with the stock decoder excluded and no replacement (it refused its rules and never became healthy). The role renders the exclusion after the native decoders load, restarts the manager once, and refuses a site that asks for it with no `json` decoder.

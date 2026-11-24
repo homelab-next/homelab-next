@@ -93,6 +93,58 @@
   ansible.builtin.include_tasks: rules.yml
   when: wazuh_start | bool and not ansible_check_mode
 
+# First install with wazuh_json_decoder_excluded: the exclusion was held back (config.yml) until the site's
+# replacement json decoder was in the manager. It is in now: render it and restart the manager once.
+- name: Look again for the site's replacement json decoder
+  ansible.builtin.include_tasks: json_decoder.yml
+  when: wazuh_start | bool and not ansible_check_mode and wazuh_json_decoder_excluded | bool
+
+- name: Refuse to exclude the product's json decoder with nothing to replace it
+  ansible.builtin.assert:
+    that: wazuh_json_native_present | bool
+    fail_msg: >-
+      siem: wazuh_json_decoder_excluded is true but the site's native decoders ({{ wazuh_native_dir | default('') }})
+      hold no decoder named json (an hnx-*.xml with <decoder name="json">): excluding the product's
+      0006-json_decoders.xml would leave the manager with none and it would refuse to load its rules
+  when: wazuh_start | bool and not ansible_check_mode and wazuh_json_decoder_excluded | bool
+
+- name: Apply the json decoder exclusion now that its replacement is in place
+  when: wazuh_start | bool and not ansible_check_mode and wazuh_json_decoder_excluded | bool and not wazuh_json_exclude_effective | bool
+  block:
+    - name: Exclude the product's json decoder from here on (a fact outranks a task variable)
+      ansible.builtin.set_fact:
+        wazuh_json_exclude_effective: true
+
+    - name: Render the manager's configuration with the exclusion
+      ansible.builtin.template:
+        src: ossec.conf.j2
+        dest: "{{ wazuh_data_root }}/config/ossec.conf"
+        owner: "{{ wazuh_owner }}"
+        group: "{{ wazuh_group }}"
+        mode: "0644"
+
+    - name: Restart the manager so it reads the exclusion
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ wazuh_dir }}/docker-compose.yml", restart, manager]
+      changed_when: true
+
+    - name: Wait for the manager's API again
+      ansible.builtin.include_tasks: probe.yml
+      vars:
+        wazuh_probe_service: manager
+        wazuh_probe_url: "https://localhost:{{ wazuh_container_api_port }}/security/user/authenticate?raw=true"
+        wazuh_probe_method: POST
+        wazuh_probe_user: "{{ wazuh_api_login_ref }}"
+        wazuh_probe_user_name: "{{ wazuh_api_user }}"
+        wazuh_probe_wait: true
+
+    - name: Refuse a manager that never answered after the exclusion
+      ansible.builtin.assert:
+        that: wazuh_probe_code | default('0') == '200'
+        fail_msg: >-
+          siem: the manager's API did not accept {{ wazuh_api_login_ref }} within {{ wazuh_ready_timeout }}
+          seconds after the json decoder exclusion (last status {{ wazuh_probe_code | default('0') }})
+
 - name: Set the hot index's retention
   ansible.builtin.include_tasks: retention.yml
   when: wazuh_start | bool and not ansible_check_mode
