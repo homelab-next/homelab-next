@@ -45,6 +45,14 @@
          open_webui_admin_password_ref] | select('!=', '') | list | length
         == [open_webui_gateway_key_ref, open_webui_session_key_ref, open_webui_oidc_client_secret_ref,
             open_webui_admin_password_ref] | select('!=', '') | list | unique | length
+      # web search: the registry id of the lab's metasearch service, or empty (off)
+      - open_webui_web_search_id is string
+      - open_webui_web_search_id == '' or open_webui_web_search_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\\Z')
+      - open_webui_web_search_id != open_webui_gateway_id
+      - open_webui_web_search_capabilities is sequence
+      - open_webui_web_search_capabilities | length > 0
+      - open_webui_web_search_result_count | string is match('^[0-9]{1,2}\\Z')
+      - open_webui_web_search_result_count | int >= 1 and open_webui_web_search_result_count | int <= 20
       - open_webui_extra_env is mapping
       - open_webui_extra_env | list | reject('in', open_webui_allowed_env) | list | length == 0
       - open_webui_extra_env | list | select('in', open_webui_fixed_env) | list | length == 0
@@ -69,7 +77,8 @@
       open_webui: the gateway's registry id (not a model backend: Open WebUI talks to the LLM
       gateway only), two distinct secret: references (this app's gateway key, the session key),
       an image pinned by tag and digest, a port, an optional public URL (https://host[:port],
-      lower-case host, port 1-65535 and not 443, no path), and extra settings (strings) named in
+      lower-case host, port 1-65535 and not 443, no path), an optional web search id (a registry
+      id, not the gateway's) with a result count of 1 to 20, and extra settings (strings) named in
       open_webui_allowed_env ({{ open_webui_allowed_env | join(', ') }}),
       none of them fixed or reserved, with GLOBAL_LOG_LEVEL one of
       {{ open_webui_log_levels | join(', ') }}; refused names:
@@ -89,6 +98,16 @@
       '{{ lookup('hnx_registry', open_webui_gateway_id, field='capability') }}', not
       {{ open_webui_gateway_capabilities | join(' or ') }}: Open WebUI talks to the LLM gateway only, never to an
       engine or another service, whatever the id is called
+
+- name: Resolve the web search id through the registry
+  ansible.builtin.assert:
+    that: lookup('hnx_registry', open_webui_web_search_id, field='capability') in open_webui_web_search_capabilities
+    fail_msg: >-
+      open_webui: the web search id {{ open_webui_web_search_id }} is a registry service with capability
+      '{{ lookup('hnx_registry', open_webui_web_search_id, field='capability') }}', not
+      {{ open_webui_web_search_capabilities | join(' or ') }}: web search goes to the lab's own
+      metasearch service only
+  when: open_webui_web_search_id | length > 0
 
 - name: Resolve the gateway's product through the registry
   ansible.builtin.assert:
