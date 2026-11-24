@@ -405,7 +405,7 @@ To avoid every PR editing the same top lines of `CHANGELOG.md`, a PR may add one
 (default `Added`), then the entry text (the leading `- ` is optional, no headings). Nothing
 requires a fragment and `CHANGELOG.md` entries still work. Whoever cuts a release (or rotates the
 changelog, above) first runs `python3 tools/changelog_compile.py`: it puts the entries at the top
-of their group in `## [Unreleased]` and deletes the fragments; `--check` only validates them.
+of their group in `## [Unreleased]` and deletes the fragments; `--check` only validates them (an optional argument names another changelog file).
 
 ## Pull requests
 

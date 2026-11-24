@@ -218,10 +218,7 @@
         "2": "a path cannot be read or written"
       },
       "id": "changelog-compile",
-      "inputs": [
-        "changelog.d/*.md",
-        "CHANGELOG.md"
-      ],
+      "inputs": "the fragment files of the changelog.d directory, and CHANGELOG.md",
       "kind": "tool",
       "language": "python",
       "outputs": "the updated CHANGELOG.md; the folded fragments are removed; one line per fragment on stdout",

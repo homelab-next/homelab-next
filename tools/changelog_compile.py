@@ -6,7 +6,7 @@
 #   purpose: Fold the per-PR fragments in changelog.d/ into the [Unreleased] section of CHANGELOG.md and delete them.
 #   owner: maintainers
 #   trigger: [make:changelog-compile]
-#   inputs: [changelog.d/*.md, CHANGELOG.md]
+#   inputs: the fragment files of the changelog.d directory, and CHANGELOG.md
 #   outputs: the updated CHANGELOG.md; the folded fragments are removed; one line per fragment on stdout
 #   exit:
 #     "0": folded (or nothing to fold), or --check found every fragment well formed
@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+CHANGELOG_NAME = "CHANGELOG.md"
 GROUPS = ("Added", "Changed", "Fixed", "Breaking")
 _FRONT = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 
@@ -91,9 +92,15 @@ def fold(changelog: str, entries: dict[str, list[str]]) -> str:
     return changelog[:start] + section + changelog[end:]
 
 
+def write_text(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8")
+
+
 def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
     args = sys.argv[1:] if argv is None else argv
     check_only = "--check" in args
+    paths = [a for a in args if not a.startswith("--")]
+    changelog_path = Path(paths[0]) if paths else root / CHANGELOG_NAME
     files = fragments(root)
     entries: dict[str, list[str]] = {}
     try:
@@ -106,8 +113,7 @@ def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
         if check_only:
             print(f"changelog-compile: {len(files)} fragment(s) well formed")
             return 0
-        cl = root / "CHANGELOG.md"
-        new = fold(cl.read_text(encoding="utf-8"), entries)
+        new = fold(changelog_path.read_text(encoding="utf-8"), entries)
     except FragmentError as exc:
         print(f"changelog-compile: {exc}", file=sys.stderr)
         return 1
@@ -115,7 +121,7 @@ def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
         print(f"changelog-compile: {exc}", file=sys.stderr)
         return 2
     try:
-        cl.write_text(new, encoding="utf-8")
+        write_text(changelog_path, new)
         for p in files:
             p.unlink()
             print(f"changelog-compile: folded {p.name}")
