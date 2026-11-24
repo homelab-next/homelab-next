@@ -155,7 +155,7 @@ argument_specs:
       orchestration_job_units:
         type: list
         elements: dict
-        description: 'Module job units: a list of {name, jobs, lanes}; each set''s units hnx-<name>@<job>-<lane>.service get a polkit rule (start, stop, ref, reset-failed by the service user, nothing else), a dispatch table entry and pre-created log files.'
+        description: 'Module job units: a list of {name, jobs, lanes, overlap}; overlap wait (default: a second session of a running instance waits its turn) or skip (it answers skipped at once, exit 0: for scheduled jobs); each set''s units hnx-<name>@<job>-<lane>.service get a polkit rule (start, stop, ref, reset-failed by the service user, nothing else), a dispatch table entry and pre-created log files.'
         default: []
       orchestration_runner_dispatch:
         type: bool

@@ -10,7 +10,8 @@ stand-in systemctl that plays a oneshot job unit whose first step is the real re
 * a failed unit is exit 1 with its status and a ``reset-failed``; a unit already running is exit
   75 and is never started a second time; a cancel (SIGTERM to the group, twice) queues the stop
   with ``--no-block`` and still resets the failed state; a systemctl that hangs is a JSON answer;
-* two sessions of the same instance run one after the other, never merged into one run;
+* two sessions of the same instance run one after the other, never merged into one run; a set
+  declared ``overlap: skip`` instead answers the second ``skipped`` (exit 0) at once, never waiting;
 * an unknown agent, a lane or run id that could not be a unit's or a file's name, a task over the
   bound and a table that its reader could rewrite are refused before anything is started;
 * the reader refuses a link, a directory, a FIFO, a hard link, a file of another owner, an oversized
@@ -368,6 +369,48 @@ def test_two_sessions_of_one_instance_run_one_after_the_other(rig):
     assert rig.calls() == [f"is-active {unit}", f"start --wait {unit}", f"{SHOW} {unit}"] * 2
     assert json.loads(out_a)["log_tail"] == "job fresh lane real run run-a\n"
     assert json.loads(out_b)["log_tail"] == "job fresh lane real run run-b\n"
+
+
+def test_a_set_that_skips_overlaps_coalesces_a_second_session_and_never_waits(rig):
+    """overlap: skip (a scheduled job): a session that finds its instance's run in progress answers
+    "skipped" at once with exit 0, never waiting behind it (a wait holds a controller slot and its
+    attempt ceiling runs while it waits) and never starting or stopping the unit."""
+    unit = U("hnx-cti", "fresh-real.service")
+    rig.write_table(units={"cti": {"jobs": {"cti-hourly": "fresh"}, "lanes": ["real"],
+                                   "log_dir": str(rig.logs / "cti"), "overlap": "skip"}})  # fmt: skip
+    rig.set("block")
+    first = rig.start(run_id="run-a")
+    rig.wait_for(lambda: f"start --wait {unit}" in rig.calls(), "the first start")
+    second = rig.run(run_id="run-b")
+    assert second.returncode == 0, second.stderr
+    out = json.loads(second.stdout)
+    assert out["outcome"] == "skipped" and out["unit"] == unit and out["run_id"] == "run-b"
+    assert rig.calls() == [f"is-active {unit}", f"start --wait {unit}"]  # nothing of the second's
+    run = json.loads((rig.runs / "cti" / "fresh-real.json").read_text())
+    assert run["run_id"] == "run-a"  # the run in progress keeps its run file
+    (rig.state / "block").unlink()
+    rig.set("release")
+    out_a, _ = first.communicate(timeout=30)
+    assert first.returncode == 0 and json.loads(out_a)["outcome"] == "done"
+
+
+def test_a_set_that_skips_overlaps_still_runs_when_nothing_is_in_progress(rig):
+    unit = U("hnx-cti", "fresh-real.service")
+    rig.write_table(units={"cti": {"jobs": {"cti-hourly": "fresh"}, "lanes": ["real"],
+                                   "log_dir": str(rig.logs / "cti"), "overlap": "skip"}})  # fmt: skip
+    r = rig.run()
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["outcome"] == "done"
+    assert rig.calls() == [f"is-active {unit}", f"start --wait {unit}", f"{SHOW} {unit}"]
+
+
+def test_an_unknown_overlap_is_refused_before_anything_starts(rig):
+    rig.write_table(units={"cti": {"jobs": {"cti-hourly": "fresh"}, "lanes": ["real"],
+                                   "log_dir": str(rig.logs / "cti"), "overlap": "restart"}})  # fmt: skip
+    r = rig.run()
+    assert r.returncode == 2
+    assert json.loads(r.stderr)["outcome"] == "refused" and "overlap" in r.stderr
+    assert rig.calls() == []
 
 
 def test_a_missing_log_is_said_and_the_result_still_answered(rig):
