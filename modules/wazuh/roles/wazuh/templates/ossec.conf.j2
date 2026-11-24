@@ -76,7 +76,7 @@
 
   <ruleset>
     <decoder_dir>ruleset/decoders</decoder_dir>
-{% if wazuh_json_decoder_excluded | bool %}
+{% if wazuh_json_exclude_effective | bool %}
     <decoder_exclude>ruleset/decoders/0006-json_decoders.xml</decoder_exclude>
 {% endif %}
     <rule_dir>ruleset/rules</rule_dir>
