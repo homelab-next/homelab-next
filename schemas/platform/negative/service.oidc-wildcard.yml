@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# oidc.redirect_uris: a wildcard is refused (an explicit URI only)
+registry_version: 1
+lab: {name: northwind, domain: example.internal, svc_label: svc}
+zones:
+  mgmt: {cidr: 192.0.2.0/24}
+hosts:
+  idp-01: {address: 192.0.2.30, zone: mgmt, role: identity}
+  apps-01: {address: 192.0.2.40, zone: mgmt, role: apps}
+services:
+  idp:
+    capability: idp
+    host: idp-01
+    protocol: https
+    port: 8443
+    owner: platform-team
+    version: "26.8.1"
+    tls: internal
+    auth: own
+  forge:
+    capability: forge
+    host: apps-01
+    protocol: https
+    port: 3443
+    owner: platform-team
+    version: "1.0.0"
+    tls: internal
+    auth: idp
+    oidc:
+      redirect_uris:
+        - https://forge.svc.example.internal:3443/user/oauth2/*
