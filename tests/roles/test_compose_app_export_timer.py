@@ -242,6 +242,19 @@ def test_the_timer_task_installs_script_manifest_units_and_arms_the_timer(first)
     assert "systemctl daemon-reload" in log and "systemctl enable --now hnx-export-app.timer" in log
 
 
+def test_an_existing_export_directory_keeps_the_module_s_owner_and_mode(tmp_path):
+    """A module that owns export/db as its database's user keeps it: the dump never changes it."""
+    db = tmp_path / "export" / "db"
+    db.mkdir(parents=True)
+    db.chmod(0o750)  # a mode the role would not choose: kept means untouched
+    before = db.stat()
+    r = run_role(tmp_path, "compose_app", tasks_from="export_timer", extra_vars=role_vars(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    after = db.stat()
+    assert stat.S_IMODE(after.st_mode) == 0o750
+    assert (after.st_uid, after.st_gid) == (before.st_uid, before.st_gid)
+
+
 def test_an_override_can_disable_or_add_an_engine_and_a_bad_one_is_refused(tmp_path):
     ok = run_role(
         tmp_path,
