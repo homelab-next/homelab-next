@@ -1878,7 +1878,7 @@
     },
     {
       "exit": {
-        "0": "the unit ran and ended successfully",
+        "0": "the unit ran and ended successfully, or (a set declared overlap skip) a run of the same instance was already in progress and this session was coalesced into it",
         "1": "the unit failed, or was never started (systemctl refused or timed out)",
         "143": "cancelled (SIGTERM, SIGINT or SIGHUP), the unit was stopped",
         "2": "usage or configuration error (an untrusted or malformed table, an agent key with no job, a lane, run id or task refused)",

@@ -34,9 +34,9 @@ def _uri(host: str, port: int | None, path: str) -> str:
 
 
 def test_version_is_2_13_frozen_and_additive():
-    assert CURRENT["$id"].endswith("/platform/service/2.13")
-    assert FROZEN_213 == CURRENT
-    assert sc.is_additive(FROZEN_212, CURRENT) == []
+    assert FROZEN_213["$id"].endswith("/platform/service/2.13")
+    assert sc.is_additive(FROZEN_212, FROZEN_213) == []
+    assert sc.is_additive(FROZEN_213, CURRENT) == []
 
 
 def test_oidc_validates_in_2_13_only_and_reaches_the_model():

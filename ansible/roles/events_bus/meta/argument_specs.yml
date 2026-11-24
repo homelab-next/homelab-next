@@ -110,8 +110,37 @@ argument_specs:
         type: bool
         description: "Enable, start and restart the unit (false: write it only)."
         default: true
+      events_bus_forward_logins: &fwd
+        type: list
+        elements: dict
+        description: "SSH logins whose only power is a local TCP forward to this bus, for a client on another host while the bus listens on loopback: [{user, ed25519 (the base64 of one ssh-ed25519 public key, without the type or a comment), from: [the client's addresses, a host or an IPv4 /24 or IPv6 /64 at the widest], state: present|absent}]. Each is a system account (no shell, locked password, root-owned home) in events_bus_forward_ssh_group, its key restricted to restrict,port-forwarding,permitopen=<the bus>,from=<from>,command=/bin/false, and a sshd Match block (AllowTcpForwarding local, PermitOpen the bus, PermitListen none, no TTY, no socket or agent forward, no X11, no tunnel, ForceCommand /bin/false) tested with sshd -t and sshd -T before it goes live. The client still signs in to the bus with its own bus user. [] (default): none."
+        default: []
+      events_bus_forward_ssh_group: &fwdgroup
+        type: str
+        description: "The group sshd's AllowGroups admits (role ssh_hardening's first allow group); each forward login is added to it."
+        default: hnx-ssh
+      events_bus_forward_home: &fwdhome
+        type: path
+        description: "Where the forward logins' root-owned homes live (one directory per login, holding .ssh/authorized_keys)."
+        default: /var/lib/hnx-events-forward
+      events_bus_forward_sshd_dropin: &fwddropin
+        type: path
+        description: "The sshd drop-in that holds the forward logins' Match blocks (a .conf under /etc/ssh/sshd_config.d)."
+        default: /etc/ssh/sshd_config.d/50-hnx-events-forward.conf
+      events_bus_sshd_main_config: &sshdmain
+        type: path
+        description: "sshd's main configuration (it includes sshd_config.d); the health hook reads the effective settings from it."
+        default: /etc/ssh/sshd_config
+      events_bus_sshd_cli: &sshdcli
+        type: str
+        description: "The sshd binary used for sshd -t and sshd -T."
+        default: sshd
+      events_bus_ssh_service:
+        type: str
+        description: "The sshd unit reloaded after the drop-in changes."
+        default: ssh
   health:
-    short_description: "Read-only, from the loopback monitor: fail unless the server answers /healthz with JetStream enabled, reports no push consumer in /jsz, holds every declared stream (and, with provisioning on, durable), has no stream in the bus account with a republish, mirror, sources or subject transform (one can aim its messages at $JS.API), and runs the account split (/accountz and /connz?auth=true: the bus account alone with JetStream and the provisioner, every other user in an account of its own importing from the bus account exactly the subjects the role renders for it; a connection not yet authenticated is skipped, and /connz returning fewer connections than its total fails); warn about a stream without deny_delete or deny_purge (never changed)."
+    short_description: "Read-only, from the loopback monitor: fail unless the server answers /healthz with JetStream enabled, reports no push consumer in /jsz, holds every declared stream (and, with provisioning on, durable), has no stream in the bus account with a republish, mirror, sources or subject transform (one can aim its messages at $JS.API), and runs the account split (/accountz and /connz?auth=true: the bus account alone with JetStream and the provisioner, every other user in an account of its own importing from the bus account exactly the subjects the role renders for it; a connection not yet authenticated is skipped, and /connz returning fewer connections than its total fails); warn about a stream without deny_delete or deny_purge (never changed); and, with forward logins, fail unless sshd -T still holds each to a local forward to the bus alone."
     options:
       events_bus_monitor_port: *mport
       events_bus_account: *account
@@ -121,6 +150,10 @@ argument_specs:
       events_bus_durables: *durables
       events_bus_provision_durables: *provdur
       events_bus_monitor_user: *monuser
+      events_bus_forward_logins: *fwd
+      events_bus_forward_ssh_group: *fwdgroup
+      events_bus_sshd_main_config: *sshdmain
+      events_bus_sshd_cli: *sshdcli
   readiness:
     short_description: Fail unless the server binary and its configuration are in place (the bus depends on nothing else).
     options:

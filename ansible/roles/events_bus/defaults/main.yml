@@ -50,5 +50,21 @@ events_bus_monitor_password_ref: ""
 # The interpreter of a homelab-next release with the nats extra (role hnx_runtime): provisioning
 # uses the project's own adapter.
 events_bus_hnx_python: /opt/hnx/current/bin/python
+# SSH logins whose only power is a TCP forward to this bus, for a client on another host while the
+# bus listens on loopback and has no TLS listener: [{user, ed25519 (the public key's base64), from: [addresses], state}].
+# Each is a system account (no shell, locked password, a root-owned home) in
+# events_bus_forward_ssh_group (sshd's AllowGroups), with ONE authorized key restricted to
+# restrict,port-forwarding,permitopen=<this bus>,from=<from>,command="/bin/false", and a sshd Match
+# block that allows a local TCP forward to the bus's own listen address and port and nothing else (no
+# TTY, no remote forward, no socket forward, no agent, no X11, no tunnel). The client still signs in
+# to the bus with its own bus user and password: the forward carries that, encrypted, to loopback.
+# `state: absent` removes the account and its key. [] (the default): none, and no drop-in.
+events_bus_forward_logins: []
+events_bus_forward_ssh_group: hnx-ssh
+events_bus_forward_home: /var/lib/hnx-events-forward
+events_bus_forward_sshd_dropin: /etc/ssh/sshd_config.d/50-hnx-events-forward.conf
+events_bus_sshd_main_config: /etc/ssh/sshd_config
+events_bus_sshd_cli: sshd
+events_bus_ssh_service: ssh
 events_bus_systemd_dir: /etc/systemd/system
 events_bus_start: true

@@ -1,0 +1,146 @@
+# SPDX-License-Identifier: Apache-2.0
+# The forward logins (defaults: events_bus_forward_logins): a client on another host reaches this
+# loopback-only bus through `ssh -N -L <local>:<the bus>` as a login whose key and whose sshd Match
+# block allow that one forward and nothing else. The account and its key are written first; the
+# sshd drop-in is staged, tested with sshd -t and, through sshd -T for each login, shown to allow
+# only the bus as a local forward before it replaces the live file; a reload owed is remembered
+# until one succeeds (the same pattern as role ssh_hardening).
+- name: The forward logins' state directory and home root
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ events_bus_forward_state_dir }}"
+    - "{{ events_bus_forward_home }}"
+
+- name: The group sshd admits (AllowGroups)
+  ansible.builtin.group:
+    name: "{{ events_bus_forward_ssh_group }}"
+    system: true
+
+- name: Each forward login's account (system, no shell, locked password)
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    state: "{{ item.state | default('present') }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ events_bus_forward_home }}/{{ item.user }}"
+    create_home: false
+    password: "!"
+    groups: ["{{ events_bus_forward_ssh_group }}"]
+    append: true
+  loop: "{{ events_bus_forward_logins }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+# root-owned, so the login cannot change its own key (sshd's StrictModes accepts a root-owned home)
+- name: Each forward login's home and .ssh (root-owned)
+  ansible.builtin.file:
+    path: "{{ events_bus_forward_home }}/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ events_bus_forward_present | map(attribute='user') | product(['', '/.ssh']) | map('join') | list }}"
+
+- name: Each forward login's one key, restricted to the forward to the bus from its own addresses
+  ansible.builtin.copy:
+    dest: "{{ events_bus_forward_home }}/{{ item.user }}/.ssh/authorized_keys"
+    content: "restrict,port-forwarding,permitopen=\"{{ events_bus_forward_target }}\",from=\"{{ item['from'] | join(',') }}\",command=\"/bin/false\" ssh-ed25519 {{ item.ed25519 }} {{ item.user }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ events_bus_forward_present }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Remove a retired login's home
+  ansible.builtin.file:
+    path: "{{ events_bus_forward_home }}/{{ item.user }}"
+    state: absent
+  loop: "{{ events_bus_forward_absent }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Compare the sshd drop-in with the live file
+  ansible.builtin.template:
+    src: sshd-forward.conf.j2
+    dest: "{{ events_bus_forward_sshd_dropin }}"
+    owner: root
+    group: root
+    mode: "0644"
+  check_mode: true
+  register: events_bus_forward_dropin
+
+- name: Test the new drop-in, then install it
+  when: events_bus_forward_dropin is changed and not ansible_check_mode
+  vars:
+    events_bus_forward_staged: "{{ events_bus_forward_state_dir }}/staged.conf"
+    events_bus_forward_test_config: "{{ events_bus_forward_state_dir }}/test-sshd_config"
+  block:
+    - name: Stage the new drop-in
+      ansible.builtin.template:
+        src: sshd-forward.conf.j2
+        dest: "{{ events_bus_forward_staged }}"
+        owner: root
+        group: root
+        mode: "0600"
+    # the staged Match blocks first, so they win over the live file's (the first Match value wins)
+    - name: Write a test configuration that reads the staged drop-in first, then the live one
+      ansible.builtin.copy:
+        dest: "{{ events_bus_forward_test_config }}"
+        content: "Include {{ events_bus_forward_staged }}\nInclude {{ events_bus_sshd_main_config }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+    - name: Test the whole configuration with the new drop-in
+      ansible.builtin.command:
+        argv: ["{{ events_bus_sshd_cli }}", -t, -f, "{{ events_bus_forward_test_config }}"]
+      changed_when: false
+    - name: Check what each login may do under it
+      ansible.builtin.include_tasks: forward_effective.yml
+      vars:
+        events_bus_forward_config: "{{ events_bus_forward_test_config }}"
+    - name: Mark a reload as owed before the live file changes
+      ansible.builtin.copy:
+        dest: "{{ events_bus_forward_state_dir }}/reload-pending"
+        content: "the forward drop-in changed; sshd has not reloaded since\n"
+        owner: root
+        group: root
+        mode: "0600"
+    - name: Install the tested drop-in as the live file
+      ansible.builtin.copy:
+        src: "{{ events_bus_forward_staged }}"
+        dest: "{{ events_bus_forward_sshd_dropin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+  always:
+    - name: Remove the staged files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ events_bus_forward_state_dir }}/staged.conf"
+        - "{{ events_bus_forward_state_dir }}/test-sshd_config"
+
+- name: Look for a reload still owed
+  ansible.builtin.stat:
+    path: "{{ events_bus_forward_state_dir }}/reload-pending"
+  register: events_bus_forward_pending
+
+- name: Reload sshd while a reload is owed (open sessions stay up)
+  when: events_bus_forward_pending.stat.exists and not ansible_check_mode
+  block:
+    - name: Reload sshd
+      ansible.builtin.systemd_service:
+        name: "{{ events_bus_ssh_service }}"
+        state: reloaded
+    - name: Clear the owed reload
+      ansible.builtin.file:
+        path: "{{ events_bus_forward_state_dir }}/reload-pending"
+        state: absent

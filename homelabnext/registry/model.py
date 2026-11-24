@@ -849,6 +849,13 @@ def status_source_problems(services: dict) -> list[str]:
             builtin = (mapping or {}).get("builtin")
             if builtin in _AGENT_BUILTINS and kind != "agent-activity":
                 problems.append(f"{where}: builtin {mapping['builtin']} is for agent-activity only")
+            if builtin is not None and kind not in _PRODUCT_STATUS_KINDS:
+                from homelabnext.status.products import BUILTIN_KINDS
+
+                if builtin in BUILTIN_KINDS:
+                    problems.append(
+                        f"{where}: builtin {builtin} is for {BUILTIN_KINDS[builtin]} only"
+                    )
             if builtin in _KIND_BUILTINS and kind != _KIND_BUILTINS[builtin][0]:
                 problems.append(
                     f"{where}: builtin {builtin} is for {_KIND_BUILTINS[builtin][0]} only"

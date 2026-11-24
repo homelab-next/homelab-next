@@ -434,6 +434,14 @@ the offline fixtures and with what the timer it replaces actually did (the parit
 [swap.md](swap.md), [[swap]]). The mode is in `pinned/<pack>.json`, rendered from the rule, so a
 run started by hand is in the rule's mode too: no parameter turns a shadow rule live.
 
+**Where the shadow records are.** A shadow record is the `homelabnext.step` execution itself:
+its result carries `result: shadow` and the encoded state with the call record (action, params,
+`request_id`, `request_digest`); a step whose `when` did not hold is `skipped`. StackStorm keeps
+them for `stackstorm_retention_days`. The status hub counts them per rule
+(`poll-stackstorm` with `builtin: automation-shadow`, [status](status.md) section 7, the
+module's source `stackstorm-shadow`): would-act, quiet and failed runs and the first and latest
+record over 7 days, which is what a promotion review reads before it writes the parity evidence.
+
 To promote a rule, change `mode: live` in `workflows/stackstorm.yml` and add:
 
 ```yaml
@@ -635,6 +643,14 @@ PrivateTmp=yes
 [Install]
 WantedBy=multi-user.target
 ```
+
+While the bus listens on loopback on its own host (the `events_bus` role has no TLS listener),
+the module's **bus forward** carries the bridge there instead: `stackstorm_events_forward_enabled`
+keeps `ssh -N -L <loopback>:<port>:<the bus>` up as `hnx-st2-events-tunnel.service` (its own user,
+the bus host's key pinned), as a login the bus host's `events_bus_forward_logins` holds to that one
+forward ([broker.md](broker.md#deploying-with-ansible)), and the bridge's endpoint is the forward's
+loopback end (`nats://<loopback>:<port>`, which the adapter accepts in plaintext because it is
+loopback; the leg between the hosts is SSH). The bridge's unit starts after the forward.
 
 It needs the `nats` extra (`pip install 'homelabnext[nats]'`). Over `tls://` it does the TLS
 handshake first, so the bus's `tls` block needs `handshake_first: true` (nats-server 2.10.3 or

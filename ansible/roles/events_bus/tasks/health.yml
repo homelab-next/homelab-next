@@ -131,4 +131,10 @@
           (created before the adapter set them: a purge or message delete that got through would
           be refused only with them; left unchanged, docs/broker.md has the break-glass step)
       when: events_bus_jsz.json | hnx_bus_unprotected_streams(events_bus_account) | length > 0
+    # read-only: the live sshd configuration still holds each forward login to the bus alone
+    - name: Check what each forward login may do under the live sshd configuration
+      ansible.builtin.include_tasks: forward_effective.yml
+      vars:
+        events_bus_forward_config: "{{ events_bus_sshd_main_config }}"
+      when: events_bus_forward_present | length > 0
   tags: [health]
