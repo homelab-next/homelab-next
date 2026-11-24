@@ -13,7 +13,7 @@
       ansible.builtin.assert:
         that:
           - trivy_last.stat.exists
-          - (now(utc=true).timestamp() - trivy_last.stat.mtime) < trivy_max_age_hours | int * 3600
+          - (now().timestamp() - trivy_last.stat.mtime) < trivy_max_age_hours | int * 3600
         fail_msg: "trivy: no Trivy package scan in the last {{ trivy_max_age_hours }}h ({{ trivy_state_dir }}/last-run is missing or older)"
     - name: Find the scan reports
       ansible.builtin.find:

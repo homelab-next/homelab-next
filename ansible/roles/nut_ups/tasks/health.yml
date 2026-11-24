@@ -33,6 +33,6 @@
           - nut_ups_mon.stdout | trim == 'active'
           - nut_ups_monline.stdout | trim | int >= 1
           - nut_ups_prom.stat.exists
-          - (now(utc=true).timestamp() - nut_ups_prom.stat.mtime) < nut_ups_health_max_age_seconds | int
+          - (now().timestamp() - nut_ups_prom.stat.mtime) < nut_ups_health_max_age_seconds | int
         fail_msg: "nut_ups: the UPS does not answer, nut-monitor is not active, upsmon.conf has no MONITOR line, or the metrics are stale"
   tags: [health]
