@@ -37,3 +37,7 @@ source_census_lake_query_id: lake-query
 source_census_lake_catalog_id: lake-catalog
 source_census_unit_dir: /etc/systemd/system
 source_census_systemctl_cli: systemctl
+# the installed unit reports its runs to the shared last-run record (role last_run)
+source_census_last_run_dir: /var/lib/homelabnext/last-run
+source_census_last_run_group: root
+source_census_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

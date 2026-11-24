@@ -14,6 +14,14 @@
     mode: "0644"
   register: source_census_env
 
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ source_census_last_run_dir }}"
+    last_run_group: "{{ source_census_last_run_group }}"
+    last_run_writer: "{{ source_census_last_run_writer }}"
+
 - name: The service and the timer
   ansible.builtin.template:
     src: "source-census-run.{{ item }}.j2"

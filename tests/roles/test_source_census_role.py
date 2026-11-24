@@ -309,6 +309,9 @@ def test_the_installed_unit_runs_the_command_with_the_endpoints_in_its_environme
         source_census_unit_dir=str(tmp_path / "units"),
         source_census_systemctl_cli=logging_fake(tmp_path, "systemctl"),
         # the example registry's rows for the two lake services
+        source_census_last_run_dir=str(tmp_path / "last-run"),
+        source_census_last_run_group=USER,
+        source_census_last_run_writer=str(tmp_path / "bin" / "hnx-last-run"),
         source_census_lake_query_id="query-core",
         source_census_lake_catalog_id="lake-catalog",
     )
@@ -316,8 +319,11 @@ def test_the_installed_unit_runs_the_command_with_the_endpoints_in_its_environme
     assert r.returncode == 0, r.stdout + r.stderr
     svc = (tmp_path / "units" / "hnx-source-census-run.service").read_text()
     assert f"User={USER}" in svc
-    assert f"ExecStart={tmp_path / 'bin' / 'hnx'} lake source-census --config " in svc
+    assert "ExecStart=/opt/hnx/bin/hnx lake source-census --config " in svc  # the runtime release
     assert f"EnvironmentFile={tmp_path / 'etc' / 'census.env'}" in svc
+    assert (
+        "--job timer:source_census/source-census-run" in svc
+    )  # its runs reach the last-run record
     env = (tmp_path / "etc" / "census.env").read_text()
     for name in ("LAKE_QUERY", "LAKE_CATALOG"):
         assert f"HNX_ENDPOINT_{name}=http" in env

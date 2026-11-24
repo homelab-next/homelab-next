@@ -67,6 +67,18 @@ argument_specs:
         type: str
         description: systemctl.
         default: systemctl
+      source_census_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      source_census_last_run_group:
+        type: str
+        description: The group that reads the last-run records.
+        default: root
+      source_census_last_run_writer:
+        type: path
+        description: The shared last-run writer.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
       source_census_reader_cred:
         type: str
         description: The secret reference of the reader's engine password (a name, never a value).

@@ -29,6 +29,7 @@
 #     - timer:prometheus/alerts
 #     - timer:restore_drill/drill
 #     - timer:rkhunter/scan
+#     - timer:source_census/source-census-run
 #     - timer:status_hub/hnx-hub-collect
 #     - timer:status_hub/hnx-hub-login-token
 #     - timer:trino/lake-maintenance
