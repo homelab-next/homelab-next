@@ -12,6 +12,7 @@
 #     - timer:clamav/scan
 #     - timer:compose_app/export
 #     - timer:context/reindex
+#     - timer:hardware_metrics/hnx-hardware-metrics
 #     - timer:honeypot/lake
 #     - timer:honeypot/report
 #     - timer:intel_ingest/intel-ingest

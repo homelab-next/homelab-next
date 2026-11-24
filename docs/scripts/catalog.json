@@ -825,6 +825,26 @@
     },
     {
       "exit": {
+        "0": "metrics written (a collector that failed says so in hw_collector_up, it does not fail the run)",
+        "2": "the configuration could not be read or the metrics could not be written"
+      },
+      "id": "hardware-metrics",
+      "inputs": "the role's JSON configuration (the collectors and the commands and paths each reads), and those commands' read-only output",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-hardware-metrics",
+      "kind": "job",
+      "language": "python",
+      "outputs": "hardware_metrics.prom in the textfile directory, written atomically",
+      "owner": "platform",
+      "path": "ansible/roles/hardware_metrics/files/hnx-hardware-metrics.py",
+      "purpose": "Write a host's hardware state (pool health and capacity, board sensors and event log, GPU temperature, power and load, guest run state) as node-exporter textfile metrics.",
+      "status": "active",
+      "trigger": [
+        "timer:hardware_metrics/hnx-hardware-metrics",
+        "role:hardware_metrics"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "findings"
       },
@@ -1320,6 +1340,7 @@
         "timer:clamav/scan",
         "timer:compose_app/export",
         "timer:context/reindex",
+        "timer:hardware_metrics/hnx-hardware-metrics",
         "timer:honeypot/lake",
         "timer:honeypot/report",
         "timer:intel_ingest/intel-ingest",

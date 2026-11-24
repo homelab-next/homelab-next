@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Hardware metrics (control hardware-metrics, applied per host): a timer writes the host's hardware
+# state as node-exporter textfile metrics (the metrics-agent control's textfile directory), so the
+# metrics service's hardware rules can alert on it. Every collector only reads:
+#   zfs         pool capacity, health and error counters (zpool list / zpool status)
+#   ipmi        the board controller's sensors (temperatures, fans, voltages, power supplies) and its
+#               event log, in-band through the local device (no network login to the controller)
+#   nvidia      per-GPU temperature, power, power limit, load and memory (nvidia-smi)
+#   xe          per-GPU temperature, power limit, energy, fan and engine idle time (the xe driver's sysfs)
+#   hypervisor  the node's guests: running or not, and set to start at boot or not
+# hardware_metrics_collectors (required): a non-empty list of the above
+hardware_metrics_textfile_dir: /var/lib/homelabnext-textfile
+hardware_metrics_interval: "*-*-* *:*:00 UTC"
+# the commands and paths the collectors read (a site never needs to change these; tests do)
+hardware_metrics_zpool_cli: zpool
+hardware_metrics_ipmitool_cli: ipmitool
+hardware_metrics_nvidia_smi_cli: nvidia-smi
+hardware_metrics_guests_cli: pvesh
+hardware_metrics_guest_conf_dirs: [/etc/pve/qemu-server, /etc/pve/lxc]
+hardware_metrics_drm_dir: /sys/class/drm
+hardware_metrics_pci_dir: /sys/bus/pci/devices
+hardware_metrics_proc_dir: /proc
+# the GPU collectors count the driver's error reports in this boot's kernel log
+hardware_metrics_journal_cli: journalctl
+# A workload (the inference server) is expected to compute on this host's GPUs at all times: the
+# metrics then say so, and an alert fires when no process holds GPU memory (a server that fell back
+# to the CPU after a card fault). Off: GPUs may sit unused.
+hardware_metrics_expect_gpu_processes: false
+# the hypervisor collector lists the guests of this node only (its name in the hypervisor's cluster)
+hardware_metrics_node: "{{ ansible_facts['hostname'] | default(inventory_hostname_short) }}"
+# Install the packages a collector needs (the board collector's ipmitool). Off: readiness only checks
+# the commands exist (the pool, GPU and guest commands come with the host's own platform, never from here).
+hardware_metrics_install_packages: true
+hardware_metrics_conf_dir: /etc/homelabnext
+hardware_metrics_libexec_dir: /usr/local/libexec/homelabnext
+hardware_metrics_systemd_dir: /etc/systemd/system
+hardware_metrics_systemctl_cli: systemctl
+# health: the metrics file is younger than this, and every collector read its source
+hardware_metrics_health_max_age_seconds: 300
+# Each run's last-run record (role last_run, docs/role-interface.md section 8): the shared
+# per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
+hardware_metrics_last_run_dir: /var/lib/homelabnext/last-run
+hardware_metrics_last_run_group: root
