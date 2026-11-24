@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the file checkpoints from an export (data state): every file in listing.jsonl must exist
+# at its listed size and sha256 (a tampered or truncated export is refused before anything is
+# touched), the containers are stopped while the files go back, and are started after. A missing
+# checkpoint is not a defect: the aggregator reads the stream from its start and the lake's content
+# key makes the replay a no-op.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Read the listing
+      ansible.builtin.slurp:
+        src: "{{ vector_restore_source }}/listing.jsonl"
+      register: vector_listing_raw
+    - name: Name the listed files
+      ansible.builtin.set_fact:
+        vector_listing: "{{ vector_listing_raw.content | b64decode | trim | split('\n') | reject('equalto', '') | map('from_json') | list }}"
+    - name: Every listed name is a plain file name
+      ansible.builtin.assert:
+        that: vector_listing | map(attribute='key') | reject('match', '^[a-z0-9_.-]+\.json\Z') | list | length == 0
+        fail_msg: "vector: the export lists a name that is not a plain checkpoint file"
+    - name: Hash each listed file
+      ansible.builtin.stat:
+        path: "{{ vector_restore_source }}/checkpoints/{{ item.key }}"
+        checksum_algorithm: sha256
+      loop: "{{ vector_listing }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: vector_restore_stats
+    - name: Every file is what the listing says
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.checksum == item.item.sha256
+          - item.stat.size == item.item.size
+        fail_msg: "vector: {{ item.item.key }} is missing or is not what the export lists"
+      loop: "{{ vector_restore_stats.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+    - name: Stop the containers while the checkpoints go back
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ vector_app.compose_app_dir }}/docker-compose.yml", stop]
+      when: vector_start | bool
+      changed_when: true
+    - name: Put each checkpoint back
+      ansible.builtin.copy:
+        src: "{{ vector_restore_source }}/checkpoints/{{ item.key }}"
+        dest: "{{ vector_data_root }}/state/{{ item.key | regex_replace('\\.json$', '') }}/checkpoints.json"
+        remote_src: true
+        owner: "{{ vector_uid | int }}"
+        group: "{{ vector_gid | int }}"
+        mode: "0600"
+      loop: "{{ vector_listing }}"
+      loop_control:
+        label: "{{ item.key }}"
+    - name: Start the containers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ vector_app.compose_app_dir }}/docker-compose.yml", start]
+      when: vector_start | bool
+      changed_when: true
+  tags: [restore]

@@ -251,12 +251,13 @@ def test_the_real_ci_yml_pools_exactly_the_listed_jobs_and_keeps_the_rest_hosted
     jobs = yaml.safe_load(POOL_WORKFLOW.read_text())["jobs"]
     pooled = {n for n, j in jobs.items() if j.get("runs-on") == POOL_RUNS_ON}
     assert pooled == POOL_JOBS
-    # the shards: the 3.11 leg only, through the flagged variant; 3.12 (the Go leg) stays hosted
+    # the shards: through the flagged variant, with no leg on the pool (measured 2026-11-23: hosted shards on xdist 6-8 min,
+    # the pool's 13 min under load); a leg moves to the pool by flipping its flag, here and in ci.yml
     assert jobs[POOL_SHARD_JOB]["runs-on"] == POOL_SHARD_RUNS_ON
     legs = {
         m["version"]: m.get("pool") for m in jobs[POOL_SHARD_JOB]["strategy"]["matrix"]["python"]
     }
-    assert legs == {"3.11": True, "3.12": False}
+    assert legs == {"3.11": False, "3.12": False}
     for name in (
         "test-ok",
         "go",

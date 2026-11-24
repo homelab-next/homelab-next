@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes: keyed by the slot, renamed to the
+# instance the site selects; version is product.version, host the module's host role (docs/modules/
+# registry-rows.md). It names the syslog over TLS listener (6514), the one the lab's own senders
+# use; the router's UDP syslog (514, the UDR7 sends UDP only) and the sensors' vector protocol
+# (6000) are admitted by the guest's firewall file from named sources only. Internal, no public
+# route; each sender is held by the allowed-source firewall and by its route's label declaration
+# (README, "Limits").
+services:
+  log-pipeline:
+    capability: log-pipeline
+    impl: vector-aggregator
+    host: aggregator
+    protocol: tcp
+    port: 6514
+    health: {kind: tcp}
+    upstreams: [object-store]
+    owner: operator
+    tls: internal
+    auth: none
+    tags: [data, logs]
+    description: Vector aggregator and label sidecar; syslog over TLS on 6514 (UDP 514 and the sensors' 6000 by firewall rule); stages OCSF batches in the object store. No public route.

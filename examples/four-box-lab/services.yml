@@ -120,7 +120,7 @@ services:
     description: Watches both capture NICs (the uplink mirror and main-1's guest mirror) and ships alerts and flow records; it listens on nothing, so its health is the sensor host's SSH.
   dfir:
     capability: dfir
-    impl: velociraptor
+    impl: dfir-server
     host: sensor-1
     protocol: https
     port: 8000

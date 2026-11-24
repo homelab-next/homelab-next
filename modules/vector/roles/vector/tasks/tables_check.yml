@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# The two rendered tables are given and valid JSON documents of the schemas the sidecar loads (it
+# refuses any other, so a deployment that copied the wrong file would label nothing).
+- name: Name the tables the role copies
+  ansible.builtin.set_fact:
+    vector_tables_src:
+      runtime-labels.json: "{{ vector_runtime_labels_src }}"
+      tlp-sources.json: "{{ vector_tlp_sources_src }}"
+  tags: [readiness]
+
+- name: Both tables are given
+  ansible.builtin.assert:
+    that: vector_tables_src.values() | reject('match', '^/[^\0]+\Z') | list | length == 0
+    fail_msg: >-
+      vector: vector_runtime_labels_src (hnx guests render --target runtime-labels) and
+      vector_tlp_sources_src (hnx modules render) name the rendered files, absolute paths on the controller
+  tags: [readiness]
+
+- name: Read each table
+  ansible.builtin.set_fact:
+    vector_table_docs:
+      runtime-labels.json: "{{ lookup('ansible.builtin.file', vector_runtime_labels_src) | from_json }}"
+      tlp-sources.json: "{{ lookup('ansible.builtin.file', vector_tlp_sources_src) | from_json }}"
+  tags: [readiness]
+
+- name: Each table has its schema
+  ansible.builtin.assert:
+    that:
+      - vector_table_docs['runtime-labels.json'].schema == 'homelabnext.logpipeline.runtime_labels/v1'
+      - vector_table_docs['tlp-sources.json'].schema == 'homelabnext.logpipeline.tlp_sources/v1'
+    fail_msg: "vector: a rendered table is not the schema the sidecar loads (swapped files?)"
+  tags: [readiness]

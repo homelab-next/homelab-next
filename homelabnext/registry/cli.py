@@ -157,6 +157,19 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
             "--node-exporter-port",
         )
         p.add_argument(
+            "--probe-targets",
+            action="store_true",
+            help="the metrics generator also renders the HTTP(S) probe target list: every row "
+            "published at the edge or declaring an http health endpoint, less --probe-exclude",
+        )
+        p.add_argument(
+            "--probe-exclude",
+            action="append",
+            default=None,
+            metavar="SERVICE",
+            help="a service row not to probe (repeatable); needs --probe-targets",
+        )
+        p.add_argument(
             "--reserved-username",
             action="append",
             default=None,
@@ -213,6 +226,10 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     if args.node_exporter_exclude and args.node_exporter_port is None:
         print("hnx: --node-exporter-exclude needs --node-exporter-port", file=err)
         return 2
+    if args.probe_exclude and not args.probe_targets:
+        print("hnx: --probe-exclude needs --probe-targets", file=err)
+        return 2
+    probe_targets = {"exclude": args.probe_exclude or []} if args.probe_targets else None
     node_targets = (
         None
         if args.node_exporter_port is None
@@ -227,6 +244,7 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
                     "edge_hosts": args.edge_host,
                     "reserved_usernames": args.reserved_username,
                     "node_targets": node_targets,
+                    "probe_targets": probe_targets,
                 },
             )
         )

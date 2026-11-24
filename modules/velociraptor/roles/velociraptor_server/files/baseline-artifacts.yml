@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+# The allow-list the module's own hunt principal may collect, and the only permissions that
+# principal holds (docs/adr/0049, decision 4). One file, human-approve (a role file: a change to
+# it is classified human by the review tier).
+#
+# The principal can COLLECT and READ. It can not run a command on the server or an endpoint
+# (EXECVE), write a file (FILESYSTEM_WRITE), define or upload an artifact (ARTIFACT_WRITER), or
+# administer the server (SERVER_ADMIN), and no entry below may need any of those: the script's
+# catalog check (hnx-velociraptor catalog-check) refuses a catalog whose principal holds a
+# permission outside the four, and an artifact whose definition, on the running server, needs
+# anything the principal does not hold. An artifact that needs one of those, and any action that
+# changes an endpoint (endpoint.quarantine, endpoint.remove-file, endpoint.kill-process), is a
+# remote-admin broker action behind approval (ADR-0017), never an entry here.
+schema: hnx-velociraptor-catalog/1
+principal:
+  permissions: [ANY_QUERY, COLLECT_CLIENT, READ_RESULTS, START_HUNT]
+# Linux.Sys.Services is NOT here: on the real server its definition implies EXECVE (it runs systemctl),
+# which the hunt principal never holds; the module's own ConfigHunt artifact covers the unit files.
+# What a hunt collects, one hunt per run for the whole list. `sources` names the artifact's
+# sources to read back (empty: its default one). `required_permissions` is what the shipped
+# definition declares (EXECVE, ... ); the script compares it with the running server's.
+artifacts:
+  - name: Linux.Sys.Crontab
+    sources: [CronTabs]
+    required_permissions: []
+    category: cron
+    purpose: Cron entries per user, for the persistence baseline.
+  - name: Linux.Sys.SUID
+    sources: []
+    required_permissions: []
+    category: suid
+    purpose: Set-uid and set-gid binaries, for the persistence baseline.
+  - name: Linux.Sys.Users
+    sources: []
+    required_permissions: []
+    category: user
+    purpose: Accounts from the passwd database, for the persistence baseline.
+  - name: Linux.Sys.Groups
+    sources: []
+    required_permissions: []
+    category: group
+    purpose: Groups and their members, for the persistence baseline.
+  - name: Custom.Linux.Persistence.ConfigHunt
+    sources: [SSHAuthorizedKeys, SystemdUnitFiles, Sudoers, PAMConfig, LdSoPreload, RcLocalInitdMotd, KernelModules]
+    required_permissions: []
+    category: persistence-config
+    purpose: Authorized keys, unit files, sudoers, PAM, ld.so.preload, init scripts and loaded kernel modules (the module ships the definition; the server loads it from its own directory, so no principal ever uploads it).

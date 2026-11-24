@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+vector_repository: "{{ vector_image.split('@')[0].rsplit(':', 1)[0] }}"
+vector_tag: "{{ vector_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+vector_digest: "{{ vector_image.split('@')[1] | default('') }}"
+vector_sidecar_repository: "{{ vector_sidecar_image.split('@')[0].rsplit(':', 1)[0] }}"
+vector_sidecar_tag: "{{ vector_sidecar_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+vector_sidecar_digest: "{{ vector_sidecar_image.split('@')[1] | default('') }}"
+vector_pin_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+vector_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+vector_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+vector_route_pattern: '^[a-z0-9][a-z0-9_-]{0,63}/[a-z0-9][a-z0-9_-]{0,63}\Z'
+vector_bucket_pattern: '^[a-z0-9][a-z0-9.-]{2,62}\Z'
+vector_prefix_pattern: '^[A-Za-z0-9][A-Za-z0-9_./-]{0,127}/\Z'
+# the object store's key forms: a key id of GK and 24 to 32 hex digits, a secret of 64 hex digits
+vector_key_id_pattern: '^GK[0-9a-f]{24,32}\Z'
+vector_hex64_pattern: '^[0-9a-f]{64}\Z'
+vector_pem_cert_pattern: '(?s)^-----BEGIN CERTIFICATE-----.+-----END CERTIFICATE-----\s*\Z'
+vector_pem_key_pattern: '(?s)^-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----.+-----END (?:[A-Z]+ )?PRIVATE KEY-----\s*\Z'
+# where things are mounted in the containers
+vector_run_dir: /run/hnx
+vector_tables_dir: /etc/hnx-vector
+vector_siem_mount: /var/siem-logs
+# the core files the sidecar's label rules are (the closure of homelabnext.logpipeline, standard
+# library only; tests/modules/test_vector_sidecar.py proves the list is complete and the copies
+# byte-identical), copied beside the module's own package
+vector_lib_files:
+  - tlp.py
+  - logpipeline/__init__.py
+  - logpipeline/runtime_labels.py
+  - logpipeline/tlp_labels.py
+vector_checkpoint_dir: file_checkpoints
+# the ports inside the container (the host's are the settings): unprivileged, so every capability stays dropped
+vector_container_syslog_udp_port: 5514
+vector_container_syslog_tls_port: 6514
+vector_container_sensor_port: 6000
+vector_container_tls_dir: /etc/vector/tls
+vector_tls_files: >-
+  {{ [{'file': 'cert.pem', 'ref': vector_tls_cert_ref}, {'file': 'key.pem', 'ref': vector_tls_pem_ref}]
+     + ([{'file': 'sensor-ca.pem', 'ref': vector_sensor_ca_ref}] if vector_sensor_ca_ref != '' else []) }}

@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role velociraptor_server); local changes are overwritten.
+[Unit]
+Description=homelabnext endpoint-forensics cycle, every {{ velociraptor_server_interval_minutes }} minutes
+
+[Timer]
+OnCalendar={{ velociraptor_server_schedule }}
+AccuracySec=5s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

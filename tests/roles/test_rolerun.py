@@ -10,6 +10,12 @@ import rolerun
 from rolerun import MAX_WORKERS, workers
 
 
+@pytest.fixture(autouse=True)
+def _not_under_xdist(monkeypatch):
+    """These tests state the serial arithmetic whatever runs them (``-n`` sets the real figure)."""
+    monkeypatch.setattr(rolerun, "XDIST_WORKERS", 1)
+
+
 @pytest.mark.parametrize(
     ("cpus", "expected"),
     [(1, 1), (4, 4), (MAX_WORKERS, MAX_WORKERS), (64, MAX_WORKERS), (0, 1)],
@@ -115,3 +121,37 @@ def test_parallel_cases_are_split_in_order_and_put_back_in_order(monkeypatch, tm
     chunks.clear()
     assert rolerun.run_cases(tmp_path, "r", "health", {}, cases) == got  # one process by default
     assert chunks == [("", list(range(7)))]
+
+
+def test_an_xdist_worker_takes_its_share_of_the_cpus(monkeypatch):
+    monkeypatch.setattr(rolerun, "XDIST_WORKERS", 4)
+    assert workers(env={}, cpus=16) == 4
+    assert workers(env={}, cpus=8) == 2
+    assert workers(env={}, cpus=2) == 1  # never none
+    assert workers(env={"HNX_ROLERUN_WORKERS": "6"}, cpus=2) == 6  # the explicit count is whole
+
+
+def test_an_xdist_worker_starts_only_its_own_modules_first_runs(monkeypatch, tmp_path_factory):
+    """Every worker collects every test but runs only the files it is handed: a worker that
+    prefetched the whole session would start each role run once per worker."""
+    started = []
+    monkeypatch.setattr(rolerun, "XDIST_WORKERS", 2)
+    monkeypatch.setattr(rolerun, "_FIRST_RUNS", {})
+
+    def node(path, name):
+        def case(tmp):
+            started.append(f"{path}::{name}")
+            return {"runner": lambda _tmp: f"ran {path}::{name}"}
+
+        return types.SimpleNamespace(
+            nodeid=f"{path}::{name}", name=name, path=path,
+            function=types.SimpleNamespace(hnx_first_run=case),
+            get_closest_marker=lambda _name: None, iter_markers=lambda _name: [],
+        )  # fmt: skip
+
+    items = [node("a.py", "t1"), node("a.py", "t2"), node("b.py", "t3")]
+    session = types.SimpleNamespace(items=items)
+    for it in items:
+        it.session = session
+    run = rolerun.prefetch_first_runs(types.SimpleNamespace(node=items[0]), tmp_path_factory)
+    assert run[0] == "ran a.py::t1" and sorted(started) == ["a.py::t1", "a.py::t2"]

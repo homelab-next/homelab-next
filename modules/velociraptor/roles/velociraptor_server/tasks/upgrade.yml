@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate a pinned image bump and record it. The server and its clients must run the same release
+# (the clients' binary is pinned in role velociraptor_client): bump both together. The start guard
+# keeps the configuration, so the new image cannot rotate the authority.
+- block:
+    - name: Refuse a target that is not pinned by tag and digest, or is another repository
+      ansible.builtin.assert:
+        that:
+          - velociraptor_server_target_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+          - velociraptor_server_target_image.split('@')[0].rsplit(':', 1)[0] == velociraptor_server_repository
+        fail_msg: "velociraptor: the target must be {{ velociraptor_server_repository }}:<tag>@sha256:<64 hex>"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: velociraptor
+        compose_app_dir: "{{ velociraptor_server_app.compose_app_dir }}"
+        compose_app_owner: "{{ velociraptor_server_app.compose_app_owner }}"
+        compose_app_group: "{{ velociraptor_server_app.compose_app_group }}"
+        compose_app_spec: "{{ velociraptor_server_app.compose_app_spec }}"
+        compose_app_upgrade_service: velociraptor
+        compose_app_upgrade_tag: "{{ velociraptor_server_target_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ velociraptor_server_target_image.split('@')[1] }}"
+  tags: [upgrade]

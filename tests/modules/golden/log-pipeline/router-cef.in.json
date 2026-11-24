@@ -1,0 +1,5 @@
+[
+  "<14>Nov 22 10:10:00 router-a CEF:0|Example Router Co|Router OS|8.0|400|Firewall Drop|5|src=198.51.100.130 dst=203.0.113.5 spt=40000 dpt=443 proto=TCP in=120 out=4096 rt=1795389000000 flowDirection=outbound\n",
+  "<14>Nov 22 10:10:01 router-a CEF:0|Example Router Co|Router OS|8.0|401|Admin login|1|suser=admin src=192.0.2.77 rt=1795389001000\n",
+  "<13>Nov 22 10:10:02 router-a dhcpd: lease granted\n"
+]

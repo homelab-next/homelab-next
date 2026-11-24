@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy; the clients' port serves the server's
+# certificate and the GUI port asks for a sign-in (both probed inside the container against its own
+# authority); the certificate authority is the recorded one (LL-087); the hunt principal holds
+# exactly the allow-list's permissions, can read the fleet, and is refused a command and an artifact
+# definition; and no listed artifact needs more than the principal holds on the running server.
+# It does not require an enrolled client (that is the module's criteria), and mutates nothing.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: velociraptor
+        compose_app_dir: "{{ velociraptor_server_app.compose_app_dir }}"
+        compose_app_spec: "{{ velociraptor_server_app.compose_app_spec }}"
+    - name: The certificate authority is the recorded one
+      ansible.builtin.include_tasks: ca.yml
+      vars:
+        velociraptor_server_record_ca: false
+    - name: The configuration and the principal's credential are the container user's alone
+      ansible.builtin.stat:
+        path: "{{ velociraptor_server_data_root }}/etc/{{ item }}"
+      loop: ["{{ velociraptor_server_config_name }}", "{{ velociraptor_server_api_config_name }}"]
+      register: velociraptor_server_files
+    - name: They exist, are regular files and are not readable by anyone else
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.mode == '0600'
+          - item.stat.uid == velociraptor_server_uid | int
+        fail_msg: "velociraptor: {{ item.item }} must be a regular file of mode 0600 owned by the container's user"
+      loop: "{{ velociraptor_server_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+    - name: Both listeners answer as they should
+      ansible.builtin.command:
+        argv: ["{{ velociraptor_server_script }}", --config, "{{ velociraptor_server_config_file }}", probe]
+      changed_when: false
+    - name: The hunt principal holds only collect rights
+      ansible.builtin.command:
+        argv: ["{{ velociraptor_server_script }}", --config, "{{ velociraptor_server_config_file }}", principal-check]
+      changed_when: false
+    - name: No listed artifact needs more than the principal holds
+      ansible.builtin.command:
+        argv: ["{{ velociraptor_server_script }}", --config, "{{ velociraptor_server_config_file }}", catalog-check]
+      changed_when: false
+  tags: [health]

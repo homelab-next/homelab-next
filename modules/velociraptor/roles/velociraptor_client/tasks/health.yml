@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the binary is the pinned release, the configuration on the host is the server's
+# generated one and owner-only, the unit is active, and the client has enrolled. Mutates nothing.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The installed binary's sha256
+      ansible.builtin.stat:
+        path: "{{ velociraptor_client_install_path }}"
+        checksum_algorithm: sha256
+      register: velociraptor_client_bin
+    - name: The binary is the pinned release
+      ansible.builtin.assert:
+        that:
+          - velociraptor_client_bin.stat.exists
+          - velociraptor_client_bin.stat.checksum == velociraptor_client_checksums[velociraptor_client_version]
+        fail_msg: "velociraptor client: {{ velociraptor_client_install_path }} is missing or not the pinned release {{ velociraptor_client_version }}"
+    - name: Read the installed configuration
+      ansible.builtin.slurp:
+        src: "{{ velociraptor_client_config_path }}"
+      register: velociraptor_client_installed_config
+      no_log: true
+    - name: It is owner-only
+      ansible.builtin.stat:
+        path: "{{ velociraptor_client_config_path }}"
+      register: velociraptor_client_config_stat
+    - name: The installed configuration is the server's generated one and owner-only
+      ansible.builtin.include_tasks: config.yml
+      vars:
+        velociraptor_client_config_file: ""
+    - name: The mode is 0600
+      ansible.builtin.assert:
+        that: velociraptor_client_config_stat.stat.mode == '0600'
+        fail_msg: "velociraptor client: {{ velociraptor_client_config_path }} must be mode 0600"
+    - name: Ask whether the unit is active
+      ansible.builtin.command:
+        argv: ["{{ velociraptor_client_systemctl_cli }}", is-active, "{{ velociraptor_client_service }}.service"]
+      register: velociraptor_client_active
+      changed_when: false
+      failed_when: velociraptor_client_active.stdout | trim != 'active'
+    - name: The client has enrolled
+      ansible.builtin.include_tasks: enrolled.yml
+      vars:
+        velociraptor_client_config_text: "{{ velociraptor_client_installed_config.content | b64decode }}"
+        velociraptor_client_ready_timeout: 10
+  tags: [health]
