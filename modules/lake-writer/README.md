@@ -105,7 +105,7 @@ lost checkpoint, the same events under another batch name).
 
 Required: `lake_writer_logical_id`, `lake_writer_lake_user`, `lake_writer_lake_warehouse`, `lake_writer_s3_region`, and for each
 of the lake query service, the catalog and the object store either its registry id or its URL. Everything
-else has a default in `defaults/main.yml`. The lake is reached over https only and verified.
+else has a default in `defaults/main.yml`. The query service is reached over https only and verified; the catalog too when a catalog token goes to it (a catalog without sign-in, network-only, may be plain http: it is sent no credential).
 
 ## What the overlay must add
 

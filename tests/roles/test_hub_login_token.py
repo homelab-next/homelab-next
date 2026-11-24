@@ -162,3 +162,51 @@ def test_a_bad_configuration_is_a_usage_error(tmp_path):
     bad.write_text('{"entries": []}')
     assert helper.main(["x", "--config", str(bad)]) == 2
     assert helper.main(["x"]) == 2
+
+
+# ------------------------------------------------- the reference a source reads a login token by
+ROLE = ROOT / "ansible/roles/status_hub"
+
+
+def _login_vars() -> dict:
+    import yaml
+
+    return yaml.safe_load((ROLE / "vars/main.yml").read_text())
+
+
+def test_login_tokens_live_in_one_store_area_under_the_issued_directory():
+    v = _login_vars()
+    assert v["status_hub_login_area"] == "hub-login"
+    assert v["status_hub_login_dir"] == "{{ status_hub_issued_dir }}/{{ status_hub_login_area }}"
+    tasks = (ROLE / "tasks/login_tokens.yml").read_text()
+    assert "'out': status_hub_login_dir ~ '/' ~ item.name" in tasks  # the helper writes there
+    assert 'path: "{{ status_hub_login_dir }}/{{ item.name }}"' in tasks  # and the role looks there
+    assert "status_hub_issued_dir ~ '/' ~ item.name" not in tasks
+    assert (
+        '{path: "{{ status_hub_login_dir }}", owner: root'
+        in (ROLE / "tasks/collect.yml").read_text()
+    )
+
+
+@pytest.mark.parametrize("name", ["flow-status-token", "flow-reader", "a"])
+def test_a_login_token_reference_is_a_store_reference_the_leak_scan_accepts(name):
+    import sys
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import leak_scan
+
+    line = f'      auth: {{secret: "secret:{_login_vars()["status_hub_login_area"]}/{name}"}}\n'
+    assert leak_scan.scan_text(line, "lab/services.yml") == []
+    # the bare login name, the old form, reads as a literal value assigned to a secret key
+    if len(name) >= 6:
+        assert leak_scan.scan_text(f'      auth: {{secret: "secret:{name}"}}\n', "lab/services.yml")
+
+
+def test_the_collector_reads_a_login_token_by_its_area_reference(tmp_path):
+    from homelabnext.status.agents.config import secret_lookup
+
+    (tmp_path / "hub-login").mkdir()
+    (tmp_path / "hub-login" / "flow-reader").write_text("issued-value\n")
+    lookup = secret_lookup(env={}, secrets_dir=tmp_path)
+    assert lookup("secret:hub-login/flow-reader") == "issued-value"
+    assert lookup("secret:flow-reader") is None
