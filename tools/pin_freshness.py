@@ -244,6 +244,7 @@ SOURCES: dict[str, tuple[str, str]] = {
     ),
     "role:prometheus/prometheus_image": ("github", "prometheus/prometheus"),
     "role:prometheus/prometheus_blackbox_image": ("github", "prometheus/blackbox_exporter"),
+    "role:prometheus/prometheus_snmp_image": ("github", "prometheus/snmp_exporter"),
     "role:stackstorm/stackstorm_mongo_image": (
         "none",
         "the Docker official image (docker.io/library/mongo), held on the 4.4 line the pinned "
@@ -562,6 +563,9 @@ NOTES: dict[str, str] = {
     ),
     "role:prometheus/prometheus_blackbox_image": (
         "an image (modules/prometheus): bump the tag and its digest together; the probe config format is stable across 0.x minors"
+    ),
+    "role:prometheus/prometheus_snmp_image": (
+        "an image (modules/prometheus): bump the tag and its digest together; its bundled snmp.yml (if_mib) is read beside the role's own module"
     ),
     "role:prometheus/prometheus_image": (
         "an image (modules/prometheus): bump the tag and its digest together, with product.version "
