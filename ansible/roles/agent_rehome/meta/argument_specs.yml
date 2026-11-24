@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Move an agent enrolled with another manager to the registry's manager (backups, re-enrolment); an agent already there is left alone.
+    options:
+      agent_rehome_enabled:
+        type: bool
+        description: Whether an agent role runs this role (off by default); the role itself acts whenever it is included.
+        default: false
+      agent_rehome_manager_id:
+        type: str
+        description: Logical id of the manager in the registry (its host is the address the agent is pointed at).
+        required: true
+      agent_rehome_enrollment_ref:
+        type: str
+        description: Secret reference (secret:<name>) of the manager's enrolment password, resolved by the hnx_secret lookup.
+        required: true
+      agent_rehome_enrollment_port:
+        type: int
+        description: The manager's enrolment port.
+        required: true
+      agent_rehome_config_file:
+        type: path
+        description: The agent's configuration file (its server blocks carry <address> elements).
+        required: true
+      agent_rehome_key_file:
+        type: path
+        description: The agent's key file, emptied so the new manager issues a fresh key.
+        required: true
+      agent_rehome_password_file:
+        type: path
+        description: The agent's enrolment password file, read by the enrolment command.
+        required: true
+      agent_rehome_service:
+        type: str
+        description: The agent's service name, stopped and started around the move.
+        required: true
+      agent_rehome_auth_cli:
+        type: str
+        description: The agent's enrolment command; it takes -m <manager> -p <port> and reads the password file.
+        required: true
+      agent_rehome_stamp:
+        type: str
+        description: The suffix of the backups (*.pre-rehome-<stamp>).
+      agent_rehome_config_group:
+        type: str
+        description: The group that reads the agent's key and enrolment password.
+        default: root
+      agent_rehome_systemctl_cli:
+        type: str
+        description: systemctl, for the stop and start.
+        default: systemctl
+  health:
+    short_description: Nothing to check; the agent role's own health hook reports the connection.
+    options: {}
+  readiness:
+    short_description: Nothing to wait for; the move runs in main.
+    options: {}
+  backup:
+    short_description: Nothing to back up; main keeps its own rollback copies.
+    options: {}
+  restore:
+    short_description: Nothing to restore; roll back by hand from the *.pre-rehome-<stamp> files.
+    options: {}
+  upgrade:
+    short_description: Nothing to upgrade; the role pins no version.
+    options: {}
+  export:
+    short_description: Nothing to export; the role holds no data.
+    options: {}

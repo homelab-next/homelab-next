@@ -56,6 +56,7 @@ def test_every_rule_has_a_fixture():
 
 
 SHIPPED = [
+    "agent_rehome",
     "aide",
     "auditd",
     "broker",

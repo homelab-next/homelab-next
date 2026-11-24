@@ -69,9 +69,22 @@
 - name: Rules, HOME_NET and the gate
   block:
     # The configuration includes the address-groups file suricata_enroll writes, and suricata-update
-    # reads the whole configuration before it fetches: on a first install that file does not exist
-    # yet and the fetch fails. A placeholder is written only when the file is missing; suricata_enroll
-    # replaces it with the real HOME_NET before the gate, and the service is never started on it.
+    # reads (and tests) the whole configuration before it fetches: on a first install that file does
+    # not exist yet and the fetch fails. A placeholder is written when the file is missing (or is
+    # still an earlier placeholder), with every standard group the rules name (a rule naming an
+    # undefined group fails the load); suricata_enroll replaces it with the real HOME_NET before the
+    # gate, and the service is never started on it. A real file is never touched.
+    - name: Look for the address-groups include
+      ansible.builtin.stat:
+        path: "{{ suricata_config_dir }}/{{ suricata_groups_file }}"
+      register: suricata_groups_now
+
+    - name: Read it, to tell a placeholder from the real file
+      ansible.builtin.slurp:
+        src: "{{ suricata_config_dir }}/{{ suricata_groups_file }}"
+      register: suricata_groups_text
+      when: suricata_groups_now.stat.exists
+
     - name: A placeholder address-groups include on a first install (replaced by suricata_enroll before the gate)
       ansible.builtin.copy:
         dest: "{{ suricata_config_dir }}/{{ suricata_groups_file }}"
@@ -80,9 +93,17 @@
           ---
           # placeholder (role suricata, first install): suricata_enroll replaces this file before the deploy gate
           HOME_NET: "[::1]"
-          EXTERNAL_NET: "!$HOME_NET"
+          {% for name, value in suricata_placeholder_groups | dictsort %}
+          {{ name }}: {{ value | to_json }}
+          {% endfor %}
         mode: "0644"
-        force: false
+      vars:
+        suricata_placeholder_groups: >-
+          {{ (lookup('ansible.builtin.file', role_path ~ '/../../../../ansible/roles/suricata_enroll/vars/main.yml')
+              | from_yaml).suricata_enroll_standard_groups }}
+      when: >-
+        not suricata_groups_now.stat.exists
+        or (suricata_groups_text.content | b64decode) is search('placeholder \\(role suricata, first install\\)')
 
     - name: Enable the rule sources and fetch the rules
       ansible.builtin.include_tasks: rules.yml
