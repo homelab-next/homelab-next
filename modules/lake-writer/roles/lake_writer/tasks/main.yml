@@ -16,6 +16,8 @@
   ansible.builtin.command:
     argv: ["{{ lake_writer_runtime_python }}", -I, "{{ lake_writer_script }}", ensure-tables]
   environment: "{{ lake_writer_script_env }}"
+  register: lake_writer_ensure
   no_log: true
-  changed_when: true
+  # changed only when a table was created (an existing one is checked, never altered)
+  changed_when: (lake_writer_ensure.stdout_lines | last | from_json).created | default([]) | length > 0
   when: lake_writer_ensure_tables | bool and not ansible_check_mode
