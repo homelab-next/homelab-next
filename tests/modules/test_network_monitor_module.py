@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.conform.adapters.network_sensor import make
@@ -217,3 +218,51 @@ def test_the_siem_agent_reads_each_captures_event_streams_and_only_those():
     # the predecessor's blocks are only ever removed, and only from an existing configuration
     assert retired["ansible.builtin.blockinfile"]["state"] == "absent"
     assert retired["when"].startswith(f"{pfx}_siem_conf.stat.exists")
+
+
+def _retire_play(tmp_path, check: bool) -> tuple[subprocess.CompletedProcess, list[str]]:
+    """retire.yml for real, with stand-in service-manager and container CLIs that report a live,
+    restartable predecessor and record every call."""
+    import stat
+
+    log = tmp_path / "calls.txt"
+    clis = {}
+    for name, body in (
+        ("svc", "a=sys.argv[1]\nprint('enabled' if a == 'is-enabled' else 'active')"),
+        ("ctr", "print('true always') if sys.argv[1] == 'inspect' else None"),
+    ):
+        f = tmp_path / name
+        f.write_text(
+            "#!/usr/bin/env python3\nimport sys\n"
+            f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n" + body + "\n"
+        )
+        f.chmod(f.stat().st_mode | stat.S_IXUSR)
+        clis[name] = str(f)
+    tasks = yaml.safe_load((MODULE / "roles" / MID / "tasks" / "retire.yml").read_text())
+    play = [{
+        "hosts": "localhost", "connection": "local", "gather_facts": False,
+        "vars": {P + "systemctl_cli": clis["svc"], P + "docker_cli": clis["ctr"],
+                 P + "retired_units": ["old-watchdog.timer"], P + "retired_containers": ["old-a", "old-b"]},
+        "tasks": tasks,
+    }]  # fmt: skip
+    (tmp_path / "p.yml").write_text(yaml.safe_dump(play))
+    argv = ["ansible-playbook", "-i", "localhost,", str(tmp_path / "p.yml")]
+    r = subprocess.run(
+        argv + (["--check"] if check else []), capture_output=True, text=True, cwd=tmp_path
+    )
+    return r, (log.read_text().splitlines() if log.exists() else [])
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+def test_retiring_the_predecessor_probes_it_in_check_mode_too(tmp_path):
+    """The read-only probes run under --check, so a dry run reads the real state instead of failing
+    on an empty probe result (the 2026-11-24 redeploy's --check failed on every container)."""
+    r, calls = _retire_play(tmp_path, check=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(c.split()[0] for c in calls) == ["inspect", "inspect", "is-active", "is-enabled"]
+    (tmp_path / "live").mkdir()
+    r, calls = _retire_play(tmp_path / "live", check=False)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert {"disable --now old-watchdog.timer", "update --restart=no old-a", "stop old-b"} <= set(
+        calls
+    )
