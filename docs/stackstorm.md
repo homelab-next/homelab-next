@@ -267,12 +267,17 @@ idempotency key is the firing's event id (a timer that fires twice is one job), 
 admits it against live load. The agent key is the job's: the dispatcher maps it to the module's
 unit and the site needs one controller profile per key. **Two different "shadow"s:** the rules ship
 in StackStorm `mode: shadow` (log the broker request, send nothing: promotion to `live` needs the
-shadow window and evidence, above), and the packs submit on the controller's shadow lane
-(`shadow: true`, so the job's unit writes only the shadow lake schema and never publishes) because
-the plan runs 7 days there before the switch. `--lane real --write` renders the packs without it for the
-switch and re-pins their digests. The controller allows one unfinished shadow
-job per agent, so a shadow firing that lands while the previous one still runs is refused (429),
-which matters for the hourly `cti-fresh` (240 min budget) and the ten rotation slots.
+shadow window and evidence, above), and the packs choose the controller's lane. The committed packs
+are the **real** lane (`cti_schedules.LANE`, since the pipeline's switch on 2026-11-22 retired the
+controller's shadow lane): they send no `shadow` flag, so a rule's shadow record is exactly the
+request the live pipeline would be sent (agent key, priority, the real lane), the parity a
+promotion is judged on against the scheduler it replaces. Only the idempotency key and the task
+description differ by construction (the firing's event id, the rule's own wording).
+`--lane shadow --write` renders the other lane (`shadow: true`: the job's unit writes only the
+shadow lake schema and never publishes) and re-pins the digests, for a site that still runs one;
+there the controller allows one unfinished shadow job per agent, so a firing that lands while the
+previous one still runs is refused (429), which matters for the hourly `cti-fresh` (240 min
+budget) and the ten rotation slots.
 
 | Old timer | Rule | Pack | Cron (UTC) | Agent key | Priority |
 |---|---|---|---|---|---|
