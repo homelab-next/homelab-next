@@ -65,5 +65,16 @@
      or prometheus_auths_written is changed or prometheus_auths_removed is changed
      or prometheus_probes_written is changed or prometheus_probes_removed is changed)
 
+# the probe exporter reads its modules (and the trust bundle they name) at start or on SIGHUP
+- name: Reload the probe exporter when its modules or its trust bundle changed
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ prometheus_dir }}/docker-compose.yml", kill, -s, HUP, "{{ prometheus_blackbox_service }}"]
+  changed_when: true
+  when: >-
+    prometheus_start | bool and prometheus_probes_enabled | bool and not ansible_check_mode and
+    (prometheus_probe_ca_written is changed or
+     (prometheus_config_written.results | default([]) | selectattr('item.dest', 'equalto', 'blackbox/blackbox.yml')
+      | selectattr('changed') | list | length > 0))
+
 - name: Install the alert forwarder and its timer
   ansible.builtin.include_tasks: alerts.yml

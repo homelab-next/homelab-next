@@ -3,7 +3,8 @@
 # The probe modules the generated probe targets name. http_edge: any answer the edge itself gives
 # is up (a login redirect, a refusal), a 5xx or no answer is down; no redirect is followed, so the
 # probe never reaches the sign-in page's own host. http_2xx: a service's own health endpoint
-# answering with a 2xx status. Certificates are always verified.
+# answering with a 2xx status. Certificates are always verified (against the system roots, plus the
+# lab CA when prometheus_probe_ca_ref names one).
 modules:
   http_edge:
     prober: http
@@ -14,6 +15,10 @@ modules:
       valid_status_codes: [200, 201, 202, 203, 204, 206, 301, 302, 303, 304, 307, 308, 401, 403]
       preferred_ip_protocol: ip4
       ip_protocol_fallback: false
+{% if prometheus_probe_ca_ref != '' %}
+      tls_config:
+        ca_file: {{ prometheus_container_blackbox_dir }}/probe-ca.pem
+{% endif %}
   http_2xx:
     prober: http
     timeout: {{ prometheus_probe_timeout }}
@@ -22,3 +27,7 @@ modules:
       valid_status_codes: []
       preferred_ip_protocol: ip4
       ip_protocol_fallback: false
+{% if prometheus_probe_ca_ref != '' %}
+      tls_config:
+        ca_file: {{ prometheus_container_blackbox_dir }}/probe-ca.pem
+{% endif %}
