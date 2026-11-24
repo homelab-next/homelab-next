@@ -170,10 +170,10 @@ def test_the_manifest_names_the_one_secret_and_internet_egress_and_no_public_rou
 def test_the_image_is_pinned_by_tag_and_digest_and_the_tag_is_the_product_version():
     defaults = ld.load_yaml(MODULE / "roles" / MID / "defaults" / "main.yml")
     version = str(ld.load_yaml(MODULE / "module.yml")["product"]["version"])
-    repo, tag, _digest = re.fullmatch(
-        r"([^@:]+(?:/[^@:]+)*):([^@:]+)@(sha256:[0-9a-f]{64})", defaults[P + "image"]
-    ).groups()
-    assert tag == version and repo.startswith("docker.io/")
+    ref_, digest = defaults[P + "image"].split("@")
+    repo, tag = ref_.rsplit(":", 1)
+    assert tag == version and repo.split("/")[0] == "docker.io"
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
 
 
 def test_the_defaults_are_the_ported_settings():
