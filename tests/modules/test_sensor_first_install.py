@@ -92,7 +92,7 @@ def test_the_placeholder_defines_every_standard_group_the_rules_name(tmp_path):
 def test_an_earlier_placeholder_is_replaced_and_a_real_file_is_not(tmp_path):
     old = f'%YAML 1.1\n---\n# placeholder (role {PFX}, first install): x\nHOME_NET: "[::1]"\n'
     assert "HTTP_SERVERS" in yaml.safe_load(_run_placeholder(tmp_path / "a", old))
-    real = '%YAML 1.1\n---\nHOME_NET: "[192.0.2.0/24]"\n'  # no-raw-endpoint: allow a documentation-range network
+    real = '%YAML 1.1\n---\n# the enrolled file (no placeholder marker)\nHOME_NET: "[::1]"\n'
     assert _run_placeholder(tmp_path / "b", real) == real
 
 
