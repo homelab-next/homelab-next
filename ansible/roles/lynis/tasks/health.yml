@@ -13,7 +13,7 @@
       ansible.builtin.assert:
         that:
           - lynis_last.stat.exists
-          - (now(utc=true).timestamp() - lynis_last.stat.mtime) < lynis_max_age_hours | int * 3600
+          - (now().timestamp() - lynis_last.stat.mtime) < lynis_max_age_hours | int * 3600
           - (lynis_last_rc.content | b64decode | trim) == '0'
         fail_msg: >-
           lynis: no Lynis host audit in the last {{ lynis_max_age_hours }}h ({{ lynis_state_dir }}/last-run is missing or older),

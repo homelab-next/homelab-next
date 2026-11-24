@@ -24,7 +24,7 @@
       ansible.builtin.assert:
         that:
           - unattended_upgrades_stamp.stat.exists
-          - (now(utc=true).timestamp() - unattended_upgrades_stamp.stat.mtime) < unattended_upgrades_max_age_hours | int * 3600
+          - (now().timestamp() - unattended_upgrades_stamp.stat.mtime) < unattended_upgrades_max_age_hours | int * 3600
         fail_msg: >-
           unattended_upgrades: no unattended run in the last {{ unattended_upgrades_max_age_hours }}h
           ({{ unattended_upgrades_stamp_file }} is missing or older)

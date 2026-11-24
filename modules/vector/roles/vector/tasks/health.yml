@@ -42,7 +42,7 @@
     - name: The status is fresh, listening, error-free and names the deployed tables
       ansible.builtin.assert:
         that:
-          - (now(utc=true).timestamp() | int) - (vector_status.time | int) <= vector_status_max_age | int
+          - (now().timestamp() | int) - (vector_status.time | int) <= vector_status_max_age | int
           - vector_status.listening | bool
           - vector_status.errors | length == 0
           - >-

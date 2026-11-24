@@ -42,7 +42,7 @@
       ansible.builtin.assert:
         that:
           - honeypot_spool.stat.exists
-          - (now(utc=true).timestamp() | int) - (honeypot_spool.stat.mtime | int) <= (honeypot_spool_max_age_h | int) * 3600
+          - (now().timestamp() | int) - (honeypot_spool.stat.mtime | int) <= (honeypot_spool_max_age_h | int) * 3600
         fail_msg: >-
           honeypot: nothing was received for {{ honeypot_spool_max_age_h }} h (the sender is silent, the push
           target is wrong, or the sender's path to this port is closed): the spool is {{ honeypot_spool_file }}
@@ -61,7 +61,7 @@
         that:
           - honeypot_last_run_stat.stat.exists
           - (honeypot_last_run.content | b64decode | from_json).ok | default(false)
-          - (now(utc=true).timestamp() | int) - (honeypot_last_run_stat.stat.mtime | int) <= (honeypot_landing_max_age_h | int) * 3600
+          - (now().timestamp() | int) - (honeypot_last_run_stat.stat.mtime | int) <= (honeypot_landing_max_age_h | int) * 3600
         fail_msg: "honeypot: no successful landing in {{ honeypot_landing_max_age_h }} h (the lake writer failed or never ran: journalctl -u {{ honeypot_lake_unit }})"
       when: honeypot_landing_max_age_h | int > 0
     - name: Read the dead-letter counter (lines the writer could not map are quarantined, never wedging it)
