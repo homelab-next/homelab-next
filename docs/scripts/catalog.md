@@ -9,7 +9,7 @@ summary_generated: true
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-124 scripts: 26 check, 33 job, 7 service, 58 tool.
+125 scripts: 26 check, 33 job, 7 service, 59 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
