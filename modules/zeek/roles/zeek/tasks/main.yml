@@ -96,7 +96,7 @@
 
 - name: Retire the predecessor (its units, its containers)
   ansible.builtin.include_tasks: retire.yml
-  when: zeek_service_manage | bool and (zeek_retired_units or zeek_retired_containers)
+  when: zeek_service_manage | bool and (zeek_retired_units + zeek_retired_containers) | length > 0
 
 - name: The SIEM agent reads the event streams
   ansible.builtin.include_tasks: siem.yml
