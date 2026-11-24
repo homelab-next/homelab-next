@@ -23,13 +23,15 @@ field whose value differs, a field one side has and the other does not.  The fie
 :data:`SITE_FIELDS` are the lab's own facts about a row (a generic module cannot know them) and are
 compared only when the module's row sets them; the fields in :data:`SITE_BOUND_FIELDS`
 (``public_hostname``, ``edge_tls``) must be present when the module's row declares them, with
-whatever value the site gives.  A host role the site does not place is a problem
+whatever value the site gives.  A contributed ``health.path`` may name a site segment ``:name``
+(an IdP's realm): the registry's path must then be the same path with that segment filled.  A host role the site does not place is a problem
 of its own (the registry's ``host`` cannot be judged), and the other fields are still compared.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -182,9 +184,35 @@ def _site_bound_ok(field: str, value: Any) -> bool:
     return isinstance(value, Mapping) and str(value.get("ca", "")).startswith("secret:")
 
 
+#: a whole path segment of a contributed health path that is the site's (``:realm``, the route
+#: parameter form, which the row schema's path characters allow): the module knows the path's
+#: shape, the site names the segment (an IdP's health is its realm's discovery document, and the
+#: realm's name is the site's)
+_SITE_SEGMENT = re.compile(r"(?<=/):[a-z][a-z0-9_-]*(?=/|\Z)")
+
+
+def _path_matches(want: str, got: str) -> bool:
+    """``got`` is ``want`` with each ``:name`` segment filled by one path segment that is not
+    itself a parameter."""
+    parts = _SITE_SEGMENT.split(want)
+    pattern = "[^/:][^/]*".join(re.escape(p) for p in parts)
+    return re.fullmatch(pattern, got) is not None
+
+
 def _same(field: str, a: Any, b: Any) -> bool:
     if field == "version" and a is not _ABSENT and b is not _ABSENT:
         return str(a) == str(b)  # an unquoted YAML version reads as a number
+    if (
+        field == "health"
+        and isinstance(a, Mapping)
+        and isinstance(b, Mapping)
+        and isinstance(a.get("path"), str)
+        and isinstance(b.get("path"), str)
+        and _SITE_SEGMENT.search(a["path"])
+    ):
+        rest_a = {k: v for k, v in a.items() if k != "path"}
+        rest_b = {k: v for k, v in b.items() if k != "path"}
+        return rest_a == rest_b and _path_matches(a["path"], b["path"])
     return a == b
 
 

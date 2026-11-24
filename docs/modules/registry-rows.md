@@ -55,6 +55,11 @@ appear in the lab registry **identically, as the site binds it**
   registry: services.idp.public_hostname: keycloak (instance idp) declares one (its value is the site's), the lab registry has (absent)
   ```
 
+- a contributed `health.path` may name whole segments that are the site's, in the route
+  parameter form `:name` (an IdP's health is its realm's discovery document,
+  `/realms/:realm/.well-known/openid-configuration`, and the realm is the site's): the lab
+  registry's path must be the same path with each such segment filled by one segment of its own
+  (not left as the parameter); the rest of `health` is compared as any other field;
 - a provider's row never sets `version` (the loader refuses one that does), so the product's
   version is the only one there is;
 - a host role the site places on no host is a problem of its own (the registry's `host` cannot be
