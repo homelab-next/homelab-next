@@ -395,7 +395,17 @@ Several files are touched by many PRs at once. Resolve them the same way every t
 - `docs/README.md` index (generated): take either side, run `python3 -m homelabnext.cli docs index generate`.
 - A page's `summary_of:` line: take either side, then
   `python3 -m homelabnext.registers summaries --restamp <path>`.
-- `CHANGELOG.md`: keep both sides' entries.
+- `CHANGELOG.md`: keep both sides' entries. Better, do not edit it: add `changelog.d/<slug>.md`
+  (see "Changelog fragments" below).
+
+## Changelog fragments
+
+To avoid every PR editing the same top lines of `CHANGELOG.md`, a PR may add one file,
+`changelog.d/<slug>.md`, instead: optional front matter `group: Added|Changed|Fixed|Breaking`
+(default `Added`), then the entry text (the leading `- ` is optional, no headings). Nothing
+requires a fragment and `CHANGELOG.md` entries still work. Whoever cuts a release (or rotates the
+changelog, above) first runs `python3 tools/changelog_compile.py`: it puts the entries at the top
+of their group in `## [Unreleased]` and deletes the fragments; `--check` only validates them (an optional argument names another changelog file).
 
 ## Pull requests
 
