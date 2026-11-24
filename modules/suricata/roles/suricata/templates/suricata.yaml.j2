@@ -120,4 +120,6 @@ threshold-file: /etc/suricata/threshold.config
 
 unix-command:
   enabled: yes
-  filename: /run/suricata/suricata-command.socket
+  # suricatasc's default path, which the distribution unit's reload and stop also use (a socket under
+  # /run/suricata/ fails to bind: nothing creates that directory, and every suricatasc call misses it)
+  filename: /run/suricata-command.socket
