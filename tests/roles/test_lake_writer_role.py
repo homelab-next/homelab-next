@@ -183,6 +183,11 @@ def test_ensure_tables_runs_the_script_with_the_soc_namespace_and_every_login(tm
         {"tables": ["dns_activity", "cti_events"]},
         {"tables": ["dns_activity", "dns_activity"]},
         {"lake_query_url": "http://lake-query.example.internal"},
+        # a plain-http catalog is refused when a catalog token would go to it
+        {
+            "lake_catalog_url": "http://lake-catalog.example.internal",
+            "catalog_bearer_ref": "secret:lake-writer/catalog-token",
+        },
         {"lake_query_url": "", "lake_query_id": ""},
         {"staging_prefix": "../x/"},
         {"s3_id_ref": "secret:lake-writer/s3-secret-key"},
