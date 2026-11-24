@@ -1,0 +1,198 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the lake writer (the script, the schemas, one timer per table and the credentials).
+    options: &opts
+      lake_writer_logical_id:
+        type: str
+        description: The instance's id (the unit set's name), e.g. lake-writer.
+        required: true
+      lake_writer_s3_region:
+        type: str
+        description: The object store's region name.
+        required: true
+      lake_writer_lake_warehouse:
+        type: str
+        description: The lake catalog's warehouse name.
+        required: true
+      lake_writer_lake_user:
+        type: str
+        description: The engine account the writers sign in as.
+        required: true
+      lake_writer_config_dir:
+        type: path
+        description: Where the environment file, the credentials directory, the lake CA and the schemas
+          are written.
+        default: /etc/hnx/{{ lake_writer_logical_id }}
+      lake_writer_data_root:
+        type: path
+        description: 'The module''s data root on the host: state/ (checkpoints, last-run records) and
+          export/.'
+        default: /var/lib/hnx-modules/{{ lake_writer_logical_id }}
+      lake_writer_bin_dir:
+        type: path
+        description: Where the script is installed (its unit's ExecStart names it).
+        default: /usr/local/libexec/homelabnext
+      lake_writer_owner:
+        type: str
+        description: Owner of the install and config directories and the credential files.
+        default: root
+      lake_writer_owner_group:
+        type: str
+        description: Group of the install and config directories, the credential files and export/.
+        default: root
+      lake_writer_user:
+        type: str
+        description: The unprivileged account the writers run as.
+        default: hnx-{{ lake_writer_logical_id }}
+      lake_writer_group:
+        type: str
+        description: The group of that account; it owns the state directory.
+        default: hnx-{{ lake_writer_logical_id }}
+      lake_writer_manage_accounts:
+        type: bool
+        description: Create the group and the user.
+        default: true
+      lake_writer_tables:
+        type: list
+        description: The tables this instance writes (a subset splits the writers over guests; each table
+          has exactly one writer).
+        elements: str
+        default:
+        - authentication
+        - compliance_finding
+        - detection_finding
+        - dns_activity
+        - file_activity
+        - http_activity
+        - network_activity
+        - process_activity
+        - raw_archive
+        - vulnerability_finding
+      lake_writer_staging_bucket:
+        type: str
+        description: The bucket the log pipeline stages its batches in.
+        default: soc-staging
+      lake_writer_staging_prefix:
+        type: str
+        description: 'The key prefix in that bucket: batches are <prefix><table>/<name> (the module staging
+          dataset).'
+        default: lake-writer/staging/
+      lake_writer_ensure_tables:
+        type: bool
+        description: Create the soc namespace and its tables on install; an existing table is checked
+          against its pinned schema and refused when it differs, never altered.
+        default: true
+      lake_writer_lake_query_id:
+        type: str
+        description: The registry id of the lake query service; its URL is resolved at run time.
+        default: ''
+      lake_writer_lake_query_url:
+        type: str
+        description: 'The query service''s https URL, when the registry is not used; empty: from the registry.'
+        default: ''
+      lake_writer_lake_catalog_id:
+        type: str
+        description: The registry id of the lake catalog; its URL is resolved at run time.
+        default: ''
+      lake_writer_lake_catalog_url:
+        type: str
+        description: 'The catalog''s https URL, when the registry is not used; empty: from the registry.'
+        default: ''
+      lake_writer_lake_login_ref:
+        type: str
+        description: secret:<name> of the engine account's password.
+        default: secret:lake-writer/lake-password
+      lake_writer_catalog_bearer_ref:
+        type: str
+        description: 'secret:<name> of the catalog''s bearer token, when it asks for one; empty: it does
+          not.'
+        default: ''
+      lake_writer_lake_ca_ref:
+        type: str
+        description: 'secret:<name> holding the CA (PEM) the lake services are verified with; empty: the
+          system roots.'
+        default: ''
+      lake_writer_object_store_id:
+        type: str
+        description: The registry id of the object store; its URL is resolved at run time.
+        default: ''
+      lake_writer_object_store_url:
+        type: str
+        description: 'The object store''s URL, when the registry is not used; empty: from the registry.'
+        default: ''
+      lake_writer_s3_id_ref:
+        type: str
+        description: secret:<name> of the key id that may read, list and delete in the staging bucket.
+        default: secret:lake-writer/s3-access-key
+      lake_writer_s3_key_ref:
+        type: str
+        description: secret:<name> of that key id's secret.
+        default: secret:lake-writer/s3-secret-key
+      lake_writer_oncalendar:
+        type: str
+        description: Each table timer's OnCalendar (a calendar, never an interval).
+        default: '*-*-* *:0/10:00 UTC'
+      lake_writer_max_attempts:
+        type: int
+        description: Attempts per batch when the lake is away (the write is replay-safe, so a retry cannot
+          duplicate).
+        default: 5
+      lake_writer_max_batches:
+        type: int
+        description: 'A cap on the batches one run commits; 0: no cap.'
+        default: 500
+      lake_writer_health_max_age_s:
+        type: int
+        description: Health fails when a table's last run is older than this many seconds.
+        default: 2400
+      lake_writer_health_max_pending:
+        type: int
+        description: Health fails when a table has more than this many staged batches waiting.
+        default: 500
+      lake_writer_restore_source:
+        type: str
+        description: The directory a previous export wrote, for the restore hook.
+        default: ''
+      lake_writer_start:
+        type: bool
+        description: 'Arm the timers (false: write the files only).'
+        default: true
+      lake_writer_unit_dir:
+        type: path
+        description: Where the systemd units are written.
+        default: /etc/systemd/system
+      lake_writer_systemctl_cli:
+        type: str
+        description: The systemctl command health asks.
+        default: systemctl
+      lake_writer_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      lake_writer_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      lake_writer_last_run_writer:
+        type: path
+        description: Where the shared last-run writer is installed.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
+  health:
+    short_description: Fail unless the timers, the credentials, the soc tables and every table's last run are healthy now.
+    options: *opts
+  readiness:
+    short_description: Fail unless every dependency is there before anything is written.
+    options: *opts
+  backup:
+    short_description: Declare what a backup must capture.
+    options: *opts
+  restore:
+    short_description: Restore the checkpoints from an export.
+    options: *opts
+  upgrade:
+    short_description: Validate the module's own re-converge (no pinned artefact).
+    options: *opts
+  export:
+    short_description: Write the open-format exit copy of the state.
+    options: *opts

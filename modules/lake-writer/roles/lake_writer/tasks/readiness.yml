@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless every dependency is there before anything is written: systemd on the host, the runtime
+# release's interpreter able to import the platform's lake and object-store clients, every secret in
+# its form and the three services' registry rows.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Resolve the services' URLs
+      ansible.builtin.include_tasks: resolve.yml
+    - name: Look for systemd on the host
+      ansible.builtin.stat:
+        path: /run/systemd/system
+      register: lake_writer_systemd_stat
+    - name: The host runs systemd
+      ansible.builtin.assert:
+        that: lake_writer_systemd_stat.stat.isdir | default(false)
+        fail_msg: "lake-writer: the host does not run systemd (the writers are units and timers)"
+    # Host precondition no module provides: the site applies role hnx_runtime to the guest. The script
+    # imports the platform's lake library and its two clients from that release.
+    - name: The runtime release's interpreter can import the platform's lake and object-store clients
+      ansible.builtin.command:
+        argv: ["{{ lake_writer_runtime_python }}", -I, -c, "from homelabnext.conform.adapters.lake import make_clients; from homelabnext.conform.adapters.s3 import make_object_store; from homelabnext.lake.checkpoint import Ingestor; from homelabnext.lake.rows import row_from_event"]
+      register: lake_writer_runtime_probe
+      changed_when: false
+      failed_when: false
+    - name: It can
+      ansible.builtin.assert:
+        that: lake_writer_runtime_probe.rc == 0
+        fail_msg: >-
+          lake-writer: {{ lake_writer_runtime_python }} cannot import homelabnext's lake library and
+          clients (exit {{ lake_writer_runtime_probe.rc }}). The writer runs from the homelab-next runtime
+          release: apply the hnx_runtime role (ansible/roles/hnx_runtime, docs/broker.md "Deploying with
+          Ansible") to this guest first; no module installs it
+  tags: [readiness]

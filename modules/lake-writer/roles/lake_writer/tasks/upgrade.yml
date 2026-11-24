@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The module pins no artefact or image: its script and the schemas ship with the role, so an upgrade
+# is the role's own re-converge. This hook validates the inputs and refuses to go on when a soc table
+# is missing or differs from the pinned columns the installed script holds (a writer upgrade must not
+# meet a different shape first on a live table); the converge is the install.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Resolve the services' URLs
+      ansible.builtin.include_tasks: resolve.yml
+    - name: The tables are the contract's before the writer changes
+      ansible.builtin.command:
+        argv: ["{{ lake_writer_runtime_python }}", -I, "{{ lake_writer_script }}", schema-check]
+      environment: "{{ lake_writer_script_env }}"
+      no_log: true
+      register: lake_writer_upgrade_schema
+      changed_when: false
+      failed_when: lake_writer_upgrade_schema.rc != 0
+  tags: [upgrade]

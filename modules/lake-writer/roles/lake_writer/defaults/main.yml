@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+# The log pipeline's lake writer as one module role (modules/lake-writer): a stdlib-plus-runtime
+# script and one timer per table. It commits the staged OCSF batches the log pipeline leaves in the
+# object store to the FRESH tables of the lake's soc namespace (the per-class OCSF tables and the
+# raw archive), one writer per table, commit then checkpoint. The namespace is not a setting: it is
+# derived (vars/main.yml) as soc, and the script refuses any other. Nothing here is a lab value: the
+# warehouse name, the user, every secret reference, the registry rows and the guest are the site's.
+# lake_writer_logical_id (required): the instance id, e.g. lake-writer
+# lake_writer_lake_warehouse (required): the lake catalog's warehouse name
+# lake_writer_lake_user (required): the engine account the writer signs in as
+# lake_writer_s3_region (required): the object store's region name (the site's)
+# lake_writer_lake_query_id / lake_writer_lake_catalog_id / lake_writer_object_store_id: the registry
+# rows of the three services (or the *_url overrides below); each is required one way or the other
+lake_writer_config_dir: "/etc/hnx/{{ lake_writer_logical_id }}"
+# the module's data root (docs/modules/data.md): state/ (checkpoints, last-run records), export/
+lake_writer_data_root: "/var/lib/hnx-modules/{{ lake_writer_logical_id }}"
+lake_writer_bin_dir: /usr/local/libexec/homelabnext
+lake_writer_owner: root
+lake_writer_owner_group: root
+lake_writer_user: "hnx-{{ lake_writer_logical_id }}"
+lake_writer_group: "hnx-{{ lake_writer_logical_id }}"
+lake_writer_manage_accounts: true
+
+# the tables this instance writes (a subset splits the writers over guests; each table has one writer)
+lake_writer_tables:
+  - authentication
+  - compliance_finding
+  - detection_finding
+  - dns_activity
+  - file_activity
+  - http_activity
+  - network_activity
+  - process_activity
+  - raw_archive
+  - vulnerability_finding
+# the bucket the log pipeline stages its batches in (<table>/<name> objects of JSON lines)
+lake_writer_staging_bucket: soc-staging
+# where in that bucket: <prefix><table>/<name> (the module's staging dataset; the pipeline stages there)
+lake_writer_staging_prefix: lake-writer/staging/
+# create the soc namespace and its tables on install (fresh tables; an existing table is checked
+# against its pinned schema and refused when it differs, never altered)
+lake_writer_ensure_tables: true
+
+# the lake: a Trino-compatible query service and an Iceberg REST catalog, both over https and verified
+lake_writer_lake_query_id: ""
+lake_writer_lake_query_url: ""
+lake_writer_lake_catalog_id: ""
+lake_writer_lake_catalog_url: ""
+lake_writer_lake_login_ref: secret:lake-writer/lake-password
+# the catalog's bearer token, when it asks for one (empty: it does not)
+lake_writer_catalog_bearer_ref: ""
+lake_writer_lake_ca_ref: ""
+# the object store's staging bucket: a key pair that may read, list and delete in it and nothing else
+lake_writer_object_store_id: ""
+lake_writer_object_store_url: ""
+lake_writer_s3_id_ref: secret:lake-writer/s3-access-key
+lake_writer_s3_key_ref: secret:lake-writer/s3-secret-key
+
+# every table's timer: on the calendar, never an interval (LL-041)
+lake_writer_oncalendar: "*-*-* *:0/10:00 UTC"
+# a lake that is away is retried this many times per batch (a retry cannot duplicate: the write is
+# replay-safe), then the table's run stops with the objects still staged
+lake_writer_max_attempts: 5
+# a cap on the batches one run commits (0: no cap)
+lake_writer_max_batches: 500
+# health: a table's last run must be this recent and its backlog this small
+lake_writer_health_max_age_s: 2400
+lake_writer_health_max_pending: 500
+lake_writer_restore_source: ""
+
+lake_writer_start: true
+lake_writer_unit_dir: /etc/systemd/system
+lake_writer_systemctl_cli: systemctl
+lake_writer_last_run_dir: /var/lib/homelabnext/last-run
+lake_writer_last_run_group: root
+lake_writer_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

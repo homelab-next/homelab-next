@@ -1,0 +1,14 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ lake_writer_marker }}, instance {{ lake_writer_logical_id }}); local changes are overwritten.
+# On the calendar, never an interval (OnBootSec plus OnUnitActiveSec can stop firing for good after a
+# reboot at the wrong moment). One timer per table: hnx-{{ lake_writer_logical_id }}@<table>.timer.
+[Unit]
+Description=lake-writer {{ lake_writer_logical_id }}: %i, on the calendar
+
+[Timer]
+OnCalendar={{ lake_writer_oncalendar }}
+Persistent=true
+Unit=hnx-{{ lake_writer_logical_id }}@%i.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The platform/lake_table record of soc.compliance_finding, owned by lake-writer (the sole writer; docs/log-pipeline.md).
+id: table:soc.compliance_finding
+owner: lake-writer
+schema: roles/lake_writer/files/schemas/compliance_finding.v1.json
+retention_days: 365
+maintenance:
+  compact: true
+  expire_snapshots_days: 7
+freshness:
+  cadence: batch
+  stale_after_s: 172800
