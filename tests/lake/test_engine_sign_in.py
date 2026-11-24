@@ -179,6 +179,29 @@ def test_a_credential_never_goes_over_plaintext_to_another_host(monkeypatch):
         _clients(credential=SECRET, allow_plaintext=True)
 
 
+def test_a_catalog_without_sign_in_may_be_plain_http_when_no_token_goes_to_it(monkeypatch):
+    """The engine's password never goes to the catalog, so an http catalog (network-only, no token)
+    is accepted beside an https engine; a catalog token still goes over https only."""
+    plain = "http://192.0.2.9:8181"  # no-raw-endpoint: allow RFC 5737 documentation address
+    monkeypatch.setenv("HNX_ENDPOINT_LAKE_QUERY", OFF_HOST)
+    monkeypatch.setenv("HNX_ENDPOINT_LAKE_CATALOG", plain)
+    monkeypatch.setenv(PASSWORD_VAR, "pw")
+    monkeypatch.setenv(TOKEN_VAR, "tok")
+    _engine, catalog = _clients(credential=SECRET)
+    assert catalog._auth is None  # nothing but the request goes to the catalog
+    with pytest.raises(LakeError, match="lake-catalog"):
+        _clients(credential=SECRET, catalog_credential="secret:lake-catalog/token")
+
+
+def test_an_engine_password_never_goes_over_plain_http_beside_a_plain_catalog(monkeypatch):
+    plain = "http://192.0.2.9:8080"  # no-raw-endpoint: allow RFC 5737 documentation address
+    monkeypatch.setenv("HNX_ENDPOINT_LAKE_QUERY", plain)
+    monkeypatch.setenv("HNX_ENDPOINT_LAKE_CATALOG", plain)
+    monkeypatch.setenv(PASSWORD_VAR, "pw")
+    with pytest.raises(LakeError, match="lake-query"):
+        _clients(credential=SECRET)
+
+
 @pytest.mark.parametrize("token", ["s3cret\n", "s3 cret", "s3cret\x7f"])
 def test_a_catalog_token_a_header_cannot_carry_is_refused_without_quoting_it(
     lab, monkeypatch, token
