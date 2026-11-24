@@ -146,6 +146,46 @@ def test_the_lab_s_own_fields_are_not_the_module_s():
     assert problems(registry=reg) == []
 
 
+_SITE_SOURCE = {
+    "id": "samples-age",
+    "kind": "poll-http-json",
+    "target": {"path": "/v1/age"},
+    "interval_s": 300,
+    "timeout_s": 10,
+    "stale_after_s": 900,
+    "mapping": {"builtin": "table-snapshot-age", "module": "lake", "item": "samples"},
+    "what": "Age of the newest commit.",
+}
+
+
+def test_status_sources_the_site_adds_to_a_module_row_are_the_site_s():
+    """The site decides what its hub collects: its own status_sources on a module's row are not a difference."""
+    reg = lab_registry()
+    reg["services"]["samples"]["status_sources"] = [_SITE_SOURCE]
+    assert problems(registry=reg) == []
+
+
+def test_a_site_status_source_does_not_hide_another_difference():
+    reg = lab_registry()
+    reg["services"]["samples"]["status_sources"] = [_SITE_SOURCE]
+    reg["services"]["samples"]["clients"] = ["mgmt"]
+    assert problems(registry=reg) == [
+        f"services.samples.clients: {STORE} (instance samples) contributes (absent) (its row "
+        'object-store), the lab registry has ["mgmt"]'
+    ]
+
+
+def test_status_sources_a_module_contributes_are_compared():
+    """A module that declares its own status_sources is held to them, as any other field."""
+    rows = copy.deepcopy(ROWS)
+    rows[COLLECTOR]["external-collector-receiver"]["status_sources"] = [_SITE_SOURCE]
+    sel = mr.selected(SITE, TREE.mods)
+    got = rr.row_problems(SITE, sel, rows, lab_registry())
+    assert len(got) == 1 and got[0].startswith(
+        "services.external-collector-receiver.status_sources: external-collector contributes "
+    )
+
+
 def test_clients_the_registry_adds_is_a_difference():
     """Extra zones widen who may reach the service: never the lab's alone to add."""
     reg = lab_registry()

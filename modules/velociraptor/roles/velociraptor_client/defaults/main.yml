@@ -35,3 +35,11 @@ velociraptor_client_ready_timeout: 120
 velociraptor_client_service: velociraptor-client
 velociraptor_client_systemctl_cli: systemctl
 velociraptor_client_unit_dir: /etc/systemd/system
+# The server's own sighting of this client (the identity file is written before the client ever
+# reaches a server, so on its own it proves nothing): the server host's inventory name; when set,
+# the role asks the server (delegated, the server role's script) whether it lists this client and
+# saw it within velociraptor_client_seen_max_age_s, and fails otherwise. Empty: not asked.
+velociraptor_client_server_host: ""
+velociraptor_client_server_script: /usr/local/libexec/homelabnext/hnx-velociraptor
+velociraptor_client_server_script_config: /etc/homelabnext/velociraptor.json
+velociraptor_client_seen_max_age_s: 300

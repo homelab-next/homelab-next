@@ -12,6 +12,7 @@
   ansible.builtin.assert:
     that:
       - lake_writer_effective_lake_query_url is match('^https://')
-      - lake_writer_effective_lake_catalog_url is match('^https://')
-    fail_msg: "lake-writer: the lake query service's or the catalog's URL is not https (the logins would travel in clear)"
+      # the catalog is sent only its own token: without one (a network-only catalog) it may be plain http
+      - lake_writer_catalog_bearer_ref == '' or lake_writer_effective_lake_catalog_url is match('^https://')
+    fail_msg: "lake-writer: the lake query service's URL, or the catalog's when a catalog token goes to it, is not https (the logins would travel in clear)"
   tags: [readiness, health, backup, export, restore, upgrade]

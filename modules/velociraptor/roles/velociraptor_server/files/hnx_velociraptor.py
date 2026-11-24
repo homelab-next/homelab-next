@@ -44,6 +44,7 @@ GRANTABLE = frozenset({"ANY_QUERY", "COLLECT_CLIENT", "READ_RESULTS", "START_HUN
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9]*(\.[A-Za-z0-9_]+)+\Z")
 SOURCE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
 HUNT_ID = re.compile(r"H\.[A-Za-z0-9]{4,32}\Z")
+CLIENT_ID = re.compile(r"C\.[0-9a-f]{16}\Z")
 #: operations the gate allows; every other (upload, define, exec, write, admin) is refused
 ALLOWED_OPS = frozenset({"collect", "hunt"})
 MAX_STATE_HUNTS = 8
@@ -138,6 +139,29 @@ def summarize_clients(rows: list[dict], now: float, stale_s: float) -> dict:
         "clients_fresh": sum(1 for s in seen if now - s <= stale_s),
         "newest_seen_age_s": round(now - max(seen)) if seen else None,
     }
+
+
+def seen_problems(rows: list[dict], now: float, max_age_s: float, client_id: str) -> list[str]:
+    """Problems unless the server lists ``client_id`` and saw it within ``max_age_s``: the
+    server-side sighting a client's own identity file cannot give (a client writes its identity
+    before it ever reaches a server)."""
+    mine = [r for r in rows if r.get("client_id") == client_id]
+    if not mine:
+        return [f"the server lists no client {client_id}: it never enrolled here"]
+    seen = float(mine[0].get("last_seen_at") or 0) / 1e6
+    if seen <= 0 or now - seen > max_age_s:
+        return [f"client {client_id} was not seen by the server in the last {int(max_age_s)} s"]
+    return []
+
+
+def fleet_problems(rows: list[dict], now: float, stale_s: float, min_clients: int) -> list[str]:
+    """Problems unless at least ``min_clients`` clients are enrolled and fresh."""
+    s = summarize_clients(rows, now, stale_s)
+    if s["clients_fresh"] < min_clients:
+        return [
+            f"{s['clients_fresh']} fresh of {s['clients_total']} enrolled clients, fewer than {min_clients}"
+        ]
+    return []
 
 
 # --- talking to the server -----------------------------------------------------------------------
@@ -510,6 +534,11 @@ def main(argv=None) -> int:
     sub.add_parser("probe")
     sub.add_parser("catalog-check")
     sub.add_parser("principal-check")
+    cs = sub.add_parser("client-seen")
+    cs.add_argument("--client-id", required=True)
+    cs.add_argument("--max-age-s", type=int, default=300)
+    fc = sub.add_parser("fleet-check")
+    fc.add_argument("--min-clients", type=int, required=True)
     g = sub.add_parser("gate")
     g.add_argument("artifact")
     g.add_argument("op")
@@ -543,6 +572,22 @@ def main(argv=None) -> int:
         cfg = _cfg(a.config)
         if a.cmd == "cycle":
             return cycle(cfg, docker_runner, time.time())
+        if a.cmd == "client-seen":
+            if not CLIENT_ID.fullmatch(a.client_id):
+                raise ValueError(f"not a client id: {a.client_id[:40]!r}")
+            rows = vql(cfg, docker_runner, "SELECT client_id, last_seen_at FROM clients(client_id="
+                       + _quote(a.client_id) + ")")  # fmt: skip
+            problems = seen_problems(rows, time.time(), a.max_age_s, a.client_id)
+            for p in problems:
+                print(p, file=sys.stderr)
+            return 1 if problems else 0
+        if a.cmd == "fleet-check":
+            rows = vql(cfg, docker_runner, "SELECT client_id, last_seen_at FROM clients()")
+            stale = int(cfg["stale_after_minutes"]) * 60
+            problems = fleet_problems(rows, time.time(), stale, a.min_clients)
+            for p in problems:
+                print(p, file=sys.stderr)
+            return 1 if problems else 0
         catalog = load_catalog(cfg["catalog"])
         if a.cmd == "gate":
             ok, why = gate(catalog, a.artifact, a.op)

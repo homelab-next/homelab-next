@@ -44,3 +44,7 @@ velociraptor_server_systemctl_cli: systemctl
 velociraptor_server_unit_dir: /etc/systemd/system
 velociraptor_server_last_run_dir: /var/lib/homelabnext/last-run
 velociraptor_server_last_run_group: root
+# health also requires this many enrolled clients seen within the stale window (0: health does not
+# count clients; a site that has enrolled its fleet sets it, so a fleet that never reached the
+# server cannot read green)
+velociraptor_server_health_min_clients: 0

@@ -46,6 +46,12 @@
       ansible.builtin.command:
         argv: ["{{ velociraptor_server_script }}", --config, "{{ velociraptor_server_config_file }}", principal-check]
       changed_when: false
+    - name: At least the expected number of clients are enrolled and fresh (velociraptor_server_health_min_clients; 0 skips)
+      ansible.builtin.command:
+        argv: ["{{ velociraptor_server_script }}", --config, "{{ velociraptor_server_config_file }}", fleet-check,
+               --min-clients, "{{ velociraptor_server_health_min_clients | int }}"]
+      changed_when: false
+      when: velociraptor_server_health_min_clients | int > 0
     - name: No listed artifact needs more than the principal holds
       ansible.builtin.command:
         argv: ["{{ velociraptor_server_script }}", --config, "{{ velociraptor_server_config_file }}", catalog-check]

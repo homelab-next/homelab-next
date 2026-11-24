@@ -8,6 +8,18 @@
     checksum_algorithm: sha256
   register: velociraptor_client_installed
 
+- name: Create the controller's download directory when a fetch is owed (owner only)
+  ansible.builtin.file:
+    path: "{{ velociraptor_client_controller_cache }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when:
+    - velociraptor_client_binary_src | length == 0
+    - velociraptor_client_installed.stat.checksum | default('') != velociraptor_client_checksums[velociraptor_client_version]
+
 - name: Fetch the release on the controller when the host's binary is not the pinned one, refused unless its sha256 is
   ansible.builtin.get_url:
     url: "{{ velociraptor_client_release_repository }}/v{{ velociraptor_client_version }}/{{ velociraptor_client_binary_name }}"

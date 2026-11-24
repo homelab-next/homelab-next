@@ -75,7 +75,7 @@ A YAML block in comments, introduced by the exact line `# hnx-script:` within th
 | `status` | no | `active` (default) must have a caller; `deprecated` may have none |
 | `purpose` | yes | one sentence |
 | `owner` | yes | a team or area slug, never a person |
-| `trigger` | yes | every caller, in the grammar below, exactly as `hnx scripts reality` finds them; `manual` for a person |
+| `trigger` | yes | every caller, in the grammar below, exactly as `hnx scripts reality` finds them; `manual` for a person. A script with many callers writes the list one entry per line (`#     - timer:x/y`, a YAML block list, sorted), so two changes that add a caller touch different lines and merge cleanly |
 | `inputs`, `outputs` | yes | a sentence or a list |
 | `exit` | yes | exit-code contract, code to meaning; `0` always documented. A check also documents a failing code in 1..99, because the invariants runner reads 1..99 as fail and 100 or more as could-not-measure |
 | `invariant` | checks only | the criteria ids that run it |

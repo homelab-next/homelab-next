@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Tokens a product issues only for a login (form post of a user name and password) expire in hours:
-# a root-run timer refreshes them into <status_hub_issued_dir>/<name>, where the collector reads them.
+# a root-run timer refreshes them into <status_hub_issued_dir>/hub-login/<name>, where the collector reads
+# them in the store area hub-login (status_hub_login_area).
 - name: Create the helper's directory
   ansible.builtin.file:
     path: "{{ status_hub_libexec_dir }}"
@@ -40,7 +41,7 @@
            'url': lookup('hnx_registry', item.service, field='url') ~ item.path,
            'username': item.username,
            'password_file': status_hub_config_dir ~ '/login-' ~ item.name ~ '.pw',
-           'out': status_hub_issued_dir ~ '/' ~ item.name}] }}
+           'out': status_hub_login_dir ~ '/' ~ item.name}] }}
   loop: "{{ status_hub_logins }}"
   loop_control:
     label: "{{ item.name }}"
@@ -66,7 +67,7 @@
 
 - name: Look for each token file
   ansible.builtin.stat:
-    path: "{{ status_hub_issued_dir }}/{{ item.name }}"
+    path: "{{ status_hub_login_dir }}/{{ item.name }}"
   loop: "{{ status_hub_logins }}"
   loop_control:
     label: "{{ item.name }}"

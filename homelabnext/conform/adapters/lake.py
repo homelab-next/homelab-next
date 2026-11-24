@@ -81,10 +81,17 @@ def _header_safe(value: str, ref: str) -> str:
     return value
 
 
-def _url(capability: str, resolver: Any, domain: str | None, allow_plaintext: bool) -> str:
+def _url(
+    capability: str,
+    resolver: Any,
+    domain: str | None,
+    allow_plaintext: bool,
+    *,
+    credentials: bool = True,
+) -> str:
     ep = resolve(capability, resolver=resolver, domain=domain, schemes=("http", "https"))
     try:
-        check_plaintext(ep.url, credentials=True, allow_plaintext=allow_plaintext)
+        check_plaintext(ep.url, credentials=credentials, allow_plaintext=allow_plaintext)
     except ValueError as exc:
         raise LakeError(f"{capability} endpoint: {exc}") from None
     return ep.url
@@ -111,16 +118,28 @@ def make_clients(
     if not wh:
         raise LookupError(f"no warehouse: pass warehouse= or set {warehouse_env}")
     query_url = _url("lake-query", resolver, domain, allow_plaintext)
-    catalog_url = _url("lake-catalog", resolver, domain, allow_plaintext)
+    # the catalog is sent only its own bearer token (never the engine's password): a catalog without
+    # sign-in (a network-only catalog, the site's choice) may be plain http when no token goes to it
+    catalog_url = _url(
+        "lake-catalog",
+        resolver,
+        domain,
+        allow_plaintext,
+        credentials=catalog_credential is not None,
+    )
     if credential is None and not is_loopback(urllib.parse.urlsplit(query_url).hostname):
         raise LakeError(
             f"lake-query endpoint is not loopback, so {user!r} must sign in to the engine: pass "
             f"credential= (a secret reference, conventionally {reader_secret(user)})"
         )
     signed_in = credential is not None or catalog_credential is not None
-    for capability, url in (("lake-query", query_url), ("lake-catalog", catalog_url)):
+    sends = (
+        ("lake-query", query_url, credential is not None),
+        ("lake-catalog", catalog_url, catalog_credential is not None),
+    )
+    for capability, url, sent in sends:
         parts = urllib.parse.urlsplit(url)
-        if signed_in and parts.scheme != "https" and not is_loopback(parts.hostname):
+        if sent and parts.scheme != "https" and not is_loopback(parts.hostname):
             # allow_plaintext cannot send a password in clear to another host (the engine's
             # password authenticator takes it over https only anyway)
             raise LakeError(f"{capability} endpoint: a credential goes over https only")
