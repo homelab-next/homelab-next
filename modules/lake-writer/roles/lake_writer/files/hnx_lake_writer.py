@@ -467,6 +467,9 @@ class Config:
         self.s3_secret_env = e.get(
             "HNX_LW_S3_SECRET_VAR", "_".join(["HNX", "LW", "S3", "SECRET", "KEY"])
         )
+        # an object store on plain http (signed requests: the secret key itself is never sent), only
+        # when the site says so (lake_writer_object_store_allow_plaintext)
+        self.s3_allow_plaintext = e.get("HNX_LW_S3_ALLOW_PLAINTEXT", "") == "true"
 
 
 def open_lake(cfg, schemas, *, ensure):
@@ -500,6 +503,7 @@ def open_store(cfg):
         access_key_env=cfg.s3_access_env,
         secret_key_env=cfg.s3_secret_env,
         region_env=cfg.s3_region_env,
+        allow_plaintext=cfg.s3_allow_plaintext,
     )
 
 
@@ -537,8 +541,13 @@ def cmd_commit(cfg, tables, schemas, lake=None, store=None):
 
 
 def cmd_ensure(cfg, schemas):
+    try:  # what exists before (nothing, on a fresh lake): the run reports what it created
+        before = set(open_lake(cfg, schemas, ensure=False).list_tables())
+    except (LakeError, KeyError):
+        before = set()
     lake = open_lake(cfg, schemas, ensure=True)
-    _say({"namespace": cfg.namespace, "tables": sorted(lake.list_tables())})
+    after = sorted(lake.list_tables())
+    _say({"namespace": cfg.namespace, "tables": after, "created": sorted(set(after) - before)})
     return EXIT_OK
 
 

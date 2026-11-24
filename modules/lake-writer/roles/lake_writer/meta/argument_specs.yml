@@ -121,6 +121,10 @@ argument_specs:
         type: str
         description: 'The object store''s URL, when the registry is not used; empty: from the registry.'
         default: ''
+      lake_writer_object_store_allow_plaintext:
+        type: bool
+        description: 'True: the object store may be plain http (signed S3 requests; the secret key is never sent). Default https only.'
+        default: false
       lake_writer_s3_id_ref:
         type: str
         description: secret:<name> of the key id that may read, list and delete in the staging bucket.
