@@ -47,12 +47,16 @@ gitea_ssh_host_key_refs:
   rsa: secret:gitea/ssh-host-key-rsa
   ecdsa: secret:gitea/ssh-host-key-ecdsa
 # an OpenID Connect sign-in is opt-in: the auth source is created when absent and updated when it
-# differs (local accounts stay); the issuer's certificate is verified against the lab CA
+# differs (local accounts stay); the issuer's certificate is verified against a bundle of the host's
+# public roots and the lab CA (an issuer behind a public edge certificate, or the lab's own)
 gitea_oidc_enabled: false
 gitea_oidc_name: sso
 gitea_oidc_issuer_url: ""
 gitea_oidc_client_id: ""
 gitea_oidc_cred_ref: secret:gitea/oidc-client-secret
+# the host's public root store (PEM, Debian's ca-certificates): with oidc on, its certificates and the
+# lab CA are written together to tls/ca-bundle.pem, the container's SSL_CERT_FILE
+gitea_system_ca_file: /etc/ssl/certs/ca-certificates.crt
 # the registry's pull account: when set, health proves that its token (scope read:package) is
 # accepted by the registry; the lab's guests log in to the registry with it (README, "The registry")
 gitea_registry_pull_user: ""

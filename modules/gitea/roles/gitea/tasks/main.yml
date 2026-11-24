@@ -42,7 +42,8 @@
   ansible.builtin.command:
     argv: [docker, compose, -f, "{{ gitea_dir }}/docker-compose.yml", restart, "{{ gitea_service }}"]
   changed_when: true
-  when: gitea_start | bool and (gitea_tls_files is changed or gitea_ssh_files is changed or gitea_secret_files is changed)
+  when: gitea_start | bool and (gitea_tls_files is changed or gitea_ca_bundle_file is changed or gitea_ssh_files is changed
+                                or gitea_secret_files is changed)
 
 # --check starts nothing, so on a guest with no container yet there is no service to wait for: the
 # wait (a read-only task, it runs in --check) would poll its whole timeout for one, and the seed's
