@@ -110,7 +110,7 @@ contributes:
     - file: roles/stackstorm
   services:
     - file: registry/services.yml
-  status_sources: [status:stackstorm-executions]
+  status_sources: [status:stackstorm-executions, status:stackstorm-shadow]
   preflight:
     - {role: role:stackstorm, hook: readiness}
   docs:

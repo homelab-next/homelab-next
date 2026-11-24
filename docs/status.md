@@ -1215,6 +1215,30 @@ reported; `states` changes that (`{canceled: warn}`, keys are StackStorm's execu
 the window held more than one page. Use a read-only API key (an RBAC role with
 `action_execution_list`/`action_execution_view` only).
 
+**Shadow evidence** (`builtin: automation-shadow`, service schema 2.14): the same kind and key,
+another question: what has each rule done in shadow? ([stackstorm](stackstorm.md), "Shadow, then
+live".)
+
+```yaml
+- id: stackstorm-shadow
+  kind: poll-stackstorm
+  target: {path: /api/v1/executions}
+  interval_s: 900
+  timeout_s: 30
+  auth: {secret: "secret:stackstorm/status-token", header: St2-Api-Key}
+  mapping: {builtin: automation-shadow, window_s: 604800, limit: 100}
+```
+
+It pages `?action=homelabnext.step&limit=<limit>&offset=..&sort_desc=true&timestamp_gt=<now -
+window_s>&include_attributes=id,action,status,start_timestamp,parameters,result` (at most 50
+pages; a summary says when it stopped there) and makes one item per pack, `shadow:<pack>` (the pack
+of rule `on_<pack>`): `would-act` counts the step runs that recorded the broker request they would
+have made (`result: shadow`, the item's value), `quiet` the ones whose `when` did not hold
+(`skipped`), `failed` the failed or timed-out ones (the item is then `warn`), `other` a live result
+or a refusal; with the first and latest record in the window. A running or canceled step is
+evidence neither way. `shadow` totals the would-act records. The window defaults to 7 days, the
+shadow window `st2-live` asks for; a rule with no record in it has no item. `states` is not taken.
+
 ### Apache NiFi (`poll-nifi`)
 
 ```yaml

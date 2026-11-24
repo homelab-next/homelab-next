@@ -429,6 +429,14 @@ the offline fixtures and with what the timer it replaces actually did (the parit
 [swap.md](swap.md), [[swap]]). The mode is in `pinned/<pack>.json`, rendered from the rule, so a
 run started by hand is in the rule's mode too: no parameter turns a shadow rule live.
 
+**Where the shadow records are.** A shadow record is the `homelabnext.step` execution itself:
+its result carries `result: shadow` and the encoded state with the call record (action, params,
+`request_id`, `request_digest`); a step whose `when` did not hold is `skipped`. StackStorm keeps
+them for `stackstorm_retention_days`. The status hub counts them per rule
+(`poll-stackstorm` with `builtin: automation-shadow`, [status](status.md) section 7, the
+module's source `stackstorm-shadow`): would-act, quiet and failed runs and the first and latest
+record over 7 days, which is what a promotion review reads before it writes the parity evidence.
+
 To promote a rule, change `mode: live` in `workflows/stackstorm.yml` and add:
 
 ```yaml

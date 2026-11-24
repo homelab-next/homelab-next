@@ -6,7 +6,8 @@
 # renders no site for it; the front (the web UI and the /api/ path the status hub and the bridge
 # read) is reached on the guest's address by the zones the site's firewall admits. auth: own - its
 # own sign-in and API keys; the edge puts nothing in front of it. The status source is the hub's
-# existing StackStorm reader: failed and timed-out executions in the last hour, and what is running.
+# existing StackStorm reader: failed and timed-out executions in the last hour, and what is running; and the
+# shadow evidence per rule (builtin automation-shadow, schema 2.14) a promotion to live is decided on.
 # `upstreams: [notify]` is deliberately absent: the pack reaches the broker, never a service.
 services:
   automation:
@@ -29,4 +30,12 @@ services:
         auth: {secret: "secret:stackstorm/status-token", header: St2-Api-Key}
         mapping: {window_s: 3600, limit: 100}
         what: Actions with failed or timed-out executions in the last hour (fail) and the running executions.
+      - id: stackstorm-shadow
+        kind: poll-stackstorm
+        target: {path: /api/v1/executions}
+        interval_s: 900
+        timeout_s: 30
+        auth: {secret: "secret:stackstorm/status-token", header: St2-Api-Key}
+        mapping: {builtin: automation-shadow, window_s: 604800, limit: 100}
+        what: Shadow evidence per rule over 7 days (would-act records, quiet evaluations, failures, first and latest).
     description: StackStorm 3.9 running the rendered workflow pack in shadow mode (rules disabled until a person enables one); the web UI and the /api/ path are on this port, internal only.

@@ -30,7 +30,12 @@ responses (``tests/status/fixtures/``).  What each reads, and where the shape wa
     and ``?status=running``, with ``St2-Api-Key`` from the secret store: each action with a
     failed, timed-out or abandoned execution in the window is a ``fail`` item; the running count
     is live work.  Shape: StackStorm ``st2common/openapi.yaml``, ``ActionExecutionAPI`` and the
-    ``LIVEACTION_STATUS_*`` constants.
+    ``LIVEACTION_STATUS_*`` constants.  ``mapping.builtin: automation-shadow`` reads the shadow
+    evidence instead: every execution of the workflow pack's ``step`` action in the window (paged,
+    with its parameters and result), one item per rule's pack: how many runs recorded the broker
+    request they would have made (``result: shadow``), how many evaluated and stayed quiet (the
+    step's ``when`` did not hold), how many failed, and the first and latest record, so promoting a
+    rule to live is decided on what it would have done (the workflow guide, "Shadow, then live").
 ``poll-nifi``
     ``GET /nifi-api/flow/status`` (``controllerStatus``) and ``GET /nifi-api/flow/bulletin-board``
     (``bulletinBoard.bulletins``), optionally with a bearer token: queued flowfiles (live work,
@@ -78,6 +83,12 @@ ST2_STATUSES = (
 ST2_STATES = {"failed": "fail", "timeout": "fail", "abandoned": "fail"}
 ST2_DEFAULT_WINDOW_S = 3600
 ST2_MAX_LIMIT = 100  # api.max_page_size: the most a non-admin key may ask for
+AUTOMATION_SHADOW = "automation-shadow"
+SHADOW_STEP_ACTION = "homelabnext.step"  # the rendered pack's one step action
+SHADOW_WINDOW_S = 604800  # seven days: the shadow window st2-live asks for before a promotion
+SHADOW_MAX_PAGES = 50  # a bound on one poll: 50 pages of `limit` executions
+SHADOW_PAGE = 100  # the default page: api.max_page_size, the most a non-admin key may ask for
+RUN_FAILED = ("failed", "timeout", "abandoned")
 NIFI_STATES = {
     "invalid": "fail",
     "stopped": "warn",
@@ -418,13 +429,97 @@ def stackstorm(
     return out
 
 
+def _step_result(ex: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The step action's own return value (``{state, skipped, result}``) inside the execution's
+    result (the Python runner wraps it as ``result.result``); empty when absent."""
+    outer = ex.get("result")
+    inner = outer.get("result") if isinstance(outer, Mapping) else None
+    return inner if isinstance(inner, Mapping) else {}
+
+
+def automation_shadow(
+    executions: Any, mapping: Mapping[str, Any], now: float, capped: bool = False
+) -> list[Draft]:
+    """The ``step`` executions of the window -> one item per pack (``shadow:<pack>``, the pack of
+    rule ``on_<pack>``): the would-act records (``result: shadow``), the quiet evaluations
+    (``skipped``: the step's ``when`` did not hold), the failures, and the first and latest record.
+    A live result (submitted, executed, held, denied) or a refusal counts as ``other``."""
+    if not isinstance(executions, list):
+        raise MappingError("automation: /executions returns a list of executions")
+    window = int(mapping.get("window_s") or SHADOW_WINDOW_S)
+    per: dict[str, dict[str, Any]] = {}
+    for ex in executions:
+        ex = _mapping(ex, "execution")
+        if str((ex.get("action") or {}).get("ref") or "") != SHADOW_STEP_ACTION:
+            continue  # the server filters by action too; this keeps a fake honest
+        try:
+            started = parse_iso(str(ex.get("start_timestamp")))
+        except ValueError:
+            raise MappingError(
+                f"automation: execution {ex.get('id')} has no start_timestamp"
+            ) from None
+        if now - started > window:
+            continue
+        params = ex.get("parameters")
+        pack = params.get("pack") if isinstance(params, Mapping) else None
+        if not isinstance(pack, str) or not pack:
+            raise MappingError(f"automation: step execution {ex.get('id')} names no pack")
+        status = raw_text(ex.get("status"))
+        if status not in RUN_FAILED and status != "succeeded":
+            continue  # still running, or canceled: evidence neither way
+        row = per.setdefault(pack, {"shadow": 0, "quiet": 0, "failed": 0, "other": 0, "ts": []})
+        got = _step_result(ex)
+        if status in RUN_FAILED:
+            row["failed"] += 1
+        elif got.get("result") == "shadow":
+            row["shadow"] += 1
+        elif got.get("skipped") is True:
+            row["quiet"] += 1
+        else:
+            row["other"] += 1
+        row["ts"].append(started)
+    span = age_text(window)
+    more = " (the newest pages only: narrow the window)" if capped else ""
+    out = []
+    for pack in sorted(per):
+        row = per[pack]
+        ts = sorted(row["ts"])
+        other = f", {row['other']} other" if row["other"] else ""
+        out.append(
+            Draft(
+                clean_item(f"shadow:{pack}", "shadow"),
+                "warn" if row["failed"] else "ok",
+                clean_summary(
+                    f"{row['shadow']} would-act, {row['quiet']} quiet, {row['failed']} failed"
+                    f"{other} in the last {span}; first {iso(ts[0])}, latest {iso(ts[-1])}{more}"
+                ),
+                value=row["shadow"],
+            )
+        )
+    total = sum(r["shadow"] for r in per.values())
+    out.append(
+        Draft(
+            "shadow",
+            "ok",
+            clean_summary(
+                f"{total} shadow record(s) from {len(per)} rule(s) in the last {span}{more}"
+            ),
+            value=total,
+        )
+    )
+    return out
+
+
 class StackStormCollector:
-    """``poll-stackstorm``: recent executions (failures) and the running ones (live work)."""
+    """Recent executions (failures) and the running ones (live work), or with
+    ``builtin: automation-shadow`` the shadow evidence per rule."""
 
     def collect(self, spec: SourceSpec, ctx: CollectContext) -> list[Draft]:
         from .collectors import fetch_json
 
         now = ctx.clock()
+        if spec.mapping.get("builtin") == AUTOMATION_SHADOW:
+            return _shadow_collect(spec, ctx, now, fetch_json)
         light = {"exclude_attributes": "result,trigger_instance"}  # outputs can be large
         limit = str(spec.mapping.get("limit") or ST2_MAX_LIMIT)
         since = iso(now - _st2_window(spec.mapping))
@@ -437,6 +532,35 @@ class StackStormCollector:
             spec, ctx, query={"status": "running", "limit": str(ST2_MAX_LIMIT), **light}
         )
         return stackstorm(recent, running, spec.mapping, now, spec.id)
+
+
+def _shadow_collect(
+    spec: SourceSpec, ctx: CollectContext, now: float, fetch_json: Callable[..., Any]
+) -> list[Draft]:
+    limit = int(spec.mapping.get("limit") or SHADOW_PAGE)
+    since = iso(now - int(spec.mapping.get("window_s") or SHADOW_WINDOW_S))
+    got: list[Any] = []
+    capped = True
+    for page in range(SHADOW_MAX_PAGES):
+        batch = fetch_json(
+            spec,
+            ctx,
+            query={
+                "action": SHADOW_STEP_ACTION,
+                "limit": str(limit),
+                "offset": str(page * limit),
+                "sort_desc": "true",
+                "timestamp_gt": since,
+                "include_attributes": "id,action,status,start_timestamp,parameters,result",
+            },
+        )
+        if not isinstance(batch, list):
+            raise MappingError("automation: /executions returns a list of executions")
+        got.extend(batch)
+        if len(batch) < limit:
+            capped = False
+            break
+    return automation_shadow(got, spec.mapping, now, capped)
 
 
 # ---------------------------------------------------------------- NiFi
@@ -561,11 +685,17 @@ PRODUCT_COLLECTORS = {
 # ---------------------------------------------------------------- registry rules
 _PROM_QUERY_KEYS = {"module", "query", "item", "thresholds", "empty"}
 _PROM_ALERT_KEYS = {"module", "builtin", "states", "item"}
+_EXECUTION_KIND = "poll-stackstorm"
+_EXECUTION_KEYS = {"module", "states", "window_s", "limit"}
+#: built-ins of a product kind -> that kind (the registry refuses one on any other kind)
+BUILTIN_KINDS = {AUTOMATION_SHADOW: _EXECUTION_KIND}
 _KIND_KEYS: dict[str, set[str]] = {
     "poll-uptime-kuma": {"module", "states"},
-    "poll-stackstorm": {"module", "states", "window_s", "limit"},
+    _EXECUTION_KIND: _EXECUTION_KEYS,
     "poll-nifi": {"module", "states", "thresholds", "limit"},
 }
+# builtin automation-shadow: no states (an item is ok, or warn when a step run failed)
+_SHADOW_KEYS = {"module", "builtin", "window_s", "limit"}
 _STATE_WORDS: dict[str, tuple[str, ...]] = {
     "poll-uptime-kuma": tuple(KUMA_STATES),
     "poll-stackstorm": ST2_STATUSES,
@@ -603,6 +733,13 @@ def source_problems(src: Mapping[str, Any], where: str) -> list[str]:
                 )
         if path and not path.split("?")[0].endswith(want):
             problems.append(f"{where}: this mapping reads {want} (target.path is {path})")
+    elif kind == _EXECUTION_KIND and "builtin" in mapping:
+        allowed = _SHADOW_KEYS
+        if mapping["builtin"] != AUTOMATION_SHADOW:
+            return [f"{where}: {kind} takes builtin {AUTOMATION_SHADOW} or none"]
+        check, want = _PATHS[kind]
+        if path and not check(path.split("?")[0]):
+            problems.append(f"{where}: {kind} needs target.path {want}")
     else:
         allowed = _KIND_KEYS[kind]
         check, want = _PATHS[kind]

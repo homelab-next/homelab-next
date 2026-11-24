@@ -1,0 +1,177 @@
+[
+ {
+  "id": "6716f0c00000000000000009",
+  "action": {
+   "ref": "homelabnext.step",
+   "name": "step",
+   "pack": "homelabnext",
+   "runner_type": "python-script"
+  },
+  "status": "succeeded",
+  "start_timestamp": "2026-09-21T13:00:02.000000Z",
+  "parameters": {
+   "pack": "cti-schedule-fresh",
+   "step": "submit",
+   "event": "%7B%7D",
+   "state": ""
+  },
+  "result": {
+   "exit_code": 0,
+   "result": {
+    "state": "%7B%7D",
+    "skipped": false,
+    "result": "shadow"
+   },
+   "stderr": "",
+   "stdout": ""
+  }
+ },
+ {
+  "id": "6716f0c00000000000000008",
+  "action": {
+   "ref": "homelabnext.step",
+   "name": "step",
+   "pack": "homelabnext",
+   "runner_type": "python-script"
+  },
+  "status": "succeeded",
+  "start_timestamp": "2026-09-21T12:20:01.000000Z",
+  "parameters": {
+   "pack": "cti-schedule-publish",
+   "step": "submit",
+   "event": "%7B%7D",
+   "state": ""
+  },
+  "result": {
+   "exit_code": 0,
+   "result": {
+    "state": "%7B%7D",
+    "skipped": false,
+    "result": "shadow"
+   },
+   "stderr": "",
+   "stdout": ""
+  }
+ },
+ {
+  "id": "6716f0c00000000000000007",
+  "action": {
+   "ref": "homelabnext.step",
+   "name": "step",
+   "pack": "homelabnext",
+   "runner_type": "python-script"
+  },
+  "status": "succeeded",
+  "start_timestamp": "2026-09-21T12:00:01.000000Z",
+  "parameters": {
+   "pack": "cti-schedule-fresh",
+   "step": "submit",
+   "event": "%7B%7D",
+   "state": ""
+  },
+  "result": {
+   "exit_code": 0,
+   "result": {
+    "state": "%7B%7D",
+    "skipped": false,
+    "result": "shadow"
+   },
+   "stderr": "",
+   "stdout": ""
+  }
+ },
+ {
+  "id": "6716f0c00000000000000006",
+  "action": {
+   "ref": "homelabnext.step",
+   "name": "step",
+   "pack": "homelabnext",
+   "runner_type": "python-script"
+  },
+  "status": "succeeded",
+  "start_timestamp": "2026-09-21T11:30:00.000000Z",
+  "parameters": {
+   "pack": "watch-llm-server",
+   "step": "submit",
+   "event": "%7B%7D",
+   "state": ""
+  },
+  "result": {
+   "exit_code": 0,
+   "result": {
+    "state": "%7B%7D",
+    "skipped": true,
+    "result": null
+   },
+   "stderr": "",
+   "stdout": ""
+  }
+ },
+ {
+  "id": "6716f0c00000000000000005",
+  "action": {
+   "ref": "homelabnext.step",
+   "name": "step",
+   "pack": "homelabnext",
+   "runner_type": "python-script"
+  },
+  "status": "failed",
+  "start_timestamp": "2026-09-21T11:00:00.000000Z",
+  "parameters": {
+   "pack": "watch-llm-server",
+   "step": "submit",
+   "event": "%7B%7D",
+   "state": ""
+  },
+  "result": {
+   "exit_code": 0,
+   "result": {},
+   "stderr": "",
+   "stdout": ""
+  }
+ },
+ {
+  "id": "6716f0c00000000000000004",
+  "action": {
+   "ref": "homelabnext.step",
+   "name": "step",
+   "pack": "homelabnext",
+   "runner_type": "python-script"
+  },
+  "status": "running",
+  "start_timestamp": "2026-09-21T13:30:01.000000Z",
+  "parameters": {
+   "pack": "cti-schedule-fresh",
+   "step": "submit",
+   "event": "%7B%7D",
+   "state": ""
+  }
+ },
+ {
+  "id": "6716f0c00000000000000003",
+  "action": {
+   "ref": "homelabnext.step",
+   "name": "step",
+   "pack": "homelabnext",
+   "runner_type": "python-script"
+  },
+  "status": "succeeded",
+  "start_timestamp": "2026-09-14T12:00:01.000000Z",
+  "parameters": {
+   "pack": "cti-schedule-fresh",
+   "step": "submit",
+   "event": "%7B%7D",
+   "state": ""
+  },
+  "result": {
+   "exit_code": 0,
+   "result": {
+    "state": "%7B%7D",
+    "skipped": false,
+    "result": "shadow"
+   },
+   "stderr": "",
+   "stdout": ""
+  }
+ }
+]
