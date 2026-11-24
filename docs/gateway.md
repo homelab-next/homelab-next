@@ -171,7 +171,11 @@ with its paths and listen address, is the private overlay's (ADR-0026 decision 3
   object, an extra top-level field alike; `data:` URLs included), or with a part of type
   `image_url`, `audio_url` or `video_url` anywhere, chat, embeddings or decision, is not sent to a local
   OpenAI-compatible deployment, which would fetch it from inside the lab. No role can opt in yet (there is no field
-  for it); cloud deployments are not affected.
+  for it); cloud deployments are not affected. One exemption: the JSON Schema of a tool
+  (`tools[].function.parameters`, `tools[].parameters`, `functions[].parameters`) may name a
+  parameter `url` or `*_url` (a name the model fills in, nothing is fetched); any URL key outside
+  the schema's name maps, and any URL inside a value keyword (`default`, `enum`, `const`,
+  `examples`), is still refused.
 - **Writes to the caller** each have a deadline (`-write-timeout`): a non-streamed reply's whole
   body, or one streamed event. A caller that stops reading has its reply ended. A non-streamed
   upstream reply is capped at 16 MiB (over it is a failed attempt), read into a buffer sized from
