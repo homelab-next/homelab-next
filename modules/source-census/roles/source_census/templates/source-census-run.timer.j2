@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (module source-census): the daily census.
+[Unit]
+Description=Daily source census
+
+[Timer]
+OnCalendar={{ source_census_oncalendar }}
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

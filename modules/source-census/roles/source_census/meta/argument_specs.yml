@@ -43,6 +43,30 @@ argument_specs:
         type: str
         description: A private CA file that verifies the query endpoint (empty means the system roots).
         default: ""
+      source_census_install_unit:
+        type: bool
+        description: Install the daily unit and its timer here (a site without a fleet scheduler).
+        default: false
+      source_census_oncalendar:
+        type: str
+        description: The installed timer's calendar.
+        default: "*-*-* 07:15:00 UTC"
+      source_census_lake_query_id:
+        type: str
+        description: The registry row of the lake query service (its URL goes into the run's environment).
+        default: lake-query
+      source_census_lake_catalog_id:
+        type: str
+        description: The registry row of the lake catalog.
+        default: lake-catalog
+      source_census_unit_dir:
+        type: path
+        description: Where the installed units are written.
+        default: /etc/systemd/system
+      source_census_systemctl_cli:
+        type: str
+        description: systemctl.
+        default: systemctl
       source_census_reader_cred:
         type: str
         description: The secret reference of the reader's engine password (a name, never a value).

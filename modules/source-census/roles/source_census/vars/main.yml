@@ -42,3 +42,6 @@ source_census_settings:
     token_file: "{{ source_census_cred_dir }}/notify-token"
     ceiling: "{{ source_census_notify_ceiling }}"
   state: "{{ source_census_state_dir }}/state.json"
+# the unit's environment (no secret): the endpoints the run reaches, resolved from the registry at
+# deploy time, so the run needs neither SRV records nor a registry on the host
+source_census_env_file: "{{ source_census_config_dir }}/census.env"

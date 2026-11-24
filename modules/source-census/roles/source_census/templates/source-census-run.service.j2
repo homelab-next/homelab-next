@@ -1,0 +1,19 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (module source-census): units/fleet_units.yml source-census-run, installed by the role.
+[Unit]
+Description=Daily source census and all-classes-dark check, paging a newly flagged set only
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ source_census_user }}
+Group={{ source_census_group }}
+EnvironmentFile={{ source_census_env_file }}
+ExecStart={{ source_census_hnx_bin }} lake source-census --config {{ source_census_config_file }}
+TimeoutStartSec=600
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths={{ source_census_state_dir }}

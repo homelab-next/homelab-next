@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# The daily census unit and its timer, for a site without a fleet scheduler (source_census_install_unit):
+# the module's own fleet unit (units/fleet_units.yml, source-census-run) as plain systemd units, with
+# the endpoints the run reaches resolved from the registry into an environment file (no secret).
+- name: The run's environment (endpoints by registry name; no secret)
+  ansible.builtin.copy:
+    dest: "{{ source_census_env_file }}"
+    content: |
+      # Managed by homelabnext (module source-census); the endpoints the census reaches.
+      HNX_ENDPOINT_LAKE_QUERY={{ lookup('hnx_registry', source_census_lake_query_id, field='url') }}
+      HNX_ENDPOINT_LAKE_CATALOG={{ lookup('hnx_registry', source_census_lake_catalog_id, field='url') }}
+    owner: "{{ source_census_root_owner }}"
+    group: "{{ source_census_group }}"
+    mode: "0644"
+  register: source_census_env
+
+- name: The service and the timer
+  ansible.builtin.template:
+    src: "source-census-run.{{ item }}.j2"
+    dest: "{{ source_census_unit_dir }}/hnx-source-census-run.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: source_census_units
+
+- name: Reload systemd and arm the timer when a unit changed
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    - ["{{ source_census_systemctl_cli }}", daemon-reload]
+    - ["{{ source_census_systemctl_cli }}", enable, --now, hnx-source-census-run.timer]
+  when: source_census_units is changed
+  changed_when: true
