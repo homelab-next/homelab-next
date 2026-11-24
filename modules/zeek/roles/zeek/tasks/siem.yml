@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# The SIEM agent reads each capture's event streams (JSON lines). The agent is its own control (the
+# siem-agent baseline); this only adds one localfile block, under its own marker, when the agent's
+# configuration exists, and says so when it does not (the same contract as the IDS module).
+- name: Is the SIEM agent installed
+  ansible.builtin.stat:
+    path: "{{ zeek_siem_agent_conf }}"
+  register: zeek_siem_conf
+
+- name: Say so when the agent is not there
+  ansible.builtin.debug:
+    msg: "zeek: {{ zeek_siem_agent_conf }} not found; the logs are written but no SIEM agent reads them yet (apply the siem-agent control to this host)"
+  when: not zeek_siem_conf.stat.exists
+
+- name: Add each capture's event streams as localfiles
+  ansible.builtin.blockinfile:
+    path: "{{ zeek_siem_agent_conf }}"
+    marker: "<!-- {mark} {{ zeek_siem_marker }} -->"
+    block: "{{ lookup('ansible.builtin.template', 'siem-localfile.xml.j2') }}"
+  register: zeek_siem_written
+  when: zeek_siem_conf.stat.exists
+
+- name: Restart the agent to read them
+  ansible.builtin.systemd:
+    name: "{{ zeek_siem_agent_unit }}"
+    state: restarted
+  when: >-
+    zeek_siem_conf.stat.exists and zeek_siem_written is changed and
+    zeek_siem_agent_unit | length > 0 and zeek_service_manage | bool

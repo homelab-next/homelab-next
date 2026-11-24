@@ -93,3 +93,7 @@
   when: >-
     zeek_service_manage | bool and
     (zeek_units is changed or zeek_context is changed or zeek_script is changed or zeek_built is changed)
+
+- name: The SIEM agent reads the event streams
+  ansible.builtin.include_tasks: siem.yml
+  when: zeek_siem_agent_manage | bool

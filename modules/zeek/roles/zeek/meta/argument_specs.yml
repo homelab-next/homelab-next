@@ -41,6 +41,23 @@ argument_specs:
         type: path
         description: Directory holding one log directory per capture.
         default: /var/log/hnx-zeek
+      zeek_siem_agent_manage:
+        type: bool
+        description: Add a localfile block for each capture's event streams to the SIEM agent's configuration when it exists.
+        default: true
+      zeek_siem_agent_conf:
+        type: path
+        description: The SIEM agent's configuration file.
+        default: /var/ossec/etc/ossec.conf
+      zeek_siem_agent_unit:
+        type: str
+        description: 'The SIEM agent''s systemd unit, restarted when the block changed (empty: the site restarts it).'
+        default: ''
+      zeek_siem_streams:
+        type: list
+        elements: str
+        description: The event streams the agent reads (file names without .log).
+        default: [conn, dns, ssl, http, ssh, files, x509, notice, weird]
       zeek_unit_dir: &id008
         type: path
         description: Where the capture units are written.

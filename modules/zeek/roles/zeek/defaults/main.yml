@@ -28,3 +28,11 @@ zeek_stats_window: 5
 zeek_stats_max_age_seconds: 300
 zeek_max_drop_ratio: 0.05
 zeek_health_timeout: 20
+# The SIEM agent on this host (its own control) reads each capture's event streams: the localfile
+# block is added when its configuration exists; the unit is restarted when the block changed
+# (empty: the site restarts it). README "Shipping" names the streams; stats, loaded_scripts,
+# packet_filter and telemetry are not events.
+zeek_siem_agent_manage: true
+zeek_siem_agent_conf: /var/ossec/etc/ossec.conf
+zeek_siem_agent_unit: ""
+zeek_siem_streams: [conn, dns, ssl, http, ssh, files, x509, notice, weird]

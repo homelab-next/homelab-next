@@ -21,3 +21,4 @@ zeek_container_site_dir: /usr/local/zeek/share/zeek/site
 zeek_container_log_dir: /zeek-logs
 zeek_image_tag: "{{ zeek_base_image.split('@')[0].rsplit(':', 1)[1] }}-{{ (zeek_base_image ~ zeek_script_packages | to_json(sort_keys=True) ~ (lookup('ansible.builtin.file', role_path ~ '/files/self-signed.zeek'))) | hash('sha256') | truncate(10, True, '') }}"
 zeek_image: "{{ zeek_local_repo }}:{{ zeek_image_tag }}"
+zeek_siem_marker: "hnx-zeek event logs"
