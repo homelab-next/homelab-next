@@ -86,6 +86,16 @@
   when: wazuh_users_remake | bool
   no_log: true
 
+# The generic json decoder is excluded only once the site's replacement is installed (main.yml applies
+# the exclusion after rules.yml on a first install): on a fresh host the manager would otherwise start
+# with no json decoder at all and refuse to load its rules.
+- name: Is the site's replacement json decoder already in the manager
+  ansible.builtin.include_tasks: json_decoder.yml
+
+- name: Decide whether the generic json decoder is excluded in this render
+  ansible.builtin.set_fact:
+    wazuh_json_exclude_effective: "{{ wazuh_json_decoder_excluded | bool and wazuh_json_native_present | bool }}"
+
 - name: Write the indexer's, the dashboard's and the manager's configuration
   ansible.builtin.template:
     src: "{{ item.src }}"

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's paths). Nothing
+# in it is irreplaceable: the results and the state are derived. The configuration directory is not listed: it
+# holds the publish token and is re-rendered by the install from the secret store.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Export the documents
+      ansible.builtin.include_tasks: export.yml
+    - name: Write the backup manifest
+      ansible.builtin.copy:
+        dest: "{{ lab_checks_data_root }}/backup-manifest.json"
+        content: "{{ {'service': lab_checks_logical_id,
+                      'paths': [lab_checks_data_root],
+                      'restore_from': lab_checks_export_dir,
+                      'note': 'results and state are derived from the register and a run; a lost state only means the next run pages every red criterion once'} | to_nice_json }}\n"
+        owner: "{{ lab_checks_owner }}"
+        group: "{{ lab_checks_owner_group }}"
+        mode: "0640"
+  tags: [backup]

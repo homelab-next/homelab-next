@@ -411,8 +411,8 @@ def test_a_sensor_route_takes_the_client_its_capture_recorded_not_a_forged_host(
         "source_ip": LAKE,
     }
     assert labels_of(run({"route": "vector/sensor-stream", "event": ev}))["hnx_runtime"] == "model"
-    zeek = {"id.orig_h": LAKE, "host": MODEL}
-    assert labels_of(run({"route": "vector/sensor-stream", "event": zeek}))["hnx_runtime"] == "none"
+    flow = {"id.orig_h": LAKE, "host": MODEL}
+    assert labels_of(run({"route": "vector/sensor-stream", "event": flow}))["hnx_runtime"] == "none"
     nested = {"id": {"orig_h": MODEL}}
     assert (
         labels_of(run({"route": "vector/sensor-stream", "event": nested}))["hnx_runtime"] == "model"

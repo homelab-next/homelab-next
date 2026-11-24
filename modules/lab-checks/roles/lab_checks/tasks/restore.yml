@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the paging state from an export directory (lab_checks_restore_source): without it a rebuilt guest pages
+# every red criterion once, which is harmless but noisy. The documents must be JSON objects.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: A source was named
+      ansible.builtin.assert:
+        that: lab_checks_restore_source is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z')
+        fail_msg: "lab-checks: set lab_checks_restore_source to an export directory (an absolute path)"
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Read the exported paging state
+      ansible.builtin.slurp:
+        src: "{{ lab_checks_restore_source }}/state.json"
+      register: lab_checks_restore_state
+    - name: It is a JSON object of statuses
+      ansible.builtin.assert:
+        that: (lab_checks_restore_state.content | b64decode | from_json) is mapping
+        fail_msg: "lab-checks: the exported state is not a JSON object"
+    - name: Install it
+      ansible.builtin.copy:
+        content: "{{ lab_checks_restore_state.content | b64decode | trim }}\n"
+        dest: "{{ lab_checks_state_file }}"
+        owner: "{{ lab_checks_owner }}"
+        group: "{{ lab_checks_owner_group }}"
+        mode: "0600"
+  tags: [restore]

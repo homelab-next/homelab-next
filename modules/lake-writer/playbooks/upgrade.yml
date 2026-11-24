@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: the module pins no artefact or image (its script and schemas ship with the role), so an
+# upgrade is a validated re-converge: the upgrade hook refuses when a live table is not the pinned
+# contract, the state is exported first, then the role converges on the new script. Run the health
+# hook after.
+#   ansible-playbook -i <inventory> modules/lake-writer/playbooks/upgrade.yml
+- name: Upgrade the lake writer
+  hosts: mod_lake_writer_writer
+  become: true
+  tasks:
+    - name: Validate the upgrade
+      ansible.builtin.include_role:
+        name: lake_writer
+        tasks_from: upgrade
+    - name: Export the state first
+      ansible.builtin.include_role:
+        name: lake_writer
+        tasks_from: export
+    - name: Converge on the new script
+      ansible.builtin.include_role:
+        name: lake_writer

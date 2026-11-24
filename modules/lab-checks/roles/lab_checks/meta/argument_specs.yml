@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the continuous lab checks (the register, the probes, the hourly unit and the pager).
+    options: &id001
+      lab_checks_logical_id:
+        type: str
+        description: The instance's id (the unit set's name), e.g. lab-checks.
+        required: true
+      lab_checks_register_src:
+        type: path
+        description: A file on the controller, the site's invariants register (the central register schema); copied to the host and validated there.
+        required: true
+      lab_checks_notify_id:
+        type: str
+        description: The registry id of the notify service pages go to.
+        default: notify
+      lab_checks_notify_topic:
+        type: str
+        description: The notify topic pages are published to.
+        default: lab-checks
+      lab_checks_notify_publisher_ref:
+        type: str
+        description: '''secret:'' reference of the publish token (a copy of the notify provider''s publisher token under this module''s namespace).'
+        default: secret:lab-checks/notify-token
+      lab_checks_ca_ref:
+        type: str
+        description: "Optional 'secret:' reference of a CA certificate (PEM) the probes verify internal TLS services with; empty for none."
+        default: ''
+      lab_checks_notify_ceiling:
+        type: str
+        description: The page channel's TLP ceiling (a page above it is withheld); red only for a channel only the operators read.
+        default: red
+      lab_checks_notify_allow_plain_http:
+        type: bool
+        description: Allow the publish token to go over plain http (a LAN endpoint with no TLS).
+        default: false
+      lab_checks_config_dir:
+        type: path
+        description: Where the register, the notify configuration and the token are written.
+        default: /etc/hnx/{{ lab_checks_logical_id }}
+      lab_checks_data_root:
+        type: path
+        description: 'The module''s data root on the host: results/ and state/.'
+        default: /var/lib/hnx-modules/{{ lab_checks_logical_id }}
+      lab_checks_bin_dir:
+        type: path
+        description: Where the probe and the pager script are installed.
+        default: /usr/local/libexec/homelabnext
+      lab_checks_owner:
+        type: str
+        description: Owner of the installed files (the unit runs as root with one capability, to read lane directories).
+        default: root
+      lab_checks_owner_group:
+        type: str
+        description: Group of the installed files.
+        default: root
+      lab_checks_oncalendar:
+        type: str
+        description: The run's calendar expression (never an interval), with an explicit UTC.
+        default: '*-*-* *:07:00 UTC'
+      lab_checks_max_runtime_s:
+        type: int
+        description: The run's wall-clock cap in seconds.
+        default: 900
+      lab_checks_results_max_age_s:
+        type: int
+        description: Health fails when the results document is older than this many seconds.
+        default: 7800
+      lab_checks_start:
+        type: bool
+        description: Enable and start the timer.
+        default: true
+      lab_checks_unit_dir:
+        type: path
+        description: Where the units are written.
+        default: /etc/systemd/system
+      lab_checks_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      lab_checks_health_timeout:
+        type: int
+        description: Seconds the health hook waits for a command.
+        default: 10
+      lab_checks_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      lab_checks_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      lab_checks_restore_source:
+        type: str
+        description: The directory a prior export wrote (restore only).
+        default: ''
+      lab_checks_last_run_writer:
+        type: path
+        description: The shared last-run writer.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
+  readiness:
+    short_description: Refuse to go on without the secret in its form, hnx and systemd on the host.
+    options: *id001
+  health:
+    short_description: The files are in place, the timer is armed and the last results are recent.
+    options: *id001
+  upgrade:
+    short_description: A validated re-converge (the scripts ship with the role).
+    options: *id001
+  backup:
+    short_description: Export the documents and write the backup manifest.
+    options: *id001
+  export:
+    short_description: Export the last results document and the paging state.
+    options: *id001
+  restore:
+    short_description: Restore the paging state from an export directory.
+    options: *id001

@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role status_hub); local changes are overwritten.
+[Unit]
+Description=homelab-next status hub: login-token refresh schedule ({{ status_hub_logical_id }})
+
+[Timer]
+OnCalendar={{ status_hub_logins_oncalendar }}
+AccuracySec=1s
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

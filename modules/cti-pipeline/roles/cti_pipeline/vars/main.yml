@@ -2,6 +2,7 @@
 # Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
 cti_pipeline_unit_template: "hnx-{{ cti_pipeline_logical_id }}@.service"
 cti_pipeline_bin: "{{ cti_pipeline_install_dir }}/bin/hnx-cti-run"
+cti_pipeline_state_tool: "{{ cti_pipeline_install_dir }}/bin/hnx-cti-state"
 cti_pipeline_releases_dir: "{{ cti_pipeline_install_dir }}/releases"
 cti_pipeline_current: "{{ cti_pipeline_install_dir }}/current"
 cti_pipeline_release_name: "{{ cti_pipeline_artefact_sha256[:16] }}"

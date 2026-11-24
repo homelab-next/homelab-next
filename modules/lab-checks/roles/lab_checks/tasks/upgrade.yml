@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# The module pins no artefact or image: its scripts ship with the role, so an upgrade is the role's own
+# re-converge. This hook validates the inputs and the secret; the converge is the install (which validates
+# the register on the host before replacing it).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+  tags: [upgrade]

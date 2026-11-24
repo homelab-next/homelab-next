@@ -226,6 +226,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         ),
         lambda a: importlib.import_module("homelabnext.workflows.cli").main(a),
     ),
+    "recovery": (
+        "what the restore drills prove: drills check (docs/adr/0042, checklist F-10, F-14, X-07)",
+        lambda a: importlib.import_module("homelabnext.recovery.cli").main(a),
+    ),
     "scripts": (
         "script catalog: catalog [--check]|reality|runner-lint|list",
         lambda a: importlib.import_module("homelabnext.scripts.cli").main(a),

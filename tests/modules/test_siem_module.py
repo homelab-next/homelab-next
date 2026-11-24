@@ -237,13 +237,69 @@ def test_the_manager_acts_on_no_host():
 def test_the_generic_json_decoder_is_excluded_only_when_the_site_asks():
     conf = role_text("templates", "ossec.conf.j2")
     block = re.search(
-        r"\{% if " + P + r"json_decoder_excluded \| bool %\}\s*"
+        r"\{% if " + P + r"json_exclude_effective \| bool %\}\s*"
         r"<decoder_exclude>ruleset/decoders/0006-json_decoders\.xml</decoder_exclude>\s*\{% endif %\}",
         conf,
     )
     assert block, "the exclusion must be conditional on the variable"
     assert conf.index(block.group(0)) > conf.index("<decoder_dir>ruleset/decoders</decoder_dir>")
     assert re.search(rf"^{P}json_decoder_excluded: false$", role_text("defaults", "main.yml"), re.M)
+
+
+def _task_names(*parts: str) -> list[str]:
+    return [t["name"] for t in yaml.safe_load(role_text(*parts)) if "name" in t]
+
+
+def test_the_json_decoder_exclusion_waits_for_the_replacement_on_a_first_install():
+    """First start: the product's decoder file excluded with no replacement makes the manager refuse
+    its rules and never become healthy, so the render must hold the exclusion back until the site's
+    native decoders are in, and the role applies it (one restart) after they are installed."""
+    conf = role_text("templates", "ossec.conf.j2")
+    assert P + "json_exclude_effective | bool" in conf
+    assert P + "json_decoder_excluded" not in conf, "the template must read the effective value"
+    cfg = role_text("tasks", "config.yml")
+    decide = cfg.index(f"{P}json_exclude_effective:")
+    assert cfg.index("json_decoder.yml") < decide < cfg.index("src: ossec.conf.j2")
+    assert f"{P}json_decoder_excluded | bool and {P}json_native_present | bool" in cfg
+    main = role_text("tasks", "main.yml")
+    loaded = (
+        main.index("tasks: rules.yml") if "tasks: rules.yml" in main else main.index("rules.yml")
+    )
+    applied = main.index("Apply the json decoder exclusion")
+    assert loaded < applied < main.index("retention.yml")
+    block = main[applied : main.index("retention.yml")]
+    assert "not ansible_check_mode" in block and f"not {P}json_exclude_effective" in block
+    assert "restart, manager" in block and "probe.yml" in block
+    # the refusal comes before the exclusion is ever rendered
+    assert main.index("Refuse to exclude the product") < applied
+
+
+def test_the_native_json_decoder_probe_finds_only_a_replacement_in_the_manager(tmp_path):
+    from tests.roles.rolerun import run_role
+
+    def probe(data_root: Path):
+        out = run_role(
+            tmp_path,
+            ROLE,
+            "json_decoder",
+            {P + "data_root": str(data_root)},
+            env={"ANSIBLE_ROLES_PATH": str(MODULE / "roles")},
+            verbose=True,
+        )
+        assert out.returncode == 0, out.stdout + out.stderr
+        return out.stdout
+
+    root = tmp_path / "data"
+    assert f'"{P}json_native_present": false' in probe(root)  # no etc yet
+    decoders = root / "manager" / "etc" / "decoders"
+    decoders.mkdir(parents=True)
+    (decoders / "0006-json_decoders.xml").write_text('<decoder name="json"></decoder>\n')
+    (decoders / "hnx-other.xml").write_text('<decoder name="json-other"></decoder>\n')
+    assert f'"{P}json_native_present": false' in probe(
+        root
+    )  # the product's own file is no replacement
+    (decoders / "hnx-zjson.xml").write_text('<decoder name="json">\n</decoder>\n')
+    assert f'"{P}json_native_present": true' in probe(root)
 
 
 def test_enrolment_needs_the_password_and_the_stack_has_no_demo_accounts():

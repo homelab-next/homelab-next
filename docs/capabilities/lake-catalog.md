@@ -294,7 +294,7 @@ Each is a deliberately broken fake (`hnx conform run lake-catalog --target broke
 Target-file factories for the lake capabilities on real products.
 
 - Target file: [`compose/lab-in-a-box/targets/lake-catalog.yml`](../../compose/lab-in-a-box/targets/lake-catalog.yml) (target `lab-in-a-box`)
-- Factory: `make_lake(*, namespace: str='auto', trino_catalog: str='iceberg', **clients: Any) -> TrinoRestLake`
+- Factory: `make_lake(*, namespace: str='auto', trino_catalog: str='iceberg', schemas: Any=None, ensure: bool=True, **clients: Any) -> TrinoRestLake`
 - Config in the target: `{domain: example.internal, namespace: auto, trino_catalog: iceberg}`
 
 <details><summary>Full adapter notes</summary>
@@ -366,7 +366,7 @@ Depended on by: [lake-query](../systems/lake-query.md) ([[systems/lake-query|lak
    def make(**config) -> LakeClient: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.lake:make_lake` is `make_lake(*, namespace: str='auto', trino_catalog: str='iceberg', **clients: Any) -> TrinoRestLake`.
+   The factory this repository ships: `homelabnext.conform.adapters.lake:make_lake` is `make_lake(*, namespace: str='auto', trino_catalog: str='iceberg', schemas: Any=None, ensure: bool=True, **clients: Any) -> TrinoRestLake`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

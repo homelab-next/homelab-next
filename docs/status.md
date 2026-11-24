@@ -1,6 +1,6 @@
 ---
-summary: 'The read-only status hub: sources, views, the status.json contract, agent activity, the mTLS edge hop, Approvals and the register pages.'
-summary_of: outline:sha256:3f784fb8e78aad88
+summary: 'The read-only status hub: sources, views, status.json, events, agent activity, the collector, the mTLS edge hop, Approvals and the register pages.'
+summary_of: outline:sha256:c5dc55eccbaabe6a
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Status hub: one read-only place for activity and status
@@ -94,6 +94,8 @@ Built-in mappers for sources this repository has:
 | `agentmetry-audit` | Agentmetry's `GET /api/v1/audit/status` (`poll-http-json`, section 7) | `audit-trail`: warn when off, empty, or silent past `warn_after_s` |
 | `prometheus-alerts` | Prometheus `GET /api/v1/alerts` (`poll-prometheus` only, section 7) | one per firing alert, by severity |
 | `job-last-run` | a directory of last-run records (`poll-file`, below), or one record, or a list of them | one per job and host, `<job id>@<host>`: fail when the run failed, warn when the next one is overdue |
+| `table-snapshot-age` | a lake catalog's REST `LoadTableResult` for one table (`poll-http-json`; registry 2.12) | one item (`mapping.item`): the age of the newest snapshot against `warn_after_s` and `fail_after_s`; no snapshot is warn |
+| `backup-snapshot-age` | a backup server datastore's snapshot list, `GET /api2/json/admin/datastore/<store>/snapshots` (`poll-http-json`; registry 2.12) | one per backup group, `<type>/<id>`: the newest snapshot's age against the same limits; a failed verification is fail; an empty datastore is fail |
 
 ### Scheduled jobs: last-run records (`job-last-run`, registry 2.6)
 
@@ -188,6 +190,37 @@ hub.ingest_event(body)  # a pushed homelabnext.status.observed event
 hub.notify(notifier)  # state-diffed, transitions only
 hub.publish(publisher, observations, "svc:metrics")  # onto the bus (homelabnext.events)
 ```
+
+### Running the collector on the hub's host (role `status_hub`)
+
+`hnx status serve` only reads `state.json`; something has to write it. With `status_hub_collect: true`
+the role installs `hnx-hub-collect.timer` (a calendar, `*-*-* *:*:00 UTC`, never a monotonic timer) that
+starts `hnx-hub-collect.service`, a hardened oneshot running `hnx status collect` as the hub's user
+against the registry copy, with `--root` (the directory poll-file producers deliver into,
+`status_hub_root_dir`) and `--secrets-dir` (`status_hub_issued_dir`). Each source runs when its own
+`interval_s` is due, so a source that stops being collected reads `stale` at the page within its
+`stale_after_s` (decision 5): the collector going quiet turns every tile stale, not green.
+
+Credentials are the registry's `secret:` references: list them in `status_hub_secret_refs` (they
+become `HNX_SECRET_*` in the units' environment file) or let the helper below write them as files.
+The collector verifies https sources against one bundle, `tls/ca-bundle.crt` (the client CA plus
+`status_hub_extra_ca_refs`, for a product that signs its own certificate), through `SSL_CERT_FILE`;
+this needs the hub's TLS settings. `status_hub_views_file` replaces the built-in two-entry menu with
+the lab's own views (checked with `hnx status views check`), `status_hub_registers_dir` is passed to
+`hnx status serve --registers`, and `status_hub_notify_topic` (with `status_hub_notify_ceiling`) pages
+`fail`/`stale` transitions through the registry's `notify` service.
+
+#### Login-issued tokens
+
+Some products issue a bearer token only for a login that expires in hours (a form post of a user name
+and password). `status_hub_logins` lists them, each `{name, service, path, username, password_ref}`;
+a root-run timer (`hnx-hub-login-token.timer`, every 4 hours by default) runs the helper, which posts
+the form to the registry row's url + `path` over verified https (no redirect, no proxy from the
+environment, a password file only root reads) and writes the answer to `<status_hub_issued_dir>/<name>`
+by rename, as a file only the hub's user reads (mode 0600, created that way), so a failed login leaves the previous token in place. A source's `auth: {secret:
+"secret:<name>"}` then reads that file. The login account should be read-only where the product
+allows; where it has a single user (the product's own limit) the credential is the administrator's,
+held in a root-only file on the hub's host and never in the unit's environment.
 
 ## 3. Views (`examples/status/views.yml`)
 

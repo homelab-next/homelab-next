@@ -66,7 +66,7 @@ what it needs, what it offers and every entry it adds to a registry the core bui
 ## Where modules live
 
 ```text
-modules/<id>/module.yml           a module shipped with homelab-next (modules/ntfy, notify; modules/caddy, edge; modules/prometheus, metrics; modules/gateway, inference; modules/garage, iceberg-rest and trino, the lake; modules/vector, log-pipeline; modules/orchestration, orchestration; modules/llamacpp, inference; modules/nifi, dataflow; modules/stackstorm, automation; modules/openwebui, chat; modules/tts, tts; modules/context, context; modules/cti-pipeline, a feature: the threat-intelligence jobs; modules/honeypot, a feature: the honeypot's receiver, lake writer and intel report)
+modules/<id>/module.yml           a module shipped with homelab-next (modules/ntfy, notify; modules/caddy, edge; modules/prometheus, metrics; modules/gateway, inference; modules/garage, iceberg-rest and trino, the lake; modules/vector, log-pipeline; modules/orchestration, orchestration; modules/llamacpp, inference; modules/nifi, dataflow; modules/stackstorm, automation; modules/openwebui, chat; modules/tts, tts; modules/context, context; modules/cti-pipeline, a feature: the threat-intelligence jobs; modules/honeypot, a feature: the honeypot's receiver, lake writer and intel report; modules/lake-writer, a feature: the log pipeline's lake writer, the fresh soc tables)
   python/hnx_modules/<id_>/       its code: hnx_modules is a PEP 420 namespace package, so overlay
                                   modules add code without touching the repository
   roles/<id_>[_<role>]/           its Ansible roles (role interface v1)

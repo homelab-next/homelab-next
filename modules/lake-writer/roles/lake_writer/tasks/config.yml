@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Resolve the services' URLs
+  ansible.builtin.include_tasks: resolve.yml
+
+- name: Create the script, configuration, schema and credentials directories (root's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ lake_writer_owner }}"
+    group: "{{ lake_writer_owner_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ lake_writer_bin_dir }}", mode: "0755"}
+    - {path: "{{ lake_writer_config_dir }}", mode: "0755"}
+    - {path: "{{ lake_writer_schema_dir }}", mode: "0755"}
+    - {path: "{{ lake_writer_auth_dir }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the script
+  ansible.builtin.copy:
+    src: hnx_lake_writer.py
+    dest: "{{ lake_writer_script }}"
+    owner: "{{ lake_writer_owner }}"
+    group: "{{ lake_writer_owner_group }}"
+    mode: "0755"
+  register: lake_writer_script_copy
+
+# the module's own pinned OCSF subsets: the tables the core does not pin (the script reads the core's
+# from the runtime release)
+- name: Install the module's table schemas
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ lake_writer_schema_dir }}/{{ item | basename }}"
+    owner: "{{ lake_writer_owner }}"
+    group: "{{ lake_writer_owner_group }}"
+    mode: "0644"
+  with_fileglob: "{{ role_path }}/files/schemas/*.v1.json"
+  loop_control:
+    label: "{{ item | basename }}"
+  register: lake_writer_schemas
+
+- name: Write the environment (no secret in it)
+  ansible.builtin.template:
+    src: lake-writer.env.j2
+    dest: "{{ lake_writer_env_file }}"
+    owner: "{{ lake_writer_owner }}"
+    group: "{{ lake_writer_owner_group }}"
+    mode: "0644"
+  register: lake_writer_env
+
+- name: Write the lake CA
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', lake_writer_lake_ca_ref) | trim }}\n"
+    dest: "{{ lake_writer_ca_file }}"
+    owner: "{{ lake_writer_owner }}"
+    group: "{{ lake_writer_owner_group }}"
+    mode: "0644"
+  when: lake_writer_lake_ca_ref != ''
+  no_log: true
+
+- name: Write the logins for the units (an environment file, root-only; systemd reads it as root)
+  ansible.builtin.copy:
+    content: |
+      HNX_SECRET_LAKE_WRITER_LAKE_PASSWORD={{ lookup('hnx_secret', lake_writer_lake_login_ref) }}
+      {% if lake_writer_catalog_bearer_ref != '' %}
+      HNX_SECRET_LAKE_WRITER_CATALOG_TOKEN={{ lookup('hnx_secret', lake_writer_catalog_bearer_ref) }}
+      {% endif %}
+      HNX_LW_S3_ACCESS_KEY={{ lookup('hnx_secret', lake_writer_s3_id_ref) }}
+      HNX_LW_S3_SECRET_KEY={{ lookup('hnx_secret', lake_writer_s3_key_ref) }}
+    dest: "{{ lake_writer_login_env_file }}"
+    owner: "{{ lake_writer_owner }}"
+    group: "{{ lake_writer_owner_group }}"
+    mode: "0600"
+  no_log: true
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ lake_writer_last_run_dir }}"
+    last_run_group: "{{ lake_writer_last_run_group }}"
+    last_run_writer: "{{ lake_writer_last_run_writer }}"
+
+- name: Write the template units (one instance per table)
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ lake_writer_unit_dir }}/{{ item.dest }}"
+    owner: "{{ lake_writer_owner }}"
+    group: "{{ lake_writer_owner_group }}"
+    mode: "0644"
+  loop:
+    - {src: lake-writer.service.j2, dest: "{{ lake_writer_service_unit }}"}
+    - {src: lake-writer.timer.j2, dest: "{{ lake_writer_timer_unit }}"}
+  loop_control:
+    label: "{{ item.dest }}"
+  register: lake_writer_units
+
+- name: Reload systemd after a unit changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: lake_writer_units.changed | bool and not ansible_check_mode and lake_writer_start | bool
+
+- name: Arm one timer per table (a run in progress is never restarted)
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: "{{ 'restarted' if lake_writer_units.changed else 'started' }}"
+  loop: "{{ lake_writer_timers }}"
+  when: not ansible_check_mode and lake_writer_start | bool

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the sensor on the host the site placed the module's `sensor` role on. The
+# apply path (docs/modules/apply.md) renders its own modules.yml from the selection and does not
+# import this file; it is the module's own entry point, for a lab that runs one module by hand:
+#   ansible-playbook -i <inventory with --selection> modules/zeek/playbooks/install.yml
+- name: Install the network monitor (Zeek)
+  hosts: mod_zeek_sensor
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: zeek
+        tasks_from: readiness
+      tags: [mod_zeek]
+  roles:
+    - role: zeek
+      tags: [mod_zeek]

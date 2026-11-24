@@ -58,6 +58,15 @@
     group: "{{ cti_pipeline_owner_group }}"
     mode: "0755"
 
+# the state tool beside the wrapper, so a check (the site's invariants) can judge freshness with the module's own code
+- name: Install the state tool (freshness, handoff health) beside the wrapper
+  ansible.builtin.copy:
+    src: cti_state.py
+    dest: "{{ cti_pipeline_state_tool }}"
+    owner: "{{ cti_pipeline_owner }}"
+    group: "{{ cti_pipeline_owner_group }}"
+    mode: "0755"
+
 - name: Write each declared instance's job spec (root's; the wrapper refuses any other owner)
   ansible.builtin.template:
     src: job-spec.json.j2

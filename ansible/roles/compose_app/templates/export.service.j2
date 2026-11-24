@@ -1,0 +1,17 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role compose_app); local changes are overwritten.
+[Unit]
+Description=Application-consistent database dump of {{ compose_app_name }} (ADR-0042)
+After=docker.service
+Requires=docker.service
+ConditionPathExists={{ compose_app_dir }}/docker-compose.yml
+
+[Service]
+Type=oneshot
+# the job's last-run record (role last_run); a writer problem never changes the job's own result
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ compose_app_export_last_run_dir }} --group {{ compose_app_export_last_run_group }} --job timer:compose_app/export --unit %n --calendar "{{ compose_app_export_calendar }}" --delay 900
+# the path is literal (what the script catalog checks); compose_app_export_script is where the role installs it
+ExecStart=/usr/local/libexec/homelabnext/hnx-export-run --manifest {{ compose_app_export_manifest }}
+TimeoutStartSec=2h
+Nice=10
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ compose_app_export_last_run_dir }} --group {{ compose_app_export_last_run_group }} --job timer:compose_app/export --unit %n --calendar "{{ compose_app_export_calendar }}" --delay 900
