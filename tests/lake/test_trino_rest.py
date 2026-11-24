@@ -240,6 +240,37 @@ def test_a_drifted_table_is_refused(lab):
         _lake(lab)
 
 
+def _all_but(lab, table, name):
+    import itertools
+
+    from fake_lab import _ice
+
+    ids = itertools.count(1)
+    return [_ice(c, ids, True) for c in lab.schemas[table].columns if c.name != name]
+
+
+def _optional_column(lab, table):
+    return next(c.name for c in lab.schemas[table].columns if not c.required)
+
+
+def test_additive_evolution_adds_a_missing_optional_column_and_nothing_else(lab):
+    col = _optional_column(lab, "dns_activity")
+    lab.schema_override["dns_activity"] = _all_but(lab, "dns_activity", col)
+    with pytest.raises(SchemaMismatch, match=col):
+        _lake(lab)  # without the opt-in, a missing column is refused as before
+    lake = _lake(lab, evolve_additive=True)
+    assert any(s.startswith("ALTER TABLE") and f'"{col}"' in s for s in lab.statements)
+    assert "dns_activity" in lake.list_tables()
+
+
+def test_additive_evolution_never_adds_a_required_column(lab):
+    req = next(c.name for c in lab.schemas["dns_activity"].columns if c.required)
+    lab.schema_override["dns_activity"] = _all_but(lab, "dns_activity", req)
+    with pytest.raises(SchemaMismatch, match=req):
+        _lake(lab, evolve_additive=True)
+    assert not any(s.startswith("ALTER TABLE") for s in lab.statements)
+
+
 def test_marks_and_ledger_survive_a_commit_conflict(lab):
     from conformance.suites._lake import auth_row
 
