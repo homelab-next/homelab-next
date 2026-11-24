@@ -34,12 +34,14 @@ appear in the lab registry **identically, as the site binds it**
   registry: services.notify-eval: example-notify (instance notify-eval) contributes this row (its row notify), but the lab registry has no such row (copy it as the site binds it)
   ```
 
-- three fields are the lab's own facts about a row, which a generic module cannot know:
-  `standing` (ADR-0039: eval, retiring or legacy, with `until` and `why`), `backup_job` and
-  `scope` (which only narrows what agents file about the service). The registry may add them;
+- four fields are the lab's own facts about a row, which a generic module cannot know:
+  `standing` (ADR-0039: eval, retiring or legacy, with `until` and `why`), `backup_job`,
+  `scope` (which only narrows what agents file about the service) and `status_sources` (what the
+  site's status hub collects about the row: the site decides what it watches, and a module need
+  not know the hub; [status](../status.md)). The registry may add them;
   they are compared only when the module's row sets them. `clients` is **not** one of them: extra
   zones widen who may reach the service, so a registry that adds them differs from the module.
-  So the overlay's copy of a module's row is the bound row plus, at most, these three (an eval
+  So the overlay's copy of a module's row is the bound row plus, at most, these four (an eval
   instance beside the primary: the module's fields exactly, and `standing`);
 - two fields have a value that is the site's and a presence that is the module's:
   `public_hostname` and `edge_tls`. A module whose row is published at the edge (an IdP's
