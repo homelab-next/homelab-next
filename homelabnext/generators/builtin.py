@@ -227,15 +227,21 @@ def _forward_auth_snippet(endpoint: str, identity: IdentityHeaders | None = None
         "\t\t\t}\n"
         "\t\t}\n"
         "\t\t# the session cookie is the auth proxy's alone: no upstream sees it (after the check)\n"
-        f'\t\trequest_header Cookie "{SESSION_COOKIE_FIND}" "$1"\n'
+        f'\t\trequest_header Cookie "{SESSION_COOKIE_FIND}" ""\n'
+        f'\t\trequest_header Cookie "{SESSION_COOKIE_LEAD}" ""\n'
         "\t}\n"
         "}\n"
     )
 
 
 #: the regular expression that deletes every part of the auth proxy's session cookie from a
-#: ``Cookie`` header (keeping the separator before it; any other cookie stays), case-insensitively
-SESSION_COOKIE_FIND = rf"(?i)(^|;\s*){AUTH_PROXY_COOKIE}[^=;]*=[^;]*"
+#: ``Cookie`` header together with the ``;`` before it (any other cookie stays), case-insensitively;
+#: a cookie first in the header leaves its following ``;`` behind, which :data:`SESSION_COOKIE_LEAD`
+#: (the next directive) removes: an upstream's strict cookie parser (OpenSearch Dashboards') rejects
+#: the whole header on a leading ``;``, which logged every user out on the next request
+SESSION_COOKIE_FIND = rf"(?i)(?:;\s*)?{AUTH_PROXY_COOKIE}[^=;]*=[^;]*"
+#: the leading ``;`` the previous deletion can leave when the session cookie was first
+SESSION_COOKIE_LEAD = r"^;\s*"
 
 
 #: the auth proxy check's query parameter naming the groups a signed-in user must be in one of
