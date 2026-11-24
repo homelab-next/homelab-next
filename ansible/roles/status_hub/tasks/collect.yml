@@ -51,6 +51,10 @@
   ansible.builtin.include_tasks: login_tokens.yml
   when: status_hub_logins | length > 0
 
+- name: Pull the producers' status files
+  ansible.builtin.include_tasks: pulls.yml
+  when: status_hub_pulls | length > 0
+
 - name: Enable the collector's timer (a pass every minute; the first one runs now)
   ansible.builtin.systemd_service:
     name: hnx-hub-collect.timer

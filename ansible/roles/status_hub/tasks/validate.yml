@@ -127,3 +127,29 @@
       a name, a registry service, an absolute path, a user name and a password_ref that is a secret:
       reference not also listed in status_hub_secret_refs
   when: status_hub_collect | bool or status_hub_registers_dir | length > 0
+
+# Pulled status files (ADR-0049 decision 7): every value lands in the helper's configuration, a
+# known_hosts file and an ssh argv, so each is checked; the host is a registry host (its address is
+# the registry's), the key is a secret: reference that is a file for the root-run helper only.
+- name: Validate the pulled status files
+  ansible.builtin.assert:
+    that:
+      - status_hub_pulls is sequence and status_hub_pulls is not string
+      - status_hub_pulls | length == 0 or status_hub_collect | bool
+      - status_hub_pulls | length == 0 or status_hub_pull_key_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - status_hub_pull_key_ref not in status_hub_secret_refs
+      - status_hub_pulls_oncalendar is match('^[A-Za-z0-9*:/,. -]{1,80}\Z')
+      - status_hub_pulls | map(attribute='name') | select('match', '^[a-z0-9][a-z0-9_-]{0,62}\Z') | list | length == status_hub_pulls | length
+      - status_hub_pulls | map(attribute='name') | unique | list | length == status_hub_pulls | length
+      - status_hub_pulls | map(attribute='host') | map('string') | select('in', status_hub_registry_hosts) | list | length == status_hub_pulls | length
+      - status_hub_pulls | map(attribute='user') | select('match', '^[a-z_][a-z0-9_-]{0,31}\Z') | list | length == status_hub_pulls | length
+      - status_hub_pulls | map(attribute='host_key') | select('match', '^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ssh-rsa) [A-Za-z0-9+/]{40,}={0,3}\Z') | list | length == status_hub_pulls | length
+      - status_hub_pulls | map(attribute='dest') | select('match', '^[a-z0-9][a-z0-9_.-]{0,62}(/[a-z0-9][a-z0-9_.-]{0,62}){0,3}\.json\Z') | list | length == status_hub_pulls | length
+      - status_hub_pulls | map(attribute='dest') | select('search', '(^|/)\.\.?(/|$)') | list | length == 0
+      - status_hub_pulls | map(attribute='dest') | unique | list | length == status_hub_pulls | length
+    fail_msg: >-
+      status_hub: each pulled status file needs a unique name, a registry host, an account name, the
+      host's SSH host key ("<type> <base64>"), and a unique relative .json dest under the status root;
+      pulls need the collector and status_hub_pull_key_ref (a secret: reference not also in
+      status_hub_secret_refs); the calendar is checked like the others
+  when: status_hub_pulls | length > 0 or status_hub_pull_key_ref | length > 0

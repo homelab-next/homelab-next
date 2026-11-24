@@ -14,6 +14,11 @@ ExecStart=/opt/hnx/bin/hnx invariants run {{ lab_checks_register_file }} --root 
 # the runner exits 1 when a criterion is red and 100 when one could not be measured: the page is the signal, and the
 # unit itself did its job (a failed unit would also hide a real fault of the runner behind a standing red)
 SuccessExitStatus=1 100
+{% if lab_checks_results_readers | length > 0 %}
+# publish a copy for the results reader (its forced command prints it): beside, then renamed, group the reader's alone
+ExecStartPost=+/usr/bin/install -m 0640 -o root -g {{ lab_checks_reader_user }} {{ lab_checks_results_file }} {{ lab_checks_reader_home }}/.{{ lab_checks_logical_id }}.hourly.json.tmp
+ExecStartPost=+/usr/bin/mv -f {{ lab_checks_reader_home }}/.{{ lab_checks_logical_id }}.hourly.json.tmp {{ lab_checks_reader_file }}
+{% endif %}
 ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ lab_checks_last_run_dir }} --group {{ lab_checks_last_run_group }} --job timer:lab_checks/lab-checks --unit %n --calendar "{{ lab_checks_oncalendar }}" --delay 0
 TimeoutStartSec={{ lab_checks_max_runtime_s }}
 Nice=10

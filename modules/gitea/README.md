@@ -366,6 +366,10 @@ administrator creates or links the account), so an OIDC identity is never an unv
 Keycloak client is a confidential client with the redirect URI
 `https://<gitea_hostname>:<gitea_port>/user/oauth2/<gitea_oidc_name>/callback`.
 
+The forge row has no public route, so the realm gives its client a redirect only when the row declares
+it (service schema 2.13): set `auth: idp` and `oidc.redirect_uris` to that URI on the `forge` row in
+the site's registry (the host must be the row's own name and port; the registry refuses any other).
+
 ## Tests and tooling
 
 `tests/modules/test_forge_module.py` (manifest, row, pins, overlay, lint),
