@@ -47,3 +47,56 @@ scrape_configs:
       - target_label: __address__
         replacement: {{ prometheus_blackbox_service }}:{{ prometheus_blackbox_port }}
 {% endif %}
+{% if prometheus_llm_probes_on | bool %}
+
+  # one-token completions through the LLM gateway, one blackbox module per model role (its body names
+  # the role); the gateway's key is a file only the blackbox exporter mounts
+  - job_name: llm-probe
+    metrics_path: /probe
+    scrape_interval: {{ prometheus_llm_probe_interval }}
+    scrape_timeout: {{ prometheus_llm_probe_timeout }}
+    static_configs:
+{% for r in prometheus_llm_probe_roles %}
+      - targets: [{{ (prometheus_llm_probe_url ~ '/v1/chat/completions') | to_json }}]
+        labels: {role: {{ r | to_json }}, module: {{ ('llm_' ~ r | replace('-', '_')) | to_json }}, gateway: {{ prometheus_llm_probe_gateway | to_json }}}
+{% endfor %}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [module]
+        target_label: __param_module
+      - source_labels: [role]
+        target_label: instance
+      - target_label: __address__
+        replacement: {{ prometheus_blackbox_service }}:{{ prometheus_blackbox_port }}
+{% endif %}
+{% if prometheus_snmp_enabled | bool %}
+{% for t in prometheus_snmp_targets %}
+
+  # SNMP: {{ t.host }} through the exporter beside this service (modules {{ t.modules | join(', ') }})
+  - job_name: {{ ('snmp-' ~ t.host) | to_json }}
+    metrics_path: /snmp
+    scrape_interval: {{ prometheus_snmp_interval }}
+    scrape_timeout: {{ prometheus_snmp_timeout }}
+    params:
+      module: [{{ t.modules | join(',') | to_json }}]
+      auth: [{{ prometheus_snmp_auth_name | to_json }}]
+    static_configs:
+      - targets: [{{ prometheus_snmp_addresses[t.host] | to_json }}]
+        labels: {host: {{ t.host | to_json }}}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: {{ prometheus_snmp_service }}:{{ prometheus_snmp_port }}
+{% if t.watch_ports | default('') != '' %}
+    metric_relabel_configs:
+      - source_labels: [ifName]
+        regex: {{ t.watch_ports | to_json }}
+        target_label: watched
+        replacement: "1"
+{% endif %}
+{% endfor %}
+{% endif %}

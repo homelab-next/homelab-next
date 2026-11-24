@@ -15,6 +15,9 @@
     - {path: "{{ prometheus_data_root }}/config/{{ prometheus_generated_dir }}", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
     - {path: "{{ prometheus_data_root }}/config/blackbox", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
     - {path: "{{ prometheus_data_root }}/scrape-credentials", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
+    - {path: "{{ prometheus_data_root }}/config/snmp", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
+    - {path: "{{ prometheus_data_root }}/snmp-credentials", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
+    - {path: "{{ prometheus_data_root }}/probe-credentials", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
     - {path: "{{ prometheus_data_root }}/export", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
   loop_control:
     label: "{{ item.path }}"
