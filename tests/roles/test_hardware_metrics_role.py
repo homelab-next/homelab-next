@@ -366,6 +366,23 @@ def test_the_sysfs_gpu_collector_counts_the_processes_holding_device_memory(tmp_
 # ----------------------------------------------------------------------------- the role
 
 
+SYSTEMCTL = """
+import os, sys
+log = os.path.join(HERE, "calls.log")
+on = os.path.join(HERE, "timer.on")
+open(log, "a").write("systemctl " + " ".join(sys.argv[1:]) + "\\n")
+if sys.argv[1] == "enable":
+    open(on, "w").close()
+elif sys.argv[1] in ("is-enabled", "is-active"):
+    print(("enabled" if sys.argv[1] == "is-enabled" else "active") if os.path.exists(on) else "inactive")
+"""
+
+
+def _systemctl(tmp_path: Path) -> str:
+    """A fake systemctl: logs every call; the timer is enabled and active once `enable` ran."""
+    return fake(tmp_path / "systemctl", f"HERE = {str(tmp_path)!r}\n" + SYSTEMCTL)
+
+
 def _vars(tmp_path: Path, **kw) -> dict:
     f = _fakes(tmp_path)
     d = {
@@ -375,7 +392,7 @@ def _vars(tmp_path: Path, **kw) -> dict:
         "hardware_metrics_conf_dir": str(tmp_path / "etc"),
         "hardware_metrics_libexec_dir": str(tmp_path / "libexec"),
         "hardware_metrics_systemd_dir": str(tmp_path / "systemd"),
-        "hardware_metrics_systemctl_cli": logging_fake(tmp_path, "systemctl"),
+        "hardware_metrics_systemctl_cli": _systemctl(tmp_path),
         "hardware_metrics_zpool_cli": f["zpool"],
         "hardware_metrics_ipmitool_cli": f["ipmitool"],
         "hardware_metrics_guest_conf_dirs": f["conf"],
@@ -414,11 +431,24 @@ def test_config_installs_the_collector_its_units_runs_it_once_and_is_idempotent(
         'hw_collector_up{collector="zfs"} 1' in prom
         and 'hw_collector_up{collector="ipmi"} 1' in prom
     )
-    assert calls(tmp_path) == ["systemctl daemon-reload"]
+    timer = "hnx-hardware-metrics.timer"
+    assert [c for c in calls(tmp_path) if " is-" not in c] == [
+        "systemctl daemon-reload", f"systemctl enable --now {timer}"]  # fmt: skip
     r2 = run_role(tmp_path, "hardware_metrics", "config", v)
     assert r2.returncode == 0, r2.stdout + r2.stderr
     assert "changed=0" in r2.stdout, r2.stdout
-    assert calls(tmp_path) == ["systemctl daemon-reload"]  # no second reload
+    # no second reload, and an enabled, active timer is left alone
+    assert [c for c in calls(tmp_path) if " is-" not in c] == [
+        "systemctl daemon-reload", f"systemctl enable --now {timer}"]  # fmt: skip
+
+
+def test_config_under_check_on_a_fresh_host_asks_nothing_it_cannot_answer(tmp_path):
+    """The dry run of a first install: the unit does not exist, so the timer is neither enabled
+    nor started, and the run does not fail on it."""
+    v = _vars(tmp_path)
+    r = run_role(tmp_path, "hardware_metrics", "config", v, check=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not any(c.startswith("systemctl enable") for c in calls(tmp_path))
 
 
 def test_a_setting_that_could_add_a_line_or_name_no_collector_is_refused(tmp_path):
