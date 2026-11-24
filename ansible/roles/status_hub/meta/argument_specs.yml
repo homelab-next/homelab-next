@@ -89,7 +89,7 @@ argument_specs:
       status_hub_logins:
         type: list
         elements: dict
-        description: "Bearer tokens a product issues only for a login: each {name, service (a registry row), path, username, password_ref}. A root-run timer posts the credentials to the row's url+path over verified https and writes the answer to <status_hub_issued_dir>/<name>; a source's auth.secret: secret:<name> reads it. password_ref is a file for the helper, not in status_hub_secret_refs."
+        description: "Bearer tokens a product issues only for a login: each {name, service (a registry row), path, username, password_ref}. A root-run timer posts the credentials to the row's url+path over verified https and writes the answer to <status_hub_issued_dir>/hub-login/<name>; a source's auth.secret reads it as the login's name in the store area hub-login (secret:hub-login/flow-reader for the login flow-reader). password_ref is a file for the helper, not in status_hub_secret_refs."
         default: []
       status_hub_logins_oncalendar:
         type: str

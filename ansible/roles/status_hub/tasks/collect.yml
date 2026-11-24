@@ -11,6 +11,7 @@
   loop:
     - {path: "{{ status_hub_root_dir }}", owner: "{{ status_hub_user }}", mode: "0750"}
     - {path: "{{ status_hub_issued_dir }}", owner: root, mode: "0750"}
+    - {path: "{{ status_hub_login_dir }}", owner: root, mode: "0750"}
   loop_control:
     label: "{{ item.path }}"
 
