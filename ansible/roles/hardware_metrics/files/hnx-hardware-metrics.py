@@ -653,10 +653,11 @@ def main(argv=None):
     text = build(cfg)
     out = os.path.join(cfg["textfile_dir"], "hardware_metrics.prom")
     tmp = out + ".tmp"
+    # the exporter's own user reads the file: a world-readable file by the process mask (no secret in it)
+    os.umask(0o022)
     try:
         with open(tmp, "w") as f:
             f.write(text)
-        os.chmod(tmp, 0o644)
         os.replace(tmp, out)
     except OSError as e:
         print(f"hardware-metrics: cannot write {out}: {e}", file=sys.stderr)

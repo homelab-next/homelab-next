@@ -320,6 +320,8 @@ def test_an_unknown_collector_or_a_missing_directory_writes_nothing(tmp_path):
 def test_the_file_is_valid_exposition_text_with_one_help_and_type_per_family(tmp_path):
     r, prom = _collect(tmp_path, ["zfs", "ipmi", "nvidia", "xe", "hypervisor"])
     assert r.returncode == 0, r.stderr
+    mode = (tmp_path / "textfile/hardware_metrics.prom").stat().st_mode & 0o777
+    assert mode == 0o644  # the exporter's own user reads it; nobody else may write it
     helps = [ln.split()[2] for ln in prom.splitlines() if ln.startswith("# HELP ")]
     assert len(helps) == len(set(helps))
     for ln in prom.splitlines():
