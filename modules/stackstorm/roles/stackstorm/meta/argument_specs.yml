@@ -187,6 +187,19 @@ argument_specs:
         description: Rules to turn on, by rule name (on_<pack>); empty ships every rule disabled.
         default: []
         elements: str
+      stackstorm_table_mounts: &idtables
+        type: list
+        elements: dict
+        description: 'Tables the pack''s lookup steps read, each {name, path, group}: a host directory under
+          stackstorm_table_roots mounted read-only into the action runner at /opt/hnx-tables/<name>, and
+          the host group (it must exist) whose number the runner is given to read it. Empty: none.'
+        default: []
+      stackstorm_table_roots: &idtableroots
+        type: list
+        elements: str
+        description: Host directories a table mount may lie under (absolute, canonical, three parts or more).
+        default:
+        - /var/lib/hnx-modules
       stackstorm_allow_live_rules: &id037
         type: bool
         description: 'Deploy a pack that carries a live rule (shadow-first: off).'
@@ -392,6 +405,8 @@ argument_specs:
       stackstorm_mem_limit: *id034
       stackstorm_mongo_cache_gb: *id035
       stackstorm_enabled_rules: *id036
+      stackstorm_table_mounts: *idtables
+      stackstorm_table_roots: *idtableroots
       stackstorm_allow_live_rules: *id037
       stackstorm_retention_days: *id038
       stackstorm_admin_user: *id039
@@ -487,6 +502,8 @@ argument_specs:
       stackstorm_mem_limit: *id034
       stackstorm_mongo_cache_gb: *id035
       stackstorm_enabled_rules: *id036
+      stackstorm_table_mounts: *idtables
+      stackstorm_table_roots: *idtableroots
       stackstorm_allow_live_rules: *id037
       stackstorm_retention_days: *id038
       stackstorm_admin_user: *id039
@@ -581,6 +598,8 @@ argument_specs:
       stackstorm_mem_limit: *id034
       stackstorm_mongo_cache_gb: *id035
       stackstorm_enabled_rules: *id036
+      stackstorm_table_mounts: *idtables
+      stackstorm_table_roots: *idtableroots
       stackstorm_allow_live_rules: *id037
       stackstorm_retention_days: *id038
       stackstorm_admin_user: *id039
@@ -675,6 +694,8 @@ argument_specs:
       stackstorm_mem_limit: *id034
       stackstorm_mongo_cache_gb: *id035
       stackstorm_enabled_rules: *id036
+      stackstorm_table_mounts: *idtables
+      stackstorm_table_roots: *idtableroots
       stackstorm_allow_live_rules: *id037
       stackstorm_retention_days: *id038
       stackstorm_admin_user: *id039
@@ -769,6 +790,8 @@ argument_specs:
       stackstorm_mem_limit: *id034
       stackstorm_mongo_cache_gb: *id035
       stackstorm_enabled_rules: *id036
+      stackstorm_table_mounts: *idtables
+      stackstorm_table_roots: *idtableroots
       stackstorm_allow_live_rules: *id037
       stackstorm_retention_days: *id038
       stackstorm_admin_user: *id039
@@ -867,6 +890,8 @@ argument_specs:
       stackstorm_mem_limit: *id034
       stackstorm_mongo_cache_gb: *id035
       stackstorm_enabled_rules: *id036
+      stackstorm_table_mounts: *idtables
+      stackstorm_table_roots: *idtableroots
       stackstorm_allow_live_rules: *id037
       stackstorm_retention_days: *id038
       stackstorm_admin_user: *id039

@@ -11,6 +11,8 @@ stackstorm_c_python_root: /opt/py311
 stackstorm_c_dist: /opt/hnx-dist
 # the runner-only volume the pack's runtime keeps its dedupe/coalesce/submitted state in (StateKV)
 stackstorm_c_state: /opt/hnx-state
+# where the declared tables appear in the action runner, one directory per stackstorm_table_mounts entry
+stackstorm_c_tables: /opt/hnx-tables
 stackstorm_c_export: /export
 stackstorm_c_broker_dir: /run/hnx-broker
 stackstorm_c_broker_socket: /run/hnx-broker/broker.sock

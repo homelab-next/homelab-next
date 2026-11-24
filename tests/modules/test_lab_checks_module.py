@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -77,3 +78,110 @@ def test_the_role_installs_the_state_tool_beside_the_wrapper_for_the_sites_check
     assert "src: cti_state.py" in config and 'dest: "{{ cti_pipeline_state_tool }}"' in config
     vars_ = (role / "vars" / "main.yml").read_text()
     assert 'cti_pipeline_state_tool: "{{ cti_pipeline_install_dir }}/bin/hnx-cti-state"' in vars_
+
+
+# ----------------------------------------------------------------------------- the results' readers
+def _defaults() -> dict:
+    return yaml.safe_load((ROLE / "defaults" / "main.yml").read_text())
+
+
+def _other_group() -> str:
+    """An existing group that is not the test user's primary one (its name only)."""
+    import grp
+    import os
+
+    return next(g.gr_name for g in grp.getgrall() if g.gr_gid not in (0, os.getgid()))
+
+
+def _dirs_check(tmp_path: Path, group: str) -> dict[str, dict]:
+    """The role's dirs.yml in check mode (nothing changes), as the test user: each task's
+    planned result by name (``diff`` before/after of the results directory and document)."""
+    import grp
+    import json
+    import os
+    import pwd
+
+    data = tmp_path / "data"
+    (data / "results").mkdir(parents=True)
+    (data / "results" / "lab-checks.hourly.json").write_text("{}")
+    os.chmod(data / "results" / "lab-checks.hourly.json", 0o600)
+    me, mygroup = pwd.getpwuid(os.getuid()).pw_name, grp.getgrgid(os.getgid()).gr_name
+    pvars = yaml.safe_load((ROLE / "vars" / "main.yml").read_text()) | {
+        "lab_checks_logical_id": "lab-checks",
+        "lab_checks_owner": me,
+        "lab_checks_owner_group": mygroup,
+        "lab_checks_results_group": group,
+        "lab_checks_bin_dir": str(tmp_path / "bin"),
+        "lab_checks_config_dir": str(tmp_path / "etc"),
+        "lab_checks_data_root": str(data),
+    }
+    tasks = yaml.safe_load((ROLE / "tasks" / "dirs.yml").read_text())
+    play = [{"hosts": "localhost", "connection": "local", "gather_facts": False,
+             "vars": pvars, "tasks": tasks}]  # fmt: skip
+    (tmp_path / "p.yml").write_text(yaml.safe_dump(play))
+    env = dict(os.environ, ANSIBLE_STDOUT_CALLBACK="json", ANSIBLE_LOAD_CALLBACK_PLUGINS="1")
+    r = subprocess.run(
+        ["ansible-playbook", "-i", "localhost,", "--check", "--diff", str(tmp_path / "p.yml")],
+        capture_output=True, text=True, cwd=tmp_path, env=env, check=False,
+    )  # fmt: skip
+    assert r.returncode == 0, r.stdout[-3000:] + r.stderr
+    out = json.loads(r.stdout)
+    return {t["task"]["name"]: t["hosts"]["localhost"] for t in out["plays"][0]["tasks"]}
+
+
+def test_by_default_the_results_stay_roots_alone():
+    assert _defaults()["lab_checks_results_group"] == ""
+    unit = (ROLE / "templates" / "lab-checks.service.j2").read_text()
+    assert "UMask={{ '0027' if lab_checks_results_group else '0077' }}" in unit
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+def test_the_default_leaves_the_results_document_owner_only(tmp_path):
+    got = _dirs_check(tmp_path, "")
+    assert got["Create the results readers' group (opt-in)"].get("skipped") is True
+    assert (
+        got["The results document is readable by exactly the opted-in group"].get("changed")
+        is False
+    )
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+def test_an_opted_in_group_may_read_the_results_document_and_nothing_else(tmp_path):
+    import grp
+
+    group = _other_group()
+    gid = grp.getgrnam(group).gr_gid
+    got = _dirs_check(tmp_path, group)
+    doc = got["The results document is readable by exactly the opted-in group"]
+    assert doc["changed"] is True
+    after = doc["diff"]["after"]
+    assert after["mode"] == "0640" and after["group"] == gid
+    dirs = {r["item"]["path"]: r for r in got["Create the directories"]["results"]}
+    res = dirs[str(tmp_path / "data" / "results")]
+    assert res["diff"]["after"]["mode"] == "02750" and res["diff"]["after"]["group"] == gid
+    # the state, the credentials and the data root keep their owner's group
+    for path, r in dirs.items():
+        if not path.endswith("/results"):
+            assert r["item"].get("group") is None, path
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+@pytest.mark.parametrize("group", ["root", "Bad Group", "1x" * 20])
+def test_the_results_group_is_never_root_and_is_a_group_name(tmp_path, group):
+    import os
+
+    v = _defaults() | yaml.safe_load((ROLE / "vars" / "main.yml").read_text())
+    v |= {"lab_checks_logical_id": "lab-checks", "lab_checks_register_src": "/x/invariants.yml",
+          "lab_checks_results_group": group}  # fmt: skip
+    tasks = yaml.safe_load((ROLE / "tasks" / "validate.yml").read_text())
+    play = [{"hosts": "localhost", "connection": "local", "gather_facts": False,
+             "vars": v, "tasks": tasks}]  # fmt: skip
+    (tmp_path / "p.yml").write_text(yaml.safe_dump(play))
+    r = subprocess.run(["ansible-playbook", "-i", "localhost,", str(tmp_path / "p.yml")],
+                       capture_output=True, text=True, cwd=tmp_path, env=dict(os.environ), check=False)  # fmt: skip
+    assert r.returncode != 0
+    v["lab_checks_results_group"] = "hnx-lab-results"
+    (tmp_path / "p.yml").write_text(yaml.safe_dump([dict(play[0], vars=v)]))
+    r = subprocess.run(["ansible-playbook", "-i", "localhost,", str(tmp_path / "p.yml")],
+                       capture_output=True, text=True, cwd=tmp_path, check=False)  # fmt: skip
+    assert r.returncode == 0, r.stdout

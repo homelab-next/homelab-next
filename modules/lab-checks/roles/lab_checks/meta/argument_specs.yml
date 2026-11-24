@@ -35,6 +35,10 @@ argument_specs:
         type: bool
         description: Allow the publish token to go over plain http (a LAN endpoint with no TLS).
         default: false
+      lab_checks_results_group:
+        type: str
+        description: "Opt-in: a host group that may read the results document (root:<group> 0640 in a 2750 directory, created as a system group). Empty: root's alone (0600)."
+        default: ''
       lab_checks_config_dir:
         type: path
         description: Where the register, the notify configuration and the token are written.

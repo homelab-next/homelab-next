@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: Apache-2.0
+# watch-cti-freshness: every hour at :15 (UTC) look up the watch-cti-freshness row of
+# table:lab.checks and page when it is not ok.
+# Replaces the old lab's cti-freshness-watch timer, which the lab's checks register already ports as
+# criteria (N-20, N-21: job freshness (an in-progress run is not a failure) and handoff health).
+# The row is the binding's: table:lab.checks is the invariants runner's results document (format
+# invariants-results), and the binding's `keys` name the criteria of this schedule id, so the row is
+# ok only when every one of them passed (docs/stackstorm.md, "Tables"). :15 reads the document the
+# hourly run at :07 wrote; a run every 30 minutes would read the same one twice.  A table that
+# cannot be read fails the run (never "no row"); a key the binding does not map pages as missing.
+# Bound in shadow only (the site's binding): it records the page it would send, nothing more.
+# Schedule: `15 * * * *`, schedule id watch-cti-freshness.
+pack: watch-cti-freshness
+version: 1
+description: Page when a lab check of the CTI pipeline's freshness is not ok.
+trigger:
+  event: homelabnext.schedule.fired
+  where:
+    - {ref: $event.data.schedule, equals: watch-cti-freshness}
+actor: profile:workflow-agents
+broker_manifest: workflows/broker.manifest.json
+steps:
+  - id: check
+    kind: enrich
+    op: lookup
+    table: table:lab.checks
+    key: $event.data.schedule
+  - id: page
+    kind: action
+    action: notify.page
+    target: svc:notify
+    when:
+      - {ref: $steps.check.found, equals: true}
+      - {ref: $steps.check.row.ok, equals: false}
+    params:
+      rota: lab-watch
+      alert_id: $event.data.schedule
+      title: $steps.check.row.summary
+  - id: page-missing
+    kind: action
+    action: notify.page
+    target: svc:notify
+    when:
+      - {ref: $steps.check.found, equals: false}
+    params:
+      rota: lab-watch
+      alert_id: $event.data.schedule
+      title: "watch-cti-freshness: no row in table:lab.checks"
+fixtures:
+  - name: red-pages
+    event:
+      specversion: "1.0"
+      id: evt-watch-cti-freshness-red-pages
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:15:00Z"
+      data: {schedule: watch-cti-freshness, fired_at: "2026-01-01T12:15:00Z", cron: "15 * * * *"}
+    lookups:
+      table:lab.checks:
+        watch-cti-freshness: {ok: false, criteria: {N-20: pass, N-21: fail}, red: [N-21], summary: "watch-cti-freshness: N-21 fail"}
+    expect:
+      calls:
+        - action: notify.page
+          target: svc:notify
+          params: {rota: lab-watch, alert_id: watch-cti-freshness, title: "watch-cti-freshness: N-21 fail"}
+          result: executed
+  - name: green-is-quiet
+    event:
+      specversion: "1.0"
+      id: evt-watch-cti-freshness-green-is-quiet
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:15:00Z"
+      data: {schedule: watch-cti-freshness, fired_at: "2026-01-01T12:15:00Z", cron: "15 * * * *"}
+    lookups:
+      table:lab.checks:
+        watch-cti-freshness: {ok: true, criteria: {N-20: pass, N-21: pass}, red: [], summary: "watch-cti-freshness: N-20, N-21 pass"}
+    expect:
+      calls: []
+  - name: missing-row-pages
+    event:
+      specversion: "1.0"
+      id: evt-watch-cti-freshness-missing-row-pages
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:15:00Z"
+      data: {schedule: watch-cti-freshness, fired_at: "2026-01-01T12:15:00Z", cron: "15 * * * *"}
+    lookups:
+      table:lab.checks: {}
+    expect:
+      calls:
+        - action: notify.page
+          target: svc:notify
+          params: {rota: lab-watch, alert_id: watch-cti-freshness, title: "watch-cti-freshness: no row in table:lab.checks"}
+          result: executed
+  - name: another-schedule-ignored
+    event:
+      specversion: "1.0"
+      id: evt-watch-cti-freshness-other
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:15:00Z"
+      data: {schedule: not-watch-cti-freshness, fired_at: "2026-01-01T12:15:00Z"}
+    expect:
+      triggered: false
+      calls: []

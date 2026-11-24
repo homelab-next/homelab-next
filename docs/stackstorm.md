@@ -1,6 +1,6 @@
 ---
-summary: 'StackStorm decides when workflow packs run: ownership, pack mapping, automations, approved requests, CTI schedules and watches, shadow mode, secrets.'
-summary_of: outline:sha256:4bd11a9952a1f6c1
+summary: 'StackStorm decides when workflow packs run: ownership, pack mapping, lookup tables, automations, approved requests, CTI schedules and watches, shadow, secrets.'
+summary_of: outline:sha256:bc62a7e3bcee7907
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # StackStorm: when workflow packs run
@@ -109,13 +109,51 @@ rendered with and the risk the manifest's; neither is a parameter, so `st2 run h
 can run only a pinned step, only in the mode it was promoted to. It runs the step exactly as
 `hnx workflows run` does. A step whose `when`
 does not hold is skipped. `enrich` `pick` and `extract-iocs` are computed. An `action` step builds the
-broker request with the runner's own `action_request`. `lookup`, `decide` and `prompt` steps do not
-run on StackStorm yet, and the renderer refuses a pack that has one (`st2-step`). The two packs that
+broker request with the runner's own `action_request`. A `lookup` step reads its row from a table the
+binding declares ([Tables](#tables)); a `lookup` on any other table, and `decide` and `prompt` steps,
+do not run on StackStorm, and the renderer refuses a pack that has one (`st2-step`). The two packs that
 use them (`new-critical-alert` and `phishing-report`) stay unbound until the runtime can reach the
 table and decision services. Those two and `case-opened-notify` are also not in `workflows/deploy.yml`:
-their handlers (`case-open`, `notify-page`, `notify-post`, `dns-block-domains`) are site code that is
-not in this tree, and their triggers pin no producer, which `hnx workflows validate` refuses for any
-pin (`docs/workflows.md`, Deploying) just as the render does (`st2-handler`, `st2-source`).
+their handlers (`case-open`, `notify-post`, `dns-block-domains`) are site code that is not in this
+tree, and their triggers pin no producer, which `hnx workflows validate` refuses for any pin
+(`docs/workflows.md`, Deploying) just as the render does (`st2-handler`, `st2-source`).
+
+### Tables
+
+A binding may declare the tables a bound pack's `lookup` steps read (`tables`, binding schema 1.2):
+
+```yaml
+tables:
+  table:lab.checks:
+    path: /opt/hnx-tables/lab-checks/lab-checks.hourly.json   # inside the action runner
+    format: invariants-results
+    max_age_s: 7800                                            # older: the run fails
+    keys:                                                      # invariants-results only
+      watch-llm-server: [N-07, N-08, N-09, N-10]
+```
+
+The renderer accepts a `lookup` only on a declared table (`st2-step` otherwise) and pins the
+declaration into `pinned/<pack>.json`, so a run reads what the rule was rendered with and no
+parameter names a file. `st2_runtime.read_table` opens the file without following a link, refuses
+anything but a regular file of at most 1 MiB, and returns `{key: row}`; the step's output is the
+offline runner's, `{key, found, row}`.
+
+| `format` | The file | A row |
+|---|---|---|
+| `json-map` | a JSON object of rows (objects) by key | the object under the key |
+| `invariants-results` | the invariants runner's results document (`homelabnext.invariants.results/1`, `hnx invariants run --out`) | per key of `keys`: `{ok, criteria, red, summary}` over the listed criteria; `ok` only when every one is `pass` (a `fail`, `error`, `skip`, unrecognised status or a criterion missing from the document is not ok, and `summary` names each) |
+
+**It fails closed.** A table that cannot be opened, is not a regular file, is too large, older than
+`max_age_s`, not JSON, not of its format, or (`invariants-results`) holds no results raises
+`TableError`: the execution fails, and the hub's StackStorm source shows a failed execution. It never
+reads as `found: false`, which only a table that was read and lacks the key returns. A key's row is
+the binding's, not the pack's: the pack looks up its own schedule id, and the site's binding says
+which of its register's criteria that is.
+
+The file reaches the runner through the automation module: `stackstorm_table_mounts` mounts a host
+directory read-only at `/opt/hnx-tables/<name>` and gives the runner its group (the module README).
+For the lab checks, lab-checks' opt-in `lab_checks_results_group` makes the results document
+group-readable (0640 in a 02750 directory; default root's alone).
 
 **Actions and approvals.** In `live` mode a risky action goes to the broker as `submit`. Risky means
 the manifest gives it tier `execute` or `privileged`, or sets `requires_approval`. The broker holds
@@ -318,15 +356,37 @@ is stale:
 A check that cannot read its input is stale, never fresh. The checks are pure functions (tested
 without a network); `python -m homelabnext.workflows.cti_watch --site-file F --lake-json F
 --route-log F` prints the table rows and exits 1 if any is stale. The packs are reference packs,
-like `new-critical-alert`: a `lookup` step does not run on StackStorm yet and the notify handlers
-are the site's, so they are not pinned in `workflows/deploy.yml` or bound in
-`workflows/stackstorm.yml` until both exist. The route-log record shape (`event`, `fallback`, `ts`)
+like `new-critical-alert`: nothing writes `table:cti.watch` as a file a binding can declare
+([Tables](#tables)) and `notify.post`'s handler is the site's, so they are not pinned in
+`workflows/deploy.yml` or bound in `workflows/stackstorm.yml`. The route-log record shape (`event`, `fallback`, `ts`)
 is a contract the app's `LLM_ROUTE_LOG` has to meet. The lake row-count query is
 `cti_watch.lake_rows_sql(schema)` (the schema must be a plain identifier; the column name is the
 site's). It buckets in explicit UTC (`at_timezone`, LL-392) and runs through the repository's lake
 client, which pins the session to UTC (`X-Trino-Time-Zone`). `site` reads the page's top-level
 `generated_at` of its embedded `DATA`, never a nested one, and a missing `extract_failed` makes `lake`
 stale. A 429 from the controller (shadow back-pressure) is a clean skip in the submit handler.
+
+**The lab-check watchers** (`workflows/packs/watch-{cti-freshness,llm-server,honeypot-lake}.yml`,
+pinned in `workflows/deploy.yml`). Three old-lab timers already have a new home as criteria of the
+lab's checks register, which `lab-checks` runs hourly at :07 and pages state-diffed. The watchers
+bind them to StackStorm as well, **in shadow only**, so a later promotion can be decided on evidence:
+
+| Old timer | Rule (site) | Pack | Criteria (the site's register) |
+|---|---|---|---|
+| `cti-freshness-watch` | W01 | `watch-cti-freshness` | job freshness and handoff health |
+| `llm-server-watch` | W02 | `watch-llm-server` | the model gateway, the small and large backends, the orchestration controller |
+| `honeypot-lake-freshness-check` | W03 | `watch-honeypot-lake` | the honeypot lake writer's and daily report's last runs |
+
+Each is a CronTimer at `15 * * * *` (it reads the document the :07 run wrote; every 30 minutes, the
+old cadence, would read the same document twice), one `lookup` of `table:lab.checks` keyed by its
+schedule id, and one `notify.page` (`svc:notify`, rota `lab-watch`) when the row is not ok, or a
+second one when the binding maps no criteria to the key. Like C01-C23 they are the site's rules, not
+the committed binding's (a rendered rule grows the product-name baseline); a test renders a binding
+with them, the table declaration and the three rules in shadow. In shadow a red row is recorded as
+the page it would send (`result: shadow`) every hour it stays red: unlike lab-checks, the rule has no
+paging state, which is a promotion question, not a shadow one. `notify.page`'s handler is in the tree
+(below), so the packs are deployable; the cti-watch packs above stay reference packs until something
+writes their `table:cti.watch` as a file a binding can declare.
 
 **What the rules do not carry over from systemd.** The old timers all had `Persistent=true`, and
 the rules are a plain clock, so these differences are real:
@@ -520,6 +580,16 @@ and any other 409 are the controller refusing this resubmit for good: the handle
 stderr and exits 0 with `{"refused": true, "status", "reason"}`, so nothing retries it. 401 and 403
 are the controller refusing the token (missing, wrong, or without the `jobs` scope): logged as such
 on stderr, exit 1. Anything else (400, 5xx, no answer) exits 1 too (`handler-failed`).
+
+`notify.page` is `workflows/handlers/notify-page.sh` (`notify-page.handler.json`), built the same
+way: the page topic's publish URL (`NOTIFY_PAGE_URL`) and a publish-only token (`NOTIFY_PAGE_TOKEN`)
+are resolved by the broker by name, the token goes through a 0600 header file in the run's `TMPDIR`
+and never into argv, and only https is spoken. The message is the validated params (`alert_id`,
+`rota`, `title`), the title `page <alert_id>`. A 2xx is success; 401 and 403 are the service
+refusing the token, and anything else (429 included: a page is never dropped quietly) is a failure,
+exit 1. The binding's actor holds a grant for it (`profile:workflow-agents`, tier `write`); the
+broker manifest a site serves must carry the same grant and the handler document before a watcher
+can go live.
 
 No literal in a bound pack may contain `{{`, `{%` or `<%` (`st2-template`). StackStorm renders
 those in criteria, parameters and Orquesta inputs, so a literal would become an expression. Event
@@ -798,7 +868,7 @@ The stats file is a status source with the existing `poll-file` kind:
 | `st2-pin` | a bound pack is not pinned at the digest of the pack in the tree, or does not validate |
 | `st2-duplicate` | a pack or a schedule id is bound twice, or a bound pack is named `approved-run` |
 | `st2-actor` | a bound pack's `actor` is not the binding's `actor` |
-| `st2-step` | a step does not run on StackStorm (`lookup`, `decide`, `prompt`) |
+| `st2-step` | a step does not run on StackStorm (`decide`, `prompt`, a `lookup` on a table the binding does not declare) |
 | `st2-template` | a literal holds `{{`, `{%` or `<%`; a rendered rule passes anything but the encoded body (or `fired_at`); a task input is an expression other than the encoded `event`, `state` or `fired_at` |
 | `st2-source` | an event-triggered pack does not pin `$event.source` to one producer, or a rendered webhook rule does not test `trigger.body.source` for equality |
 | `st2-handler` | an action a bound pack calls has no handler file in the tree, or none whose `handler.json` digest matches |

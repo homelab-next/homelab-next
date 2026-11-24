@@ -2464,6 +2464,24 @@
     },
     {
       "exit": {
+        "0": "the notify service accepted the page",
+        "1": "no alert_id or token, the service could not be reached, refused the token (401, 403), or failed (anything else)"
+      },
+      "id": "workflow-broker-notify-page",
+      "inputs": "the validated params as JSON on stdin; the NOTIFY_PAGE_URL secret (the page topic's publish URL); the NOTIFY_PAGE_TOKEN secret (a publish-only token for that topic)",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the notify service's answer on stdout",
+      "owner": "broker",
+      "path": "workflows/handlers/notify-page.sh",
+      "purpose": "Broker handler for notify.page; publishes one page to the notify service's page topic.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "a workstation reference or a stale allowlist entry",
         "2": "usage error or a missing dependency"

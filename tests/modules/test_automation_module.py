@@ -28,6 +28,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.modules import cli as mcli
@@ -309,3 +310,142 @@ def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
         [*lint, "--playbook", *books, "--inventory", inv], capture_output=True, text=True
     )
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# ----------------------------------------------------------------------------- table mounts
+ROLE = MODULE / "roles" / ID
+ROLE_VARS = ld.load_yaml(ROLE / "vars" / "main.yml")
+
+
+def _task(file: str, name_part: str) -> dict:
+    tasks = ld.load_yaml(ROLE / "tasks" / file)
+    return next(t for t in tasks if name_part in t["name"])
+
+
+def _play(tmp_path: Path, tasks: list[dict], **extra) -> subprocess.CompletedProcess:
+    pre = ID + "_"
+    pvars = {
+        **{
+            k: v for k, v in ROLE_VARS.items() if k.endswith("_pattern") or k.startswith(pre + "c_")
+        },
+        pre + "data_root": DEFAULTS[pre + "data_root"],
+        pre + "table_roots": DEFAULTS[pre + "table_roots"],
+        **extra,
+    }
+    play = [{"hosts": "localhost", "connection": "local", "gather_facts": False,
+             "vars": pvars, "tasks": tasks}]  # fmt: skip
+    (tmp_path / "p.yml").write_text(_dump(play))
+    return subprocess.run(["ansible-playbook", "-i", "localhost,", str(tmp_path / "p.yml")],
+                          capture_output=True, text=True, cwd=tmp_path)  # fmt: skip
+
+
+def _mounts_ok(tmp_path, mounts, **extra) -> bool:
+    task = _task("validate.yml", "table mounts")
+    return _play(tmp_path, [task], **{ID + "_table_mounts": mounts, **extra}).returncode == 0
+
+
+def test_the_default_mounts_no_table():
+    assert DEFAULTS[ID + "_table_mounts"] == []
+    assert DEFAULTS[ID + "_table_roots"] == ["/var/lib/hnx-modules"]
+    assert ROLE_VARS[ID + "_c_tables"] == "/opt/hnx-tables"
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+@pytest.mark.parametrize(
+    ("mounts", "ok"),
+    [
+        ([], True),
+        ([{"name": "lab-checks", "path": "/var/lib/hnx-modules/lab-checks/results", "group": "hnx-lab-results"}], True),
+        ([{"name": "lab-checks", "path": "var/lib/hnx-modules/lab-checks/results", "group": "g"}], False),
+        ([{"name": "x", "path": "/etc/hnx", "group": "g"}], False),  # outside every root
+        ([{"name": "x", "path": "/var/lib/hnx-modules", "group": "g"}], False),  # the root itself
+        ([{"name": "x", "path": "/var/lib/hnx-modules/a/../b", "group": "g"}], False),
+        ([{"name": "x", "path": "<data root>/state", "group": "g"}], False),  # the module's own
+        ([{"name": "x", "path": "/var/lib/hnx-modules/a", "group": "root group"}], False),
+        ([{"name": "X_y", "path": "/var/lib/hnx-modules/a", "group": "g"}], False),
+        ([{"name": "x", "path": "/var/lib/hnx-modules/a"}], False),  # no group
+        ([{"name": "x", "path": "/var/lib/hnx-modules/a", "group": "g"},
+          {"name": "x", "path": "/var/lib/hnx-modules/b", "group": "g"}], False),  # a name twice
+        ([{"name": "x", "path": "/var/lib/hnx-modules/a", "group": "g"},
+          {"name": "y", "path": "/var/lib/hnx-modules/a", "group": "g"}], False),  # a directory twice
+        ("x", False),
+    ],
+)  # fmt: skip
+def test_a_table_mount_is_a_named_directory_under_a_root_and_never_the_modules_own(
+    tmp_path, mounts, ok
+):
+    # the module's own data root lies under the default root: a mount there must still be refused
+    data_root = DEFAULTS[ID + "_data_root"]
+    assert data_root.startswith("/var/lib/hnx-modules/")
+    if mounts and not isinstance(mounts, str):
+        mounts = [dict(m, path=m.get("path", "").replace("<data root>", data_root)) for m in mounts]
+        mounts = [{k: v for k, v in m.items() if k != "path" or v} for m in mounts]
+    assert _mounts_ok(tmp_path, mounts) is ok
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+def test_a_shallow_or_relative_root_is_refused(tmp_path):
+    m = [{"name": "x", "path": "/var/lib/a", "group": "g"}]
+    assert not _mounts_ok(tmp_path, m, **{ID + "_table_roots": ["/var/lib"]})
+    assert not _mounts_ok(tmp_path, [], **{ID + "_table_roots": ["srv/x/y"]})
+    assert _mounts_ok(tmp_path, m[:0], **{ID + "_table_roots": ["/srv/hnx/tables"]})
+
+
+def _some_group() -> tuple[str, int]:
+    import grp
+
+    g = next(g for g in grp.getgrall() if g.gr_gid > 0 and " " not in g.gr_name)
+    return g.gr_name, g.gr_gid
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+def test_the_runner_mounts_each_table_read_only_with_its_group_by_number(tmp_path):
+    name, gid = _some_group()
+    tasks = ld.load_yaml(ROLE / "tasks" / "tables.yml")
+    out = tmp_path / "out.json"
+    show = {"ansible.builtin.copy": {"dest": str(out), "content": "{{ {'v': " + ID + "_table_volumes, 'g': "
+            + ID + "_table_gids, 'b': " + ID + "_table_binds} | to_json }}"}}  # fmt: skip
+    mounts = [
+        {"name": "lab-checks", "path": "/var/lib/hnx-modules/lab-checks/results", "group": name},
+        {"name": "other", "path": "/var/lib/hnx-modules/other/out", "group": name},
+    ]
+    r = _play(tmp_path, [*tasks, show], **{ID + "_table_mounts": mounts})
+    assert r.returncode == 0, r.stdout + r.stderr
+    got = json.loads(out.read_text())
+    assert got["v"] == [
+        "/var/lib/hnx-modules/lab-checks/results:/opt/hnx-tables/lab-checks:ro",
+        "/var/lib/hnx-modules/other/out:/opt/hnx-tables/other:ro",
+    ]
+    assert got["g"] == [str(gid)]  # one group, once, by number
+    assert [b["path"] for b in got["b"]] == [m["path"] for m in mounts]
+    assert all(len(b["reason"]) >= 10 for b in got["b"])
+    r = _play(tmp_path, [*tasks, show], **{ID + "_table_mounts": []})
+    assert r.returncode == 0 and json.loads(out.read_text()) == {"v": [], "g": [], "b": []}
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+def test_a_table_group_that_does_not_exist_fails_before_compose(tmp_path):
+    tasks = ld.load_yaml(ROLE / "tasks" / "tables.yml")
+    mounts = [{"name": "t", "path": "/var/lib/hnx-modules/t/out", "group": "hnx-no-such-group-x"}]
+    r = _play(tmp_path, tasks, **{ID + "_table_mounts": mounts})
+    assert r.returncode != 0 and "hnx-no-such-group-x" in r.stdout
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+def test_readiness_refuses_a_table_directory_that_is_missing_or_a_file(tmp_path):
+    block = ld.load_yaml(ROLE / "tasks" / "readiness.yml")[0]["block"]
+    picked = [t for t in block if "table director" in t["name"]]
+    assert len(picked) == 2
+    (tmp_path / "d").mkdir()
+    (tmp_path / "f").write_text("x")
+    for path, ok in ((tmp_path / "d", True), (tmp_path / "f", False), (tmp_path / "nope", False)):
+        mounts = [{"name": "t", "path": str(path), "group": "g"}]
+        assert (_play(tmp_path, picked, **{ID + "_table_mounts": mounts}).returncode == 0) is ok
+
+
+def test_the_runner_gets_the_table_volumes_groups_and_listed_binds():
+    app = (ROLE / "tasks" / "app.yml").read_text()
+    assert f"+ {ID}_table_volumes }}}}" in app
+    assert f'group_add: "{{{{ {ID}_table_gids }}}}"' in app
+    assert f"+ {ID}_table_binds }}}}" in app
+    assert "tables.yml" in app and "tables.yml" in (ROLE / "tasks" / "readiness.yml").read_text()
