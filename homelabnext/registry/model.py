@@ -705,6 +705,8 @@ _KIND_BUILTINS = {
     "orchestrator-queue": ("poll-http-json", {"module", "warn_after_s"}),
     "agentmetry-audit": ("poll-http-json", {"module", "warn_after_s"}),
     "prometheus-alerts": ("poll-prometheus", {"module", "states", "item"}),
+    "table-snapshot-age": ("poll-http-json", {"module", "item", "warn_after_s", "fail_after_s"}),
+    "backup-snapshot-age": ("poll-http-json", {"module", "warn_after_s", "fail_after_s"}),
 }
 _RAW_ADDRESS = re.compile(r"://|(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w])|\blocalhost\b", re.I)
 

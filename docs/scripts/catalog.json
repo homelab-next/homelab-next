@@ -868,6 +868,27 @@
     },
     {
       "exit": {
+        "0": "every entry refreshed",
+        "1": "at least one entry failed (its previous token file is left as it was)",
+        "2": "usage or configuration error"
+      },
+      "id": "hub-login-token",
+      "inputs": "--config FILE: JSON {entries: [{name, url, username, password_file, out}], ca_file?: PATH}",
+      "installs_to": "/usr/local/libexec/hnx-hub/hnx-hub-login-token",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line per entry on stdout (name, ok or the error class); each token is written to its entry's out file (0600, owned by the configured owner, the collector's account) by rename; the token is never printed",
+      "owner": "platform",
+      "path": "ansible/roles/status_hub/files/hnx-hub-login-token.py",
+      "purpose": "Refresh the short-lived bearer tokens the status hub's collector sends to products that only issue them for a login (a form post of a user name and password), so no expired token leaves a source unreadable.",
+      "status": "active",
+      "trigger": [
+        "role:status_hub",
+        "timer:status_hub/hnx-hub-login-token"
+      ]
+    },
+    {
+      "exit": {
         "0": "walked every type to the end",
         "1": "a type failed (its checkpoint is saved; the next run resumes)",
         "2": "paused at the wall-clock cap or on a signal (progress, not failure)"
@@ -1200,19 +1221,21 @@
         "timer:clamav/scan",
         "timer:context/reindex",
         "timer:honeypot/lake",
-        "timer:intel_ingest/intel-ingest",
         "timer:honeypot/report",
+        "timer:intel_ingest/intel-ingest",
         "timer:lynis/scan",
         "timer:media_automation/cleanup-downloads",
         "timer:media_automation/rename-cleanup",
         "timer:media_automation/stalled-repair",
         "timer:needrestart/check",
         "timer:needrestart/reboot",
-        "timer:nut_ups/hnx-nut-ups-check",
         "timer:ntfy/deadman",
+        "timer:nut_ups/hnx-nut-ups-check",
         "timer:openbao/acme-renew",
         "timer:prometheus/alerts",
         "timer:rkhunter/scan",
+        "timer:status_hub/hnx-hub-collect",
+        "timer:status_hub/hnx-hub-login-token",
         "timer:trino/lake-maintenance",
         "timer:trivy/scan",
         "timer:velociraptor_server/cycle"

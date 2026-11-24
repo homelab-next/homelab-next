@@ -43,6 +43,14 @@ and for the scheduled jobs (``poll-file`` over a directory of last-run records):
   calendar this repository cannot read exactly (no ``UTC`` token, a shorthand) falls back to
   ``warn_after_s`` past the start, or no lateness at all without one.
 
+and for data freshness (``poll-http-json``, an age judged against ``warn_after_s`` and
+``fail_after_s``):
+
+* ``table-snapshot-age`` -- a lake catalog's REST ``LoadTableResult``: the age of the table's
+  newest snapshot, one item (``mapping.item``).
+* ``backup-snapshot-age`` -- a Proxmox Backup Server datastore's snapshot list: one item per backup
+  group, the age of its newest snapshot; a failed verification is ``fail``.
+
 A payload the mapping cannot read raises :class:`MappingError`; the scheduler turns that into the
 source's error, exactly like a timeout, so one malformed source never touches another.
 """
@@ -449,6 +457,82 @@ def job_last_run(payload: Any, mapping: Mapping[str, Any], now: float) -> list[D
     return out + [d for _, d in sorted(best.values(), key=lambda x: x[1].item)]
 
 
+def _age_state(age: float, mapping: Mapping[str, Any]) -> tuple[str, str]:
+    """(state, suffix) of an age against ``warn_after_s``/``fail_after_s``; past neither is ok."""
+    fail, warn = mapping.get("fail_after_s"), mapping.get("warn_after_s")
+    if fail is not None and age > fail:
+        return "fail", f" (over the {age_text(fail)} limit)"
+    if warn is not None and age > warn:
+        return "warn", f" (over the {age_text(warn)} limit)"
+    return "ok", ""
+
+
+def table_snapshot_age(payload: Any, mapping: Mapping[str, Any], now: float) -> list[Draft]:
+    """``GET /v1/namespaces/<ns>/tables/<table>`` of the lake catalog's REST API (``LoadTableResult``:
+    ``metadata.snapshots[].timestamp-ms``): how long ago the table last committed a snapshot.
+    One item, ``mapping.item`` (default ``table``).  A table with no snapshot is ``warn`` (nothing
+    ever landed); a snapshot dated in the future is ``unknown``."""
+    meta = payload.get("metadata") if isinstance(payload, Mapping) else None
+    if not isinstance(meta, Mapping):
+        raise MappingError("catalog table: expected a LoadTableResult with a 'metadata' object")
+    item = clean_item(mapping.get("item"), "table")
+    snaps = meta.get("snapshots")
+    stamps = [
+        s["timestamp-ms"]
+        for s in (snaps if isinstance(snaps, list) else [])
+        if isinstance(s, Mapping)
+        and isinstance(s.get("timestamp-ms"), int | float)
+        and not isinstance(s.get("timestamp-ms"), bool)
+    ]
+    if not stamps:
+        return [Draft(item, "warn", "no snapshot: no data has ever been committed to this table")]
+    age = now - max(stamps) / 1000.0
+    if age < -300:
+        return [Draft(item, "unknown", "newest snapshot is dated in the future")]
+    state, over = _age_state(max(0.0, age), mapping)
+    n = len(stamps)
+    summary = f"last commit {age_text(age)} ago{over}; {n} snapshot" + ("" if n == 1 else "s")
+    return [Draft(item, state, clean_summary(summary), value=max(0, int(age)))]
+
+
+def backup_snapshot_age(payload: Any, mapping: Mapping[str, Any], now: float) -> list[Draft]:
+    """``GET /api2/json/admin/datastore/<store>/snapshots`` of a Proxmox Backup Server
+    (``{"data": [{"backup-type", "backup-id", "backup-time", "verification"?}]}``): one item per
+    backup group, ``<type>/<id>``, its newest snapshot's age against the limits; a newest
+    snapshot whose verification failed is ``fail`` whatever its age."""
+    rows = payload.get("data") if isinstance(payload, Mapping) else None
+    if not isinstance(rows, list):
+        raise MappingError("pbs snapshots: expected {'data': [...]}")
+    newest: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        t = row.get("backup-time")
+        if not (isinstance(t, int | float) and not isinstance(t, bool)):
+            continue
+        key = f"{row.get('backup-type')}/{row.get('backup-id')}"
+        if key not in newest or t > newest[key]["backup-time"]:
+            newest[key] = row
+    if not newest:
+        return [Draft("snapshots", "fail", "the datastore lists no snapshot at all")]
+    out: list[Draft] = []
+    for key in sorted(newest):
+        row = newest[key]
+        age = now - row["backup-time"]
+        state, over = _age_state(max(0.0, age), mapping)
+        ver = row.get("verification")
+        vstate = ver.get("state") if isinstance(ver, Mapping) else None
+        summary = f"newest snapshot {age_text(age)} ago{over}"
+        if vstate == "failed":
+            state, summary = "fail", summary + "; its verification FAILED"
+        elif vstate:
+            summary += f"; verified {vstate}"
+        out.append(
+            Draft(clean_item(key, "group"), state, clean_summary(summary), value=max(0, int(age)))
+        )
+    return out
+
+
 Builtin = Callable[[Any, Mapping[str, Any], float], list[Draft]]
 BUILTINS: dict[str, Builtin] = {
     "invariants-results": invariants_results,
@@ -457,6 +541,8 @@ BUILTINS: dict[str, Builtin] = {
     "orchestrator-queue": orchestrator_queue,
     "agentmetry-audit": agentmetry_audit,
     "job-last-run": job_last_run,
+    "table-snapshot-age": table_snapshot_age,
+    "backup-snapshot-age": backup_snapshot_age,
 }
 
 

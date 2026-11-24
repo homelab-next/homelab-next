@@ -1,0 +1,14 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role status_hub); local changes are overwritten.
+# A calendar, never OnBootSec+OnUnitActiveSec (a timer that never fires after a restart): each
+# source declares its own interval_s and the pass runs only the due ones.
+[Unit]
+Description=homelab-next status hub: collection schedule ({{ status_hub_logical_id }})
+
+[Timer]
+OnCalendar={{ status_hub_collect_oncalendar }}
+AccuracySec=1s
+RandomizedDelaySec=0
+
+[Install]
+WantedBy=timers.target
