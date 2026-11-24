@@ -49,3 +49,12 @@ open_webui_oidc_provider_name: SSO
 # (email, and the reference of its password; both or neither)
 open_webui_admin_email: ""
 open_webui_admin_password_ref: ""
+# optional web search through the lab's own metasearch service (empty: web search stays off): the
+# registry id of a row whose capability is in open_webui_web_search_capabilities. Open WebUI asks it
+# for results as JSON and answers from the result snippets only: the web loader that would fetch each
+# result page from this container, and the embedding of those pages, are bypassed, so the app still
+# reaches no address but the gateway, the identity provider and that service
+open_webui_web_search_id: ""
+open_webui_web_search_capabilities: [web-search]
+# how many results a search puts in front of the model (1 to 20)
+open_webui_web_search_result_count: 5

@@ -29,6 +29,19 @@
           'OAUTH_ADMIN_ROLES': 'admin'}
          if open_webui_oidc_issuer_url | length > 0 else {} }}
 
+# web search through the lab's metasearch service only, when the site names one: the results'
+# snippets go to the model as they are (no page is fetched by this container, nothing is embedded)
+- name: The web search settings
+  ansible.builtin.set_fact:
+    open_webui_web_search_env: >-
+      {{ {'ENABLE_WEB_SEARCH': 'true',
+          'WEB_SEARCH_ENGINE': 'searxng',
+          'SEARXNG_QUERY_URL': lookup('hnx_registry', open_webui_web_search_id, field='url') ~ '/search',
+          'BYPASS_WEB_SEARCH_WEB_LOADER': 'true',
+          'BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL': 'true',
+          'WEB_SEARCH_RESULT_COUNT': open_webui_web_search_result_count | string}
+         if open_webui_web_search_id | length > 0 else {} }}
+
 - name: The settings the role derives from its own inputs
   ansible.builtin.set_fact:
     open_webui_derived_env: >-
@@ -36,7 +49,8 @@
          | combine({'OPENAI_API_CONFIGS': {'0': {'headers': open_webui_gateway_headers}} | to_json}
                    if open_webui_gateway_headers | length > 0 else {})
          | combine({'WEBUI_ADMIN_EMAIL': open_webui_admin_email}
-                   if open_webui_admin_email | length > 0 else {}) }}
+                   if open_webui_admin_email | length > 0 else {})
+         | combine(open_webui_web_search_env) }}
 
 - name: Build the application spec
   ansible.builtin.set_fact:
