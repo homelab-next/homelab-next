@@ -203,6 +203,44 @@ def test_a_configured_namespace_other_than_soc_refuses_before_anything_is_opened
     assert not (tmp_path / "state").exists()
 
 
+def test_a_plain_http_object_store_is_refused_unless_the_site_allows_it(tmp_path, monkeypatch):
+    got = {}
+
+    def fake(**kw):
+        got.update(kw)
+        return object()
+
+    import homelabnext.conform.adapters.s3 as s3
+
+    monkeypatch.setattr(s3, "make_object_store", fake)
+    lw.open_store(lw.Config(_env(tmp_path)))
+    assert got["allow_plaintext"] is False
+    lw.open_store(lw.Config(_env(tmp_path, HNX_LW_S3_ALLOW_PLAINTEXT="true")))
+    assert got["allow_plaintext"] is True
+    lw.open_store(lw.Config(_env(tmp_path, HNX_LW_S3_ALLOW_PLAINTEXT="yes")))
+    assert got["allow_plaintext"] is False  # only the literal true allows it
+
+
+def test_ensure_reports_only_the_tables_it_created(tmp_path, monkeypatch, capsys):
+    class Lake:
+        def __init__(self, tables):
+            self.tables = tables
+
+        def list_tables(self):
+            return list(self.tables)
+
+    calls = []
+
+    def fake_open(cfg, schemas, *, ensure):
+        calls.append(ensure)
+        return Lake(["raw_archive", "dns_activity"] if ensure else ["raw_archive"])
+
+    monkeypatch.setattr(lw, "open_lake", fake_open)
+    assert lw.cmd_ensure(lw.Config(_env(tmp_path)), {}) == lw.EXIT_OK
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["created"] == ["dns_activity"] and calls == [False, True]
+
+
 def test_the_default_namespace_is_soc(tmp_path):
     cfg = lw.Config(_env(tmp_path))
     assert cfg.namespace == "soc"

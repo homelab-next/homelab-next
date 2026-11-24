@@ -127,6 +127,7 @@ def test_main_installs_the_writer_with_no_secret_in_any_world_readable_file(tmp_
     assert "HNX_ENDPOINT_LAKE_QUERY=https://lake-query.example.internal" in env
     assert "HNX_ENDPOINT_OBJECT_STORE=https://object-store.example.internal" in env
     assert "CATALOG_CREDENTIAL" not in env  # none asked for
+    assert "HNX_LW_S3_ALLOW_PLAINTEXT=false" in env  # https only unless the site says so
     for secret in (LOGIN, S3_ID, S3_KEY):
         assert secret not in env and secret not in out
     logins = tmp_path / "etc" / "credentials" / "logins.env"
