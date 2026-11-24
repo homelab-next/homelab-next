@@ -188,7 +188,7 @@ def test_login_tokens_live_in_one_store_area_under_the_issued_directory():
     )
 
 
-@pytest.mark.parametrize("name", ["nifi-status-token", "flow-reader", "a"])
+@pytest.mark.parametrize("name", ["flow-status-token", "flow-reader", "a"])
 def test_a_login_token_reference_is_a_store_reference_the_leak_scan_accepts(name):
     import sys
 

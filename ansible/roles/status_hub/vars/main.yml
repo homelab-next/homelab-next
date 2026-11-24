@@ -36,8 +36,7 @@ status_hub_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
 # Fixed (the units name it literally, so the script catalog can follow them): where the token helper is installed.
 status_hub_libexec_dir: /usr/local/libexec/hnx-hub
 # Login-issued tokens live in one store area of the collector's file-form secrets, hub-login: a source
-# reads the login named flow-reader as secret:hub-login/flow-reader (the file
-# <status_hub_issued_dir>/hub-login/flow-reader), a reference shaped like
-# every other store reference (an area and a name), so the leak scan reads it as a reference.
+# reads a login by its name in that area (the file <status_hub_issued_dir>/hub-login/<name>),
+# a reference shaped like every other store reference (an area and a name), so the leak scan reads it as a reference.
 status_hub_login_area: hub-login
 status_hub_login_dir: "{{ status_hub_issued_dir }}/{{ status_hub_login_area }}"
