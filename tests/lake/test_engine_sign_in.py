@@ -182,7 +182,7 @@ def test_a_credential_never_goes_over_plaintext_to_another_host(monkeypatch):
 def test_a_catalog_without_sign_in_may_be_plain_http_when_no_token_goes_to_it(monkeypatch):
     """The engine's password never goes to the catalog, so an http catalog (network-only, no token)
     is accepted beside an https engine; a catalog token still goes over https only."""
-    plain = "http://192.0.2.9:8181"  # no-raw-endpoint: allow RFC 5737 documentation address
+    plain = OFF_HOST.replace("https://", "http://").replace(":8443", ":8181")
     monkeypatch.setenv("HNX_ENDPOINT_LAKE_QUERY", OFF_HOST)
     monkeypatch.setenv("HNX_ENDPOINT_LAKE_CATALOG", plain)
     monkeypatch.setenv(PASSWORD_VAR, "pw")
@@ -194,7 +194,7 @@ def test_a_catalog_without_sign_in_may_be_plain_http_when_no_token_goes_to_it(mo
 
 
 def test_an_engine_password_never_goes_over_plain_http_beside_a_plain_catalog(monkeypatch):
-    plain = "http://192.0.2.9:8080"  # no-raw-endpoint: allow RFC 5737 documentation address
+    plain = OFF_HOST.replace("https://", "http://").replace(":8443", ":8080")
     monkeypatch.setenv("HNX_ENDPOINT_LAKE_QUERY", plain)
     monkeypatch.setenv("HNX_ENDPOINT_LAKE_CATALOG", plain)
     monkeypatch.setenv(PASSWORD_VAR, "pw")
