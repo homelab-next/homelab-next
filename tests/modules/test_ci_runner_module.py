@@ -268,3 +268,21 @@ def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
         [*lint, "--playbook", *books, "--inventory", inv], capture_output=True, text=True
     )
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_golden_image_puts_pinned_pythons_in_the_tool_cache():
+    text = (ROLE / "templates" / "build-user-data.j2").read_text()
+    loop = text[text.index("{% for tc in ci_runner_toolcache_pythons %}") :]
+    loop = loop[: loop.index("{% endfor %}")]
+    assert "{{ tc.url }}" in loop and "{{ tc.sha256 }}" in loop
+    assert "sha256sum -c -" in loop
+    assert "AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache bash ./setup.sh" in loop
+    assert text.index("install -d -o runner") < text.index(
+        "{% for tc in"
+    )  # the cache dir exists first
+    assert text.index("{% endfor %}") < text.index("chown -R runner:runner /opt/hostedtoolcache")
+    tasks = yaml.safe_load((ROLE / "tasks" / "validate.yml").read_text())
+    that = "\n".join(
+        str(x) for t in tasks for x in t.get("ansible.builtin.assert", {}).get("that", [])
+    )
+    assert "ci_runner_toolcache_pythons" in that

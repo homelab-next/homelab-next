@@ -122,6 +122,11 @@ argument_specs:
         elements: str
         description: Command-line tools (name==version) installed with pipx onto the golden image's PATH.
         default: []
+      ci_runner_toolcache_pythons:
+        type: list
+        elements: dict
+        description: 'Python releases (each {url, sha256}: the setup action''s python-versions archive) put in the golden image''s tool cache, so jobs download none.'
+        default: []
       ci_runner_egress_tcp_ports:
         type: list
         description: TCP ports the job VMs may reach on public addresses.
