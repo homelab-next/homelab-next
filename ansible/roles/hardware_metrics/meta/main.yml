@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: Hardware metrics for the metrics service - pool health, board sensors and event log, GPU temperature and power, guest run state - as node-exporter textfile metrics.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

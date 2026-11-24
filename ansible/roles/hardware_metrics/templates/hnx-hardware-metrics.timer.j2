@@ -1,0 +1,11 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role hardware_metrics, control hardware-metrics); local changes are overwritten.
+[Unit]
+Description=homelabnext hardware metrics every minute (control hardware-metrics)
+
+[Timer]
+OnCalendar={{ hardware_metrics_interval }}
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

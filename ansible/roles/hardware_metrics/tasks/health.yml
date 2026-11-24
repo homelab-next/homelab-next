@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the metrics file is fresh, and every chosen collector read its source on the last run.
+- block:
+    - name: Validate the settings
+      ansible.builtin.include_tasks: validate.yml
+    - name: Read the metrics file
+      ansible.builtin.slurp:
+        src: "{{ hardware_metrics_textfile_dir }}/hardware_metrics.prom"
+      register: hardware_metrics_prom
+      check_mode: false
+    - name: Stat the metrics file
+      ansible.builtin.stat:
+        path: "{{ hardware_metrics_textfile_dir }}/hardware_metrics.prom"
+      register: hardware_metrics_stat
+      check_mode: false
+    - name: Fail unless the file is fresh and every collector is up
+      ansible.builtin.assert:
+        that:
+          - (now().timestamp() - hardware_metrics_stat.stat.mtime) < hardware_metrics_health_max_age_seconds | int
+          - hardware_metrics_down | length == 0
+        fail_msg: >-
+          hardware_metrics: the metrics file is older than {{ hardware_metrics_health_max_age_seconds }} s
+          (is the {{ hardware_metrics_unit }}.timer running?), or these collectors could not read their
+          source: {{ hardware_metrics_down | join(', ') or 'none' }} (journalctl -u {{ hardware_metrics_unit }}.service)
+      vars:
+        hardware_metrics_text: "{{ hardware_metrics_prom.content | b64decode }}"
+        hardware_metrics_down: >-
+          {{ hardware_metrics_collectors | reject('in',
+             hardware_metrics_text | regex_findall('(?m)^hw_collector_up\{collector="([a-z]+)"\} 1$')) | list }}
+  tags: [health]

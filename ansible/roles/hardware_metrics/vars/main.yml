@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory.
+hardware_metrics_known_collectors: [zfs, ipmi, nvidia, xe, hypervisor]
+hardware_metrics_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+hardware_metrics_cli_pattern: '^[A-Za-z0-9_./-]+\Z'
+hardware_metrics_node_pattern: '^[A-Za-z0-9][A-Za-z0-9-]{0,62}\Z'
+hardware_metrics_calendar_pattern: '^[0-9*][0-9*:/, -]*( UTC)?\Z'
+hardware_metrics_script: "{{ hardware_metrics_libexec_dir }}/hnx-hardware-metrics"
+hardware_metrics_config: "{{ hardware_metrics_conf_dir }}/hardware-metrics.json"
+hardware_metrics_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
+hardware_metrics_unit: hnx-hardware-metrics
+# the packages a collector needs from the distribution (nothing for the others: their commands are the platform's)
+hardware_metrics_collector_packages: {ipmi: [ipmitool]}
+hardware_metrics_collector_clis:
+  zfs: "{{ hardware_metrics_zpool_cli }}"
+  ipmi: "{{ hardware_metrics_ipmitool_cli }}"
+  nvidia: "{{ hardware_metrics_nvidia_smi_cli }}"
+  hypervisor: "{{ hardware_metrics_guests_cli }}"

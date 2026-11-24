@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# Ready means: the settings hold, and every command a chosen collector reads is on this host (the
+# package install of main provides the board's; the others come with the host's own platform). The
+# xe collector reads sysfs only: it is checked by the first run in main and by health.
+- block:
+    - name: Validate the settings
+      ansible.builtin.include_tasks: validate.yml
+    - name: Look up the commands the chosen collectors read
+      ansible.builtin.command:
+        argv: [sh, -c, 'command -v "$1"', sh, "{{ hardware_metrics_collector_clis[item] }}"]
+      # a collector whose package main installs is not looked up while installing is on
+      loop: >-
+        {{ hardware_metrics_collectors | select('in', hardware_metrics_collector_clis)
+           | reject('in', hardware_metrics_collector_packages if hardware_metrics_install_packages | bool else {}) | list }}
+      register: hardware_metrics_found
+      changed_when: false
+      failed_when: false
+      check_mode: false
+    - name: Refuse a collector whose command this host lacks
+      ansible.builtin.assert:
+        that: hardware_metrics_missing | length == 0
+        fail_msg: >-
+          hardware_metrics: this host has no {{ hardware_metrics_missing | join(', ') }}, which the
+          chosen collectors read; take the collector off this host's control, or install its platform first
+      vars:
+        hardware_metrics_missing: >-
+          {{ hardware_metrics_found.results | rejectattr('rc', 'equalto', 0)
+             | map(attribute='item') | map('extract', hardware_metrics_collector_clis) | list }}
+  tags: [readiness]
