@@ -41,6 +41,21 @@ argument_specs:
         type: path
         description: Directory holding one log directory per capture.
         default: /var/log/hnx-zeek
+      zeek_retired_units:
+        type: list
+        elements: str
+        description: The predecessor's systemd units (a watchdog timer first) to disable and stop once the module owns the captures.
+        default: []
+      zeek_retired_containers:
+        type: list
+        elements: str
+        description: The predecessor's containers to keep from restarting and stop once the module owns the captures.
+        default: []
+      zeek_retired_siem_markers:
+        type: list
+        elements: str
+        description: Blockinfile marker texts (no BEGIN/END) of the predecessor's SIEM agent localfile blocks to remove.
+        default: []
       zeek_siem_agent_manage:
         type: bool
         description: Add a localfile block for each capture's event streams to the SIEM agent's configuration when it exists.

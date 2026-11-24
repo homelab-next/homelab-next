@@ -210,7 +210,10 @@ def test_the_siem_agent_reads_each_captures_event_streams_and_only_those():
     assert locs[0] == f"{defaults[pfx + '_log_root']}/mirror/conn.log" and len(locs) == 18
     assert not any(n in loc for loc in locs for n in ("stats", "loaded_scripts", "packet_filter"))
     tasks = yaml.safe_load((role / "tasks/siem.yml").read_text())
-    (block,) = [t for t in tasks if "ansible.builtin.blockinfile" in t]
+    block, retired = [t for t in tasks if "ansible.builtin.blockinfile" in t]
     assert (
         block["when"] == f"{pfx}_siem_conf.stat.exists"
     )  # never creates the agent's configuration
+    # the predecessor's blocks are only ever removed, and only from an existing configuration
+    assert retired["ansible.builtin.blockinfile"]["state"] == "absent"
+    assert retired["when"].startswith(f"{pfx}_siem_conf.stat.exists")

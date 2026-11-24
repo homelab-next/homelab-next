@@ -272,3 +272,122 @@ def test_upgrade_refuses_another_repository_and_an_unpinned_target(tmp_path):
         env=setup_fakes(tmp_path),
     )
     assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
+# ----------------------------------------------------------------------------- the predecessor
+
+ENGINE_STATE = r"""
+import json, os, sys
+a = sys.argv[1:]
+open(os.environ["FAKE_LOG"], "a").write("engine " + " ".join(a) + "\n")
+path = os.environ["FAKE_CTRS"]
+ctrs = json.load(open(path))
+if a[:1] == ["inspect"]:
+    c = ctrs.get(a[-1])
+    if c is None:
+        sys.exit(1)
+    print(("true" if c["running"] else "false") + " " + c["restart"])
+elif a[:1] == ["update"]:
+    ctrs[a[-1]]["restart"] = "no"
+elif a[:1] == ["stop"]:
+    ctrs[a[-1]]["running"] = False
+json.dump(ctrs, open(path, "w"))
+"""
+UNIT_STATE = r"""
+import json, os, sys
+a = sys.argv[1:]
+open(os.environ["FAKE_LOG"], "a").write("systemctl " + " ".join(a) + "\n")
+path = os.environ["FAKE_UNITS"]
+units = json.load(open(path))
+u = units.get(a[-1], {"enabled": False, "active": False})
+if a[0] == "is-enabled":
+    print("enabled" if u["enabled"] else "disabled")
+    sys.exit(0 if u["enabled"] else 1)
+if a[0] == "is-active":
+    sys.exit(0 if u["active"] else 3)
+if a[:2] == ["disable", "--now"]:
+    units[a[-1]] = {"enabled": False, "active": False}
+    json.dump(units, open(path, "w"))
+"""
+
+
+def _retire_env(tmp: Path) -> dict:
+    env = setup_fakes(tmp)
+    fake(tmp / "bin" / "engine", ENGINE_STATE)
+    fake(tmp / "bin" / "systemctl", UNIT_STATE)
+    (tmp / "ctrs.json").write_text(
+        json.dumps(
+            {
+                "old-mirror": {"running": True, "restart": "unless-stopped"},
+                "old-guests": {"running": False, "restart": "unless-stopped"},
+            }
+        )
+    )
+    (tmp / "units.json").write_text(
+        json.dumps({"old-watchdog.timer": {"enabled": True, "active": True}})
+    )
+    return {**env, "FAKE_CTRS": str(tmp / "ctrs.json"), "FAKE_UNITS": str(tmp / "units.json")}
+
+
+def test_the_predecessor_is_retired_units_first_and_a_second_run_changes_nothing(tmp_path):
+    """Once the module owns the captures, the predecessor's watchdog is disabled before its
+    containers are touched (it would revive them), each container is kept from restarting and
+    stopped, a container already gone is no error, and a second run changes nothing."""
+    prepare(tmp_path)
+    env = _retire_env(tmp_path)
+    v = sv(
+        tmp_path,
+        service_manage=True,
+        retired_units=["old-watchdog.timer"],
+        retired_containers=["old-mirror", "old-guests", "old-gone"],
+    )
+    r = run_role(tmp_path, ROLE, "retire", v, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    ctrs = json.loads((tmp_path / "ctrs.json").read_text())
+    assert ctrs == {
+        "old-mirror": {"running": False, "restart": "no"},
+        "old-guests": {"running": False, "restart": "no"},
+    }
+    log = (tmp_path / "calls.log").read_text().splitlines()
+    disable = log.index("systemctl disable --now old-watchdog.timer")
+    assert disable < log.index("engine update --restart=no old-mirror")
+    assert "engine stop old-guests" not in log  # already stopped: only its restart policy changes
+    again = run_role(tmp_path, ROLE, "retire", v, env=env)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+def test_the_predecessors_agent_blocks_are_removed_and_the_modules_own_stays(tmp_path):
+    """Each event is read once: the predecessor's localfile block (by its marker) is removed from the
+    agent's configuration beside this module's own block, and other blocks are left alone."""
+    prepare(tmp_path)
+    conf = tmp_path / "ossec" / "ossec.conf"
+    conf.parent.mkdir()
+    conf.write_text(
+        "<ossec_config/>\n"
+        "<!-- BEGIN OLD BLOCK: flow logs -->\n<localfile>/opt/old/conn.log</localfile>\n"
+        "<!-- END OLD BLOCK: flow logs -->\n"
+        "<!-- BEGIN OLD BLOCK: something else -->\nkeep\n<!-- END OLD BLOCK: something else -->\n"
+    )
+    v = sv(
+        tmp_path,
+        service_manage=True,
+        siem_agent_conf=str(conf),
+        siem_agent_unit="",
+        retired_siem_markers=["OLD BLOCK: flow logs"],
+    )
+    r = run_role(tmp_path, ROLE, "siem", v, env=setup_fakes(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = conf.read_text()
+    assert "/opt/old/conn.log" not in text and "flow logs" not in text
+    assert "keep" in text and f"{tmp_path}/logs/mirror/conn.log" in text
+    again = run_role(tmp_path, ROLE, "siem", v, env=setup_fakes(tmp_path))
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+def test_nothing_is_retired_before_the_module_owns_the_captures():
+    tasks = yaml.safe_load((ROLE_DIR / "tasks" / "main.yml").read_text())
+    retire = next(t for t in tasks if t.get("name", "").startswith("Retire the predecessor"))
+    assert f"{P}service_manage" in " ".join(str(retire["when"]).split())
+    siem = yaml.safe_load((ROLE_DIR / "tasks" / "siem.yml").read_text())
+    drop = next(t for t in siem if t.get("name", "").startswith("Remove the predecessor"))
+    assert f"{P}service_manage" in str(drop["when"])
