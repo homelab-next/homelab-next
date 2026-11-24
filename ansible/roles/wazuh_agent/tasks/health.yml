@@ -22,7 +22,7 @@
           - want in found
         fail_msg: >-
           the agent's configuration names {{ found | join(', ') or 'no manager' }}, not {{ want }}
-          (move it with wazuh_agent_rehome, or reinstall)
+          (moving the agent to another manager is a reinstall)
       vars:
         found: "{{ conf.content | b64decode | regex_replace('(?s)<!--.*?-->', '') | regex_findall('<address>\\s*([^<\\s]+)\\s*</address>') }}"
   vars:

@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: Apache-2.0
+# Move an agent enrolled with another manager to the registry's manager (see defaults/main.yml).
+- block:
+    - name: Read the agent configuration
+      ansible.builtin.slurp:
+        src: "{{ agent_rehome_config_file }}"
+      register: agent_rehome_conf
+
+    - name: Work out the configured managers
+      ansible.builtin.set_fact:
+        agent_rehome_configured: >-
+          {{ agent_rehome_conf.content | b64decode | regex_replace('(?s)<!--.*?-->', '')
+             | regex_findall('<address>\s*([^<\s]+)\s*</address>') }}
+        agent_rehome_want: "{{ lookup('hnx_registry', agent_rehome_manager_id, field='host') }}"
+
+    - name: Re-home the agent to the registry's manager
+      when: agent_rehome_configured | length > 0 and agent_rehome_want not in agent_rehome_configured
+      block:
+        - name: Back up the configuration, the key and the enrolment password (once per stamp)
+          ansible.builtin.copy:
+            src: "{{ item }}"
+            dest: "{{ item }}.pre-rehome-{{ agent_rehome_stamp }}"
+            remote_src: true
+            mode: preserve
+            force: false
+          loop: ["{{ agent_rehome_config_file }}", "{{ agent_rehome_key_file }}", "{{ agent_rehome_password_file }}"]
+          failed_when: false
+
+        - name: Stop the agent
+          ansible.builtin.command:
+            argv: ["{{ agent_rehome_systemctl_cli }}", stop, "{{ agent_rehome_service }}"]
+          changed_when: true
+
+        - name: Point every server block at the registry's manager
+          ansible.builtin.replace:
+            path: "{{ agent_rehome_config_file }}"
+            regexp: '<address>\s*{{ item | regex_escape }}\s*</address>'
+            replace: "<address>{{ agent_rehome_want }}</address>"
+          loop: "{{ agent_rehome_configured | unique }}"
+
+        - name: Write the enrolment password (read by the enrolment command; never an argument)
+          ansible.builtin.copy:
+            content: "{{ lookup('hnx_secret', agent_rehome_enrollment_ref) }}"
+            dest: "{{ agent_rehome_password_file }}"
+            group: "{{ agent_rehome_config_group }}"
+            mode: "0640"
+          no_log: true
+
+        - name: Empty the key the old manager issued
+          ansible.builtin.copy:
+            content: ""
+            dest: "{{ agent_rehome_key_file }}"
+            group: "{{ agent_rehome_config_group }}"
+            mode: "0640"
+
+        - name: Enrol with the registry's manager
+          ansible.builtin.command:
+            argv:
+              - "{{ agent_rehome_auth_cli }}"
+              - -m
+              - "{{ agent_rehome_want }}"
+              - -p
+              - "{{ agent_rehome_enrollment_port | string }}"
+          changed_when: true
+
+        - name: Start the agent
+          ansible.builtin.command:
+            argv: ["{{ agent_rehome_systemctl_cli }}", start, "{{ agent_rehome_service }}"]
+          changed_when: true

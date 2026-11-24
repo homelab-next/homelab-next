@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Control siem-agent (ADR-0016 decision 7): the vendor's pinned agent from its signed apt
 # repository. The deployment variables (WAZUH_MANAGER, WAZUH_REGISTRATION_PASSWORD, ...) take effect
-# on the first install only; an agent already enrolled with another manager is moved by
-# wazuh_agent_rehome (tasks/rehome.yml), never silently.
+# on the first install only: moving the agent to another manager later is a reinstall
+# (docs/compute-model.md, "Bound products"), unless the site opts into the agent_rehome role.
 - name: Validate the inputs
   ansible.builtin.include_tasks: validate.yml
 
@@ -49,9 +49,10 @@
     name: wazuh-agent
     selection: hold
 
-- name: Re-home an agent enrolled with another manager (wazuh_agent_rehome)
-  ansible.builtin.include_tasks: rehome.yml
-  when: wazuh_agent_rehome | bool
+- name: Re-home an agent enrolled with another manager (opt-in, role agent_rehome)
+  ansible.builtin.include_role:
+    name: agent_rehome
+  when: agent_rehome_enabled | default(false) | bool
 
 - name: Enable and start the agent
   ansible.builtin.systemd_service:

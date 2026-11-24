@@ -18,10 +18,3 @@ wazuh_agent_name: ""
 wazuh_agent_groups: []
 wazuh_agent_state_file: /var/ossec/var/run/wazuh-agentd.state
 wazuh_agent_manifest_dir: /var/lib/homelabnext/wazuh-agent
-# Re-home an agent already enrolled with another manager (tasks/rehome.yml): off by default, since
-# moving it cuts the old manager's feed. The backups carry this stamp.
-wazuh_agent_rehome: false
-wazuh_agent_rehome_stamp: "{{ now(utc=true).strftime('%Y%m%d') }}"
-wazuh_agent_config_group: wazuh
-wazuh_agent_systemctl_cli: systemctl
-wazuh_agent_auth_cli: "{{ wazuh_agent_state_file | dirname | dirname | dirname }}/bin/agent-auth"

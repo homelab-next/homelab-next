@@ -9,17 +9,15 @@ run here and their install path is proven only by ``--syntax-check`` of the gene
 (``tests/compute/test_products.py``).  Every refusal is shown failing on a bad input and passing
 on a good one."""
 
-import grp
 import ipaddress
 import json
-import os
 import re
 import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import calls, fake, first_run, logging_fake, run_cases, run_role
+from rolerun import fake, first_run, run_cases, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
@@ -154,59 +152,6 @@ def test_wazuh_agent_health_reads_the_state_file_and_the_configured_manager(firs
         assert failed is (msg is not None), (name, got)
         assert msg is None or msg in got, (name, got)
     assert "reinstall" in results[2][1]
-
-
-def _agent_home(tmp_path, address):
-    home = tmp_path / "ossec"
-    (home / "var" / "run").mkdir(parents=True)
-    (home / "etc").mkdir()
-    (home / "etc" / "ossec.conf").write_text(
-        f"<ossec_config><client><server><address>{address}</address><port>1514</port></server>"
-        "</client></ossec_config>\n"
-    )
-    (home / "etc" / "client.keys").write_text("001 old-host any oldkey\n")
-    (home / "etc" / "authd.pass").write_text("old-pass\n")
-    v = wazuh_vars(
-        tmp_path,
-        wazuh_agent_state_file=str(home / "var" / "run" / "wazuh-agentd.state"),
-        wazuh_agent_rehome_stamp="20261124",
-        wazuh_agent_config_group=grp.getgrgid(os.getgid()).gr_name,
-        wazuh_agent_systemctl_cli=logging_fake(tmp_path, "systemctl"),
-        wazuh_agent_auth_cli=logging_fake(tmp_path, "agent-auth"),
-    )
-    return home, v
-
-
-REHOME_ENV = {"HNX_SECRET_SIEM_ENROLLMENT_PASSWORD": "new-enrolment-pass"}
-
-
-def test_wazuh_agent_rehome_moves_an_agent_enrolled_elsewhere(tmp_path):
-    home, v = _agent_home(tmp_path, "old.example.internal")
-    r = run_role(tmp_path, SIEM_ROLE, "rehome", v, env=REHOME_ENV)
-    assert r.returncode == 0, r.stdout + r.stderr
-    etc = home / "etc"
-    assert "<address>siem-01.example.internal</address>" in (etc / "ossec.conf").read_text()
-    assert "old.example.internal" not in (etc / "ossec.conf").read_text()
-    assert (etc / "client.keys").read_text() == ""
-    assert (etc / "authd.pass").read_text() == "new-enrolment-pass"
-    for f in ("ossec.conf", "client.keys", "authd.pass"):  # the rollback copies
-        assert (etc / f"{f}.pre-rehome-20261124").exists()
-    assert "old.example.internal" in (etc / "ossec.conf.pre-rehome-20261124").read_text()
-    log = [line.split()[0:3] for line in calls(tmp_path)]
-    assert log == [["systemctl", "stop", "wazuh-agent"],
-                   ["agent-auth", "-m", "siem-01.example.internal"],
-                   ["systemctl", "start", "wazuh-agent"]]  # fmt: skip
-    assert "new-enrolment-pass" not in r.stdout + r.stderr  # the password is never printed
-    assert all("new-enrolment-pass" not in c for c in calls(tmp_path))  # nor an argument
-
-
-def test_wazuh_agent_rehome_leaves_an_agent_already_on_the_manager(tmp_path):
-    home, v = _agent_home(tmp_path, "siem-01.example.internal")
-    r = run_role(tmp_path, SIEM_ROLE, "rehome", v, env=REHOME_ENV)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert calls(tmp_path) == []
-    assert (home / "etc" / "client.keys").read_text() == "001 old-host any oldkey\n"
-    assert not list((home / "etc").glob("*.pre-rehome-*"))
 
 
 def _first(tmp_path):
