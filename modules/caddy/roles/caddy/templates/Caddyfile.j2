@@ -16,6 +16,40 @@
 	servers {
 		protocols h1 h2
 	}
+	# media-server clients put credentials in query strings and headers, and Caddy logs the whole
+	# request (also in warnings such as an aborted upstream response): redact them in the default
+	# logger, which carries every non-access message (reverse_proxy warnings, http.log.error)
+	log {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					replace api_key REDACTED
+					replace apikey REDACTED
+					replace ApiKey REDACTED
+					replace Api_Key REDACTED
+					replace api-key REDACTED
+					replace token REDACTED
+					replace Token REDACTED
+					replace access_token REDACTED
+					replace AccessToken REDACTED
+					replace X-Emby-Token REDACTED
+					replace X-MediaBrowser-Token REDACTED
+					replace x-emby-token REDACTED
+					replace x-mediabrowser-token REDACTED
+				}
+				request>headers>Authorization replace REDACTED
+				request>headers>X-Emby-Authorization replace REDACTED
+				request>headers>X-Emby-Token replace REDACTED
+				request>headers>X-Mediabrowser-Token replace REDACTED
+				request>headers>X-MediaBrowser-Token replace REDACTED
+				request>headers>Cookie replace REDACTED
+				request>headers>Proxy-Authorization replace REDACTED
+				resp_headers>Set-Cookie replace REDACTED
+			}
+		}
+	}
 }
 
 http://127.0.0.1:{{ caddy_container_health_port }} {  # no-raw-endpoint: allow the healthcheck's site, on the container's own loopback

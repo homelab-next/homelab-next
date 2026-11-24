@@ -485,3 +485,92 @@ def test_the_first_start_creates_the_network_then_trusts_its_gateway(tmp_path):
         next(c for c in log if c.endswith("up -d --remove-orphans"))
     )
     assert trusted_of(tmp_path) == [GATEWAY + "/32"]
+
+
+# ------------------------------------------------------------------------- log redaction
+
+SAMPLE_QUERY = "k" * 8  # a short obviously-fake value, never key-shaped
+
+
+def _filter_rules(caddyfile: str) -> tuple[set[str], set[str]]:
+    """The query names and the request headers the rendered default logger redacts."""
+    block = caddyfile.split("format filter", 1)[1]
+    query, headers = set(), set()
+    in_query = False
+    for line in block.splitlines():
+        t = line.strip()
+        if t.startswith("request>uri query"):
+            in_query = True
+        elif in_query and t == "}":
+            in_query = False
+        elif in_query and t.startswith("replace "):
+            query.add(t.split()[1])
+        elif t.startswith("request>headers>") and t.endswith("replace REDACTED"):
+            headers.add(t.split()[0].split(">")[2])
+    return query, headers
+
+
+def test_the_default_logger_redacts_credentials_in_urls_and_headers(tmp_path):
+    r = run_steps(tmp_path, CADDY, RENDER, caddy_vars(tmp_path), SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    caddyfile = (tmp_path / "data" / "config" / "Caddyfile").read_text()
+    sites = (tmp_path / "data" / "config" / "sites.caddy").read_text()
+    # the filter sits in the GLOBAL options, so it wraps the default logger: the reverse_proxy
+    # warnings and http.log.error go through it, not only access logs
+    global_block = caddyfile.split("\n}\n", 1)[0]
+    assert "\tlog {" in global_block and "format filter" in global_block
+    assert "wrap json" in global_block
+    # no site declares its own logger that would bypass the filter
+    assert not any(line.strip().startswith("log") for line in sites.splitlines())
+    query, headers = _filter_rules(caddyfile)
+    for name in (
+        "api_key",
+        "ApiKey",
+        "apikey",
+        "token",
+        "access_token",
+        "X-Emby-Token",
+        "X-MediaBrowser-Token",
+    ):
+        assert name in query, name
+    for name in (
+        "Authorization",
+        "X-Emby-Authorization",
+        "X-Emby-Token",
+        "X-Mediabrowser-Token",
+        "Cookie",
+    ):
+        assert name in headers, name
+    assert "resp_headers>Set-Cookie replace" in caddyfile
+
+
+def _redact(line: dict, query: set[str], headers: set[str]) -> dict:
+    """What Caddy's filter encoder does with the rules the role rendered (query values replaced,
+    listed request headers replaced), applied to one structured log line."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit
+
+    req = line["request"]
+    parts = urlsplit(req["uri"])
+    pairs = [(k, "REDACTED" if k in query else v) for k, v in parse_qsl(parts.query)]
+    req["uri"] = parts.path + "?" + urlencode(pairs, safe="")
+    for h in headers & set(req.get("headers", {})):
+        req["headers"][h] = ["REDACTED"]
+    return line
+
+
+def test_a_warning_line_with_a_media_key_in_its_url_loses_the_key(tmp_path):
+    r = run_steps(tmp_path, CADDY, RENDER, caddy_vars(tmp_path), SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    query, headers = _filter_rules((tmp_path / "data" / "config" / "Caddyfile").read_text())
+    line = {
+        "level": "warn",
+        "logger": "http.handlers.reverse_proxy",
+        "msg": "aborting with incomplete response",
+        "request": {
+            "uri": f"/Videos/1/stream?UserId=u1&ApiKey={SAMPLE_QUERY}&api_key={SAMPLE_QUERY}",
+            "headers": {"X-Emby-Token": [SAMPLE_QUERY], "Accept": ["*/*"]},
+        },
+    }
+    out = _redact(line, query, headers)
+    text = str(out)
+    assert SAMPLE_QUERY not in text and "UserId=u1" in text and "*/*" in text
