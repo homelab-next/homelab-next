@@ -4,6 +4,12 @@
 # hosts only); this file adds what is the role's: the global options, a health site on the
 # container's own loopback, and the catch-all that loads the certificate and answers 404 for every
 # name no site has.
+{# Media-server clients put credentials in the query string and in headers; Caddy logs the whole request
+    (also in warnings such as an aborted upstream response), so the default logger redacts them. -#}
+{% set log_query = ['api_key', 'apikey', 'ApiKey', 'Api_Key', 'api-key', 'token', 'Token', 'access_token', 'AccessToken',
+                    'X-Emby-Token', 'X-MediaBrowser-Token', 'x-emby-token', 'x-mediabrowser-token'] %}
+{% set log_req_headers = ['Authorization', 'X-Emby-Authorization', 'X-Emby-Token', 'X-Mediabrowser-Token',
+                          'X-MediaBrowser-Token', 'Cookie', 'Proxy-Authorization'] %}
 {
 	admin 127.0.0.1:2019  # no-raw-endpoint: allow the admin API on the container's own loopback (caddy reload, the health hook)
 	http_port {{ caddy_container_http_port }}
@@ -15,6 +21,24 @@
 	grace_period 10s
 	servers {
 		protocols h1 h2
+	}
+	# the default logger carries every non-access message (reverse_proxy warnings, http.log.error)
+	log {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+{% for k in log_query %}
+					replace {{ k }} REDACTED
+{% endfor %}
+				}
+{% for h in log_req_headers %}
+				request>headers>{{ h }} replace REDACTED
+{% endfor %}
+				resp_headers>Set-Cookie replace REDACTED
+			}
+		}
 	}
 }
 
