@@ -189,6 +189,28 @@ def supply(status: dict, tag: str) -> int:
     return n
 
 
+def idle_runners(runners: list[dict], prefix: str = PREFIX) -> list[dict]:
+    """Pool runners that are connected and run no job: a VM holding a slot for work that is not
+    coming (or whose job another runner took)."""
+    return [
+        r
+        for r in runners
+        if str(r.get("name", "")).startswith(prefix)
+        and r.get("status") == "online"
+        and not r.get("busy")
+    ]
+
+
+def booting(status: dict, tag: str) -> int:
+    """Slots of one ``--also`` repository whose VM is up and has not started a job yet."""
+    mark = f"{PREFIX}{tag}-"
+    return sum(
+        1
+        for s in status.get("slots", {}).values()
+        if s.get("state") == "booting" and str(s.get("runner", "")).startswith(mark)
+    )
+
+
 def new_name(tag: str) -> str:
     return f"{PREFIX}{tag}-{time.strftime('%m%d%H%M%S', time.gmtime())}-{secrets.token_hex(3)}"
 
@@ -197,6 +219,7 @@ class Feeder:
     def __init__(self, forge: Forge, host: Host, args, clock=time.monotonic):
         self.forge, self.host, self.args, self.clock = forge, host, args, clock
         self.extras = list(getattr(args, "extras", []) or [])  # [(Forge, labels, tag)]
+        self.seen: dict[int, float] = {}  # runner id -> when this process first saw it idle
         self.last_live = clock()
         self.rounds = 0
         self.routed: str | None = None
@@ -225,17 +248,21 @@ class Feeder:
             self.route(self.args.off_value)
         if st.get("golden"):
             room = wanted(st, self.args.buffer)
+            unmet = 0  # queued jobs of the other repositories no registration covers yet
             # another repository's registrations only against its queued jobs, first: its jobs
             # wait for them, where the main repository's buffer is only a head start
             for forge, labels, tag in self.extras:
                 try:
-                    need = forge.queued_jobs(labels) - supply(st, tag)
+                    queued = forge.queued_jobs(labels)
+                    need = queued - supply(st, tag)
                 except Exception as e:  # its API failing must not stop the main repository's feed
                     print(
                         f"feeder: {tag} demand failed: {type(e).__name__}: {str(e)[:200]}",
                         flush=True,
                     )
                     continue
+                # spooled registrations only cover a queue once a slot takes them
+                unmet += max(0, queued - booting(st, tag))
                 for _ in range(
                     max(0, min(need, st.get("slots_total", 0) - len(st.get("spooled", []))))
                 ):
@@ -247,11 +274,45 @@ class Feeder:
                 name = new_name(self.args.tag)
                 self.host.put(name, self.forge.mint(name, self.args.labels))
                 st.setdefault("spooled", []).append(name)
+            self.reclaim(st, unmet)
         if self.rounds % self.args.reap_every == 1 or self.args.reap_every == 1:
             for forge in [self.forge, *(e[0] for e in self.extras)]:
                 for r in orphans(forge.runners(), held(st)):
                     forge.delete_runner(r["id"])
                     print(f"feeder: removed orphan registration {r['name']}", flush=True)
+
+    def reclaim(self, st: dict, unmet: int) -> None:
+        """Free slots held by idle runners, so a repository's idle VMs never starve another's
+        queued jobs: when queued jobs of an ``--also`` repository wait and no slot is free, the
+        main repository's idle runners are deleted (their VMs power off) one for one; and every
+        repository's runners idle longer than ``--idle-ttl`` go too (all but ``--buffer`` of the
+        main repository's, which are its head start)."""
+        now = self.clock()
+        free = sum(1 for s in st.get("slots", {}).values() if s.get("state") in IDLE)
+        ttl = getattr(self.args, "idle_ttl", 0)
+        due = ttl > 0 and self.rounds % self.args.reap_every == 2 % self.args.reap_every
+        if not ((unmet > 0 and free == 0) or due):
+            return
+        for forge, keep, starving in [(self.forge, self.args.buffer, unmet)] + [
+            (e[0], 0, 0) for e in self.extras
+        ]:
+            idle = idle_runners(forge.runners())
+            ids = {r["id"] for r in idle}
+            for rid in [k for k in self.seen if k not in ids]:
+                del self.seen[rid]
+            for r in idle:
+                self.seen.setdefault(r["id"], now)
+            idle.sort(key=lambda r: self.seen[r["id"]])  # oldest first
+            kill = []
+            if starving > 0 and free == 0:
+                kill = idle[:starving]
+            if due:
+                old = [r for r in idle if now - self.seen[r["id"]] >= ttl]
+                kill += [r for r in old[: max(0, len(idle) - keep)] if r not in kill]
+            for r in kill:
+                forge.delete_runner(r["id"])
+                self.seen.pop(r["id"], None)
+                print(f"feeder: released idle runner {r['name']}", flush=True)
 
 
 def token_from(args) -> str:
@@ -290,6 +351,13 @@ def parse(argv: list[str]):
     p.add_argument("--buffer", type=int, default=2)
     p.add_argument("--interval", type=float, default=15.0)
     p.add_argument("--reap-every", type=int, default=20)
+    p.add_argument(
+        "--idle-ttl",
+        type=float,
+        default=900.0,
+        help="seconds a connected runner may sit without a job before its registration is "
+        "deleted and its slot freed (0: never); its first sight is this process's own clock",
+    )
     p.add_argument("--down-after", type=float, default=180.0)
     p.add_argument(
         "--also",

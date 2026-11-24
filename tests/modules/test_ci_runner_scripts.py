@@ -448,3 +448,63 @@ def test_also_parses_and_refuses_a_malformed_spec():
     assert a.extras == [("o/ov", ["self-hosted", "hnx-ci-overlay"], "ov")]
     with pytest.raises(SystemExit):
         feeder.parse(["--repo", "o/r", "--host", "h", "--ssh-key", "k", "--also", "bad"])
+
+
+class _IdleForge(FakeForge):
+    def __init__(self, runners, queued=0):
+        super().__init__()
+        self._runners, self.queued = runners, queued
+
+    def runners(self):
+        return self._runners
+
+    def queued_jobs(self, labels):
+        return self.queued
+
+
+def _idle(n, prefix="hnx-ci-t-"):
+    return [{"id": i, "name": f"{prefix}{i}", "status": "online", "busy": False} for i in range(n)]
+
+
+def test_idle_runners_of_the_main_repository_are_released_for_another_repositorys_queue():
+    status = _status(["running"] * 4, spooled=["hnx-ci-ov-a", "hnx-ci-ov-b"])  # no slot free
+    main = _IdleForge(_idle(3))
+    other = _OtherForge(2)
+    f = feeder.Feeder(main, FakeHost(status), _args(extras=[(other, ["ov"], "ov")], idle_ttl=0))
+    f.round()
+    assert sorted(main.deleted) == [0, 1]  # one for one with the queued jobs it starves
+
+
+def test_nothing_is_released_while_a_slot_is_free_or_nothing_waits():
+    main = _IdleForge(_idle(3))
+    feeder.Feeder(
+        main,
+        FakeHost(_status(["waiting", "running"])),
+        _args(extras=[(_OtherForge(2), ["ov"], "ov")], idle_ttl=0),
+    ).round()
+    assert main.deleted == []
+    main2 = _IdleForge(_idle(3))
+    feeder.Feeder(
+        main2,
+        FakeHost(_status(["running"] * 3)),
+        _args(extras=[(_OtherForge(0), ["ov"], "ov")], idle_ttl=0),
+    ).round()
+    assert main2.deleted == []
+
+
+def test_runners_idle_past_the_ttl_are_released_keeping_the_buffer():
+    now = [0.0]
+    main = _IdleForge(_idle(4))
+    f = feeder.Feeder(
+        main,
+        FakeHost(_status(["running"] * 4)),
+        _args(idle_ttl=100.0, reap_every=2),
+        clock=lambda: now[0],
+    )
+    f.round()  # round 1: nothing yet
+    f.round()  # round 2 (the reclaim round): first sight, not old
+    assert main.deleted == []
+    now[0] = 150.0
+    f.rounds = 3
+    f.round()  # round 4: the oldest go, the buffer (1) stays
+    assert sorted(main.deleted) == [0, 1, 2]
