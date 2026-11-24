@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 from .fixtures import FixtureError, load_fixtures
-from .sigma import ATTACK_TECH_RE, STATUSES, RuleError, load_rules
+from .sigma import ATTACK_TECH_RE, SOURCES, STATUSES, RuleError, load_rules
 
 # Agent-facing file kinds: charters, profiles, decision specs, schedules, workflow packs. Decision
 # specs live in decision packs (``workflows/decisions/``) and as ``decision_spec*`` files.
@@ -66,6 +66,8 @@ def lint_rules(root: Path) -> list[str]:
         problems += [f"{r.det_id}: {p}" for p in r.attack_tag_problems()]
         if r.status not in STATUSES:
             problems.append(f"{r.det_id}: status {r.status!r} is not one of {STATUSES}")
+        if r.source not in SOURCES:
+            problems.append(f"{r.det_id}: hnx_source {r.source!r} is not one of {SOURCES}")
         techs = [t for t in r.tags if ATTACK_TECH_RE.match(t)]
         if not techs:
             problems.append(f"{r.det_id}: no ATT&CK technique tag (attack.tNNNN)")
@@ -84,6 +86,9 @@ def lint_rules(root: Path) -> list[str]:
         for need in ("must_fire", "must_not_fire"):
             if need not in kinds:
                 problems.append(f"{r.det_id}: no {need} fixture (a rule without fixtures fails)")
+    from .engine import lint_engine_fixtures
+
+    problems += lint_engine_fixtures(root, rules)
     fx_root = root / "fixtures"
     if fx_root.is_dir():
         for d in sorted(p for p in fx_root.iterdir() if p.is_dir()):

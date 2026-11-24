@@ -1,11 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Wazuh-style XML stub backend. Emits well-formed rule XML; deploys nothing.
+"""Wazuh-style XML backend: the Sigma lane's compiler to the engine's rule XML (ADR-0006).
 
 Expressible subset: a conjunction of selections, each with ONE alternative,
 optionally negated (single-field selections only). Anything else raises
 ``UnsupportedConstruct`` - author a native rule with a stated reason.
 The logical id is preserved as an XML comment; the engine number comes only
 from ``Target.det_map`` (the generated map), never from the rule file.
+
+With logsource bindings (``Target.logsources``, from ``mappings/<backend>.yml``), each rule chains
+from its logsource's engine base (``parent``: one ``if_sid``, ``if_group`` or ``decoded_as``; a
+multi-valued ``if_sid`` beside a field condition matches nothing on the engine, so it is refused)
+and reads only the binding's field names. A binding field written ``raw:<template>`` is matched on
+the event's raw line through the rule's one ``<regex type="pcre2">``: ``<template>`` is a PCRE2
+fragment with one ``{}`` standing for the value (``raw:"id\\.resp_h":"{}"`` for a JSON key), for a
+value the decoder keeps only in a static field the engine will not match by pattern. A rule whose
+logsource no binding names is not expressible for that target. This is what the deploy compiles
+and loads; the engine's own rule tester proves it (``run --engine``).
 
 Case-insensitivity is a scoped group, ``(?i:...)``, never a bare ``(?i)``: an alternation of
 bare-flag patterns is refused by Python's ``re`` and only works in PCRE2 by its looser rule.
@@ -22,7 +32,15 @@ from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
 from .. import attack
-from ..adapters import Artifact, MissingEngineId, Target, UnsupportedConstruct, register
+from ..adapters import (
+    Artifact,
+    Binding,
+    MissingEngineId,
+    Target,
+    UnsupportedConstruct,
+    register,
+    select_binding,
+)
 from ..sigma import Matcher, Rule, _lookup
 
 _LEVEL = {"informational": 3, "low": 5, "medium": 8, "high": 12, "critical": 15}
@@ -41,10 +59,68 @@ def _rx(m: Matcher, value) -> str:
     return str(value)  # re
 
 
-def _field_elems(m: Matcher, tgt: Target, negate: bool) -> list[str]:
+_PARENTS = {
+    "if_sid": re.compile(r"^[0-9]{1,6}\Z"),
+    "if_group": re.compile(r"^[A-Za-z0-9_-]{1,64}\Z"),
+    "decoded_as": re.compile(r"^[A-Za-z0-9_.-]{1,64}\Z"),
+}
+RAW = "raw:"
+
+
+def _parent_elem(b: Binding) -> str:
+    ((kind, value),) = b.parent.items()
+    if kind not in _PARENTS or not _PARENTS[kind].match(str(value)):
+        raise UnsupportedConstruct(
+            f"binding {b.name!r}: parent must be one if_sid number, if_group or decoded_as name"
+        )
+    return f"<{kind}>{escape(str(value))}</{kind}>"
+
+
+def _raw_alt(m: Matcher, value) -> str:
+    """One value as a fragment inside a raw-line template (it stays inside a JSON string)."""
+    text = str(value)
+    if '"' in text or "\\" in text:
+        raise UnsupportedConstruct("a raw-line value cannot hold a quote or a backslash")
+    v = re.escape(text)
+    if m.op == "equals":
+        body = v.replace(chr(92) + "*", '[^"]*').replace(chr(92) + "?", '[^"]')
+    elif m.op == "contains":
+        body = f'[^"]*{v}[^"]*'
+    elif m.op == "startswith":
+        body = f'{v}[^"]*'
+    elif m.op == "endswith":
+        body = f'[^"]*{v}'
+    else:
+        raise UnsupportedConstruct("a raw-line field takes equals, contains, startswith, endswith")
+    return f"(?i:{body})"
+
+
+def _raw_elem(m: Matcher, template: str, negate: bool) -> str:
+    if template.count("{}") != 1:
+        raise UnsupportedConstruct("a raw-line template holds exactly one {}")
+    if m.match_all and len(m.values) > 1:
+        raise UnsupportedConstruct("'all' on a raw-line field needs a native rule")
+    alts = [_raw_alt(m, v) for v in m.values]
+    pat = template.replace("{}", alts[0] if len(alts) == 1 else "(?:" + "|".join(alts) + ")")
+    neg = ' negate="yes"' if negate else ""
+    return f'<regex type="pcre2"{neg}>{escape(pat)}</regex>'
+
+
+def _field_elems(
+    m: Matcher, tgt: Target, negate: bool, binding: Binding | None = None
+) -> list[str]:
     if m.field is None or m.op == "null":
         raise UnsupportedConstruct("keyword / null matchers need a native rule")
-    name = tgt.field_mapping.get(m.field, m.field)
+    if binding is not None:
+        if m.field not in binding.fields:
+            raise UnsupportedConstruct(
+                f"field {m.field!r} has no engine name in binding {binding.name!r}"
+            )
+        name = binding.fields[m.field]
+        if name.startswith(RAW):
+            return [_raw_elem(m, name[len(RAW) :], negate)]
+    else:
+        name = tgt.field_mapping.get(m.field, m.field)
     neg = ' negate="yes"' if negate else ""
     pats = [_rx(m, v) for v in m.values]
     if m.match_all and len(pats) > 1:
@@ -67,7 +143,8 @@ def _terms(ast: tuple) -> list[tuple[str, bool]]:
 
 
 class WazuhStubBackend:
-    """Wazuh-style stub. ``known_ids_snapshot`` is the default snapshot path RELATIVE to the
+    """The XML backend (the class keeps its historical name: callers import it).
+    ``known_ids_snapshot`` is the default snapshot path RELATIVE to the
     detections root; callers can also set an absolute path or ``None``. ``known_technique_ids``
     loads the snapshot lazily and caches the frozen set so repeated calls are free.
     """
@@ -111,6 +188,13 @@ class WazuhStubBackend:
         if rule.det_id not in target.det_map:
             raise MissingEngineId(rule.det_id)
         num = target.det_map[rule.det_id]
+        binding = None
+        if target.logsources:
+            binding = select_binding(target.logsources, rule.logsource)
+            if binding is None:
+                raise UnsupportedConstruct(
+                    f"no engine binding for logsource {dict(sorted(rule.logsource.items()))}"
+                )
         fields: list[str] = []
         for sel, neg in _terms(rule.condition):
             alts = rule.selections[sel]
@@ -119,12 +203,18 @@ class WazuhStubBackend:
             if neg and len(alts[0]) != 1:
                 raise UnsupportedConstruct(f"negated selection {sel!r} has several fields")
             for m in alts[0]:
-                fields += _field_elems(m, target, neg)
-        group = target.options.get("if_group", "hnx_generic")
+                fields += _field_elems(m, target, neg, binding)
+        if sum(f.startswith("<regex") for f in fields) > 1:
+            # the engine keeps one <regex> per rule: a second would silently replace the first
+            raise UnsupportedConstruct("more than one raw-line condition in one rule")
+        if binding is not None:
+            parent = _parent_elem(binding)
+        else:
+            parent = f"<if_group>{escape(target.options.get('if_group', 'hnx_generic'))}</if_group>"
         lines = [
             f"<!-- {rule.det_id} -->",
             f'<rule id="{num}" level="{_LEVEL[rule.level]}">',
-            f"  <if_group>{escape(group)}</if_group>",
+            f"  {parent}",
         ]
         lines += [f"  {f}" for f in fields]
         lines.append(f"  <description>{escape(rule.title)}</description>")
@@ -146,6 +236,10 @@ class WazuhStubBackend:
         the one place they could differ.
         """
         rule = ET.fromstring(artifact.content)
+        if rule.find("regex") is not None:
+            # a raw-line condition reads the engine's input line, which a fixture event does not
+            # carry: the engine fixtures through the engine's own tester prove it (run --engine)
+            raise UnsupportedConstruct("a raw-line condition is evaluated by the engine only")
         for f in rule.findall("field"):
             values = [v for v in _lookup(event, f.get("name", "")) if v is not None]
             if not values:
