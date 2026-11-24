@@ -38,7 +38,10 @@ def test_a_placeholder_include_is_written_before_the_rules_are_fetched_and_never
     assert copy["force"] is False  # an existing (real) file is never replaced
     assert copy["dest"] == "{{ " + PFX + "_config_dir }}/{{ " + PFX + "_groups_file }}"
     body = yaml.safe_load(copy["content"])
-    assert set(body) == {"HOME_NET", "EXTERNAL_NET"}  # parses as the include the sensor configuration expects
+    assert set(body) == {
+        "HOME_NET",
+        "EXTERNAL_NET",
+    }  # parses as the include the sensor configuration expects
 
 
 def test_the_include_the_configuration_names_is_the_placeholder_s_file():
