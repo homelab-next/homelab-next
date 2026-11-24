@@ -180,3 +180,34 @@ def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
     r = subprocess.run([*lint, "--playbook", *books, "--inventory", inv],
                        capture_output=True, text=True)  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_siem_agent_reads_each_captures_event_streams_and_only_those():
+    """The monitor adds one marked localfile block for each capture's event streams to an installed
+    SIEM agent (the IDS module's contract), so a re-converge keeps the agent reading the logs."""
+    import jinja2
+
+    root = Path(__file__).resolve().parents[2]
+    role = next(
+        p.parents[1]
+        for p in sorted(root.glob("modules/*/roles/*/templates/siem-localfile.xml.j2"))
+        if (p.parents[1] / "tasks/siem.yml").read_text().count("_capture_interfaces") == 0
+        and "streams" in (p.parents[1] / "defaults/main.yml").read_text()
+    )
+    pfx = role.name
+    defaults = yaml.safe_load((role / "defaults/main.yml").read_text())
+    out = jinja2.Template((role / "templates/siem-localfile.xml.j2").read_text()).render(
+        {
+            f"{pfx}_capture_interfaces": [{"slug": "mirror"}, {"slug": "guests"}],
+            f"{pfx}_siem_streams": defaults[f"{pfx}_siem_streams"],
+            f"{pfx}_log_root": defaults[f"{pfx}_log_root"],
+        }
+    )
+    locs = [line.strip()[10:-11] for line in out.splitlines() if "<location>" in line]
+    assert locs[0] == f"{defaults[pfx + '_log_root']}/mirror/conn.log" and len(locs) == 18
+    assert not any(n in loc for loc in locs for n in ("stats", "loaded_scripts", "packet_filter"))
+    tasks = yaml.safe_load((role / "tasks/siem.yml").read_text())
+    (block,) = [t for t in tasks if "ansible.builtin.blockinfile" in t]
+    assert (
+        block["when"] == f"{pfx}_siem_conf.stat.exists"
+    )  # never creates the agent's configuration

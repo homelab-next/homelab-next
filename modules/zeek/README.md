@@ -22,6 +22,9 @@ file name: `conn`, `dns`, `ssl`, `http`, `ssh`, `files`, `x509`, `notice`, `weir
 remap to OCSF `network_activity`, the labels (`hnx_runtime`, `hnx_tlp`) and the JA3/JA4/HASSH fields
 belong to the `vector` module (decoders for them are owed in the SIEM module's native rules, which
 must carry the old zeek decoder). This module guarantees the path, the format and the rotation.
+Until that agent exists, an installed SIEM agent on the host reads the event streams: the role adds one
+marked localfile block for each capture's streams (`zeek_siem_streams`) when the agent's configuration
+exists, as the IDS module does for its alert log (`zeek_siem_agent_manage`, `zeek_siem_agent_unit`).
 
 ## What the overlay adds
 
