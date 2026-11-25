@@ -59,6 +59,14 @@ SITE_FIELDS = frozenset({"standing", "backup_job", "scope", "status_sources"})
 #: other, so a site can never make a module's internal row public
 SITE_BOUND_FIELDS = frozenset({"public_hostname", "edge_tls"})
 
+#: single sign-on is the site's choice for a row whose module keeps its own accounts: a registry
+#: row may add ``oidc`` (its own callbacks, service schema 2.13; the registry checks they name the
+#: row's own host and port) and, with it, ``auth: idp`` where the module's row says ``auth: own``
+#: (the IdP's realm then renders a client for it; the module's local accounts stay).  Only that
+#: one step: ``auth: idp`` without ``oidc``, or over a module's ``none``/``mtls``, stays a
+#: difference, and a module that declares ``oidc`` itself is compared as any other field
+SITE_SIGN_IN_FROM, SITE_SIGN_IN_TO = "own", "idp"
+
 #: the longest value a problem prints before it is cut (a row's field can be a large mapping)
 SHOWN = 120
 
@@ -184,6 +192,21 @@ def _site_bound_ok(field: str, value: Any) -> bool:
     return isinstance(value, Mapping) and str(value.get("ca", "")).startswith("secret:")
 
 
+def _site_sign_in(field: str, row: Mapping[str, Any], have: Mapping[str, Any]) -> bool:
+    """The registry signs a module's own-accounts row in through the site's IdP
+    (:data:`SITE_SIGN_IN_FROM`): ``oidc`` the module does not declare, and the ``auth`` step it
+    carries, are the site's."""
+    if "oidc" in row or not isinstance(have.get("oidc"), Mapping) or not have["oidc"]:
+        return False
+    if field == "oidc":
+        return True
+    return (
+        field == "auth"
+        and row.get("auth") == SITE_SIGN_IN_FROM
+        and have.get("auth") == SITE_SIGN_IN_TO
+    )
+
+
 #: a whole path segment of a contributed health path that is the site's (``:realm``, the route
 #: parameter form, which the row schema's path characters allow): the module knows the path's
 #: shape, the site names the segment (an IdP's health is its realm's discovery document, and the
@@ -246,6 +269,8 @@ def row_problems(
             if field in SITE_FIELDS and field not in e.row:
                 continue
             want, got = e.row.get(field, _ABSENT), have.get(field, _ABSENT)
+            if _site_sign_in(field, e.row, have):
+                continue
             if field in SITE_BOUND_FIELDS and want is not _ABSENT:
                 if got is _ABSENT:
                     out.append(

@@ -345,6 +345,38 @@ argument_specs:
         type: str
         description: The forwarded socket's mode (0660 or 0600).
         default: '0660'
+      stackstorm_events_forward_enabled: &fwd01
+        type: bool
+        description: "Keep an SSH local forward to a bus that listens on loopback on another host up as a systemd service (the bridge's endpoint is then its loopback end)."
+        default: false
+      stackstorm_events_forward_host: &fwd02
+        type: str
+        description: "The bus host's name or address."
+        default: ''
+      stackstorm_events_forward_ssh_user: &fwd03
+        type: str
+        description: "The login on the bus host that may only forward to the bus (role events_bus, events_bus_forward_logins)."
+        default: hnx-events-st2
+      stackstorm_events_forward_ssh_port: &fwd04
+        type: int
+        description: "The bus host's ssh port."
+        default: 22
+      stackstorm_events_forward_host_key: &fwd05
+        type: str
+        description: "The bus host's public key line (`name ssh-ed25519 AAAA...`), pinned."
+        default: ''
+      stackstorm_events_forward_key_ref: &fwd06
+        type: str
+        description: "secret:<name> of the bus forward's OpenSSH private key."
+        default: secret:stackstorm/events-ssh-key
+      stackstorm_events_forward_remote: &fwd07
+        type: str
+        description: "The bus as its own host sees it (`<loopback address>:<port>`), the login's only PermitOpen."
+        default: ''
+      stackstorm_events_forward_user: &fwd08
+        type: str
+        description: "The bus forward's service user (it alone reads the key)."
+        default: hnx-st2-events
       stackstorm_status_packs:
         type: list
         elements: str
@@ -442,6 +474,14 @@ argument_specs:
       stackstorm_broker_socket_dir: *id069
       stackstorm_broker_tunnel_user: *id070
       stackstorm_broker_socket_mode: *id071
+      stackstorm_events_forward_enabled: *fwd01
+      stackstorm_events_forward_host: *fwd02
+      stackstorm_events_forward_ssh_user: *fwd03
+      stackstorm_events_forward_ssh_port: *fwd04
+      stackstorm_events_forward_host_key: *fwd05
+      stackstorm_events_forward_key_ref: *fwd06
+      stackstorm_events_forward_remote: *fwd07
+      stackstorm_events_forward_user: *fwd08
       stackstorm_status_packs:
         type: list
         elements: str
@@ -539,6 +579,14 @@ argument_specs:
       stackstorm_broker_socket_dir: *id069
       stackstorm_broker_tunnel_user: *id070
       stackstorm_broker_socket_mode: *id071
+      stackstorm_events_forward_enabled: *fwd01
+      stackstorm_events_forward_host: *fwd02
+      stackstorm_events_forward_ssh_user: *fwd03
+      stackstorm_events_forward_ssh_port: *fwd04
+      stackstorm_events_forward_host_key: *fwd05
+      stackstorm_events_forward_key_ref: *fwd06
+      stackstorm_events_forward_remote: *fwd07
+      stackstorm_events_forward_user: *fwd08
       stackstorm_status_packs:
         type: list
         elements: str
@@ -635,6 +683,14 @@ argument_specs:
       stackstorm_broker_socket_dir: *id069
       stackstorm_broker_tunnel_user: *id070
       stackstorm_broker_socket_mode: *id071
+      stackstorm_events_forward_enabled: *fwd01
+      stackstorm_events_forward_host: *fwd02
+      stackstorm_events_forward_ssh_user: *fwd03
+      stackstorm_events_forward_ssh_port: *fwd04
+      stackstorm_events_forward_host_key: *fwd05
+      stackstorm_events_forward_key_ref: *fwd06
+      stackstorm_events_forward_remote: *fwd07
+      stackstorm_events_forward_user: *fwd08
       stackstorm_status_packs:
         type: list
         elements: str
@@ -731,6 +787,14 @@ argument_specs:
       stackstorm_broker_socket_dir: *id069
       stackstorm_broker_tunnel_user: *id070
       stackstorm_broker_socket_mode: *id071
+      stackstorm_events_forward_enabled: *fwd01
+      stackstorm_events_forward_host: *fwd02
+      stackstorm_events_forward_ssh_user: *fwd03
+      stackstorm_events_forward_ssh_port: *fwd04
+      stackstorm_events_forward_host_key: *fwd05
+      stackstorm_events_forward_key_ref: *fwd06
+      stackstorm_events_forward_remote: *fwd07
+      stackstorm_events_forward_user: *fwd08
       stackstorm_status_packs:
         type: list
         elements: str
@@ -827,6 +891,14 @@ argument_specs:
       stackstorm_broker_socket_dir: *id069
       stackstorm_broker_tunnel_user: *id070
       stackstorm_broker_socket_mode: *id071
+      stackstorm_events_forward_enabled: *fwd01
+      stackstorm_events_forward_host: *fwd02
+      stackstorm_events_forward_ssh_user: *fwd03
+      stackstorm_events_forward_ssh_port: *fwd04
+      stackstorm_events_forward_host_key: *fwd05
+      stackstorm_events_forward_key_ref: *fwd06
+      stackstorm_events_forward_remote: *fwd07
+      stackstorm_events_forward_user: *fwd08
       stackstorm_restore_source:
         type: path
         description: An export directory (listing.jsonl and mongo/st2.archive.gz) to restore from.
@@ -927,6 +999,14 @@ argument_specs:
       stackstorm_broker_socket_dir: *id069
       stackstorm_broker_tunnel_user: *id070
       stackstorm_broker_socket_mode: *id071
+      stackstorm_events_forward_enabled: *fwd01
+      stackstorm_events_forward_host: *fwd02
+      stackstorm_events_forward_ssh_user: *fwd03
+      stackstorm_events_forward_ssh_port: *fwd04
+      stackstorm_events_forward_host_key: *fwd05
+      stackstorm_events_forward_key_ref: *fwd06
+      stackstorm_events_forward_remote: *fwd07
+      stackstorm_events_forward_user: *fwd08
       stackstorm_target_release_tag:
         type: str
         description: The next st2 release (a patch of the current minor line); with stackstorm_target_release_digests.

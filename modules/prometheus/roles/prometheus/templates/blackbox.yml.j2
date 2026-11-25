@@ -31,3 +31,27 @@ modules:
       tls_config:
         ca_file: {{ prometheus_container_blackbox_dir }}/probe-ca.pem
 {% endif %}
+{% if prometheus_llm_probes_on | bool %}
+{% for r in prometheus_llm_probe_roles %}
+  # a one-token chat completion of model role {{ r }} through the gateway: 200 with a choices list is up
+  {{ 'llm_' ~ r | replace('-', '_') }}:
+    prober: http
+    timeout: {{ prometheus_llm_probe_timeout[:-1] | int - 5 }}s
+    http:
+      method: POST
+      headers:
+        Content-Type: application/json
+      body: {{ {'model': r, 'messages': [{'role': 'user', 'content': 'Reply with the single word OK.'}], 'max_tokens': 1, 'stream': false} | to_json | to_json }}
+      valid_status_codes: [200]
+      fail_if_body_not_matches_regexp: ['"choices"']
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+      authorization:
+        type: Bearer
+        credentials_file: {{ prometheus_container_probe_auth_dir }}/gateway-key
+{% if prometheus_probe_ca_ref != '' %}
+      tls_config:
+        ca_file: {{ prometheus_container_blackbox_dir }}/probe-ca.pem
+{% endif %}
+{% endfor %}
+{% endif %}

@@ -168,13 +168,18 @@ def test_the_row_is_internal_has_its_own_sign_in_and_a_status_source_the_hub_rea
     assert "public_hostname" not in row and "edge_tls" not in row
     assert row["auth"] == "own" and row["tls"] == "none" and "version" not in row
     assert row["host"] == "server" and row["port"] == 9101
-    (source,) = row["status_sources"]
-    assert source["kind"] in status_products.PRODUCT_COLLECTORS
+    source, shadow = row["status_sources"]
+    for src in (source, shadow):
+        assert src["kind"] in status_products.PRODUCT_COLLECTORS
+        assert (
+            src["target"]["path"] == "/api/v1/executions"
+        )  # the front's path: the API itself has no /api prefix
+        assert src["auth"]["secret"] in {c["secret"] for c in MANIFEST["credentials"]}
     assert set(source["mapping"]) <= status_products._KIND_KEYS[source["kind"]]
-    assert (
-        source["target"]["path"] == "/api/v1/executions"
-    )  # the front's path: the API itself has no /api prefix
-    assert source["auth"]["secret"] in {c["secret"] for c in MANIFEST["credentials"]}
+    # the second reads the shadow evidence per rule (a promotion review's input), same key
+    assert shadow["kind"] == source["kind"] and shadow["auth"] == source["auth"]
+    assert shadow["mapping"]["builtin"] == status_products.AUTOMATION_SHADOW
+    assert status_products.source_problems(shadow, "automation") == []
 
 
 def test_the_status_fixture_the_hub_already_parses_still_parses():

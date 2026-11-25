@@ -10,7 +10,7 @@
 #   outputs: one JSON answer on stdout (success) or stderr (failure, refusal, cancel); the run file the job reads itself, removed when the run ends
 #   installs_to: /opt/hnx/orchestration/bin/hnx-session-dispatch
 #   exit:
-#     "0": the unit ran and ended successfully
+#     "0": "the unit ran and ended successfully, or (a set declared overlap skip) a run of the same instance was already in progress and this session was coalesced into it"
 #     "1": "the unit failed, or was never started (systemctl refused or timed out)"
 #     "2": usage or configuration error (an untrusted or malformed table, an agent key with no job, a lane, run id or task refused)
 #     "75": "the unit is already active (started outside this dispatcher), a wait the controller retries"
@@ -49,7 +49,11 @@ Every outcome, a systemctl that times out included, is one JSON answer.
 One run of an instance at a time: the dispatcher holds an exclusive lock on the instance while it
 waits for the unit, so a second session for the same job and lane waits its turn, and a unit
 found active (started by hand) is a refusal with exit 75, never a second start that would merge
-into someone else's run.
+into someone else's run. A set declared ``overlap: skip`` (scheduled jobs, whose next firing
+redoes the work anyway) does not wait: a session that finds the lock held answers ``skipped``
+with exit 0 at once, starting and stopping nothing. Waiting there is what let hourly submissions
+of a multi-hour job pile up behind each other, each holding a controller slot while its attempt
+ceiling ran, until a waiter that finally got the lock was cut off by its ceiling mid-run.
 
 Usage: hnx-session-dispatch --table FILE [--table-owner UID] [--tail-bytes N] [--systemctl-timeout S]
 """
@@ -82,6 +86,7 @@ RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 SYSTEMCTL_TIMEOUT = 30
 STOP_WAIT_SECONDS = 4.0
 SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+OVERLAPS = ("wait", "skip")
 
 
 class Refused(Exception):
@@ -165,6 +170,8 @@ def resolve(table: dict, agent_key: str, lane: str, run_id: str) -> tuple[str, s
         raise Refused(f"unit set {name} does not run the {lane} lane")
     if not isinstance(entry.get("log_dir"), str) or not entry["log_dir"].startswith("/"):
         raise Refused(f"unit set {name} has no absolute log_dir")
+    if entry.get("overlap", "wait") not in OVERLAPS:
+        raise Refused(f"unit set {name} has overlap {entry.get('overlap')!r}, not wait or skip")
     return name, job, entry
 
 
@@ -333,8 +340,23 @@ def main(argv: list[str]) -> int:
                 },
             )
             return EXIT_USAGE
-        # one run of an instance at a time: a second session for the same job and lane waits here
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        # one run of an instance at a time: a second session for the same job and lane waits here,
+        # or, for a set that skips overlaps, is coalesced into the run in progress
+        if entry.get("overlap", "wait") == "skip":
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                answer(
+                    sys.stdout,
+                    {
+                        **body,
+                        "outcome": "skipped",
+                        "reason": f"a run of {unit} is in progress; this session was coalesced into it",
+                    },
+                )
+                return EXIT_OK
+        else:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
         probe = systemctl(table, "is-active", unit)
         state = probe.stdout.strip()
         if probe.returncode == 124 or state in BUSY_STATES:

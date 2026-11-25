@@ -167,6 +167,31 @@
   when: stackstorm_broker_tunnel_enabled | bool
   tags: [health, backup, restore, export, upgrade, readiness]
 
+- name: Validate the bus forward's inputs (only when it is on)
+  ansible.builtin.assert:
+    that:
+      - stackstorm_bridge_enabled | bool
+      - stackstorm_events_endpoint is match('^nats://(localhost|127\.0\.0\.1):[0-9]{1,5}\Z')
+      - stackstorm_events_ca_file == ''
+      - stackstorm_events_forward_host is match('^[A-Za-z0-9][A-Za-z0-9.-]*\Z')
+      - stackstorm_events_forward_ssh_user is match('^[a-z][a-z0-9_-]{1,31}\Z')
+      - stackstorm_events_forward_ssh_port | int >= 1 and stackstorm_events_forward_ssh_port | int <= 65535
+      - stackstorm_events_forward_host_key is match('^[A-Za-z0-9.,:\[\]-]+ ssh-[a-z0-9-]+ [A-Za-z0-9+/=]+\Z')
+      - stackstorm_events_forward_key_ref is match(stackstorm_ref_pattern)
+      - stackstorm_events_forward_key_ref != stackstorm_broker_key_ref
+      - stackstorm_events_forward_remote is match('^(127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|\[::1\]):[0-9]{1,5}\Z')
+      - stackstorm_events_forward_user is match('^[a-z][a-z0-9_-]{1,31}\Z')
+      - stackstorm_events_forward_user not in [stackstorm_bridge_user, stackstorm_broker_tunnel_user]
+    fail_msg: >-
+      stackstorm: the bus forward needs the bridge on with its endpoint the forward's loopback end
+      (nats://<loopback>:<port>, no CA file), the bus host, the login there that may only forward to the
+      bus, its pinned public host key line (`name ssh-ed25519 AAAA...`, never trusted on first use), a
+      secret:<name> reference for the private key (not the broker forward's), the bus as the bus host
+      sees it (`<loopback address>:<port>`) and a service user of its own (turn it off with
+      stackstorm_events_forward_enabled: false)
+  when: stackstorm_events_forward_enabled | bool
+  tags: [health, backup, restore, export, upgrade, readiness]
+
 - name: Require the pinned network subnet
   ansible.builtin.assert:
     that:

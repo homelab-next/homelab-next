@@ -443,7 +443,13 @@ def test_the_four_default_rules_use_the_settings(tmp_path):
     )
     assert r.returncode == 0, r.stdout + r.stderr
     rules = yaml.safe_load((tmp_path / "data/config/rules.yml").read_text())
-    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
+    by = {
+        x["alert"]: x
+        for g in rules["groups"]
+        if g["name"] == "hnx-default"
+        for x in g["rules"]
+        if "alert" in x
+    }
     assert sorted(by) == [
         "DiskAlmostFull", "FilesystemReadOnly", "MemoryPressure", "NoTargets", "TargetDown",
         "UpsCheckStale", "UpsLowBattery", "UpsMonitorDown", "UpsOnBattery", "UpsUnreadable",
@@ -460,7 +466,7 @@ def test_a_deliberate_read_only_mount_can_be_left_out_of_the_rule(tmp_path):
     r = render(tmp_path, prometheus_alert_readonly_ignore="/boot/efi|/mnt/media")
     assert r.returncode == 0, r.stdout + r.stderr
     rules = yaml.safe_load((tmp_path / "data/config/rules.yml").read_text())
-    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
+    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"] if "alert" in x}
     assert (
         by["FilesystemReadOnly"]["expr"]
         == 'node_filesystem_readonly{mountpoint!~"/boot/efi|/mnt/media"} == 1'
@@ -692,7 +698,7 @@ def test_a_stale_record_fails_health(tmp_path):
 def test_the_watchdog_rule_always_fires_and_carries_no_severity_that_pages(tmp_path):
     assert render(tmp_path).returncode == 0
     rules = yaml.safe_load((tmp_path / "data/config/rules.yml").read_text())
-    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
+    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"] if "alert" in x}
     assert by["Watchdog"]["expr"] == "vector(1)" and "for" not in by["Watchdog"]
     assert by["Watchdog"]["labels"]["severity"] == "none"
 
@@ -833,7 +839,7 @@ def test_probes_are_off_by_default_nothing_probe_is_rendered(tmp_path):
     cfg = yaml.safe_load((tmp_path / "data/config/prometheus.yml").read_text())
     assert "probe" not in [j["job_name"] for j in cfg["scrape_configs"]]
     rules = yaml.safe_load((tmp_path / "data/config/rules.yml").read_text())
-    assert "ProbeDown" not in {x["alert"] for g in rules["groups"] for x in g["rules"]}
+    assert "ProbeDown" not in {x.get("alert") for g in rules["groups"] for x in g["rules"]}
     assert not (tmp_path / "data/config/generated/probe_targets.yml").exists()
 
 
@@ -850,7 +856,7 @@ def test_probes_on_render_the_target_list_the_job_the_modules_and_the_rule(tmp_p
     assert {"source_labels": ["module"], "target_label": "__param_module"} in job["relabel_configs"]
     assert {"target_label": "__address__", "replacement": "blackbox:9115"} in job["relabel_configs"]
     rules = yaml.safe_load((data / "rules.yml").read_text())
-    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
+    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"] if "alert" in x}
     assert by["ProbeDown"]["expr"] == "probe_success == 0"
     assert by["ProbeDown"]["for"] == "5m" and by["ProbeDown"]["labels"]["severity"] == "critical"
     mods = yaml.safe_load((data / "blackbox/blackbox.yml").read_text())["modules"]
@@ -872,7 +878,7 @@ def test_the_probe_exclusion_and_alert_window_are_settings(tmp_path):
     got = yaml.safe_load((tmp_path / "data/config/generated/probe_targets.yml").read_text())
     assert gone not in {e["labels"]["service"] for e in got}
     rules = yaml.safe_load((tmp_path / "data/config/rules.yml").read_text())
-    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
+    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"] if "alert" in x}
     assert by["ProbeDown"]["for"] == "7m"
 
 
@@ -1050,3 +1056,448 @@ def test_the_probe_configuration_passes_the_products_own_checks(tmp_path):
         capture_output=True, text=True, timeout=300,
     )  # fmt: skip
     assert bb.returncode == 0, bb.stdout + bb.stderr
+
+
+# ----------------------------------------------------------------------------- hardware, SNMP and LLM-probe rules
+# (README "Hardware alerts", "SNMP polling", "Inference probes"): each rule fires on the series it is
+# for, stays silent on the healthy twin, and the event rules clear once their window has passed.
+
+ROLE_DEFAULTS = (
+    Path(__file__).resolve().parents[2] / "modules/prometheus/roles/prometheus/defaults/main.yml"
+)
+COMMUNITY_ENV = "HNX_SECRET_PROMETHEUS_SNMP_COMMUNITY"
+KEY_ENV = "HNX_SECRET_PROMETHEUS_GATEWAY_PROBE_KEY"
+ON = {
+    "prometheus_snmp_enabled": True,
+    "prometheus_snmp_community_ref": "secret:prometheus/snmp-community",
+    "prometheus_snmp_targets": [
+        {"host": "edge-core", "modules": ["if_mib"], "watch_ports": "eth[0-4]"},
+        {"host": "lake-core", "modules": ["if_mib", "nas_storage"], "watch_ports": "eth0"},
+    ],
+    "prometheus_probes_enabled": True,
+    "prometheus_llm_probe_gateway": "llm-gateway",
+    "prometheus_llm_probe_roles": ["main-reasoner"],
+    "prometheus_llm_probe_key_ref": "secret:prometheus/gateway-probe-key",
+}
+ENV_ON = {
+    **SECRETS,
+    COMMUNITY_ENV: "-".join(["comm", "fake"]),
+    KEY_ENV: "-".join(["sk", "fake", "probe"]),
+}
+
+HW_TESTS = """\
+rule_files: [/etc/prometheus/rules.yml]
+evaluation_interval: 1m
+tests:
+  - name: a CPU over the critical line fires within its window and clears when it cools; a cool one never does
+    interval: 1m
+    input_series:
+      - {series: 'node_hwmon_chip_names{instance="a", chip="pci0", chip_name="k10temp"}', values: '1x30'}
+      - {series: 'node_hwmon_temp_celsius{instance="a", chip="pci0", sensor="temp1"}', values: '60x5 96x10 60x15'}
+      - {series: 'node_hwmon_chip_names{instance="b", chip="pci0", chip_name="k10temp"}', values: '1x30'}
+      - {series: 'node_hwmon_temp_celsius{instance="b", chip="pci0", sensor="temp1"}', values: '60x30'}
+      - {series: 'node_hwmon_chip_names{instance="a", chip="nic", chip_name="bnxt_en"}', values: '1x30'}
+      - {series: 'node_hwmon_temp_celsius{instance="a", chip="nic", sensor="temp1"}', values: '99x30'}
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: CpuTemperatureCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: a, chip: pci0}
+            exp_annotations: {summary: "a CPU pci0 is at 96 C (critical over 92 C): check fans and cooling now"}
+      - eval_time: 25m
+        alertname: CpuTemperatureCritical
+        exp_alerts: []
+  - name: an NVMe drive hot for ten minutes warns
+    interval: 1m
+    input_series:
+      - {series: 'node_hwmon_chip_names{instance="a", chip="nvme_nvme0", chip_name="nvme"}', values: '1x20'}
+      - {series: 'node_hwmon_temp_celsius{instance="a", chip="nvme_nvme0", sensor="temp1"}', values: '75x20'}
+      - {series: 'node_hwmon_temp_celsius{instance="a", chip="nvme_nvme0", sensor="temp2"}', values: '90x20'}
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NvmeTemperatureHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: a, chip: nvme_nvme0, sensor: temp1}
+            exp_annotations: {summary: "a nvme_nvme0 composite temperature is 75 C (warning over 70 C)"}
+  - name: a GPU spike over the cap is accepted; a sustained draw over it and a limit over it alert
+    interval: 1m
+    input_series:
+      - {series: 'hw_gpu_power_watts{instance="g", gpu="0", bus="b0", driver="nvidia"}', values: '150 215 150x20'}
+      - {series: 'hw_gpu_power_watts{instance="g", gpu="1", bus="b1", driver="nvidia"}', values: '230x20'}
+      - {series: 'hw_gpu_power_limit_watts{instance="g", gpu="0", bus="b0", driver="nvidia"}', values: '200x20'}
+      - {series: 'hw_gpu_power_limit_watts{instance="g", gpu="1", bus="b1", driver="nvidia"}', values: '250x20'}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: GpuPowerOverCap
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: g, gpu: "1", bus: b1, driver: nvidia}
+            exp_annotations: {summary: "g GPU 1 (b1) has drawn 230 W for 5m, over the 200 W cap"}
+      - eval_time: 15m
+        alertname: GpuPowerCapNotApplied
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: g, gpu: "1", bus: b1, driver: nvidia}
+            exp_annotations: {summary: "g GPU 1 (b1) power limit is 250 W, over the 200 W cap: re-apply the cap"}
+  - name: an energy-counter GPU gets a power series; a hot GPU fires critical
+    interval: 1m
+    input_series:
+      - {series: 'hw_gpu_energy_joules_total{instance="x", gpu="0", bus="b", driver="xe"}', values: '0+12000x20'}
+      - {series: 'hw_gpu_temperature_celsius{instance="x", gpu="0", bus="b", driver="xe"}', values: '50x3 95x10'}
+    promql_expr_test:
+      - expr: hw:gpu_power_watts
+        eval_time: 10m
+        exp_samples:
+          - {labels: 'hw:gpu_power_watts{instance="x", gpu="0", bus="b", driver="xe"}', value: 200}
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: GpuTemperatureCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: x, gpu: "0", bus: b, driver: xe}
+            exp_annotations: {summary: "x GPU 0 (b) is at 95 C (critical over 92 C): it is near its slowdown temperature"}
+  - name: a card fallen off the bus fires GpuLost, GpuCountDropped and GpuDriverError, which clears after its window
+    interval: 1m
+    input_series:
+      - {series: 'hw_gpu_count{instance="g", driver="nvidia"}', values: '3x10 2x50'}
+      - {series: 'hw_gpu_pci_devices{instance="g", driver="nvidia"}', values: '3x60'}
+      - {series: 'hw_gpu_lost{instance="g", driver="nvidia"}', values: '0x10 1x50'}
+      - {series: 'hw_gpu_driver_errors_total{instance="g", driver="nvidia"}', values: '0x10 2x50'}
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: GpuLost
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: g, driver: nvidia}
+            exp_annotations: {summary: "g nvidia: 1 GPU(s) cannot be reached by the driver (lost, fallen off the bus or not bound)"}
+      - eval_time: 17m
+        alertname: GpuCountDropped
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: g, driver: nvidia}
+            exp_annotations: {summary: "g nvidia: only 2 GPU(s) are reachable, fewer than in the last day"}
+      - eval_time: 12m
+        alertname: GpuDriverError
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: g, driver: nvidia}
+            exp_annotations: {summary: "g nvidia driver reported a GPU fault in the kernel log (journalctl -k)"}
+      - eval_time: 50m
+        alertname: GpuDriverError
+        exp_alerts: []
+  - name: an inference host with no process on its GPUs fires; one that is not expected to compute does not
+    interval: 1m
+    input_series:
+      - {series: 'hw_gpu_compute_processes{instance="g", host="gpu1", gpu="0", driver="nvidia"}', values: '1x5 0x20'}
+      - {series: 'hw_gpu_compute_processes{instance="g", host="gpu1", gpu="1", driver="nvidia"}', values: '1x5 0x20'}
+      - {series: 'hw_gpu_processes_expected{instance="g", driver="nvidia"}', values: '1x25'}
+      - {series: 'hw_gpu_compute_processes{instance="h", host="gpu2", gpu="0", driver="xe"}', values: '0x25'}
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GpuNotComputing
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: g, host: gpu1, driver: nvidia}
+            exp_annotations: {summary: "g no process is computing on its nvidia GPUs: the inference server fell back to the CPU or stopped"}
+      - eval_time: 4m
+        alertname: GpuNotComputing
+        exp_alerts: []
+  - name: pools - unhealthy, data errors and nearly full fire; a healthy pool does not
+    interval: 1m
+    input_series:
+      - {series: 'hw_zfs_pool_healthy{instance="p", pool="tank"}', values: '0x20'}
+      - {series: 'hw_zfs_pool_health_info{instance="p", pool="tank", health="DEGRADED"}', values: '1x20'}
+      - {series: 'hw_zfs_pool_healthy{instance="p", pool="fast"}', values: '1x20'}
+      - {series: 'hw_zfs_pool_health_info{instance="p", pool="fast", health="ONLINE"}', values: '1x20'}
+      - {series: 'hw_zfs_pool_data_errors{instance="p", pool="fast"}', values: '1x20'}
+      - {series: 'hw_zfs_pool_data_errors{instance="p", pool="tank"}', values: '0x20'}
+      - {series: 'hw_zfs_pool_capacity_percent{instance="p", pool="fast"}', values: '90x20'}
+      - {series: 'hw_zfs_pool_capacity_percent{instance="p", pool="tank"}', values: '10x20'}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PoolUnhealthy
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: p, pool: tank, health: DEGRADED}
+            exp_annotations: {summary: "p pool tank is DEGRADED"}
+      - eval_time: 1m
+        alertname: PoolDataErrors
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: p, pool: fast}
+            exp_annotations: {summary: "p pool fast has permanent errors in 1 file(s) (zpool status -v)"}
+      - eval_time: 18m
+        alertname: PoolAlmostFull
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: p, pool: fast}
+            exp_annotations: {summary: "p pool fast is 90% full (warning at 85%)"}
+  - name: the board - a critical sensor, a stopped fan and a fan that lost its reading fire; an absent fan never does
+    interval: 1m
+    input_series:
+      - {series: 'hw_ipmi_sensor_state{instance="m", sensor="PS2_Status", kind="discrete"}', values: '0 2x10'}
+      - {series: 'hw_ipmi_sensor_state{instance="m", sensor="CPU0_FAN", kind="fan"}', values: '0x20'}
+      - {series: 'hw_ipmi_fan_rpm{instance="m", sensor="CPU0_FAN"}', values: '1500 1500 0x20'}
+      - {series: 'hw_ipmi_fan_rpm{instance="m", sensor="SYS_FAN1"}', values: '2700x3'}
+      - {series: 'hw_collector_up{instance="m", collector="ipmi"}', values: '1x20'}
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: BoardSensorCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: m, sensor: PS2_Status, kind: discrete}
+            exp_annotations: {summary: "m board sensor PS2_Status (discrete) is past its critical threshold or asserts a fault"}
+      - eval_time: 6m
+        alertname: FanFailed
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: m, sensor: CPU0_FAN}
+            exp_annotations: {summary: "m fan CPU0_FAN has stopped or is under its critical speed"}
+      - eval_time: 16m
+        alertname: FanReadingLost
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: m, sensor: SYS_FAN1}
+            exp_annotations: {summary: "m fan SYS_FAN1 no longer reports a speed (unplugged or dead)"}
+  - name: a new critical event-log entry fires with its sensor and event, and clears after the window
+    interval: 1m
+    input_series:
+      - {series: 'hw_ipmi_sel_critical_events_total{instance="m"}', values: '5x10 6x60'}
+      - {series: 'hw_ipmi_sel_last_critical_info{instance="m", sensor="Processor CPU0_Status", event="Thermal Trip"}', values: '1x70'}
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: BoardCriticalEvent
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: BoardCriticalEvent
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: m, sensor: "Processor CPU0_Status", event: "Thermal Trip"}
+            exp_annotations: {summary: "m board event log: Processor CPU0_Status: Thermal Trip"}
+      - eval_time: 50m
+        alertname: BoardCriticalEvent
+        exp_alerts: []
+  - name: a stopped guest set to start at boot fires; a stopped one that is not does not
+    interval: 1m
+    input_series:
+      - {series: 'hw_guest_running{instance="n", vmid="130", name="apps", type="qemu"}', values: '0x10'}
+      - {series: 'hw_guest_onboot{instance="n", vmid="130", name="apps", type="qemu"}', values: '1x10'}
+      - {series: 'hw_guest_running{instance="n", vmid="9101", name="smoke", type="qemu"}', values: '0x10'}
+      - {series: 'hw_guest_onboot{instance="n", vmid="9101", name="smoke", type="qemu"}', values: '0x10'}
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: GuestDown
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: n, vmid: "130", name: apps, type: qemu}
+            exp_annotations: {summary: "n guest 130 (apps) is not running but is set to start at boot"}
+"""
+
+ON_TESTS = """\
+rule_files: [/etc/prometheus/rules.yml]
+evaluation_interval: 1m
+tests:
+  - name: a watched port going down fires and clears when it comes back; an unwatched or disabled one never does
+    interval: 1m
+    input_series:
+      - {series: 'ifOperStatus{instance="r", host="router", ifIndex="9", ifName="eth0", watched="1"}', values: '1x3 2x10 1x10'}
+      - {series: 'ifAdminStatus{instance="r", host="router", ifIndex="9", ifName="eth0", watched="1"}', values: '1x25'}
+      - {series: 'ifOperStatus{instance="r", host="router", ifIndex="20", ifName="wifi0"}', values: '2x25'}
+      - {series: 'ifAdminStatus{instance="r", host="router", ifIndex="20", ifName="wifi0"}', values: '1x25'}
+      - {series: 'ifOperStatus{instance="r", host="router", ifIndex="10", ifName="eth1", watched="1"}', values: '2x25'}
+      - {series: 'ifAdminStatus{instance="r", host="router", ifIndex="10", ifName="eth1", watched="1"}', values: '2x25'}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NetworkPortDown
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: r, host: router, ifIndex: "9", ifName: eth0, watched: "1"}
+            exp_annotations: {summary: "router port eth0 is down (enabled, but no link)"}
+      - eval_time: 20m
+        alertname: NetworkPortDown
+        exp_alerts: []
+  - name: a NAS disk whose SMART goes bad, a volume not ready and a nearly full volume fire
+    interval: 1m
+    input_series:
+      - {series: 'nas_disk_status{instance="q", host="nas", disk="1", disk_name="HDD1"}', values: '0x20'}
+      - {series: 'nas_disk_smart_good{instance="q", host="nas", disk="1", disk_name="HDD1"}', values: '1 1 0x20'}
+      - {series: 'nas_disk_status{instance="q", host="nas", disk="2", disk_name="HDD2"}', values: '0x20'}
+      - {series: 'nas_disk_smart_good{instance="q", host="nas", disk="2", disk_name="HDD2"}', values: '1x20'}
+      - {series: 'nas_volume_status_ready{instance="q", host="nas", volume="1", volume_name="DataVol1"}', values: '0x20'}
+      - {series: 'nas_volume_size_kilobytes{instance="q", host="nas", volume="1", volume_name="DataVol1"}', values: '1000x20'}
+      - {series: 'nas_volume_free_kilobytes{instance="q", host="nas", volume="1", volume_name="DataVol1"}', values: '100x20'}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NasDiskUnhealthy
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: q, host: nas, disk: "1", disk_name: HDD1}
+            exp_annotations: {summary: "nas disk HDD1 is not healthy (status or SMART)"}
+      - eval_time: 10m
+        alertname: NasVolumeNotReady
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: q, host: nas, volume: "1", volume_name: DataVol1}
+            exp_annotations: {summary: "nas volume DataVol1 is not ready (degraded, rebuilding or failed)"}
+      - eval_time: 18m
+        alertname: NasVolumeAlmostFull
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: q, host: nas, volume: "1", volume_name: DataVol1}
+            exp_annotations: {summary: "nas volume DataVol1 is 90% full (warning at 85%)"}
+  - name: the gateway failing a role's completion fires after its window and clears; a slow answer warns
+    interval: 1m
+    input_series:
+      - {series: 'probe_success{job="llm-probe", instance="main-reasoner", role="main-reasoner"}', values: '1x3 0x15 1x15'}
+      - {series: 'probe_success{job="llm-probe", instance="fast", role="fast"}', values: '1x40'}
+      - {series: 'probe_duration_seconds{job="llm-probe", instance="fast", role="fast"}', values: '75x40'}
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: LlmProbeFailed
+        exp_alerts:
+          - exp_labels: {severity: critical, job: llm-probe, instance: main-reasoner, role: main-reasoner}
+            exp_annotations: {summary: "the gateway cannot serve model role main-reasoner: a one-token completion failed (refused, upstream unavailable or timed out)"}
+      - eval_time: 30m
+        alertname: LlmProbeFailed
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LlmProbeSlow
+        exp_alerts:
+          - exp_labels: {severity: warning, job: llm-probe, instance: fast, role: fast}
+            exp_annotations: {summary: "model role fast took 75 s for a one-token completion (over 60 s): a GPU fault (CPU fallback) or a saturated server"}
+"""
+
+
+def _rules_test(tmp_path, tests: str):
+    work = tmp_path / "rules"
+    work.mkdir()
+    shutil.copy(tmp_path / "data/config/rules.yml", work / "rules.yml")
+    (work / "tests.yml").write_text(tests)
+    for p in (work, work / "rules.yml", work / "tests.yml"):
+        p.chmod(0o755 if p.is_dir() else 0o644)
+    return _promtool(
+        tmp_path, "test", "rules", "/etc/prometheus/tests.yml", mounts={work: "/etc/prometheus"}
+    )
+
+
+def test_the_hardware_rules_fire_and_clear_on_what_they_should(tmp_path):
+    require_tool("docker")
+    assert render(tmp_path).returncode == 0
+    r = _rules_test(tmp_path, HW_TESTS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "SUCCESS" in r.stdout
+
+
+def test_the_snmp_and_llm_probe_rules_fire_and_clear_on_what_they_should(tmp_path):
+    require_tool("docker")
+    r = run_steps(tmp_path, ["validate", "app", "generate", "credentials", "dirs", "render"],
+                  pvars(tmp_path, **ON), ENV_ON)  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    r = _rules_test(tmp_path, ON_TESTS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "SUCCESS" in r.stdout
+
+
+def test_with_snmp_and_llm_probes_on_the_jobs_modules_and_credentials_are_rendered(tmp_path):
+    r = run_steps(tmp_path, ["validate", "app", "generate", "credentials", "dirs", "render"],
+                  pvars(tmp_path, **ON), ENV_ON)  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    cfg = yaml.safe_load((tmp_path / "data/config/prometheus.yml").read_text())
+    jobs = {j["job_name"]: j for j in cfg["scrape_configs"]}
+    edge = jobs["snmp-edge-core"]
+    assert edge["params"] == {"module": ["if_mib"], "auth": ["hnx"]}
+    assert edge["static_configs"][0]["labels"] == {"host": "edge-core"}
+    assert edge["metric_relabel_configs"][0]["regex"] == "eth[0-4]"
+    assert jobs["snmp-lake-core"]["params"]["module"] == ["if_mib,nas_storage"]
+    llm = jobs["llm-probe"]
+    assert llm["static_configs"][0]["targets"][0].endswith("/v1/chat/completions")
+    assert llm["static_configs"][0]["labels"]["module"] == "llm_main_reasoner"
+    auth = yaml.safe_load((tmp_path / "data/snmp-credentials/auth.yml").read_text())
+    assert auth == {"auths": {"hnx": {"community": "comm-fake", "version": 2}}}
+    assert (tmp_path / "data/probe-credentials/gateway-key").read_text() == "sk-fake-probe\n"
+    for p in ("snmp-credentials/auth.yml", "probe-credentials/gateway-key"):
+        assert oct((tmp_path / "data" / p).stat().st_mode & 0o777) == "0o640"
+    bb = yaml.safe_load((tmp_path / "data/config/blackbox/blackbox.yml").read_text())
+    mod = bb["modules"]["llm_main_reasoner"]["http"]
+    assert mod["method"] == "POST" and mod["valid_status_codes"] == [200]
+    assert '"model": "main-reasoner"' in mod["body"] and '"max_tokens": 1' in mod["body"]
+    assert mod["authorization"]["credentials_file"] == "/etc/hnx/probe-credentials/gateway-key"
+    # the secrets never reach the files the metrics container mounts
+    for f in (tmp_path / "data/config").rglob("*"):
+        if f.is_file():
+            assert "comm-fake" not in f.read_text() and "sk-fake-probe" not in f.read_text()
+    # turned off again, the credential files are removed
+    r = run_steps(tmp_path, ["validate", "app", "generate", "credentials", "dirs", "render"],
+                  pvars(tmp_path), SECRETS)  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (tmp_path / "data/snmp-credentials/auth.yml").exists()
+    assert not (tmp_path / "data/probe-credentials/gateway-key").exists()
+
+
+def test_the_configuration_with_snmp_and_llm_probes_on_passes_the_products_checks(tmp_path):
+    require_tool("docker")
+    r = run_steps(tmp_path, ["validate", "app", "generate", "credentials", "dirs", "render"],
+                  pvars(tmp_path, **ON), ENV_ON)  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    data = tmp_path / "data"
+    for p in data.rglob("*"):
+        p.chmod(0o755 if p.is_dir() else 0o644)
+    data.chmod(0o755)
+    r = _promtool(tmp_path, "check", "config", "/etc/prometheus/prometheus.yml",
+                  mounts={data / "config": "/etc/prometheus",
+                          data / "scrape-credentials": "/etc/hnx/scrape-credentials"})  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_snmp_exporter_reads_its_bundled_modules_the_roles_and_the_community(tmp_path):
+    """The exporter's own --dry-run with exactly the three files the container is given."""
+    docker = require_tool("docker")
+    r = run_steps(tmp_path, ["validate", "app", "generate", "credentials", "dirs", "render"],
+                  pvars(tmp_path, **ON), ENV_ON)  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    data = tmp_path / "data"
+    for p in data.rglob("*"):
+        p.chmod(0o755 if p.is_dir() else 0o644)
+    data.chmod(0o755)
+    image = yaml.safe_load((ROLE_DEFAULTS).read_text())["prometheus_snmp_image"]
+    out = subprocess.run(
+        [docker, "run", "--rm", "-v", f"{data}/config/snmp:/etc/hnx-snmp:ro",
+         "-v", f"{data}/snmp-credentials:/etc/hnx/snmp-credentials:ro", image,
+         "--config.file=/etc/snmp_exporter/snmp.yml", "--config.file=/etc/hnx-snmp/snmp.yml",
+         "--config.file=/etc/hnx/snmp-credentials/auth.yml", "--dry-run"],
+        capture_output=True, text=True, timeout=300)  # fmt: skip
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "Configuration parsed successfully" in out.stdout + out.stderr
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"prometheus_alert_cpu_temp_warning_celsius": 95},
+        {"prometheus_alert_gpu_power_cap_watts": 5},
+        {"prometheus_alert_pool_used_percent": 100},
+        {"prometheus_alert_gpu_idle_for": "ten minutes"},
+        {
+            "prometheus_snmp_enabled": True,
+            "prometheus_snmp_community_ref": "secret:x/y",
+            "prometheus_snmp_targets": [],
+        },
+        {"prometheus_snmp_targets": [{"host": "edge-core", "modules": ["everything"]}]},
+        {
+            "prometheus_snmp_targets": [
+                {"host": "edge-core", "modules": ["if_mib"], "watch_ports": 'eth0"} or'}
+            ]
+        },
+        {"prometheus_snmp_targets": [{"host": "Edge Core", "modules": ["if_mib"]}]},
+        {
+            "prometheus_snmp_enabled": True,
+            "prometheus_snmp_targets": [{"host": "edge-core", "modules": ["if_mib"]}],
+        },
+        {
+            "prometheus_llm_probe_roles": ["main-reasoner"],
+            "prometheus_llm_probe_gateway": "llm-gateway",
+            "prometheus_llm_probe_key_ref": "secret:x/y",
+        },
+        {
+            "prometheus_probes_enabled": True,
+            "prometheus_llm_probe_roles": ["Main Reasoner"],
+            "prometheus_llm_probe_gateway": "llm-gateway",
+            "prometheus_llm_probe_key_ref": "secret:x/y",
+        },
+        {"prometheus_llm_probe_timeout": "5s"},
+    ],
+    ids=lambda o: ",".join(o),
+)
+def test_a_hardware_snmp_or_probe_setting_that_could_break_a_rule_is_refused(tmp_path, over):
+    r = run_steps(tmp_path, ["validate"], pvars(tmp_path, **over), SECRETS)
+    assert r.returncode != 0, r.stdout
+    assert "prometheus: a registry id" in r.stdout, r.stdout
+
+
+def test_an_snmp_target_the_registry_has_no_host_for_is_refused_by_name(tmp_path):
+    over = {**ON, "prometheus_snmp_targets": [{"host": "no-such-host", "modules": ["if_mib"]}]}
+    r = run_steps(tmp_path, ["validate", "app", "generate", "credentials", "dirs", "render"],
+                  pvars(tmp_path, **over), ENV_ON)  # fmt: skip
+    assert r.returncode != 0
+    assert "no-such-host" in r.stdout and "are not hosts of the registry" in r.stdout

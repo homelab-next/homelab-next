@@ -134,6 +134,138 @@ argument_specs:
         type: str
         description: "The probe exporter container's memory limit."
         default: "128m"
+      prometheus_alert_cpu_temp_warning_celsius: &alert_cpu_temp_warning_celsius
+        type: int
+        description: 'CpuTemperatureHigh: a CPU package sensor over this (C).'
+        default: 85
+      prometheus_alert_cpu_temp_critical_celsius: &alert_cpu_temp_critical_celsius
+        type: int
+        description: 'CpuTemperatureCritical: a CPU package sensor over this (C).'
+        default: 92
+      prometheus_alert_cpu_temp_warning_for: &alert_cpu_temp_warning_for
+        type: str
+        description: How long CpuTemperatureHigh must hold.
+        default: 5m
+      prometheus_alert_cpu_temp_critical_for: &alert_cpu_temp_critical_for
+        type: str
+        description: How long CpuTemperatureCritical must hold.
+        default: 1m
+      prometheus_alert_nvme_temp_warning_celsius: &alert_nvme_temp_warning_celsius
+        type: int
+        description: 'NvmeTemperatureHigh: an NVMe composite temperature over this (C).'
+        default: 70
+      prometheus_alert_nvme_temp_critical_celsius: &alert_nvme_temp_critical_celsius
+        type: int
+        description: 'NvmeTemperatureCritical: an NVMe composite temperature over this (C).'
+        default: 80
+      prometheus_alert_gpu_temp_warning_celsius: &alert_gpu_temp_warning_celsius
+        type: int
+        description: 'GpuTemperatureHigh: a GPU over this (C).'
+        default: 85
+      prometheus_alert_gpu_temp_critical_celsius: &alert_gpu_temp_critical_celsius
+        type: int
+        description: 'GpuTemperatureCritical: a GPU over this (C).'
+        default: 92
+      prometheus_alert_gpu_power_cap_watts: &alert_gpu_power_cap_watts
+        type: int
+        description: 'The site''s per-GPU power cap (W): a sustained draw over it and a power limit in
+  force above it alert.'
+        default: 200
+      prometheus_alert_gpu_power_for: &alert_gpu_power_for
+        type: str
+        description: How long a draw over the cap must last for GpuPowerOverCap.
+        default: 5m
+      prometheus_alert_pool_used_percent: &alert_pool_used_percent
+        type: int
+        description: 'PoolAlmostFull: a pool at this percent or more.'
+        default: 85
+      prometheus_alert_board_event_window: &alert_board_event_window
+        type: str
+        description: How long BoardCriticalEvent and GpuDriverError fire after a new event.
+        default: 30m
+      prometheus_alert_guest_down_for: &alert_guest_down_for
+        type: str
+        description: How long GuestDown must hold.
+        default: 5m
+      prometheus_alert_gpu_idle_for: &alert_gpu_idle_for
+        type: str
+        description: How long GpuNotComputing must hold (no process on the GPUs of a host expected to compute).
+        default: 10m
+      prometheus_snmp_enabled: &snmp_enabled
+        type: bool
+        description: Run the SNMP exporter beside the service and a job per prometheus_snmp_targets entry.
+        default: false
+      prometheus_snmp_targets: &snmp_targets
+        type: list
+        elements: dict
+        description: 'SNMP targets: {host: registry host id, modules: [module...], watch_ports: ifName
+  regex}.'
+        default: []
+      prometheus_snmp_community_ref: &snmp_community_ref
+        type: str
+        description: The SNMP community (v2c), a secret:<name> reference; required when SNMP is on.
+        default: ''
+      prometheus_snmp_interval: &snmp_interval
+        type: str
+        description: The SNMP jobs' scrape interval.
+        default: 60s
+      prometheus_snmp_timeout: &snmp_timeout
+        type: str
+        description: The SNMP jobs' scrape timeout.
+        default: 30s
+      prometheus_snmp_image: &snmp_image
+        type: str
+        description: The SNMP exporter image, pinned by tag and digest.
+        default: docker.io/prom/snmp-exporter:v0.31.0@sha256:e5f1aba929145cea2a3bad89c29959efaec0dc26fb87e3761414616a1a392c1c
+      prometheus_snmp_mem_limit: &snmp_mem_limit
+        type: str
+        description: The SNMP exporter container's memory limit.
+        default: 128m
+      prometheus_alert_port_down_for: &alert_port_down_for
+        type: str
+        description: How long NetworkPortDown must hold.
+        default: 5m
+      prometheus_alert_port_errors_per_minute: &alert_port_errors_per_minute
+        type: int
+        description: 'NetworkPortErrors: errors a minute on a watched port over this.'
+        default: 10
+      prometheus_alert_nas_disk_temp_celsius: &alert_nas_disk_temp_celsius
+        type: int
+        description: 'NasDiskTemperatureHigh: a NAS disk over this (C).'
+        default: 55
+      prometheus_alert_nas_volume_used_percent: &alert_nas_volume_used_percent
+        type: int
+        description: 'NasVolumeAlmostFull: a NAS volume at this percent or more.'
+        default: 85
+      prometheus_llm_probe_gateway: &llm_probe_gateway
+        type: str
+        description: The LLM gateway's registry row id the completion probes go through.
+        default: ''
+      prometheus_llm_probe_roles: &llm_probe_roles
+        type: list
+        elements: str
+        description: 'Model roles asked for a one-token completion (empty: no LLM probes; needs prometheus_probes_enabled).'
+        default: []
+      prometheus_llm_probe_key_ref: &llm_probe_key_ref
+        type: str
+        description: The gateway key the probes present, a secret:<name> reference.
+        default: ''
+      prometheus_llm_probe_interval: &llm_probe_interval
+        type: str
+        description: How often each model role is probed (minutes).
+        default: 5m
+      prometheus_llm_probe_timeout: &llm_probe_timeout
+        type: str
+        description: The probe's scrape timeout (seconds, 15 or more, inside the interval).
+        default: 90s
+      prometheus_alert_llm_probe_failed_for: &alert_llm_probe_failed_for
+        type: str
+        description: How long LlmProbeFailed must hold.
+        default: 10m
+      prometheus_alert_llm_probe_slow_seconds: &alert_llm_probe_slow_seconds
+        type: int
+        description: 'LlmProbeSlow: a successful probe slower than this (s).'
+        default: 60
       prometheus_alert_target_down_for: &alert_target_down_for
         type: str
         description: "How long a target must be down before TargetDown fires."
@@ -263,6 +395,38 @@ argument_specs:
       prometheus_alert_probe_down_for: *alert_probe_down_for
       prometheus_blackbox_image: *blackbox_image
       prometheus_blackbox_mem_limit: *blackbox_mem_limit
+      prometheus_alert_cpu_temp_warning_celsius: *alert_cpu_temp_warning_celsius
+      prometheus_alert_cpu_temp_critical_celsius: *alert_cpu_temp_critical_celsius
+      prometheus_alert_cpu_temp_warning_for: *alert_cpu_temp_warning_for
+      prometheus_alert_cpu_temp_critical_for: *alert_cpu_temp_critical_for
+      prometheus_alert_nvme_temp_warning_celsius: *alert_nvme_temp_warning_celsius
+      prometheus_alert_nvme_temp_critical_celsius: *alert_nvme_temp_critical_celsius
+      prometheus_alert_gpu_temp_warning_celsius: *alert_gpu_temp_warning_celsius
+      prometheus_alert_gpu_temp_critical_celsius: *alert_gpu_temp_critical_celsius
+      prometheus_alert_gpu_power_cap_watts: *alert_gpu_power_cap_watts
+      prometheus_alert_gpu_power_for: *alert_gpu_power_for
+      prometheus_alert_pool_used_percent: *alert_pool_used_percent
+      prometheus_alert_board_event_window: *alert_board_event_window
+      prometheus_alert_guest_down_for: *alert_guest_down_for
+      prometheus_alert_gpu_idle_for: *alert_gpu_idle_for
+      prometheus_snmp_enabled: *snmp_enabled
+      prometheus_snmp_targets: *snmp_targets
+      prometheus_snmp_community_ref: *snmp_community_ref
+      prometheus_snmp_interval: *snmp_interval
+      prometheus_snmp_timeout: *snmp_timeout
+      prometheus_snmp_image: *snmp_image
+      prometheus_snmp_mem_limit: *snmp_mem_limit
+      prometheus_alert_port_down_for: *alert_port_down_for
+      prometheus_alert_port_errors_per_minute: *alert_port_errors_per_minute
+      prometheus_alert_nas_disk_temp_celsius: *alert_nas_disk_temp_celsius
+      prometheus_alert_nas_volume_used_percent: *alert_nas_volume_used_percent
+      prometheus_llm_probe_gateway: *llm_probe_gateway
+      prometheus_llm_probe_roles: *llm_probe_roles
+      prometheus_llm_probe_key_ref: *llm_probe_key_ref
+      prometheus_llm_probe_interval: *llm_probe_interval
+      prometheus_llm_probe_timeout: *llm_probe_timeout
+      prometheus_alert_llm_probe_failed_for: *alert_llm_probe_failed_for
+      prometheus_alert_llm_probe_slow_seconds: *alert_llm_probe_slow_seconds
       prometheus_alert_target_down_for: *alert_target_down_for
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
@@ -318,6 +482,38 @@ argument_specs:
       prometheus_alert_probe_down_for: *alert_probe_down_for
       prometheus_blackbox_image: *blackbox_image
       prometheus_blackbox_mem_limit: *blackbox_mem_limit
+      prometheus_alert_cpu_temp_warning_celsius: *alert_cpu_temp_warning_celsius
+      prometheus_alert_cpu_temp_critical_celsius: *alert_cpu_temp_critical_celsius
+      prometheus_alert_cpu_temp_warning_for: *alert_cpu_temp_warning_for
+      prometheus_alert_cpu_temp_critical_for: *alert_cpu_temp_critical_for
+      prometheus_alert_nvme_temp_warning_celsius: *alert_nvme_temp_warning_celsius
+      prometheus_alert_nvme_temp_critical_celsius: *alert_nvme_temp_critical_celsius
+      prometheus_alert_gpu_temp_warning_celsius: *alert_gpu_temp_warning_celsius
+      prometheus_alert_gpu_temp_critical_celsius: *alert_gpu_temp_critical_celsius
+      prometheus_alert_gpu_power_cap_watts: *alert_gpu_power_cap_watts
+      prometheus_alert_gpu_power_for: *alert_gpu_power_for
+      prometheus_alert_pool_used_percent: *alert_pool_used_percent
+      prometheus_alert_board_event_window: *alert_board_event_window
+      prometheus_alert_guest_down_for: *alert_guest_down_for
+      prometheus_alert_gpu_idle_for: *alert_gpu_idle_for
+      prometheus_snmp_enabled: *snmp_enabled
+      prometheus_snmp_targets: *snmp_targets
+      prometheus_snmp_community_ref: *snmp_community_ref
+      prometheus_snmp_interval: *snmp_interval
+      prometheus_snmp_timeout: *snmp_timeout
+      prometheus_snmp_image: *snmp_image
+      prometheus_snmp_mem_limit: *snmp_mem_limit
+      prometheus_alert_port_down_for: *alert_port_down_for
+      prometheus_alert_port_errors_per_minute: *alert_port_errors_per_minute
+      prometheus_alert_nas_disk_temp_celsius: *alert_nas_disk_temp_celsius
+      prometheus_alert_nas_volume_used_percent: *alert_nas_volume_used_percent
+      prometheus_llm_probe_gateway: *llm_probe_gateway
+      prometheus_llm_probe_roles: *llm_probe_roles
+      prometheus_llm_probe_key_ref: *llm_probe_key_ref
+      prometheus_llm_probe_interval: *llm_probe_interval
+      prometheus_llm_probe_timeout: *llm_probe_timeout
+      prometheus_alert_llm_probe_failed_for: *alert_llm_probe_failed_for
+      prometheus_alert_llm_probe_slow_seconds: *alert_llm_probe_slow_seconds
       prometheus_alert_target_down_for: *alert_target_down_for
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
@@ -371,6 +567,38 @@ argument_specs:
       prometheus_alert_probe_down_for: *alert_probe_down_for
       prometheus_blackbox_image: *blackbox_image
       prometheus_blackbox_mem_limit: *blackbox_mem_limit
+      prometheus_alert_cpu_temp_warning_celsius: *alert_cpu_temp_warning_celsius
+      prometheus_alert_cpu_temp_critical_celsius: *alert_cpu_temp_critical_celsius
+      prometheus_alert_cpu_temp_warning_for: *alert_cpu_temp_warning_for
+      prometheus_alert_cpu_temp_critical_for: *alert_cpu_temp_critical_for
+      prometheus_alert_nvme_temp_warning_celsius: *alert_nvme_temp_warning_celsius
+      prometheus_alert_nvme_temp_critical_celsius: *alert_nvme_temp_critical_celsius
+      prometheus_alert_gpu_temp_warning_celsius: *alert_gpu_temp_warning_celsius
+      prometheus_alert_gpu_temp_critical_celsius: *alert_gpu_temp_critical_celsius
+      prometheus_alert_gpu_power_cap_watts: *alert_gpu_power_cap_watts
+      prometheus_alert_gpu_power_for: *alert_gpu_power_for
+      prometheus_alert_pool_used_percent: *alert_pool_used_percent
+      prometheus_alert_board_event_window: *alert_board_event_window
+      prometheus_alert_guest_down_for: *alert_guest_down_for
+      prometheus_alert_gpu_idle_for: *alert_gpu_idle_for
+      prometheus_snmp_enabled: *snmp_enabled
+      prometheus_snmp_targets: *snmp_targets
+      prometheus_snmp_community_ref: *snmp_community_ref
+      prometheus_snmp_interval: *snmp_interval
+      prometheus_snmp_timeout: *snmp_timeout
+      prometheus_snmp_image: *snmp_image
+      prometheus_snmp_mem_limit: *snmp_mem_limit
+      prometheus_alert_port_down_for: *alert_port_down_for
+      prometheus_alert_port_errors_per_minute: *alert_port_errors_per_minute
+      prometheus_alert_nas_disk_temp_celsius: *alert_nas_disk_temp_celsius
+      prometheus_alert_nas_volume_used_percent: *alert_nas_volume_used_percent
+      prometheus_llm_probe_gateway: *llm_probe_gateway
+      prometheus_llm_probe_roles: *llm_probe_roles
+      prometheus_llm_probe_key_ref: *llm_probe_key_ref
+      prometheus_llm_probe_interval: *llm_probe_interval
+      prometheus_llm_probe_timeout: *llm_probe_timeout
+      prometheus_alert_llm_probe_failed_for: *alert_llm_probe_failed_for
+      prometheus_alert_llm_probe_slow_seconds: *alert_llm_probe_slow_seconds
       prometheus_alert_target_down_for: *alert_target_down_for
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
@@ -429,6 +657,38 @@ argument_specs:
       prometheus_alert_probe_down_for: *alert_probe_down_for
       prometheus_blackbox_image: *blackbox_image
       prometheus_blackbox_mem_limit: *blackbox_mem_limit
+      prometheus_alert_cpu_temp_warning_celsius: *alert_cpu_temp_warning_celsius
+      prometheus_alert_cpu_temp_critical_celsius: *alert_cpu_temp_critical_celsius
+      prometheus_alert_cpu_temp_warning_for: *alert_cpu_temp_warning_for
+      prometheus_alert_cpu_temp_critical_for: *alert_cpu_temp_critical_for
+      prometheus_alert_nvme_temp_warning_celsius: *alert_nvme_temp_warning_celsius
+      prometheus_alert_nvme_temp_critical_celsius: *alert_nvme_temp_critical_celsius
+      prometheus_alert_gpu_temp_warning_celsius: *alert_gpu_temp_warning_celsius
+      prometheus_alert_gpu_temp_critical_celsius: *alert_gpu_temp_critical_celsius
+      prometheus_alert_gpu_power_cap_watts: *alert_gpu_power_cap_watts
+      prometheus_alert_gpu_power_for: *alert_gpu_power_for
+      prometheus_alert_pool_used_percent: *alert_pool_used_percent
+      prometheus_alert_board_event_window: *alert_board_event_window
+      prometheus_alert_guest_down_for: *alert_guest_down_for
+      prometheus_alert_gpu_idle_for: *alert_gpu_idle_for
+      prometheus_snmp_enabled: *snmp_enabled
+      prometheus_snmp_targets: *snmp_targets
+      prometheus_snmp_community_ref: *snmp_community_ref
+      prometheus_snmp_interval: *snmp_interval
+      prometheus_snmp_timeout: *snmp_timeout
+      prometheus_snmp_image: *snmp_image
+      prometheus_snmp_mem_limit: *snmp_mem_limit
+      prometheus_alert_port_down_for: *alert_port_down_for
+      prometheus_alert_port_errors_per_minute: *alert_port_errors_per_minute
+      prometheus_alert_nas_disk_temp_celsius: *alert_nas_disk_temp_celsius
+      prometheus_alert_nas_volume_used_percent: *alert_nas_volume_used_percent
+      prometheus_llm_probe_gateway: *llm_probe_gateway
+      prometheus_llm_probe_roles: *llm_probe_roles
+      prometheus_llm_probe_key_ref: *llm_probe_key_ref
+      prometheus_llm_probe_interval: *llm_probe_interval
+      prometheus_llm_probe_timeout: *llm_probe_timeout
+      prometheus_alert_llm_probe_failed_for: *alert_llm_probe_failed_for
+      prometheus_alert_llm_probe_slow_seconds: *alert_llm_probe_slow_seconds
       prometheus_alert_target_down_for: *alert_target_down_for
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for

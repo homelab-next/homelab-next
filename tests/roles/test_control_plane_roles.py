@@ -280,6 +280,79 @@ def test_events_bus_accepts_the_narrow_grants_a_bridge_needs(tmp_path):
     assert results == [(False, "")] * 3, results
 
 
+#: a forward login (events_bus_forward_logins): a client on another host reaches the loopback bus
+#: through ssh -L as this login; the key and the source are built, never a literal of either
+FWD_ED = "AAAAC3NzaC1lZDI1NTE5AAAAI" + "Q" * 43
+FWD_FROM = str(ipaddress.IPv4Address(HUB_ADDR) + 1)
+FWD = {"user": "hnx-events-fwd", "ed25519": FWD_ED, "from": [FWD_FROM]}
+
+
+def test_events_bus_refuses_a_forward_login_that_could_do_more_than_forward(tmp_path):
+    """A forward login lands in an authorized_keys line, a sshd Match block and an account: no
+    second key or option, no newline, no open source, no name that is already someone's."""
+    good = {**EVENTS, "events_bus_forward_logins": [FWD]}
+    _refusals(tmp_path, "events_bus", good, [
+        {"events_bus_forward_logins": [dict(FWD, ed25519=FWD_ED + "\nssh-ed25519 AAAA other")]},
+        {"events_bus_forward_logins": [dict(FWD, ed25519="AAAAB3NzaC1yc2E" + "Q" * 53)]},
+        {"events_bus_forward_logins": [dict(FWD, ed25519="ssh-ed25519 " + FWD_ED)]},
+        {"events_bus_forward_logins": [dict(FWD, ed25519=FWD_ED + ' x",permitopen="any')]},
+        {"events_bus_forward_logins": [{k: v for k, v in FWD.items() if k != "ed25519"}]},
+        {"events_bus_forward_logins": [{k: v for k, v in FWD.items() if k != "from"}]},
+        {"events_bus_forward_logins": [dict(FWD, **{"from": []})]},
+        {"events_bus_forward_logins": [dict(FWD, **{"from": FWD_FROM})]},  # a string, not a list
+        {"events_bus_forward_logins": [dict(FWD, **{"from": [str(ipaddress.IPv4Network((0, 0)))]})]},
+        {"events_bus_forward_logins": [dict(FWD, **{"from": [str(ipaddress.IPv4Address(0))]})]},  # any
+        {"events_bus_forward_logins": [dict(FWD, **{"from": [FWD_FROM + "/16"]})]},
+        {"events_bus_forward_logins": [dict(FWD, **{"from": [FWD_FROM + '",permitopen="any']})]},
+        {"events_bus_forward_logins": [dict(FWD, user="root")]},
+        {"events_bus_forward_logins": [dict(FWD, user="hnx-events")]},  # the bus's own account
+        {"events_bus_forward_logins": [dict(FWD, user="Bad\nMatch All")]},
+        {"events_bus_forward_logins": [dict(FWD, state="disabled")]},
+        {"events_bus_forward_logins": [dict(FWD, shell="/bin/sh")]},  # no other key
+        {"events_bus_forward_logins": [FWD, FWD]},
+        {"events_bus_forward_logins": FWD},
+        {"events_bus_forward_sshd_dropin": "/etc/ssh/sshd_config"},
+        {"events_bus_forward_home": "/var"},
+    ])  # fmt: skip
+    (tmp_path / "ok").mkdir()
+    results = run_cases(tmp_path / "ok", "events_bus", "validate", EVENTS, [
+        {"events_bus_forward_logins": [dict(FWD, **{"from": [FWD_FROM + "/24"]})]},
+        {"events_bus_forward_logins": [{"user": "hnx-events-fwd", "state": "absent"}]},
+    ])  # fmt: skip
+    assert results == [(False, "")] * 2, results
+
+
+def test_events_bus_forward_login_may_open_the_bus_alone(tmp_path):
+    """The rendered Match block holds each present login to a local forward to the bus's own
+    listen address and port (sshd -T reads these settings back before the drop-in goes live)."""
+    retired = {"user": "hnx-old-fwd", "state": "absent"}
+    files = _render(tmp_path, "events_bus", {**EVENTS, "events_bus_forward_logins": [FWD, retired],
+                                             "events_bus_rendered_users": _rendered_users(BUS_USERS),
+                                             "inventory_hostname": "bus-01.example.internal"})  # fmt: skip
+    conf = files["sshd-forward.conf"]
+    body = [line.strip() for line in conf.splitlines() if line.strip() and not line.startswith("#")]
+    assert body == [
+        "Match User hnx-events-fwd", "AllowTcpForwarding local", f"PermitOpen {LOOP}:4222",
+        "PermitListen none", "AllowStreamLocalForwarding no", "AllowAgentForwarding no",
+        "X11Forwarding no", "PermitTTY no", "PermitTunnel no", "GatewayPorts no",
+        "PermitUserRC no", "ForceCommand /bin/false",
+    ], conf  # fmt: skip
+    assert "hnx-old-fwd" not in conf
+    v6 = _render(tmp_path / "v6", "events_bus", {**EVENTS, "events_bus_forward_logins": [FWD],
+                                                 "events_bus_listen_address": "::1",
+                                                 "events_bus_rendered_users": _rendered_users(BUS_USERS),
+                                                 "inventory_hostname": "bus-01.example.internal"})  # fmt: skip
+    assert "PermitOpen [::1]:4222" in v6["sshd-forward.conf"]
+    # the key's line, as the forward-login tasks write it: one key, every restriction before it
+    task = next(t for t in yaml.safe_load((ROLES / "events_bus/tasks/forward_logins.yml").read_text())
+                if "authorized_keys" in str(t.get("ansible.builtin.copy", {}).get("dest", "")))  # fmt: skip
+    content = task["ansible.builtin.copy"]["content"]
+    assert content == (
+        'restrict,port-forwarding,permitopen="{{ events_bus_forward_target }}",'
+        "from=\"{{ item['from'] | join(',') }}\",command=\"/bin/false\" ssh-ed25519 {{ item.ed25519 }} {{ item.user }}\n"
+    )
+
+
 def _here_registry(tmp_path) -> str:
     """The example registry with the events bus on the host the tests run the role on
     (``localhost``): a loopback relay endpoint is accepted only when the bus is this host's."""

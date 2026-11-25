@@ -91,6 +91,10 @@
   ansible.builtin.include_tasks: tunnel.yml
   when: stackstorm_broker_tunnel_enabled | bool
 
+- name: Install the bus forward (the bridge's way to a loopback-only bus on another host)
+  ansible.builtin.include_tasks: events_tunnel.yml
+  when: stackstorm_events_forward_enabled | bool
+
 - name: Install the event bridge
   ansible.builtin.include_tasks: bridge.yml
   when: stackstorm_bridge_enabled | bool

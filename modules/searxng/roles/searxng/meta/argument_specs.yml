@@ -1,0 +1,310 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run SearXNG as a compose_app and render its settings (the default engines, the JSON format, the secret key) into one 0600 file.
+    options:
+      searxng_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. search).
+        required: true
+      searxng_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the SearXNG image.
+        default: docker.io/searxng/searxng:2026.11.9-57ff753ad@sha256:287af61f1a13e86d02974fcde91a3413a9945788de38b61ffbc491d81a19bcc2
+      searxng_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      searxng_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8095
+      searxng_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/searxng
+      searxng_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      searxng_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      searxng_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ holds the rendered settings (the container''s).'
+        default: /var/lib/hnx-modules/searxng
+      searxng_uid:
+        type: int
+        description: The container's user id (the image's own); owns config/ and the settings file.
+        default: 977
+      searxng_gid:
+        type: int
+        description: The container's group id.
+        default: 977
+      searxng_key_ref:
+        type: str
+        description: secret:<name> of the instance secret key (32 or more characters); rendered only into the 0600 settings file.
+        default: secret:searxng/secret-key
+      searxng_safe_search:
+        type: int
+        description: 'Safe search: 0 off (the old instance), 1 moderate, 2 strict.'
+        default: 0
+      searxng_instance_name:
+        type: str
+        description: The instance's name (general.instance_name), 1 to 64 printable characters.
+        default: SearXNG
+      searxng_request_timeout:
+        type: float
+        description: Seconds each engine request may take (outgoing.request_timeout), 0.5 to 60.
+        default: 3.0
+      searxng_engines_disabled:
+        type: list
+        description: Engine names to disable, each rendered as an engines entry with disabled true. use_default_settings merges an entry into the default engine of that name by name, so every other engine
+          keeps its default; a misspelled name adds a stray engine entry instead of disabling one.
+        default: []
+      searxng_mem_limit:
+        type: str
+        description: Container memory limit.
+        default: 768m
+      searxng_start:
+        type: bool
+        description: Run docker compose up after rendering.
+        default: true
+      searxng_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      searxng_health_timeout:
+        type: int
+        description: Seconds for each health request (a search asks several engines, so more than a plain page).
+        default: 20
+      searxng_health_query:
+        type: str
+        description: The query the health hook searches for.
+        default: debian
+      searxng_health_require_results:
+        type: bool
+        description: A search that returns no results fails health (a metasearch whose engines are all blocked still answers 200). false only for a site that accepts that.
+        default: true
+  health:
+    short_description: Fail unless the container is healthy, the health path answers and a real JSON search returns a list of results (not empty unless the site allows it).
+    options:
+      searxng_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. search).
+        required: true
+      searxng_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the SearXNG image.
+        default: docker.io/searxng/searxng:2026.11.9-57ff753ad@sha256:287af61f1a13e86d02974fcde91a3413a9945788de38b61ffbc491d81a19bcc2
+      searxng_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      searxng_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8095
+      searxng_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/searxng
+      searxng_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      searxng_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      searxng_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ holds the rendered settings (the container''s).'
+        default: /var/lib/hnx-modules/searxng
+      searxng_uid:
+        type: int
+        description: The container's user id (the image's own); owns config/ and the settings file.
+        default: 977
+      searxng_gid:
+        type: int
+        description: The container's group id.
+        default: 977
+      searxng_mem_limit:
+        type: str
+        description: Container memory limit.
+        default: 768m
+      searxng_health_timeout:
+        type: int
+        description: Seconds for each health request (a search asks several engines, so more than a plain page).
+        default: 20
+      searxng_health_query:
+        type: str
+        description: The query the health hook searches for.
+        default: debian
+      searxng_health_require_results:
+        type: bool
+        description: A search that returns no results fails health (a metasearch whose engines are all blocked still answers 200). false only for a site that accepts that.
+        default: true
+  readiness:
+    short_description: Fail unless the container engine is ready and the secret key resolves in its expected form.
+    options:
+      searxng_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. search).
+        required: true
+      searxng_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the SearXNG image.
+        default: docker.io/searxng/searxng:2026.11.9-57ff753ad@sha256:287af61f1a13e86d02974fcde91a3413a9945788de38b61ffbc491d81a19bcc2
+      searxng_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      searxng_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8095
+      searxng_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/searxng
+      searxng_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ holds the rendered settings (the container''s).'
+        default: /var/lib/hnx-modules/searxng
+      searxng_uid:
+        type: int
+        description: The container's user id (the image's own); owns config/ and the settings file.
+        default: 977
+      searxng_gid:
+        type: int
+        description: The container's group id.
+        default: 977
+      searxng_key_ref:
+        type: str
+        description: secret:<name> of the instance secret key (32 or more characters); rendered only into the 0600 settings file.
+        default: secret:searxng/secret-key
+      searxng_safe_search:
+        type: int
+        description: 'Safe search: 0 off (the old instance), 1 moderate, 2 strict.'
+        default: 0
+      searxng_instance_name:
+        type: str
+        description: The instance's name (general.instance_name), 1 to 64 printable characters.
+        default: SearXNG
+      searxng_request_timeout:
+        type: float
+        description: Seconds each engine request may take (outgoing.request_timeout), 0.5 to 60.
+        default: 3.0
+      searxng_engines_disabled:
+        type: list
+        description: Engine names to disable, each rendered as an engines entry with disabled true. use_default_settings merges an entry into the default engine of that name by name, so every other engine
+          keeps its default; a misspelled name adds a stray engine entry instead of disabling one.
+        default: []
+      searxng_health_query:
+        type: str
+        description: The query the health hook searches for.
+        default: debian
+      searxng_health_require_results:
+        type: bool
+        description: A search that returns no results fails health (a metasearch whose engines are all blocked still answers 200). false only for a site that accepts that.
+        default: true
+      searxng_health_timeout:
+        type: int
+        description: Seconds for each health request (a search asks several engines, so more than a plain page).
+        default: 20
+      searxng_mem_limit:
+        type: str
+        description: Container memory limit.
+        default: 768m
+  backup:
+    short_description: 'Nothing to back up: the service keeps no data.'
+    options: {}
+  export:
+    short_description: 'Nothing to export: the service keeps no data.'
+    options: {}
+  restore:
+    short_description: 'Nothing to restore: the service keeps no data.'
+    options: {}
+  upgrade:
+    short_description: Validate an image bump (tag and digest) and record it as pending.
+    options:
+      searxng_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. search).
+        required: true
+      searxng_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the SearXNG image.
+        default: docker.io/searxng/searxng:2026.11.9-57ff753ad@sha256:287af61f1a13e86d02974fcde91a3413a9945788de38b61ffbc491d81a19bcc2
+      searxng_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      searxng_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8095
+      searxng_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/searxng
+      searxng_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      searxng_group:
+        type: str
+        description: Group of the compose project and the data root.
+        default: root
+      searxng_data_root:
+        type: path
+        description: 'The module''s data root on the host: config/ holds the rendered settings (the container''s).'
+        default: /var/lib/hnx-modules/searxng
+      searxng_uid:
+        type: int
+        description: The container's user id (the image's own); owns config/ and the settings file.
+        default: 977
+      searxng_gid:
+        type: int
+        description: The container's group id.
+        default: 977
+      searxng_mem_limit:
+        type: str
+        description: Container memory limit.
+        default: 768m
+      searxng_safe_search:
+        type: int
+        description: 'Safe search: 0 off (the old instance), 1 moderate, 2 strict.'
+        default: 0
+      searxng_instance_name:
+        type: str
+        description: The instance's name (general.instance_name), 1 to 64 printable characters.
+        default: SearXNG
+      searxng_request_timeout:
+        type: float
+        description: Seconds each engine request may take (outgoing.request_timeout), 0.5 to 60.
+        default: 3.0
+      searxng_engines_disabled:
+        type: list
+        description: Engine names to disable, each rendered as an engines entry with disabled true. use_default_settings merges an entry into the default engine of that name by name, so every other engine
+          keeps its default; a misspelled name adds a stray engine entry instead of disabling one.
+        default: []
+      searxng_health_query:
+        type: str
+        description: The query the health hook searches for.
+        default: debian
+      searxng_health_require_results:
+        type: bool
+        description: A search that returns no results fails health (a metasearch whose engines are all blocked still answers 200). false only for a site that accepts that.
+        default: true
+      searxng_health_timeout:
+        type: int
+        description: Seconds for each health request (a search asks several engines, so more than a plain page).
+        default: 20
+      searxng_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> to move to.
+        required: true

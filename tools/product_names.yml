@@ -178,6 +178,15 @@ allow:
     reason: "registers one lake catalog's tables into another by their metadata files: it reads the earlier catalog's SQLite schema (its table is named for the product) and speaks the Iceberg REST API, the product-specific migration step of the lake's catalog move"
   - path: "tools/tests/test_catalog_register.py"
     reason: "the tests of tools/migrate/catalog_register.py against a stand-in for the two catalog APIs, and a SQLite file in the earlier catalog's schema"
+  - path: "ansible/roles/open_webui/tasks/app.yml"
+    products: [searxng]
+    reason: "Open WebUI's own web-search settings for the lab's metasearch service: the engine value it reads (WEB_SEARCH_ENGINE) and the setting that carries its query URL are named for the product in the pinned release (the web-search provider module modules/searxng makes the name a linted product; these lines were added by #637 before it)"
+  - path: "ansible/roles/open_webui/vars/main.yml"
+    products: [searxng]
+    reason: "the reserved-name pattern refuses every Open WebUI setting that calls out of the lab, including the product-named web-search settings (the web-search provider module modules/searxng makes the name a linted product; this file was counted debt before it)"
+  - path: "tests/roles/test_serving_roles.py"
+    products: [searxng]
+    reason: "a refused extra setting of the open_webui role named for the product, proving the reserved-name pattern (the web-search provider module modules/searxng makes the name a linted product; this file was counted debt before it)"
   - path: "schemas/platform/**"
     products: [lakekeeper]
     reason: "the registry row schema's examples and negative fixtures name the lake's catalog as the impl of a lake-catalog row (the lakekeeper provider module makes the name a linted product; these files were counted debt before it)"

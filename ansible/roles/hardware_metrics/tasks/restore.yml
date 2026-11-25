@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to restore (re-run main to render the collector again)
+  ansible.builtin.debug:
+    msg: hardware_metrics keeps no data; re-running main renders the collector, its configuration and its timer
+  tags: [restore]

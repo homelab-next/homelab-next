@@ -41,9 +41,9 @@ def test_every_old_timer_maps_to_exactly_one_rule():
 
 @pytest.mark.parametrize("lane", cs.LANES)
 def test_the_committed_files_are_what_the_table_renders(lane):
-    if lane != "shadow":  # the tree is committed for the default lane; the other renders cleanly
+    if lane != cs.LANE:  # the tree is committed for the default lane; the other renders cleanly
         for t in cs.TIMERS:
-            assert "shadow: true" not in cs.render_pack(t, lane)
+            assert "shadow: true" in cs.render_pack(t, lane)
         return
     for path, text in cs.expected(lane).items():
         assert path.read_text() == text, (
@@ -69,7 +69,8 @@ def test_each_schedule_pack_validates_pins_and_fires_one_keyed_job():
             step["action"] == "agent.job.submit"
             and step["params"]["idempotency_key"] == "$event.id"
         )
-        assert step["params"]["agent_key"] == t[2] and step["params"]["shadow"] is True
+        # the real lane (cs.LANE): the job goes to the live pipeline's units, no shadow flag
+        assert step["params"]["agent_key"] == t[2] and "shadow" not in step["params"]
         for fx in doc["fixtures"]:
             res = run_fixture(doc, fx, manifest=manifest())
             assert not res.problems, (doc["pack"], res.problems)

@@ -139,6 +139,11 @@ SOURCES: dict[str, tuple[str, str]] = {
     ),
     "role:freshrss/freshrss_image": ("github", "FreshRSS/FreshRSS"),
     "role:gitea/gitea_image": ("github", "go-gitea/gitea"),
+    "role:searxng/searxng_image": (
+        "none",
+        "the project publishes dated container builds (docker.io/searxng/searxng, tag <year>.<month>.<day>-<commit>) "
+        "and no releases: compare its tags with the project's commit log by hand, a build at least 14 days old",
+    ),
     "role:synapse_cortex/synapse_cortex_image": ("github", "vertexproject/synapse"),
     "role:intelowl/intelowl_image": ("github", "intelowlproject/IntelOwl"),
     "role:intelowl/intelowl_nginx_image": ("github", "intelowlproject/IntelOwl"),
@@ -244,6 +249,7 @@ SOURCES: dict[str, tuple[str, str]] = {
     ),
     "role:prometheus/prometheus_image": ("github", "prometheus/prometheus"),
     "role:prometheus/prometheus_blackbox_image": ("github", "prometheus/blackbox_exporter"),
+    "role:prometheus/prometheus_snmp_image": ("github", "prometheus/snmp_exporter"),
     "role:stackstorm/stackstorm_mongo_image": (
         "none",
         "the Docker official image (docker.io/library/mongo), held on the 4.4 line the pinned "
@@ -466,6 +472,11 @@ NOTES: dict[str, str] = {
         "modules/trino/module.yml and the lab registry's version; read the release notes of every "
         "version crossed (catalog properties and procedure options change between releases)"
     ),
+    "role:searxng/searxng_image": (
+        "an image (modules/searxng): bump the tag and its digest together, with product.version in "
+        "modules/searxng/module.yml; the service keeps no data (its settings are rendered), so a bump "
+        "needs no export and the role only refuses a target that is not pinned by tag and digest"
+    ),
     "role:gitea/gitea_image": (
         "an image (modules/gitea, the rootless build): bump the tag and its digest together, with "
         "product.version in modules/gitea/module.yml and the lab registry's version; the upgrade "
@@ -562,6 +573,9 @@ NOTES: dict[str, str] = {
     ),
     "role:prometheus/prometheus_blackbox_image": (
         "an image (modules/prometheus): bump the tag and its digest together; the probe config format is stable across 0.x minors"
+    ),
+    "role:prometheus/prometheus_snmp_image": (
+        "an image (modules/prometheus): bump the tag and its digest together; its bundled snmp.yml (if_mib) is read beside the role's own module"
     ),
     "role:prometheus/prometheus_image": (
         "an image (modules/prometheus): bump the tag and its digest together, with product.version "

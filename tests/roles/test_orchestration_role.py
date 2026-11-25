@@ -604,7 +604,7 @@ def test_what_changed_decides_start_restart_reload_and_a_profile_reload(tmp_path
 
 JOB_UNITS = [
     {"name": "cti", "jobs": {"cti-hourly": "fresh", "cti-hourly-b": "fresh", "cti-publish": "publish"}},
-    {"name": "voice", "jobs": {"voice-check": "check"}, "lanes": ["shadow"]},
+    {"name": "voice", "jobs": {"voice-check": "check"}, "lanes": ["shadow"], "overlap": "skip"},
 ]  # fmt: skip
 MANAGE = "org.freedesktop.systemd1.manage-units"
 
@@ -693,9 +693,10 @@ def test_module_job_units_get_a_narrow_polkit_rule_a_table_logs_and_the_dispatch
     assert table["systemctl"] == str(systemctl)
     assert table["units"]["cti"] == {
         "jobs": JOB_UNITS[0]["jobs"], "lanes": ["real", "shadow"],
-        "log_dir": str(tmp_path / "log" / "hnx-jobs" / "cti"),
+        "log_dir": str(tmp_path / "log" / "hnx-jobs" / "cti"), "overlap": "wait",
     }  # fmt: skip
     assert table["units"]["voice"]["lanes"] == ["shadow"]
+    assert table["units"]["voice"]["overlap"] == "skip"
     for d in (var / "dispatch", var / "dispatch" / "cti", var / "dispatch" / "voice"):
         assert oct(d.stat().st_mode & 0o777) == "0o700"
     logs = tmp_path / "log" / "hnx-jobs"
@@ -804,6 +805,7 @@ def test_malformed_job_units_and_a_dispatcher_beside_another_command_are_refused
         {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "fresh"}, "lanes": ["prod"]}]},
         {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "fresh"}, "lanes": []}]},
         {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "fresh"}, "unit": "ssh.service"}]},
+        {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "fresh"}, "overlap": "restart"}]},
         {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "x"}}, {"name": "cti", "jobs": {"b": "y"}}]},
         {"orchestration_job_units": [{"name": "cti", "jobs": {"a": "x"}}, {"name": "tts", "jobs": {"a": "y"}}]},
         {"orchestration_job_units": good, "orchestration_polkit_rules_dir": "/etc"},

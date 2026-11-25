@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - searxng_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - searxng_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      - searxng_tag != 'latest'
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - searxng_bind is match(searxng_ipv4_pattern)
+      - searxng_bind != '0.0.0.0'
+      - searxng_port is integer and searxng_port is not boolean
+      - searxng_port | int >= 1 and searxng_port | int <= 65535
+      - searxng_uid | int >= 1 and searxng_gid | int >= 1
+      # absolute, canonical paths of two or more components (no //, no . or .. component, no trailing /)
+      - >-
+        [searxng_dir, searxng_data_root] | reject('match', searxng_path_pattern) | list | length == 0
+      - searxng_key_ref is match(searxng_ref_pattern)
+      - searxng_safe_search is integer and searxng_safe_search is not boolean
+      - searxng_safe_search in [0, 1, 2]
+      - searxng_request_timeout is number and searxng_request_timeout is not boolean
+      - searxng_request_timeout >= 0.5 and searxng_request_timeout <= 60
+      - searxng_instance_name is string and searxng_instance_name is match(searxng_name_pattern)
+      - searxng_engines_disabled is sequence and searxng_engines_disabled is not string
+      - searxng_engines_disabled | reject('string') | list | length == 0
+      - searxng_engines_disabled | reject('match', searxng_engine_pattern) | list | length == 0
+      - searxng_engines_disabled | unique | list | length == searxng_engines_disabled | length
+      - searxng_health_query is string and searxng_health_query is match(searxng_query_pattern)
+      - searxng_health_require_results is boolean
+      - searxng_health_timeout | int >= 1 and searxng_health_timeout | int <= 300
+      - searxng_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      searxng: a registry id, an image pinned by tag and digest, the guest's IPv4 address to publish
+      on (not all interfaces), a port, a container uid and gid of 1 or more (never root), absolute
+      canonical directories, a secret: reference for the key, a safe_search of 0, 1 or 2, a
+      request_timeout of 0.5 to 60 seconds, an instance name of 1 to 64 printable characters, engine
+      names (a list of distinct lower-case names, as the product spells them), a health query of
+      letters, digits, spaces and . _ -, health_require_results true or false, and a memory limit
+      like 768m
+  tags: [health, backup, restore, export, upgrade]

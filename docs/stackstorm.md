@@ -305,12 +305,17 @@ idempotency key is the firing's event id (a timer that fires twice is one job), 
 admits it against live load. The agent key is the job's: the dispatcher maps it to the module's
 unit and the site needs one controller profile per key. **Two different "shadow"s:** the rules ship
 in StackStorm `mode: shadow` (log the broker request, send nothing: promotion to `live` needs the
-shadow window and evidence, above), and the packs submit on the controller's shadow lane
-(`shadow: true`, so the job's unit writes only the shadow lake schema and never publishes) because
-the plan runs 7 days there before the switch. `--lane real --write` renders the packs without it for the
-switch and re-pins their digests. The controller allows one unfinished shadow
-job per agent, so a shadow firing that lands while the previous one still runs is refused (429),
-which matters for the hourly `cti-fresh` (240 min budget) and the ten rotation slots.
+shadow window and evidence, above), and the packs choose the controller's lane. The committed packs
+are the **real** lane (`cti_schedules.LANE`, since the pipeline's switch on 2026-11-22 retired the
+controller's shadow lane): they send no `shadow` flag, so a rule's shadow record is exactly the
+request the live pipeline would be sent (agent key, priority, the real lane), the parity a
+promotion is judged on against the scheduler it replaces. Only the idempotency key and the task
+description differ by construction (the firing's event id, the rule's own wording).
+`--lane shadow --write` renders the other lane (`shadow: true`: the job's unit writes only the
+shadow lake schema and never publishes) and re-pins the digests, for a site that still runs one;
+there the controller allows one unfinished shadow job per agent, so a firing that lands while the
+previous one still runs is refused (429), which matters for the hourly `cti-fresh` (240 min
+budget) and the ten rotation slots.
 
 | Old timer | Rule | Pack | Cron (UTC) | Agent key | Priority |
 |---|---|---|---|---|---|
@@ -488,6 +493,14 @@ workflows run PACK` prints for the same event, so a shadow log can be compared l
 the offline fixtures and with what the timer it replaces actually did (the parity method of
 [swap.md](swap.md), [[swap]]). The mode is in `pinned/<pack>.json`, rendered from the rule, so a
 run started by hand is in the rule's mode too: no parameter turns a shadow rule live.
+
+**Where the shadow records are.** A shadow record is the `homelabnext.step` execution itself:
+its result carries `result: shadow` and the encoded state with the call record (action, params,
+`request_id`, `request_digest`); a step whose `when` did not hold is `skipped`. StackStorm keeps
+them for `stackstorm_retention_days`. The status hub counts them per rule
+(`poll-stackstorm` with `builtin: automation-shadow`, [status](status.md) section 7, the
+module's source `stackstorm-shadow`): would-act, quiet and failed runs and the first and latest
+record over 7 days, which is what a promotion review reads before it writes the parity evidence.
 
 To promote a rule, change `mode: live` in `workflows/stackstorm.yml` and add:
 
@@ -700,6 +713,14 @@ PrivateTmp=yes
 [Install]
 WantedBy=multi-user.target
 ```
+
+While the bus listens on loopback on its own host (the `events_bus` role has no TLS listener),
+the module's **bus forward** carries the bridge there instead: `stackstorm_events_forward_enabled`
+keeps `ssh -N -L <loopback>:<port>:<the bus>` up as `hnx-st2-events-tunnel.service` (its own user,
+the bus host's key pinned), as a login the bus host's `events_bus_forward_logins` holds to that one
+forward ([broker.md](broker.md#deploying-with-ansible)), and the bridge's endpoint is the forward's
+loopback end (`nats://<loopback>:<port>`, which the adapter accepts in plaintext because it is
+loopback; the leg between the hosts is SSH). The bridge's unit starts after the forward.
 
 It needs the `nats` extra (`pip install 'homelabnext[nats]'`). Over `tls://` it does the TLS
 handshake first, so the bus's `tls` block needs `handshake_first: true` (nats-server 2.10.3 or

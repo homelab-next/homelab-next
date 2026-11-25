@@ -14,7 +14,7 @@ this module **deploys** it, it does not define it.
 | Why containers | StackStorm 3.9 packages target Ubuntu 22.04 and Rocky 9; the lab's base is Debian 13 |
 | Runs as | `compose_app`, every container in the module's role slice (`cgroup_parent`), no capability but `st2web`'s four (nginx starts as root), `no-new-privileges`, every image pinned by tag **and** digest |
 | Row | `automation` (`impl: stackstorm`), http, port 9101, `auth: own`, **no public route** |
-| Status | the hub's existing `poll-stackstorm` reader (`status_sources` on the row; fixture `tests/status/fixtures/stackstorm-executions.json`) |
+| Status | the hub's existing `poll-stackstorm` reader (`status_sources` on the row; fixture `tests/status/fixtures/stackstorm-executions.json`), and `stackstorm-shadow` (built-in `automation-shadow`, schema 2.14): the shadow evidence per rule over 7 days, for promotion reviews |
 | Shadow first | every rule ships **disabled** and every pack rule is in **shadow mode** (it records the broker request it would make and sends nothing) |
 
 ## What runs where
@@ -88,6 +88,14 @@ hashes from the package index's JSON API, and regenerate `roles/stackstorm/files
    (`constraints/ci.txt`), `stackstorm_hnx_bootstrap` (`constraints/bootstrap.txt`);
    `stackstorm_events_endpoint` (`tls://...`), `stackstorm_events_ca_file`,
    `stackstorm_events_api_prefix` (the bridge account's import prefix, `JS.HNX.API` in the lab);
+   or, while the bus listens on loopback on its own host (role `events_bus` has no TLS listener),
+   the **bus forward**: `stackstorm_events_forward_enabled: true`, `stackstorm_events_endpoint`
+   `nats://<loopback>:<a free local port>` (the forward's end on this guest), `stackstorm_events_forward_host`,
+   `stackstorm_events_forward_host_key` (the bus host's public key line, pinned),
+   `stackstorm_events_forward_remote` (`<the bus's loopback address>:<port>`, as the bus host sees it)
+   and the key's secret (`stackstorm_events_forward_key_ref`); the bus host gets the matching login
+   in `events_bus_forward_logins` (its public key and this guest's address as `from`) and admits
+   SSH from this guest;
    `stackstorm_broker_host`, `stackstorm_broker_host_key` (the broker host's public key line,
    pinned), `stackstorm_broker_ssh_user`; `stackstorm_enabled_rules` (empty: all off);
    `stackstorm_operator_users` as wanted. The memory budget below is the default; the budget

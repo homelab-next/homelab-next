@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed secret key before anything is written
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Is the container already created (a first run needs no restart)
+  ansible.builtin.stat:
+    path: "{{ searxng_dir }}/docker-compose.yml"
+  register: searxng_compose_before
+  check_mode: false
+
+# The key is read by name and rendered into the one 0600 file; the tasks that touch it log nothing.
+- name: Read the secret key
+  ansible.builtin.set_fact:
+    searxng_secret_value: "{{ lookup('hnx_secret', searxng_key_ref) }}"
+  no_log: true
+
+- name: Render the settings (the only file that holds the key)
+  ansible.builtin.template:
+    src: settings.yml.j2
+    dest: "{{ searxng_data_root }}/config/settings.yml"
+    owner: "{{ searxng_uid | int }}"
+    group: "{{ searxng_gid | int }}"
+    mode: "0600"
+  register: searxng_settings
+  no_log: true
+
+- name: Render and start SearXNG
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ searxng_app.compose_app_name }}"
+    compose_app_dir: "{{ searxng_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ searxng_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ searxng_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ searxng_app.compose_app_owner }}"
+    compose_app_group: "{{ searxng_app.compose_app_group }}"
+    compose_app_start: "{{ searxng_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ searxng_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ searxng_app.compose_app_spec }}"
+
+# The product reads its settings at start: a container that was already running keeps the old ones
+# until it is restarted.
+- name: Restart a running container whose settings changed
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ searxng_dir }}/docker-compose.yml", restart]
+  changed_when: true
+  when:
+    - searxng_start | bool
+    - searxng_settings is changed
+    - searxng_compose_before.stat.exists
+
+- name: Wait for the service to answer its health path
+  ansible.builtin.uri:
+    url: "http://{{ searxng_bind }}:{{ searxng_port | int }}/healthz"
+    status_code: 200
+    timeout: "{{ searxng_health_timeout | int }}"
+  register: searxng_up
+  until: searxng_up.status | default(0) == 200
+  retries: 12
+  delay: 5
+  changed_when: false
+  when: searxng_start | bool

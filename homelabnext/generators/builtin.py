@@ -1255,7 +1255,10 @@ def idp_realm(reg: Registry, reserved_usernames=None, edge_hosts=None) -> dict[s
     for s in gated:
         # a redirect is under a public route, which is a primary's alone
         root = f"https://{s.public_hostname}" if s.public_hostname and s.is_primary else None
-        clients.append(_client(s.name, s.owner, [f"{root}/*"] if root else [], root))
+        # 2.13: the callbacks the row declares itself (the registry has held each to the row's
+        # own name and port); the only way a row with no public route gets a redirect
+        redirects = ([f"{root}/*"] if root else []) + list(s.oidc_redirect_uris)
+        clients.append(_client(s.name, s.owner, redirects, root))
         if s.roles:
             roles[s.name] = [
                 {"clientRole": True, "description": f"{s.name} {r}", "name": r} for r in s.roles
