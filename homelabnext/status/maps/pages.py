@@ -22,6 +22,7 @@ hub's own.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -32,7 +33,7 @@ from homelabnext.status.render import _e, nav_html, render_html, shell_html
 
 from . import assets
 
-__all__ = ["MAP_ROUTES", "TITLES", "MapSite"]
+__all__ = ["JSON_ROUTES", "MAP_ROUTES", "TITLES", "MapSite"]
 
 Response = tuple[int, str, bytes] | tuple[int, str, bytes, dict[str, str]]
 HTML = "text/html; charset=utf-8"
@@ -46,6 +47,14 @@ MAP_ROUTES = {
     "/roster": "roster",
     "/mcp-servers": "mcp-servers",
 }
+#: the machine-readable forms of the three maps an agent reads more often than a person does
+#: (the same view-models the pages draw, as JSON; withheld like the pages, ADR-0033)
+JSON_ROUTES = {
+    "/topology.json": "topology",
+    "/dataflow.json": "dataflow",
+    "/schedule.json": "schedule",
+}
+JSON_TYPE = "application/json; charset=utf-8"
 #: the roster file read under ``--maps ROOT`` when ``--roster`` is not given
 DEFAULT_ROSTER = "examples/status/roster.yml"
 #: the MCP catalog read under ``--maps ROOT`` when ``--mcp-catalog`` is not given
@@ -85,6 +94,15 @@ SOURCES = {
     "tools and their classes, review, lifecycle) and the agent profiles roster.yml names (grants)",
 }
 _ERRORS = (OSError, ValueError, LookupError, TypeError, yaml.YAMLError)
+
+
+def _plain(value: Any) -> Any:
+    """``json.dumps``'s fallback for a view-model: sets and tuples as lists, paths as text."""
+    if isinstance(value, set | frozenset):
+        return sorted(value, key=str)
+    if isinstance(value, tuple):
+        return list(value)
+    return str(value)
 
 
 class MapSite:
@@ -130,16 +148,20 @@ class MapSite:
         out = set()
         if self.guests and self.guests_site:
             out.add("topology")
+        # no checkout needed: the dataflow is then drawn from the registry alone, and the schedule
+        # from the registry's collectors and the jobs the hosts report to the hub
+        if self.lab is not None:
+            out.add("dataflow")
+        if self.root is not None or self.registry is not None:
+            out.add("schedule")
         if self.root is not None:
-            out |= {"roadmap", "schedule"}
+            out |= {"roadmap"}
             if self.registry is not None:
                 out |= {"architecture", "links"}
             if self.roster is not None:
                 out |= {"roster"}
             if self.mcp_catalog is not None:
                 out |= {"mcp-servers"}
-            if self.lab is not None:
-                out |= {"dataflow"}
         return frozenset(out)
 
     # ---- the pages
@@ -169,6 +191,50 @@ class MapSite:
                 self._dataflow = dataflow.build({"services": dataflow.services_of(self.lab)})
         return self._dataflow
 
+    def _schedule_vm(self, doc: Mapping[str, Any]) -> dict[str, Any]:
+        """The schedule view-model: the checkout's timers and specs (gathered once per process;
+        with no checkout, only the registry's collectors) and the hub's last runs."""
+        from . import schedule
+
+        if self._schedule is None:
+            self._schedule = schedule.gather(self.root, self.registry)
+        return schedule.build(
+            self._schedule,
+            now=doc.get("generated_at"),
+            sources=doc.get("sources") or (),
+            observations=doc.get("observations") or (),
+        )
+
+    def _topology_vm(self, doc: Mapping[str, Any]) -> dict[str, Any]:
+        from homelabnext.compute.model import ComputeError
+
+        from ..power import states
+        from . import topology
+
+        try:
+            return topology.load(
+                self.guests,
+                self.guests_site,
+                registry=self.lab,
+                dataflow=self._dataflow_vm(),
+                ups_state=states(doc),  # the UPS badges: the hub's live NUT readings
+            )
+        except ComputeError as exc:
+            raise ValueError(str(exc)) from None
+
+    def data(self, panel: str, doc: Mapping[str, Any]) -> dict[str, Any]:
+        """The machine-readable form of ``panel`` (topology, dataflow or schedule): the
+        view-model its page draws.  ``KeyError`` for another panel; an unreadable source raises
+        like :meth:`body`'s."""
+        if panel == "topology":
+            return self._topology_vm(doc)
+        if panel == "schedule":
+            return self._schedule_vm(doc)
+        if panel == "dataflow":
+            _, extra = self._guests()
+            return {"model": self._dataflow_vm() or {}, "host_flows": extra}
+        raise KeyError(panel)
+
     def _guests(self) -> tuple[Any, list[dict[str, Any]]]:
         """The lab index and the host-level flows (service calls, firewall allows) the Dataflow
         page adds; with no guests configured, the registry's own."""
@@ -181,7 +247,7 @@ class MapSite:
         from homelabnext.compute.model import ComputeError
 
         try:
-            doc, guests, _, nodes = topology.inputs(self.guests, self.guests_site)
+            doc, guests, _, nodes = topology.inputs(self.guests, self.guests_site, problems_out=[])
         except ComputeError as exc:
             raise ValueError(str(exc)) from None
         idx = topology.index_for(doc, [g.raw for g in guests], lab, nodes)
@@ -193,16 +259,7 @@ class MapSite:
         if panel == "links":
             return links.render(links.build(self.registry))
         if panel == "schedule":
-            if self._schedule is None:  # the checkout's timers and specs: once per process
-                self._schedule = schedule.gather(self.root, self.registry)
-            return schedule.render(
-                schedule.build(
-                    self._schedule,
-                    now=doc.get("generated_at"),
-                    sources=doc.get("sources") or (),
-                    observations=doc.get("observations") or (),
-                )
-            )
+            return schedule.render(self._schedule_vm(doc))
         if panel == "mcp-servers":
             from homelabnext.mcp import servers
 
@@ -214,21 +271,7 @@ class MapSite:
             return roster.render(roster.build(roster.gather(self.roster, self.root), sessions))
 
         if panel == "topology":
-            from homelabnext.compute.model import ComputeError
-
-            try:
-                from ..power import states
-
-                vm = topology.load(
-                    self.guests,
-                    self.guests_site,
-                    registry=self.lab,
-                    dataflow=self._dataflow_vm(),
-                    ups_state=states(doc),  # the UPS badges: the hub's live NUT readings
-                )
-            except ComputeError as exc:
-                raise ValueError(str(exc)) from None
-            return topology.render(vm)
+            return topology.render(self._topology_vm(doc))
         if panel == "dataflow":
             idx, extra = self._guests()
             return dataflow.render(self._dataflow_vm() or {}, idx=idx, extra=extra)
@@ -260,6 +303,8 @@ class MapSite:
         interactive pages carry their own CSP header (:func:`.assets.live_csp`)."""
         if route == assets.SCRIPT_ROUTE and self.available() & assets.INTERACTIVE:
             return 200, assets.JS_TYPE, assets.js().encode("utf-8")
+        if (jpanel := JSON_ROUTES.get(route)) is not None:
+            return self._json(jpanel, doc)
         panel = MAP_ROUTES.get(route)
         if panel is None or panel not in self.available():
             return None
@@ -267,6 +312,22 @@ class MapSite:
         if panel in assets.INTERACTIVE:
             return 200, HTML, body, {"Content-Security-Policy": assets.live_csp()}
         return 200, HTML, body
+
+    def _json(self, panel: str, doc: Mapping[str, Any]) -> Response | None:
+        """The JSON response for ``panel``, or None when its inputs are not configured; an
+        unreadable source is a ``500`` with the error text, never a half-built document."""
+        if panel not in self.available():
+            return None
+        try:
+            return 200, JSON_TYPE, self.json_bytes(panel, doc)
+        except _ERRORS as exc:
+            err = json.dumps({"error": "cannot build the map", "detail": str(exc)[:300]})
+            return 500, JSON_TYPE, (err + "\n").encode("utf-8")
+
+    def json_bytes(self, panel: str, doc: Mapping[str, Any]) -> bytes:
+        """``panel``'s data as JSON text (sorted keys, so two reads of one state are equal)."""
+        text = json.dumps(self.data(panel, doc), indent=1, sort_keys=True, default=_plain)
+        return (text + "\n").encode("utf-8")
 
     def write(self, out: str | Path, doc: Mapping[str, Any]) -> list[Path]:
         """Write every available map as ``<panel>.html`` into ``out``, and the private
@@ -283,4 +344,11 @@ class MapSite:
             p = d / f"{panel}.html"
             p.write_text(self.page(panel, doc, live=False), encoding="utf-8")
             paths.append(p)
+            if panel in JSON_ROUTES.values():
+                j = d / f"{panel}.json"
+                try:
+                    j.write_bytes(self.json_bytes(panel, doc))
+                except _ERRORS as exc:  # the page above says the same, as an error line
+                    j.write_text(json.dumps({"error": str(exc)[:300]}) + "\n", encoding="utf-8")
+                paths.append(j)
         return paths

@@ -207,7 +207,9 @@ The collector verifies https sources against one bundle, `tls/ca-bundle.crt` (th
 `status_hub_extra_ca_refs`, for a product that signs its own certificate), through `SSL_CERT_FILE`;
 this needs the hub's TLS settings. `status_hub_views_file` replaces the built-in two-entry menu with
 the lab's own views (checked with `hnx status views check`), `status_hub_registers_dir` is passed to
-`hnx status serve --registers`, and `status_hub_notify_topic` (with `status_hub_notify_ceiling`) pages
+`hnx status serve --registers`, `status_hub_guests_src` and `status_hub_site_src` (the lab's guest
+directory and site model on the controller) are delivered beside the registry and passed to `--guests` and
+`--guests-site` for the map pages, and `status_hub_notify_topic` (with `status_hub_notify_ceiling`) pages
 `fail`/`stale` transitions through the registry's `notify` service.
 
 #### Login-issued tokens
@@ -713,6 +715,18 @@ hnx status render --out build/hub --guests examples/lab-topology/guests \
 ```
 
 `hnx status serve ... --maps . --invariants-results build/invariants/results.json` serves them
+**No checkout, and as JSON.** A hub deployed from a wheel has no checkout, and needs none for three
+of these pages: given `--guests` and `--guests-site` (the role's `status_hub_guests_src` and
+`status_hub_site_src`) it serves the Topology, draws the Dataflow from the registry's services,
+status sources and upstreams (plus the guests' firewall allows), and draws the Schedule from the
+registry's status collectors and the jobs the hosts report (every item of a `job-last-run` source,
+under "Jobs the hosts report", with its hosts, newest run and worst state; with a checkout the
+timers, fleet units, CI and packs the repository declares are listed too, and only a job none of
+them covers appears under "reported"). Each of the three is also served as JSON, the same view-model
+the page draws (`/topology.json`, `/dataflow.json` as `{model, host_flows}`, `/schedule.json`), withheld
+at `red` like the pages and written by `render --private-out` as `<panel>.json`; a lab's `views.yml`
+lists them as `private` group entries (`panel: topology | dataflow | schedule`, `tlp: red`). The topology draws a guest set that breaks a rule `hnx guests validate` enforces (it shows the lab as it is) and lists the problems on the page and as `guest_problems`; a guest file that cannot be read or does not fit its schema still refuses.
+
 live, through the trusted front door only (the maps are withheld from the public view,
 [above](#tlp-ceilings-and-release-transforms)); `hnx status render --out DIR --private-out PRIV`
 with the same options writes each available map as `<panel>.html` into `PRIV`, never beside the

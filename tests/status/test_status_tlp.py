@@ -591,9 +591,11 @@ def test_the_real_withheld_sites_refuse_an_anonymous_request(served, tmp_path):
 
 def test_the_withheld_routes_cover_every_withheld_page():
     from homelabnext.status.maps import assets
+    from homelabnext.status.maps.pages import JSON_ROUTES
     from homelabnext.status.views import PAGE_PANELS, WITHHELD_ROUTES, withheld_route
 
-    assert {PAGE_PANELS[p] for p in WITHHELD_PANELS} | {assets.SCRIPT_ROUTE} == set(WITHHELD_ROUTES)
+    pages = {PAGE_PANELS[p] for p in WITHHELD_PANELS}
+    assert pages | {assets.SCRIPT_ROUTE, *JSON_ROUTES} == set(WITHHELD_ROUTES)
     assert withheld_route("/orchestration/job") and not withheld_route("/rosterx")
     assert not any(withheld_route(r) for r in ("/", "/agents", "/activity", "/activity.csv"))
 

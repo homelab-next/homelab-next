@@ -23,6 +23,7 @@ from homelabnext.status.cli import main
 from homelabnext.status.maps import MapSite, architecture, assets, dataflow, roadmap, topology
 from homelabnext.status.maps.lab import Index, host_flows
 from homelabnext.status.maps.mdtables import parse_tables, split_row
+from homelabnext.status.maps.pages import JSON_ROUTES
 from homelabnext.status.model import sources_from_registry
 from homelabnext.status.views import build_status, load_views
 from tests.front_door_pass import FrontDoorPass
@@ -46,6 +47,8 @@ SEG = "192.0.2.0/24"  # no-raw-endpoint: allow RFC 5737 documentation address
 A_IP = "192.0.2.10"  # no-raw-endpoint: allow RFC 5737 documentation address
 B_IP = "192.0.2.20"  # no-raw-endpoint: allow RFC 5737 documentation address
 B_NIC = "192.0.2.21"  # no-raw-endpoint: allow RFC 5737 documentation address
+HV_IP = "192.0.2.10"  # no-raw-endpoint: allow RFC 5737 documentation address
+BUS_IP = "192.0.2.80"  # no-raw-endpoint: allow RFC 5737 documentation address
 STRAY = "192.0.2.99"  # no-raw-endpoint: allow RFC 5737 documentation address
 B_V6, B_V6_LONG = "2001:db8::21", "2001:0db8:0000:0000:0000:0000:0000:0021"
 
@@ -701,9 +704,11 @@ def test_render_writes_the_maps_to_the_private_out_only(tmp_path, capsys):
     assert main([*args, "--private-out", str(private)]) == 0
     assert sorted(p.name for p in out.iterdir()) == ["index.html", "status.json"]
     names = sorted(p.name for p in private.iterdir())
-    assert names == ["architecture.html", "dataflow.html", "index.html", "links.html",
-                     "mcp-servers.html", "roadmap.html", "roster.html", "schedule.html",
-                     "topology.html"]  # fmt: skip
+    assert names == ["architecture.html", "dataflow.html", "dataflow.json", "index.html",
+                     "links.html", "mcp-servers.html", "roadmap.html", "roster.html",
+                     "schedule.html", "schedule.json", "topology.html", "topology.json"]  # fmt: skip
+    for name in ("topology.json", "dataflow.json", "schedule.json"):  # the data the pages draw
+        assert isinstance(json.loads((private / name).read_text()), dict)
     home = (private / "index.html").read_text()  # what the maps' menu anchors link back to
     assert 'id="view-overview"' in home and '<a href="topology.html">Topology</a>' in home
     index = (out / "index.html").read_text()
@@ -770,3 +775,97 @@ def test_map_options_are_checked(tmp_path, capsys):
     assert "--guests-registry needs --guests" in err and "--guests-registry " in err
     assert "--guests needs --guests-site" in err and "not a directory" in err
     assert "--invariants-results needs --maps" in err
+
+
+# ----------------------------------------------- no checkout: the hub's own inputs, and JSON
+def _hub_site():
+    """What the deployed hub has: the registry, the guest directory and the site, no checkout."""
+    return MapSite(registry=load(REGISTRY), guests=GUESTS, guests_site=SITE)
+
+
+def test_a_hub_with_no_checkout_serves_topology_dataflow_and_schedule():
+    site = _hub_site()
+    assert site.available() == {"topology", "dataflow", "schedule"}
+    for panel in ("topology", "dataflow", "schedule"):
+        body = site.body(panel, _doc())
+        assert "cannot build" not in body and "unavailable" not in body, panel
+    assert "guest:bus-core" in site.body("topology", _doc())
+    assert MapSite(registry=load(REGISTRY)).available() == {"dataflow", "schedule"}
+
+
+def test_each_map_is_also_json_and_the_json_is_the_view_model_the_page_draws():
+    site = _hub_site()
+    doc = _doc()
+    for route, panel in JSON_ROUTES.items():
+        code, ctype, body = site.handle(route, "", doc)
+        assert code == 200 and ctype == "application/json; charset=utf-8"
+        data = json.loads(body)
+        assert data == json.loads(site.json_bytes(panel, doc)) and data  # stable and non-empty
+        assert body.endswith(b"\n")
+    topo = json.loads(site.handle("/topology.json", "", doc)[2])
+    assert "guest:bus-core" in json.dumps(topo)
+    flow = json.loads(site.handle("/dataflow.json", "", doc)[2])
+    assert set(flow) == {"model", "host_flows"}
+    sched = json.loads(site.handle("/schedule.json", "", doc)[2])
+    assert {g["kind"] for g in sched["groups"]} >= {"collector", "reported"}
+
+
+def test_a_json_route_of_a_map_that_is_not_configured_is_not_served():
+    assert MapSite(root=ROOT).handle("/topology.json", "", _doc()) is None
+    assert MapSite(guests=GUESTS, guests_site=SITE).handle("/dataflow.json", "", _doc()) is None
+    assert _hub_site().handle("/roadmap.json", "", _doc()) is None
+
+
+def test_an_unreadable_source_is_a_json_error_not_a_half_built_document(tmp_path):
+    (tmp_path / "site.yml").write_text("site_version: 1\nzones: nope\n")
+    site = MapSite(guests=tmp_path, guests_site=tmp_path / "site.yml")
+    code, ctype, body = site.handle("/topology.json", "", _doc())
+    assert code == 500 and ctype.startswith("application/json")
+    assert json.loads(body)["error"] == "cannot build the map"
+
+
+def test_the_json_routes_are_withheld_red_and_need_the_front_door():
+    from homelabnext import tlp
+    from homelabnext.status import views as v
+    from homelabnext.status.serve import make_server
+
+    for route in JSON_ROUTES:
+        assert v.withheld_route(route) and v.route_ceiling(route) is tlp.Label.RED
+    site = _hub_site()
+    srv = make_server(lambda: _doc(site.available()), maps=site, agents=FrontDoorPass())
+    threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
+    host, port = srv.server_address[:2]
+    try:
+        headers, text = _get(host, port, "/schedule.json")
+        assert headers["Content-Type"].startswith("application/json")
+        assert isinstance(json.loads(text)["groups"], list)
+        with pytest.raises(urllib.error.HTTPError):  # a map no site configured: 404
+            urllib.request.urlopen(f"http://{host}:{port}/roadmap.json", timeout=HANG_GUARD_S)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_map_draws_a_guest_set_that_breaks_a_validate_rule_and_says_so(tmp_path):
+    """``hnx guests validate`` enforces the rules; the map shows the lab as it is (the real lab has
+    a known policy error, so a strict map would never draw it), with the problems listed."""
+    import shutil
+
+    from homelabnext.compute.model import ComputeError
+
+    guests = tmp_path / "guests"
+    shutil.copytree(GUESTS, guests)
+    twin = (guests / "bus-core.yml").read_text().replace(BUS_IP, HV_IP)
+    (guests / "bus-core.yml").write_text(twin)  # the same address as hv-a: a semantic problem
+    with pytest.raises(ComputeError, match=re.escape(HV_IP)):
+        topology.inputs(guests, SITE)  # strict by default
+    vm = topology.load(guests, SITE)
+    assert vm["guest_problems"] and any(HV_IP in p for p in vm["guest_problems"])
+    assert {g["id"] for g in vm["guests"]} >= {"guest:bus-core", "guest:hv-a"}
+    page = topology.render(vm)
+    assert "Guest set problems" in page and HV_IP in page
+    assert "guest_problems" not in topology.load(GUESTS, SITE)  # a clean set carries none
+    # a file that does not fit the schema is still an error, not a half-drawn lab
+    (guests / "bus-core.yml").write_text("id: guest:bus-core\nnonsense: [\n")
+    with pytest.raises(ComputeError):
+        topology.load(guests, SITE)

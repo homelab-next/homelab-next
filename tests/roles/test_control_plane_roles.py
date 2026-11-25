@@ -1771,6 +1771,20 @@ def test_status_hub_collector_renders_a_calendar_timer_and_a_hardened_oneshot(tm
     ]  # the alias a product's certificate does not carry is overridden by a name it does
 
 
+def test_status_hub_serves_the_guest_pages_from_the_delivered_directory_only_when_given(tmp_path):
+    """The topology, dataflow and schedule views (and their JSON) need the guest directory and the
+    site model on the hub host; the unit names the delivered copies, never the controller paths."""
+    argv = _directives(_render(tmp_path / "bare", "status_hub", HUB_COLLECT)["hnx-hub.service"])
+    assert "--guests" not in argv["ExecStart"][0].split()
+    given = {**HUB_COLLECT, "status_hub_guests_src": "/srv/lab/guests",
+             "status_hub_site_src": "/srv/lab/site.yml"}  # fmt: skip
+    argv = _directives(_render(tmp_path / "given", "status_hub", given)["hnx-hub.service"])
+    argv = argv["ExecStart"][0].split()
+    assert argv[argv.index("--guests") + 1] == "/etc/hnx-hub/guests"
+    assert argv[argv.index("--guests-site") + 1] == "/etc/hnx-hub/site.yml"
+    assert "/srv/lab" not in " ".join(argv)
+
+
 def test_status_hub_collector_pages_through_the_notify_channel_when_asked(tmp_path):
     extra = {**HUB_COLLECT, "status_hub_notify_topic": "hub-alerts"}
     argv = _directives(_render(tmp_path, "status_hub", extra)["hnx-hub-collect.service"])
@@ -1796,6 +1810,10 @@ def test_status_hub_collector_inputs_are_checked(tmp_path):
         {"status_hub_notify_ceiling": "orange"},
         {"status_hub_extra_ca_refs": ["-----BEGIN CERTIFICATE-----"]},
         {"status_hub_registers_dir": "../registers"},
+        {"status_hub_guests_src": "/srv/lab/guests"},  # the guest pages need the site model too
+        {"status_hub_site_src": "/srv/lab/site.yml"},
+        {"status_hub_guests_src": "lab/guests", "status_hub_site_src": "/srv/lab/site.yml"},
+        {"status_hub_guests_src": "/srv/lab/guests", "status_hub_site_src": "../site.yml"},
         {"status_hub_endpoints": {"backup": BACKUP_URL.rsplit(":", 1)[0]}},  # no explicit port
         {"status_hub_endpoints": {"Backup Up": BACKUP_URL}},
         {"status_hub_endpoints": ["backup"]},
