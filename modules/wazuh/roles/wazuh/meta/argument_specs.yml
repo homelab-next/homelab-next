@@ -81,6 +81,14 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'
@@ -287,6 +295,14 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'
@@ -493,6 +509,14 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'
@@ -698,6 +722,14 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'
@@ -903,6 +935,14 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'
@@ -1108,6 +1148,14 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'
@@ -1317,6 +1365,14 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'

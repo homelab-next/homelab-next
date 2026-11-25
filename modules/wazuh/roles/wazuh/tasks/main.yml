@@ -161,3 +161,7 @@
   changed_when: false
   check_mode: false
   when: wazuh_start | bool and not ansible_check_mode
+
+- name: Write the liveness metrics timer (which daemons are live, how old the alert stream is)
+  ansible.builtin.include_tasks: liveness.yml
+  when: wazuh_textfile_dir | length > 0

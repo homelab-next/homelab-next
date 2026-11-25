@@ -23,6 +23,9 @@
         [wazuh_agent_port, wazuh_enrollment_port, wazuh_api_port, wazuh_indexer_port,
          wazuh_dashboard_port, wazuh_syslog_port] | map('int') | unique | list | length == 6
       - wazuh_indexer_uid | int >= 1 and wazuh_dashboard_uid | int >= 1
+      # the liveness timer's output directory: empty (off) or a canonical absolute path of at least two parts
+      - wazuh_textfile_dir == '' or wazuh_textfile_dir is match('^(/[A-Za-z0-9._-]+){2,}\Z')
+      - wazuh_alerts_max_age_seconds | int >= 120
       - wazuh_indexer_gid | int >= 1 and wazuh_dashboard_gid | int >= 1 and wazuh_manager_gid | int >= 1
       - wazuh_indexer_heap is match('^[1-9][0-9]{0,3}[mg]\Z')
       - >-
