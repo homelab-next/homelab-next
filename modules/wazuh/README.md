@@ -240,8 +240,8 @@ A timer (`hnx-wazuh-liveness.timer`, every minute, role task `liveness.yml`) run
 writes `siem_manager.prom` into `wazuh_textfile_dir` (default `/var/lib/homelabnext-textfile`; empty turns the
 timer off): `siem_manager_daemon_up{daemon}`, `siem_manager_daemons_running`/`_expected`,
 `siem_alerts_file_age_seconds`, `siem_alerts_file_present` and `siem_manager_check_timestamp_seconds`. The host's
-node exporter must serve that directory (the overlay's `node_exporter_textfile_dir`); the file is mode 0640 owned by
-`wazuh_textfile_group` (default `root`), so set that to the group the exporter runs as. The monitoring module's
+node exporter must serve that directory (the overlay's `node_exporter_textfile_dir`); the file is mode 0600 owned by
+`wazuh_textfile_owner` (default `root`), so set that to the user the exporter runs as. The monitoring module's
 rules page on `SiemManagerDaemonsDown` (a daemon missing for 5 minutes), `SiemAlertStreamStale` (no write for 15
 minutes, 5 minutes sustained) and `SiemLivenessCheckStale` (the writer itself stopped).
 

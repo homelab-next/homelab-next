@@ -6,5 +6,8 @@ After=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/libexec/homelabnext/hnx-wazuh-liveness --compose-file {{ wazuh_dir }}/docker-compose.yml --alerts-file {{ wazuh_data_root }}/manager/logs/alerts/alerts.json --out {{ wazuh_textfile_dir }}/siem_manager.prom --group {{ wazuh_textfile_group }}
+# the timer's runs are reported to the shared last-run record (the writer runs privileged: +)
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ wazuh_last_run_dir }} --group {{ wazuh_last_run_group }} --job timer:wazuh/hnx-wazuh-liveness --unit %n --calendar "{{ wazuh_liveness_interval }}" --delay 0
+ExecStart=/usr/local/libexec/homelabnext/hnx-wazuh-liveness --compose-file {{ wazuh_dir }}/docker-compose.yml --alerts-file {{ wazuh_data_root }}/manager/logs/alerts/alerts.json --out {{ wazuh_textfile_dir }}/siem_manager.prom --owner {{ wazuh_textfile_owner }}
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ wazuh_last_run_dir }} --group {{ wazuh_last_run_group }} --job timer:wazuh/hnx-wazuh-liveness --unit %n --calendar "{{ wazuh_liveness_interval }}" --delay 0
 Nice=10

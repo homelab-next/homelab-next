@@ -7,8 +7,8 @@
 #   owner: platform
 #   trigger: [timer:wazuh/hnx-wazuh-liveness, role:wazuh]
 #   installs_to: /usr/local/libexec/homelabnext/hnx-wazuh-liveness
-#   inputs: "--compose-file FILE --alerts-file FILE --out FILE [--group GROUP]; runs docker compose exec for the process check"
-#   outputs: "the metrics file (atomic rename, 0640); one line on stdout with the same numbers"
+#   inputs: "--compose-file FILE --alerts-file FILE --out FILE [--owner USER]; runs docker compose exec for the process check"
+#   outputs: "the metrics file (atomic rename, 0600); one line on stdout with the same numbers"
 #   exit:
 #     "0": the metrics were written (a dead daemon is a metric, not a failure)
 #     "2": usage error or an unsafe output path
@@ -91,7 +91,7 @@ def daemon_up(compose_file: str, name: str, full: bool, timeout: int = 20) -> bo
         return False
 
 
-def write_atomic(out: Path, text: str, group: str | None = None) -> None:
+def write_atomic(out: Path, text: str, owner: str | None = None) -> None:
     out = out.resolve()
     if len(out.parts) < 4 or out.suffix != ".prom":
         raise ValueError(f"refusing an unsafe output path: {out}")
@@ -99,9 +99,8 @@ def write_atomic(out: Path, text: str, group: str | None = None) -> None:
     try:
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
-        if group:
-            shutil.chown(tmp, group=group)
-        os.chmod(tmp, 0o640)
+        if owner:
+            shutil.chown(tmp, user=owner)  # mkstemp made it 0600: only its owner reads it
         os.replace(tmp, out)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -114,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--alerts-file", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument(
-        "--group", default=None, help="group that owns the file and may read it (mode 0640)"
+        "--owner", default=None, help="user that owns the file and reads it (mode 0600)"
     )
     args = ap.parse_args(argv)
     now = time.time()
@@ -122,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     up["wazuh-apid"] = daemon_up(args.compose_file, API_DAEMON, True)
     text = render(up, alerts_age(Path(args.alerts_file), now), now)
     try:
-        write_atomic(Path(args.out), text, args.group)
+        write_atomic(Path(args.out), text, args.owner)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
