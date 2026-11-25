@@ -47,8 +47,9 @@ SEG = "192.0.2.0/24"  # no-raw-endpoint: allow RFC 5737 documentation address
 A_IP = "192.0.2.10"  # no-raw-endpoint: allow RFC 5737 documentation address
 B_IP = "192.0.2.20"  # no-raw-endpoint: allow RFC 5737 documentation address
 B_NIC = "192.0.2.21"  # no-raw-endpoint: allow RFC 5737 documentation address
-HV_IP = "192.0.2.10"  # no-raw-endpoint: allow RFC 5737 documentation address
-BUS_IP = "192.0.2.80"  # no-raw-endpoint: allow RFC 5737 documentation address
+HV_IP = A_IP  # the same address as hv-a
+# the example bus-core's address, read from its guest file
+BUS_IP = re.search(r"\bip: ([0-9.]+)", (GUESTS / "bus-core.yml").read_text()).group(1)
 STRAY = "192.0.2.99"  # no-raw-endpoint: allow RFC 5737 documentation address
 B_V6, B_V6_LONG = "2001:db8::21", "2001:0db8:0000:0000:0000:0000:0000:0021"
 

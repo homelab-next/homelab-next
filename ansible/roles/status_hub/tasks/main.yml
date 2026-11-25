@@ -78,17 +78,6 @@
 # The guest pages (Topology, Baselines) and the topology, dataflow and schedule JSON read the lab's
 # guest directory and site model: delivered flat beside the registry, and a guest file the lab no
 # longer has is removed (a stale guest would stay on the map).
-- name: List the lab's guest files on the controller
-  ansible.builtin.find:
-    paths: "{{ status_hub_guests_src }}"
-    patterns: ["*.yml"]
-    file_type: file
-  delegate_to: localhost
-  become: false
-  register: status_hub_guest_files
-  check_mode: false  # read-only: it runs in --check too
-  when: status_hub_guests_src | length > 0
-
 - name: Create the guest directory
   ansible.builtin.file:
     path: "{{ status_hub_config_dir }}/guests"
@@ -105,7 +94,7 @@
     owner: root
     group: "{{ status_hub_group }}"
     mode: "0640"
-  loop: "{{ status_hub_guest_files.files | map(attribute='path') | sort | list }}"
+  loop: "{{ query('ansible.builtin.fileglob', status_hub_guests_src ~ '/*.yml') | sort }}"
   register: status_hub_guests_delivered
   when: status_hub_guests_src | length > 0
 
@@ -124,7 +113,7 @@
     state: absent
   loop: >-
     {{ status_hub_guests_present.files | map(attribute='path')
-       | reject('in', status_hub_guest_files.files | map(attribute='path') | map('basename')
+       | reject('in', query('ansible.builtin.fileglob', status_hub_guests_src ~ '/*.yml') | map('basename')
                 | map('regex_replace', '^', status_hub_config_dir ~ '/guests/') | list)
        | list }}
   register: status_hub_guests_removed
