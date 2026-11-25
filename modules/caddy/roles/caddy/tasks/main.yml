@@ -48,6 +48,7 @@
       - "--volume={{ caddy_data_root }}/config:{{ caddy_container_config_dir }}:ro"
       - "--volume={{ caddy_data_root }}/certs:{{ caddy_container_certs_dir }}:ro"
       - "--volume={{ caddy_data_root }}/edge-tls:{{ caddy_edge_tls_dir }}:ro"
+      - "--volume={{ caddy_log_root }}:{{ caddy_container_log_dir }}"
       - "--tmpfs=/data"
       - "--tmpfs=/config"
       - "--env=XDG_DATA_HOME=/data"
