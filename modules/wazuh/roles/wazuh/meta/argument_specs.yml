@@ -85,6 +85,10 @@ argument_specs:
         type: str
         description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
         default: /var/lib/homelabnext-textfile
+      wazuh_textfile_group:
+        type: str
+        description: The group that owns the liveness metrics file and may read it (mode 0640); set it to the group the host exporter runs as.
+        default: root
       wazuh_alerts_max_age_seconds:
         type: int
         description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
@@ -299,6 +303,10 @@ argument_specs:
         type: str
         description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
         default: /var/lib/homelabnext-textfile
+      wazuh_textfile_group:
+        type: str
+        description: The group that owns the liveness metrics file and may read it (mode 0640); set it to the group the host exporter runs as.
+        default: root
       wazuh_alerts_max_age_seconds:
         type: int
         description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
@@ -513,6 +521,10 @@ argument_specs:
         type: str
         description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
         default: /var/lib/homelabnext-textfile
+      wazuh_textfile_group:
+        type: str
+        description: The group that owns the liveness metrics file and may read it (mode 0640); set it to the group the host exporter runs as.
+        default: root
       wazuh_alerts_max_age_seconds:
         type: int
         description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
@@ -726,6 +738,10 @@ argument_specs:
         type: str
         description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
         default: /var/lib/homelabnext-textfile
+      wazuh_textfile_group:
+        type: str
+        description: The group that owns the liveness metrics file and may read it (mode 0640); set it to the group the host exporter runs as.
+        default: root
       wazuh_alerts_max_age_seconds:
         type: int
         description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
@@ -939,6 +955,10 @@ argument_specs:
         type: str
         description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
         default: /var/lib/homelabnext-textfile
+      wazuh_textfile_group:
+        type: str
+        description: The group that owns the liveness metrics file and may read it (mode 0640); set it to the group the host exporter runs as.
+        default: root
       wazuh_alerts_max_age_seconds:
         type: int
         description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
@@ -1152,6 +1172,10 @@ argument_specs:
         type: str
         description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
         default: /var/lib/homelabnext-textfile
+      wazuh_textfile_group:
+        type: str
+        description: The group that owns the liveness metrics file and may read it (mode 0640); set it to the group the host exporter runs as.
+        default: root
       wazuh_alerts_max_age_seconds:
         type: int
         description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
@@ -1369,6 +1393,10 @@ argument_specs:
         type: str
         description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
         default: /var/lib/homelabnext-textfile
+      wazuh_textfile_group:
+        type: str
+        description: The group that owns the liveness metrics file and may read it (mode 0640); set it to the group the host exporter runs as.
+        default: root
       wazuh_alerts_max_age_seconds:
         type: int
         description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).

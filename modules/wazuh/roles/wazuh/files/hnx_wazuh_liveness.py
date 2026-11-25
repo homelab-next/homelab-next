@@ -1,12 +1,14 @@
+#!/usr/bin/python3 -I
 # SPDX-License-Identifier: Apache-2.0
 # hnx-script:
 #   id: wazuh-liveness
 #   kind: tool
 #   purpose: Write the SIEM manager's liveness as node-exporter textfile metrics - which daemons are live processes and how old the alert stream's last write is - so a manager that is up but not working is loud.
 #   owner: platform
-#   trigger: [role:wazuh]
-#   inputs: "--compose-file FILE --alerts-file FILE --out FILE; runs docker compose exec for the process check"
-#   outputs: "the metrics file (atomic rename, 0644); one line on stdout with the same numbers"
+#   trigger: [timer:wazuh/hnx-wazuh-liveness, role:wazuh]
+#   installs_to: /usr/local/libexec/homelabnext/hnx-wazuh-liveness
+#   inputs: "--compose-file FILE --alerts-file FILE --out FILE [--group GROUP]; runs docker compose exec for the process check"
+#   outputs: "the metrics file (atomic rename, 0640); one line on stdout with the same numbers"
 #   exit:
 #     "0": the metrics were written (a dead daemon is a metric, not a failure)
 #     "2": usage error or an unsafe output path
@@ -23,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -88,7 +91,7 @@ def daemon_up(compose_file: str, name: str, full: bool, timeout: int = 20) -> bo
         return False
 
 
-def write_atomic(out: Path, text: str) -> None:
+def write_atomic(out: Path, text: str, group: str | None = None) -> None:
     out = out.resolve()
     if len(out.parts) < 4 or out.suffix != ".prom":
         raise ValueError(f"refusing an unsafe output path: {out}")
@@ -96,7 +99,9 @@ def write_atomic(out: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
-        os.chmod(tmp, 0o644)
+        if group:
+            shutil.chown(tmp, group=group)
+        os.chmod(tmp, 0o640)
         os.replace(tmp, out)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -108,13 +113,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--compose-file", required=True)
     ap.add_argument("--alerts-file", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--group", default=None, help="group that owns the file and may read it (mode 0640)"
+    )
     args = ap.parse_args(argv)
     now = time.time()
     up = {d: daemon_up(args.compose_file, d, False) for d in DAEMONS}
     up["wazuh-apid"] = daemon_up(args.compose_file, API_DAEMON, True)
     text = render(up, alerts_age(Path(args.alerts_file), now), now)
     try:
-        write_atomic(Path(args.out), text)
+        write_atomic(Path(args.out), text, args.group)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2

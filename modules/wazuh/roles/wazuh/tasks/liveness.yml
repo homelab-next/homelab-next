@@ -2,13 +2,21 @@
 # The liveness metrics (README, "Liveness and the stale-stream alert"): a timer writes siem_* textfile
 # metrics once a minute (which manager daemons are live processes, how old the alert stream's last
 # write is) and the monitoring rules page on them. Off when wazuh_textfile_dir is empty.
+- name: The directory for the liveness writer exists
+  ansible.builtin.file:
+    path: /usr/local/libexec/homelabnext
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Install the liveness writer
   ansible.builtin.copy:
     src: hnx_wazuh_liveness.py
-    dest: "{{ wazuh_data_root }}/config/hnx_wazuh_liveness.py"
-    owner: "{{ wazuh_owner }}"
-    group: "{{ wazuh_group }}"
-    mode: "0750"
+    dest: /usr/local/libexec/homelabnext/hnx-wazuh-liveness
+    owner: root
+    group: root
+    mode: "0755"
 
 - name: The textfile directory exists
   ansible.builtin.file:

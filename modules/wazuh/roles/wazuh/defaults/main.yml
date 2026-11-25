@@ -36,6 +36,8 @@ wazuh_manager_gid: 999
 # call the alert stream stale when its file was last written more than this many seconds ago (the stream
 # advances many times a minute even at the quietest hour; a quarter of an hour of silence is an outage).
 wazuh_textfile_dir: /var/lib/homelabnext-textfile
+# The group that owns the metrics file (mode 0640, never world-readable): the group the exporter runs as.
+wazuh_textfile_group: root
 wazuh_alerts_max_age_seconds: 900
 # memory: the indexer's heap is half its container limit (the product default of 1 GiB starved it
 # on a much bigger host); the manager and the dashboard have their own limits

@@ -500,6 +500,7 @@ def test_the_liveness_writer_reads_the_stream_age_and_refuses_an_unsafe_output(t
     out.parent.mkdir()
     mod.write_atomic(out, "a 1\n")
     assert out.read_text() == "a 1\n" and not list(out.parent.glob(".hnx-liveness-*"))
+    assert (out.stat().st_mode & 0o777) == 0o640  # never world-readable
     with pytest.raises(ValueError):
         mod.write_atomic(Path("/x.prom"), "a 1\n")
     with pytest.raises(ValueError):

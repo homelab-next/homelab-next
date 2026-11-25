@@ -6,5 +6,5 @@ After=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 -I {{ wazuh_data_root }}/config/hnx_wazuh_liveness.py --compose-file {{ wazuh_dir }}/docker-compose.yml --alerts-file {{ wazuh_data_root }}/manager/logs/alerts/alerts.json --out {{ wazuh_textfile_dir }}/siem_manager.prom
+ExecStart=/usr/local/libexec/homelabnext/hnx-wazuh-liveness --compose-file {{ wazuh_dir }}/docker-compose.yml --alerts-file {{ wazuh_data_root }}/manager/logs/alerts/alerts.json --out {{ wazuh_textfile_dir }}/siem_manager.prom --group {{ wazuh_textfile_group }}
 Nice=10
