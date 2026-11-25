@@ -1,0 +1,45 @@
+{
+  "action": "notify.page",
+  "audit": true,
+  "description": "Publish one page to the notify service's page topic (the alert id as its title, the params as its message).",
+  "handler": "handlers/notify-page.sh",
+  "handler_digest": "sha256:faa103021d0e45b3df778c7ca5e220d332898c13768c5114a43150e8fe0441b1",
+  "idempotent": false,
+  "max_output_bytes": 65536,
+  "params_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "alert_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+        "description": "the page's title, also the header the notify service shows"
+      },
+      "rota": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+        "description": "who is paged; the topic itself is the broker's NOTIFY_PAGE_URL"
+      },
+      "title": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "not": {
+          "pattern": "\\{\\{|\\{%|<%|%>"
+        },
+        "description": "what is wrong, one line; never a template marker"
+      }
+    },
+    "required": [
+      "alert_id",
+      "title"
+    ]
+  },
+  "requires_approval": false,
+  "secrets": [
+    "NOTIFY_PAGE_URL",
+    "NOTIFY_PAGE_TOKEN"
+  ],
+  "tier": "write",
+  "timeout_s": 30
+}

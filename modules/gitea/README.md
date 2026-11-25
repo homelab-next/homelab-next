@@ -360,11 +360,20 @@ The overlay carries every real value ([selection](../../docs/modules/selection.m
 `gitea_oidc_enabled: true` with `gitea_oidc_issuer_url`, `gitea_oidc_client_id` and
 `secret:gitea/oidc-client-secret` creates (or updates) an authentication source named
 `gitea_oidc_name` through Gitea's own `gitea admin auth add-oauth`, the secret passed in the
-docker client's environment. The issuer's certificate is verified against the lab CA
-(`SSL_CERT_FILE`, set only then). Local accounts stay; automatic registration is **off** (an
+docker client's environment. The issuer's certificate is verified against a trust bundle,
+`tls/ca-bundle.pem`: the host's public root store (`gitea_system_ca_file`, Debian's
+`/etc/ssl/certs/ca-certificates.crt` by default) followed by the lab CA, the container's
+`SSL_CERT_FILE` (set only then). The bundle carries both because `SSL_CERT_FILE` replaces the image's
+own root store: an issuer published at the edge presents the edge's public certificate, which the lab
+CA alone does not verify (the token exchange fails with an x509 error after a good login). The run
+refuses a root store with no certificate in it. Local accounts stay; automatic registration is **off** (an
 administrator creates or links the account), so an OIDC identity is never an unvetted account. The
 Keycloak client is a confidential client with the redirect URI
 `https://<gitea_hostname>:<gitea_port>/user/oauth2/<gitea_oidc_name>/callback`.
+
+The forge row has no public route, so the realm gives its client a redirect only when the row declares
+it (service schema 2.13): set `auth: idp` and `oidc.redirect_uris` to that URI on the `forge` row in
+the site's registry (the host must be the row's own name and port; the registry refuses any other).
 
 ## Tests and tooling
 

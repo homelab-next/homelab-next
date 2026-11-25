@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/workflows/stackstorm/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/workflows/stackstorm/1.2",
   "title": "StackStorm binding of workflow packs",
-  "description": "When pinned workflow packs run on StackStorm: the rendered pack's name and version, the webhook the event bridge posts to, the broker socket its actions call, and one rule per pack - shadow or live, an optional coalesce window, an optional cron schedule for a pack triggered by homelabnext.schedule.fired, and the built-in approved-run rule. `hnx workflows st2 render` turns this file, the deploy pins and the packs into a StackStorm pack; rules JSON Schema cannot express (the pack is pinned, its steps run on StackStorm, a live rule carries shadow evidence, agent dispatch is coalesced and bounded, secrets are datastore references) are enforced by `hnx workflows st2 check` (docs/stackstorm.md).",
+  "description": "When pinned workflow packs run on StackStorm: the rendered pack's name and version, the webhook the event bridge posts to, the broker socket its actions call, and one rule per pack - shadow or live, an optional coalesce window, an optional cron schedule for a pack triggered by homelabnext.schedule.fired, the built-in approved-run rule, and the tables a lookup step may read. `hnx workflows st2 render` turns this file, the deploy pins and the packs into a StackStorm pack; rules JSON Schema cannot express (the pack is pinned, its steps run on StackStorm, a live rule carries shadow evidence, agent dispatch is coalesced and bounded, secrets are datastore references) are enforced by `hnx workflows st2 check` (docs/stackstorm.md).",
   "type": "object",
   "properties": {
     "st2_pack": {
@@ -80,6 +80,16 @@
             "additionalProperties": false
           }
         ]
+      }
+    },
+    "tables": {
+      "type": "object",
+      "description": "the tables a bound pack's lookup step may read, by table id: a file the action runner mounts read-only, read bounded; a lookup on a table not declared here does not run on StackStorm (st2-step), and an unreadable, too old or malformed table fails the run instead of reading as no row",
+      "propertyNames": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/table_id"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/table"
       }
     },
     "rules": {
@@ -217,6 +227,84 @@
         "mode"
       ],
       "additionalProperties": false
+    },
+    "table": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^(/(?!\\.\\.?(/|$))[A-Za-z0-9._-]+)+$(?!\\n)",
+          "description": "the table file inside the action runner: absolute, no . or .. part"
+        },
+        "format": {
+          "enum": [
+            "json-map",
+            "invariants-results"
+          ],
+          "description": "json-map: a JSON object of rows (objects) by key; invariants-results: the invariants runner's results document, one row per key of keys"
+        },
+        "max_age_s": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 604800,
+          "description": "a file older than this fails the run (its writer is not running)"
+        },
+        "keys": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "invariants-results only: each lookup key (a slug, e.g. a schedule id) and the criteria whose verdict is its row (ok only when every one passed)",
+          "propertyNames": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$(?!\\n)"
+            }
+          }
+        }
+      },
+      "required": [
+        "path",
+        "format"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "format": {
+                "const": "invariants-results"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "keys"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "format": {
+                "const": "json-map"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "keys"
+              ]
+            }
+          }
+        }
+      ]
     }
   }
 }

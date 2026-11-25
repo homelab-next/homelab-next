@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing pinned (the collector ships with the role; the board tool is the distribution's package)
+  ansible.builtin.debug:
+    msg: hardware_metrics pins nothing; packages arrive through the patching control
+  tags: [upgrade]

@@ -54,10 +54,37 @@
              'command': ['--config.file=' ~ prometheus_container_blackbox_dir ~ '/blackbox.yml'],
              'user': (prometheus_uid | int | string) ~ ':' ~ (prometheus_gid | int | string),
              'read_only': true,
-             'volumes': [prometheus_data_root ~ '/config/blackbox:' ~ prometheus_container_blackbox_dir ~ ':ro'],
+             'volumes': [prometheus_data_root ~ '/config/blackbox:' ~ prometheus_container_blackbox_dir ~ ':ro']
+                        + ([prometheus_data_root ~ '/probe-credentials:' ~ prometheus_container_probe_auth_dir ~ ':ro']
+                           if prometheus_llm_probes_on | bool else []),
              'mem_limit': prometheus_blackbox_mem_limit,
              'healthcheck': {
                'test': ['CMD', 'wget', '-q', '--spider', 'http://localhost:' ~ (prometheus_blackbox_port | string) ~ '/-/healthy'],
                'interval': '30s', 'timeout': '5s', 'retries': 5, 'start_period': '15s'}}})}}) }}
   when: prometheus_probes_enabled | bool
+  tags: [health, backup, restore, export, upgrade]
+
+# The SNMP exporter: another container of the project while SNMP is on. It reads its bundled modules,
+# the role's module (config/snmp) and the community (snmp-credentials, mounted into it alone), and
+# publishes no port (the metrics service reaches it by name on the project's network).
+- name: Add the SNMP exporter to the application spec
+  ansible.builtin.set_fact:
+    prometheus_app: >-
+      {{ prometheus_app | combine({'compose_app_spec': {'services': prometheus_app.compose_app_spec.services | combine({
+           prometheus_snmp_service: {
+             'image': prometheus_snmp_image.split('@')[0].rsplit(':', 1)[0],
+             'tag': prometheus_snmp_image.split('@')[0].rsplit(':', 1)[1],
+             'digest': prometheus_snmp_image.split('@')[1],
+             'command': ['--config.file=/etc/snmp_exporter/snmp.yml',
+                         '--config.file=' ~ prometheus_container_snmp_dir ~ '/snmp.yml',
+                         '--config.file=' ~ prometheus_container_snmp_auth_dir ~ '/auth.yml'],
+             'user': (prometheus_uid | int | string) ~ ':' ~ (prometheus_gid | int | string),
+             'read_only': true,
+             'volumes': [prometheus_data_root ~ '/config/snmp:' ~ prometheus_container_snmp_dir ~ ':ro',
+                         prometheus_data_root ~ '/snmp-credentials:' ~ prometheus_container_snmp_auth_dir ~ ':ro'],
+             'mem_limit': prometheus_snmp_mem_limit,
+             'healthcheck': {
+               'test': ['CMD', 'wget', '-q', '--spider', 'http://localhost:' ~ (prometheus_snmp_port | string) ~ '/'],
+               'interval': '30s', 'timeout': '5s', 'retries': 5, 'start_period': '15s'}}})}}) }}
+  when: prometheus_snmp_enabled | bool
   tags: [health, backup, restore, export, upgrade]

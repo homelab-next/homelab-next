@@ -16,6 +16,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -105,6 +106,8 @@ class Service:
     #: 2.10: how the edge reaches this public row over TLS: ``ca``, optional ``server_name``, and
     #: with ``tls: mtls`` the ``client_cert`` and ``client_key`` it presents (secret references)
     edge_tls: dict | None = None
+    #: 2.13: the callbacks the row's own product serves for a sign-in at the IdP (``oidc.redirect_uris``)
+    oidc_redirect_uris: tuple[str, ...] = ()
 
     @property
     def is_primary(self) -> bool:
@@ -391,6 +394,7 @@ def semantic_problems(doc: dict) -> list[str]:
                 f"service {sname}: front_door needs auth: idp and a public_hostname (the edge adds it)"
             )
         problems += edge_tls_problems(sname, s)
+        problems += oidc_problems(sname, s, doc["lab"])
     problems += upstream_problems(services)
     problems += edge_tls_key_reuse(services)
     # a primary answers by its capability, an eval or retiring row by its row name (ADR-0039
@@ -459,6 +463,62 @@ def edge_tls_problems(sname: str, s: Mapping[str, Any]) -> list[str]:
         out.append(f"service {sname}: edge_tls.client_key is also its certificate or CA")
     if et.get("client_cert") and et.get("client_cert") == et.get("ca"):
         out.append(f"service {sname}: edge_tls.client_cert is also its CA")
+    return out
+
+
+def _walks_path(path: str) -> bool:
+    """True for a URL path with a dot segment (plain or percent-encoded), an empty segment, or an
+    encoded slash or backslash: each can make a server resolve the callback to another path."""
+    low = path.lower()
+    if "%2f" in low or "%5c" in low:
+        return True
+    segments = low.split("/")[1:]
+    if segments and segments[-1] == "":
+        segments = segments[:-1]  # one trailing slash is an ordinary path
+    return any(seg in ("", ".", "..", "%2e", "%2e%2e", ".%2e", "%2e.") for seg in segments)
+
+
+def oidc_problems(sname: str, s: Mapping[str, Any], lab: Mapping[str, Any]) -> list[str]:
+    """A row's ``oidc.redirect_uris`` (2.13) against the row itself: the IdP is told to send a
+    signed-in browser (and its authorization code) to each URI, so each must be this row's own
+    address, never another service's and never a name outside the lab. The row needs ``auth: idp``
+    (the realm makes a client only for such a row); the host is the alias-zone name the row
+    answers by (a primary its capability, an eval or retiring row its row name) with the row's own
+    port, or the row's ``public_hostname`` on the default port; no dot segment or encoded slash
+    can walk the path out of the callback the product serves."""
+    uris = (s.get("oidc") or {}).get("redirect_uris")
+    if not uris:
+        return []
+    if s.get("auth") != "idp":
+        return [f"service {sname}: oidc needs auth: idp (the IdP makes a client for that row only)"]
+    label = row_name_label(sname, s)
+    zone = f"{lab.get('svc_label', 'svc')}.{lab['domain']}"
+    own = {f"{label}.{zone}": s["port"]} if label else {}
+    if s.get("public_hostname"):
+        own[s["public_hostname"]] = 443
+    out = []
+    for uri in uris:
+        parts = urlsplit(uri)
+        try:
+            host, port = parts.hostname, parts.port or 443
+        except ValueError:
+            out.append(f"service {sname}: oidc.redirect_uris {uri!r}: not a valid port")
+            continue
+        if host not in own:
+            out.append(
+                f"service {sname}: oidc.redirect_uris {uri!r}: host {host!r} is not this row's own "
+                f"name ({', '.join(sorted(own)) or 'none: a legacy row answers by no name'})"
+            )
+        elif port != own[host]:
+            out.append(
+                f"service {sname}: oidc.redirect_uris {uri!r}: port {port} is not the row's port "
+                f"{own[host]} on {host}"
+            )
+        if _walks_path(parts.path):
+            out.append(
+                f"service {sname}: oidc.redirect_uris {uri!r}: a dot segment, empty segment or "
+                "encoded slash in the path"
+            )
     return out
 
 
@@ -789,6 +849,13 @@ def status_source_problems(services: dict) -> list[str]:
             builtin = (mapping or {}).get("builtin")
             if builtin in _AGENT_BUILTINS and kind != "agent-activity":
                 problems.append(f"{where}: builtin {mapping['builtin']} is for agent-activity only")
+            if builtin is not None and kind not in _PRODUCT_STATUS_KINDS:
+                from homelabnext.status.products import BUILTIN_KINDS
+
+                if builtin in BUILTIN_KINDS:
+                    problems.append(
+                        f"{where}: builtin {builtin} is for {BUILTIN_KINDS[builtin]} only"
+                    )
             if builtin in _KIND_BUILTINS and kind != _KIND_BUILTINS[builtin][0]:
                 problems.append(
                     f"{where}: builtin {builtin} is for {_KIND_BUILTINS[builtin][0]} only"
@@ -897,6 +964,7 @@ def build_registry(doc: dict) -> Registry:
             why=(s.get("standing") or {}).get("why", ""),
             replica_of=s.get("replica_of"),
             edge_tls=s.get("edge_tls"),
+            oidc_redirect_uris=tuple((s.get("oidc") or {}).get("redirect_uris", ())),
         )
     return Registry(
         lab_name=lab["name"],

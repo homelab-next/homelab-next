@@ -42,7 +42,8 @@
     }
   ],
   "handler_docs": [
-    "handlers/agent-job-submit.handler.json"
+    "handlers/agent-job-submit.handler.json",
+    "handlers/notify-page.handler.json"
   ],
   "grants": [
     {
@@ -58,7 +59,8 @@
     {
       "profile": "profile:workflow-agents",
       "actions": [
-        "agent.job.submit"
+        "agent.job.submit",
+        "notify.page"
       ],
       "max_tier": "write"
     }

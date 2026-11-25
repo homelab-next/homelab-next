@@ -238,7 +238,17 @@ def test_deploy_unknown_and_twice_pinned(tmp_path):
 from homelabnext.workflows import cti_schedules as _cti
 
 # the rest are reference packs (site handlers); the cti-schedule packs only submit controller jobs
-RUNNABLE = ("proposal-validate", "agent-job-retry", *(_cti.pack_name(t[0]) for t in _cti.TIMERS))
+RUNNABLE = (
+    "proposal-validate",
+    "agent-job-retry",
+    *(_cti.pack_name(t[0]) for t in _cti.TIMERS),
+    "watch-cti-freshness",
+    "watch-honeypot-lake",
+    "watch-llm-server",
+)
+#: deployable (notify.page's handler is in the tree, a schedule pins the producer) and deliberately
+#: not pinned: nothing writes their table (table:cti.watch) yet, so they stay reference packs
+DEPLOYABLE_UNPINNED = ("cti-watch-site", "cti-watch-lake")
 
 
 def test_repository_deploy_manifest_pins_every_runnable_pack():
@@ -249,7 +259,8 @@ def test_repository_deploy_manifest_pins_every_runnable_pack():
     pins = yaml.safe_load((ROOT / "workflows" / "deploy.yml").read_text())["pins"]
     assert {p["pack"]: p["digest"] for p in pins} == {n: pack_digest(pack(n)) for n in RUNNABLE}
     for n in ALL:
-        assert (deployable_problems(ROOT, pack(n), manifest()) == []) == (n in RUNNABLE), n
+        want = n in RUNNABLE or n in DEPLOYABLE_UNPINNED
+        assert (deployable_problems(ROOT, pack(n), manifest()) == []) == want, n
 
 
 def test_pack_digest_ignores_comments_and_key_order():

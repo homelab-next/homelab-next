@@ -14,7 +14,7 @@
           'GITEA__server__SSH_SERVER_HOST_KEYS': (gitea_ssh_host_key_refs.keys() | sort
                                                   | map('regex_replace', '^', gitea_container_sshkeys ~ '/gitea.')
                                                   | join(','))}
-         | combine({'SSL_CERT_FILE': gitea_container_tls ~ '/ca.pem'} if gitea_oidc_enabled | bool else {}) }}
+         | combine({'SSL_CERT_FILE': gitea_container_tls ~ '/ca-bundle.pem'} if gitea_oidc_enabled | bool else {}) }}
 
 - name: Name the [oauth2_client] settings as the product's environment
   ansible.builtin.set_fact:

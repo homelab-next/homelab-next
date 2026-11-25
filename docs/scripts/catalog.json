@@ -825,6 +825,26 @@
     },
     {
       "exit": {
+        "0": "metrics written (a collector that failed says so in hw_collector_up, it does not fail the run)",
+        "2": "the configuration could not be read or the metrics could not be written"
+      },
+      "id": "hardware-metrics",
+      "inputs": "the role's JSON configuration (the collectors and the commands and paths each reads), and those commands' read-only output",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-hardware-metrics",
+      "kind": "job",
+      "language": "python",
+      "outputs": "hardware_metrics.prom in the textfile directory, written atomically",
+      "owner": "platform",
+      "path": "ansible/roles/hardware_metrics/files/hnx-hardware-metrics.py",
+      "purpose": "Write a host's hardware state (pool health and capacity, board sensors and event log, GPU temperature, power and load, guest run state) as node-exporter textfile metrics.",
+      "status": "active",
+      "trigger": [
+        "timer:hardware_metrics/hnx-hardware-metrics",
+        "role:hardware_metrics"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "findings"
       },
@@ -925,6 +945,27 @@
       "trigger": [
         "role:status_hub",
         "timer:status_hub/hnx-hub-login-token"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every entry pulled",
+        "1": "at least one entry failed (its previous file is left as it was)",
+        "2": "usage or configuration error"
+      },
+      "id": "hub-pull",
+      "inputs": "--config FILE: JSON {key_file, known_hosts, root, group, ssh?: PATH, entries: [{name, address, user, dest}]}",
+      "installs_to": "/usr/local/libexec/hnx-hub/hnx-hub-pull",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line per entry on stdout (name, ok and the size, or the error class); each document is written to <root>/<dest> (0640, group the collector's) by rename; nothing is written for a document that is not a JSON object",
+      "owner": "platform",
+      "path": "ansible/roles/status_hub/files/hnx-hub-pull.py",
+      "purpose": "Pull each producer host's status file (for example the invariants runner's results document) over SSH to a restricted account whose forced command streams that one file read-only, and file it under the status root at the path the hub's own configuration names, so a poll-file source has something to read.",
+      "status": "active",
+      "trigger": [
+        "role:status_hub",
+        "timer:status_hub/hnx-hub-pull"
       ]
     },
     {
@@ -1320,6 +1361,7 @@
         "timer:clamav/scan",
         "timer:compose_app/export",
         "timer:context/reindex",
+        "timer:hardware_metrics/hnx-hardware-metrics",
         "timer:honeypot/lake",
         "timer:honeypot/report",
         "timer:intel_ingest/intel-ingest",
@@ -1340,6 +1382,7 @@
         "timer:source_census/source-census-run",
         "timer:status_hub/hnx-hub-collect",
         "timer:status_hub/hnx-hub-login-token",
+        "timer:status_hub/hnx-hub-pull",
         "timer:trino/lake-maintenance",
         "timer:trivy/scan",
         "timer:velociraptor_server/cycle"
@@ -1835,7 +1878,7 @@
     },
     {
       "exit": {
-        "0": "the unit ran and ended successfully",
+        "0": "the unit ran and ended successfully, or (a set declared overlap skip) a run of the same instance was already in progress and this session was coalesced into it",
         "1": "the unit failed, or was never started (systemctl refused or timed out)",
         "143": "cancelled (SIGTERM, SIGINT or SIGHUP), the unit was stopped",
         "2": "usage or configuration error (an untrusted or malformed table, an agent key with no job, a lane, run id or task refused)",
@@ -2457,6 +2500,24 @@
       "owner": "broker",
       "path": "workflows/handlers/agent-job-submit.sh",
       "purpose": "Broker handler for agent.job.submit; puts one job on the orchestration controller's queue.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the notify service accepted the page",
+        "1": "no alert_id or token, the service could not be reached, refused the token (401, 403), or failed (anything else)"
+      },
+      "id": "workflow-broker-notify-page",
+      "inputs": "the validated params as JSON on stdin; the NOTIFY_PAGE_URL secret (the page topic's publish URL); the NOTIFY_PAGE_TOKEN secret (a publish-only token for that topic)",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the notify service's answer on stdout",
+      "owner": "broker",
+      "path": "workflows/handlers/notify-page.sh",
+      "purpose": "Broker handler for notify.page; publishes one page to the notify service's page topic.",
       "status": "active",
       "trigger": [
         "manual"

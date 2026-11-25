@@ -37,7 +37,9 @@ Rules (``<path>: <rule>: <detail>``, exit 1 on any):
 ``st2-duplicate`` a pack or a schedule id is bound once; no bound pack is named ``approved-run``.
 ``st2-actor``    every bound pack's ``actor`` is the binding's ``actor`` (the one broker identity
                  StackStorm's actions authenticate as).
-``st2-step``     every step runs on StackStorm: ``action``, or ``enrich`` ``pick``/``extract-iocs``.
+``st2-step``     every step runs on StackStorm: ``action``, ``enrich`` ``pick``/``extract-iocs``, or
+                 ``enrich`` ``lookup`` on a table the binding declares (``tables``: a file the action
+                 runner mounts read-only, pinned into ``pinned/<pack>.json``).
 ``st2-template`` no literal in a bound pack holds ``{{``, ``{%`` or ``<%``: StackStorm renders those
                  (Jinja in rule criteria and parameters, YAQL/Jinja in Orquesta), so a literal would
                  become an expression.  In the rendered tree, a rule passes the trigger only as
@@ -106,6 +108,7 @@ from .st2_runtime import (
     approved_run_pack,
     pinned_sources,
 )
+from .tables import TABLE_OPS
 from .validate import Problem, Universe, handler_problem, load_universe, validate_repo
 
 DEFAULT_BINDING = Path("workflows") / "stackstorm.yml"
@@ -611,10 +614,17 @@ def _workflow(ref: str, pack: Mapping[str, Any], digest: str, rule: Mapping[str,
     }
 
 
-def _pinned(pack: Mapping[str, Any], digest: str, rule: Mapping[str, Any], manifest) -> str:
+def _pinned(
+    pack: Mapping[str, Any],
+    digest: str,
+    rule: Mapping[str, Any],
+    manifest,
+    tables: Mapping[str, Any] | None = None,
+) -> str:
     """``pinned/<pack>.json``: what the two actions run, read by them from the installed pack and
     never from a parameter -- the pack document (its digest re-checked on load), the mode of its
-    rule (the promotion state), each action step's risk, the coalesce window and the schedule."""
+    rule (the promotion state), each action step's risk, the coalesce window, the schedule and the
+    declaration of every table its lookup steps read (and no other)."""
     doc: dict[str, Any] = {
         "pack": dict(pack),
         "digest": digest,
@@ -629,6 +639,9 @@ def _pinned(pack: Mapping[str, Any], digest: str, rule: Mapping[str, Any], manif
     for key in ("coalesce", "schedule"):
         if key in rule:
             doc[key] = dict(rule[key])
+    used = sorted({s["table"] for s in pack["steps"] if s.get("op") in TABLE_OPS})
+    if used:
+        doc["tables"] = {t: dict((tables or {})[t]) for t in used}
     return _json(doc)
 
 
@@ -831,7 +844,9 @@ def render(
         n = st2_name(pack["pack"])
         files[f"{base}/actions/{n}.yaml"] = _yaml(_wf_meta(ref, pack, rule))
         files[f"{base}/actions/workflows/{n}.yaml"] = _yaml(_workflow(ref, pack, digest, rule))
-        files[f"{base}/pinned/{n}.json"] = _pinned(pack, digest, rule, manifest)
+        files[f"{base}/pinned/{n}.json"] = _pinned(
+            pack, digest, rule, manifest, binding.get("tables")
+        )
         files[f"{base}/rules/on_{n}.yaml"] = _yaml(_rule(ref, binding, pack, rule))
         provenance["packs"][pack["pack"]] = {"digest": digest, "mode": rule["mode"]}
         if "schedule" not in rule:
@@ -863,10 +878,17 @@ def _check_rule(rule, pack, binding, tracked, bad) -> None:
     name = pack["pack"]
     if pack["actor"] != binding["actor"]:
         bad("st2-actor", f"{name}: actor {pack['actor']} is not the binding's {binding['actor']}")
+    tables = binding.get("tables") or {}
     for s in pack["steps"]:
-        if s["kind"] in MODEL_KINDS or (s["kind"] == "enrich" and s["op"] not in ST2_ENRICH_OPS):
+        why = None
+        if s["kind"] == "enrich" and s["op"] in TABLE_OPS:
+            if s["table"] not in tables:
+                why = f"reads {s['table']}, a table the binding does not declare (tables)"
+        elif s["kind"] in MODEL_KINDS or (s["kind"] == "enrich" and s["op"] not in ST2_ENRICH_OPS):
+            why = "does not run on StackStorm yet"
+        if why:
             what = s["kind"] if s["kind"] in MODEL_KINDS else f"enrich {s['op']}"
-            bad("st2-step", f"{name}: step {s['id']} ({what}) does not run on StackStorm yet")
+            bad("st2-step", f"{name}: step {s['id']} ({what}) {why}")
     lits = [x for x in _strings([pack["trigger"], pack["steps"]]) if _TEMPLATE.search(x)]
     for x in lits:
         bad("st2-template", f"{name}: literal {x[:60]!r} would be rendered as a template")

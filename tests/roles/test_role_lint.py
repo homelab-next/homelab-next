@@ -70,6 +70,7 @@ SHIPPED = [
     "events_bus",
     "example_service",
     "greenbone_target",
+    "hardware_metrics",
     "hnx_runtime",
     "last_run",
     "lynis",

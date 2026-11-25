@@ -94,6 +94,15 @@ stackstorm_mongo_cache_gb: "0.25"
 # binding pins; the role refuses a pack whose rule is `live` unless stackstorm_allow_live_rules.
 stackstorm_enabled_rules: []
 stackstorm_allow_live_rules: false
+# Tables a bound pack's lookup step reads (the binding's `tables`): host directories mounted READ-ONLY
+# into the action runner at /opt/hnx-tables/<name>, each {name, path, group}. name: a slug (the binding
+# declares the table's file as /opt/hnx-tables/<name>/<file>); path: an absolute, canonical directory
+# under one of stackstorm_table_roots, never this module's own data root (a directory, not a file: a
+# writer that replaces its file would leave a file mount on the old copy); group: the host group whose
+# members may read it, added to the runner's groups by number (it must exist on the guest: the role
+# that writes the table creates it). EMPTY: nothing is mounted and no lookup step can read anything.
+stackstorm_table_mounts: []
+stackstorm_table_roots: [/var/lib/hnx-modules]
 # st2 retention (garbage collector), in days (7 or more; st2 refuses less); 0 keeps everything
 stackstorm_retention_days: 30
 #
@@ -135,6 +144,22 @@ stackstorm_events_subject_prefix: lab
 stackstorm_events_api_prefix: ""
 stackstorm_bridge_user: hnx-st2-bridge
 stackstorm_bridge_state_dir: /var/lib/hnx-st2-bridge
+# The bus forward: when the bus listens on loopback on another host (no TLS listener), the bridge
+# reaches it through an SSH local forward kept up as a systemd service, as a login on the bus host
+# whose key and sshd Match block allow that one forward (role events_bus, events_bus_forward_logins).
+# The bridge's endpoint is then this guest's loopback end of the forward
+# (stackstorm_events_endpoint nats://<loopback>:<port>); the bus password still authenticates the
+# bridge to the bus, and the forward carries it encrypted.
+stackstorm_events_forward_enabled: false
+stackstorm_events_forward_host: ""
+stackstorm_events_forward_ssh_user: hnx-events-st2
+stackstorm_events_forward_ssh_port: 22
+# the bus host's public host key line (`ssh-keyscan` output), pinned: the forward never trusts on first use
+stackstorm_events_forward_host_key: ""
+stackstorm_events_forward_key_ref: secret:stackstorm/events-ssh-key
+# the bus as its own host sees it (`<loopback address>:<port>`, the bus login's only PermitOpen)
+stackstorm_events_forward_remote: ""
+stackstorm_events_forward_user: hnx-st2-events
 #
 # --- the broker socket (StackStorm's only way to change anything) ------------------------------
 # The broker has no network listener: a remote caller reaches it through an SSH-forwarded socket,

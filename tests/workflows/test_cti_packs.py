@@ -41,9 +41,9 @@ def test_every_old_timer_maps_to_exactly_one_rule():
 
 @pytest.mark.parametrize("lane", cs.LANES)
 def test_the_committed_files_are_what_the_table_renders(lane):
-    if lane != "shadow":  # the tree is committed for the default lane; the other renders cleanly
+    if lane != cs.LANE:  # the tree is committed for the default lane; the other renders cleanly
         for t in cs.TIMERS:
-            assert "shadow: true" not in cs.render_pack(t, lane)
+            assert "shadow: true" in cs.render_pack(t, lane)
         return
     for path, text in cs.expected(lane).items():
         assert path.read_text() == text, (
@@ -69,7 +69,8 @@ def test_each_schedule_pack_validates_pins_and_fires_one_keyed_job():
             step["action"] == "agent.job.submit"
             and step["params"]["idempotency_key"] == "$event.id"
         )
-        assert step["params"]["agent_key"] == t[2] and step["params"]["shadow"] is True
+        # the real lane (cs.LANE): the job goes to the live pipeline's units, no shadow flag
+        assert step["params"]["agent_key"] == t[2] and "shadow" not in step["params"]
         for fx in doc["fixtures"]:
             res = run_fixture(doc, fx, manifest=manifest())
             assert not res.problems, (doc["pack"], res.problems)
@@ -222,8 +223,8 @@ def test_watch_packs_validate_and_notify_only_on_a_stale_row(name, action):
     assert run_fixture(doc, quiet, manifest=manifest()).calls == []
     for fx in doc["fixtures"]:
         assert not run_fixture(doc, fx, manifest=manifest()).problems
-    # the pack is a reference pack, as new-critical-alert is: not pinned or bound until its
-    # lookup runs on the engine and the site's notify handlers exist
+    # the pack is a reference pack, as new-critical-alert is: not pinned or bound until something
+    # writes its table (table:cti.watch) as a file a binding can declare (docs/stackstorm.md, Tables)
     assert doc["pack"] not in {p["pack"] for p in load_doc(ROOT / "workflows/deploy.yml")["pins"]}
 
 

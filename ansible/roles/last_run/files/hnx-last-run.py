@@ -12,6 +12,7 @@
 #     - timer:clamav/scan
 #     - timer:compose_app/export
 #     - timer:context/reindex
+#     - timer:hardware_metrics/hnx-hardware-metrics
 #     - timer:honeypot/lake
 #     - timer:honeypot/report
 #     - timer:intel_ingest/intel-ingest
@@ -32,6 +33,7 @@
 #     - timer:source_census/source-census-run
 #     - timer:status_hub/hnx-hub-collect
 #     - timer:status_hub/hnx-hub-login-token
+#     - timer:status_hub/hnx-hub-pull
 #     - timer:trino/lake-maintenance
 #     - timer:trivy/scan
 #     - timer:velociraptor_server/cycle

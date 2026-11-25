@@ -84,6 +84,50 @@
       (constraints/ci.txt of the same commit) and stackstorm_hnx_bootstrap (its constraints/bootstrap.txt, pip itself by hash) are required
   tags: [health, backup, restore, export, upgrade, readiness]
 
+# A table mount puts a host directory into the action runner (read-only) and gives the runner a host
+# group: each must be a named, absolute, canonical directory under a declared root of three parts or
+# more (never a host-wide one), never this module's own data root or anything nested with it (its
+# secrets and the runtime's state), and every name and directory used once.
+- name: Validate the table mounts (read-only directories the pack's lookup steps read)
+  vars:
+    _roots: "{{ stackstorm_table_roots | default([]) }}"
+    _mounts: "{{ stackstorm_table_mounts | default([]) }}"
+    _paths: "{{ _mounts | selectattr('path', 'defined') | map(attribute='path') | map('string') | list }}"
+    _outside: >-
+      {%- set out = [] -%}
+      {%- for p in _paths -%}
+      {%-   set ns = namespace(ok=false) -%}
+      {%-   for r in _roots -%}
+      {%-     if p.startswith(r ~ '/') -%}{%- set ns.ok = true -%}{%- endif -%}
+      {%-   endfor -%}
+      {%-   if not ns.ok or p == stackstorm_data_root or p.startswith(stackstorm_data_root ~ '/')
+              or stackstorm_data_root.startswith(p ~ '/') -%}{%- set _ = out.append(p) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ out | join(' ') }}
+  ansible.builtin.assert:
+    that:
+      - _roots is sequence and _roots is not string
+      - _roots | reject('string') | list | length == 0
+      - _roots | reject('match', stackstorm_path_pattern) | list | length == 0
+      - _roots | map('split', '/') | map('length') | select('lt', 4) | list | length == 0
+      - _mounts is sequence and _mounts is not string
+      - _mounts | reject('mapping') | list | length == 0
+      - _mounts | rejectattr('name', 'defined') | list | length == 0
+      - _mounts | rejectattr('path', 'defined') | list | length == 0
+      - _mounts | rejectattr('group', 'defined') | list | length == 0
+      - _mounts | map(attribute='name') | map('string') | reject('match', '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z') | list | length == 0
+      - _mounts | map(attribute='group') | map('string') | reject('match', '^[a-z_][a-z0-9_-]{0,31}\Z') | list | length == 0
+      - _paths | reject('match', stackstorm_path_pattern) | list | length == 0
+      - _outside | length == 0
+      - _mounts | map(attribute='name') | unique | list | length == _mounts | length
+      - _paths | unique | list | length == _paths | length
+    fail_msg: >-
+      stackstorm: stackstorm_table_mounts must be a list of {name, path, group}: a slug name, an
+      absolute canonical directory under one of stackstorm_table_roots ({{ _roots | join(', ') }}: each
+      absolute, canonical, three parts or more) that is not this module's data root nor nested with it
+      ({{ _outside }}), and a group name; every name and directory once
+  tags: [health, backup, restore, export, upgrade, readiness]
+
 - name: Validate the event bridge's inputs (only when the bridge is on)
   ansible.builtin.assert:
     that:
@@ -121,6 +165,31 @@
       trusted on first use), a secret:<name> reference for the private key and the remote socket's
       path (turn it off with stackstorm_broker_tunnel_enabled: false and mount the socket yourself)
   when: stackstorm_broker_tunnel_enabled | bool
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Validate the bus forward's inputs (only when it is on)
+  ansible.builtin.assert:
+    that:
+      - stackstorm_bridge_enabled | bool
+      - stackstorm_events_endpoint is match('^nats://(localhost|127\.0\.0\.1):[0-9]{1,5}\Z')
+      - stackstorm_events_ca_file == ''
+      - stackstorm_events_forward_host is match('^[A-Za-z0-9][A-Za-z0-9.-]*\Z')
+      - stackstorm_events_forward_ssh_user is match('^[a-z][a-z0-9_-]{1,31}\Z')
+      - stackstorm_events_forward_ssh_port | int >= 1 and stackstorm_events_forward_ssh_port | int <= 65535
+      - stackstorm_events_forward_host_key is match('^[A-Za-z0-9.,:\[\]-]+ ssh-[a-z0-9-]+ [A-Za-z0-9+/=]+\Z')
+      - stackstorm_events_forward_key_ref is match(stackstorm_ref_pattern)
+      - stackstorm_events_forward_key_ref != stackstorm_broker_key_ref
+      - stackstorm_events_forward_remote is match('^(127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|\[::1\]):[0-9]{1,5}\Z')
+      - stackstorm_events_forward_user is match('^[a-z][a-z0-9_-]{1,31}\Z')
+      - stackstorm_events_forward_user not in [stackstorm_bridge_user, stackstorm_broker_tunnel_user]
+    fail_msg: >-
+      stackstorm: the bus forward needs the bridge on with its endpoint the forward's loopback end
+      (nats://<loopback>:<port>, no CA file), the bus host, the login there that may only forward to the
+      bus, its pinned public host key line (`name ssh-ed25519 AAAA...`, never trusted on first use), a
+      secret:<name> reference for the private key (not the broker forward's), the bus as the bus host
+      sees it (`<loopback address>:<port>`) and a service user of its own (turn it off with
+      stackstorm_events_forward_enabled: false)
+  when: stackstorm_events_forward_enabled | bool
   tags: [health, backup, restore, export, upgrade, readiness]
 
 - name: Require the pinned network subnet

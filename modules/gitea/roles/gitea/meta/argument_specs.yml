@@ -118,6 +118,11 @@ argument_specs:
         type: str
         description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
         default: secret:gitea/oidc-client-secret
+      gitea_system_ca_file:
+        type: str
+        description: The host's public root store (PEM); with oidc on it and the lab CA form tls/ca-bundle.pem, the container's
+          SSL_CERT_FILE.
+        default: /etc/ssl/certs/ca-certificates.crt
       gitea_registry_pull_user:
         type: str
         description: A registry pull account's name; set, health proves its token is accepted.
@@ -277,6 +282,11 @@ argument_specs:
         type: str
         description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
         default: secret:gitea/oidc-client-secret
+      gitea_system_ca_file:
+        type: str
+        description: The host's public root store (PEM); with oidc on it and the lab CA form tls/ca-bundle.pem, the container's
+          SSL_CERT_FILE.
+        default: /etc/ssl/certs/ca-certificates.crt
       gitea_registry_pull_user:
         type: str
         description: A registry pull account's name; set, health proves its token is accepted.
@@ -436,6 +446,11 @@ argument_specs:
         type: str
         description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
         default: secret:gitea/oidc-client-secret
+      gitea_system_ca_file:
+        type: str
+        description: The host's public root store (PEM); with oidc on it and the lab CA form tls/ca-bundle.pem, the container's
+          SSL_CERT_FILE.
+        default: /etc/ssl/certs/ca-certificates.crt
       gitea_registry_pull_user:
         type: str
         description: A registry pull account's name; set, health proves its token is accepted.
@@ -595,6 +610,11 @@ argument_specs:
         type: str
         description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
         default: secret:gitea/oidc-client-secret
+      gitea_system_ca_file:
+        type: str
+        description: The host's public root store (PEM); with oidc on it and the lab CA form tls/ca-bundle.pem, the container's
+          SSL_CERT_FILE.
+        default: /etc/ssl/certs/ca-certificates.crt
       gitea_registry_pull_user:
         type: str
         description: A registry pull account's name; set, health proves its token is accepted.
@@ -754,6 +774,11 @@ argument_specs:
         type: str
         description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
         default: secret:gitea/oidc-client-secret
+      gitea_system_ca_file:
+        type: str
+        description: The host's public root store (PEM); with oidc on it and the lab CA form tls/ca-bundle.pem, the container's
+          SSL_CERT_FILE.
+        default: /etc/ssl/certs/ca-certificates.crt
       gitea_registry_pull_user:
         type: str
         description: A registry pull account's name; set, health proves its token is accepted.
@@ -913,6 +938,11 @@ argument_specs:
         type: str
         description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
         default: secret:gitea/oidc-client-secret
+      gitea_system_ca_file:
+        type: str
+        description: The host's public root store (PEM); with oidc on it and the lab CA form tls/ca-bundle.pem, the container's
+          SSL_CERT_FILE.
+        default: /etc/ssl/certs/ca-certificates.crt
       gitea_registry_pull_user:
         type: str
         description: A registry pull account's name; set, health proves its token is accepted.
@@ -1076,6 +1106,11 @@ argument_specs:
         type: str
         description: secret:<name> of the OpenID Connect client secret (read only with oidc on).
         default: secret:gitea/oidc-client-secret
+      gitea_system_ca_file:
+        type: str
+        description: The host's public root store (PEM); with oidc on it and the lab CA form tls/ca-bundle.pem, the container's
+          SSL_CERT_FILE.
+        default: /etc/ssl/certs/ca-certificates.crt
       gitea_registry_pull_user:
         type: str
         description: A registry pull account's name; set, health proves its token is accepted.

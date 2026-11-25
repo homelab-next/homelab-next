@@ -568,7 +568,7 @@ change until its ADR is accepted):
 | `platform/orchestrator_profile` | 1.0 | `schemas/platform/orchestrator_profile.schema.json` | draft |
 | `platform/role_interface` | 1.0 | `schemas/platform/role_interface.schema.json` | stable |
 | `platform/script_header` | 1.0 | `schemas/platform/script_header.schema.json` | stable |
-| `platform/service` | 2.12 | `schemas/platform/service.json` | stable |
+| `platform/service` | 2.14 | `schemas/platform/service.json` | stable |
 | `platform/site` | 1.6 | `schemas/platform/site.schema.json` | stable |
 | `platform/slot` | 1.0 | `schemas/platform/slot.schema.json` | draft |
 | `platform/swap_record` | 1.1 | `schemas/platform/swap_record.schema.json` | stable |
@@ -599,7 +599,7 @@ change until its ADR is accepted):
 | `strategy/strategy` | 2.0 | `schemas/strategy/strategy.schema.json` | stable |
 | `workflows/deploy` | 1.0 | `schemas/workflows/deploy.schema.json` | stable |
 | `workflows/pack` | 1.0 | `schemas/workflows/pack.schema.json` | stable |
-| `workflows/stackstorm` | 1.1 | `schemas/workflows/stackstorm.schema.json` | stable |
+| `workflows/stackstorm` | 1.2 | `schemas/workflows/stackstorm.schema.json` | stable |
 <!-- /hnx:gen -->
 
 ## 6. Version policy

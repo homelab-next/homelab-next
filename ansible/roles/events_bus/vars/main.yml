@@ -21,3 +21,11 @@ events_bus_monitor_url: "http://127.0.0.1:{{ events_bus_monitor_port | int }}"  
 # the bridge's and orchestration's --events-api-prefix), never $JS.API, which an account
 # without JetStream answers itself.
 events_bus_api_prefix: "JS.{{ events_bus_account }}.API"
+# What a forward login may open: the bus's own listen address and port (sshd's PermitOpen form,
+# an IPv6 address in brackets), and where the role keeps its staged sshd files.
+events_bus_forward_target: "{{ events_bus_listen_address | hnx_nats_hostport(events_bus_port) }}"
+events_bus_forward_state_dir: /var/lib/homelabnext/events-bus-forward
+events_bus_forward_present: >-
+  {{ events_bus_forward_logins | rejectattr('state', 'defined') | list
+     + events_bus_forward_logins | selectattr('state', 'defined') | selectattr('state', 'eq', 'present') | list }}
+events_bus_forward_absent: "{{ events_bus_forward_logins | selectattr('state', 'defined') | selectattr('state', 'eq', 'absent') | list }}"

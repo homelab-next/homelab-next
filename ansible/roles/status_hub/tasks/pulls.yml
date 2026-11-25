@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: Apache-2.0
+# Pulled status files (ADR-0049 decision 7, "The results transport"; docs/status.md "Pulled status
+# files"): a root-run timer dials each producer host as its restricted account (the forced command
+# prints one file) and files the answer at <status_hub_root_dir>/<dest> for the poll-file sources.
+# The hub dials out; nothing on a producer can reach the hub, and the stream names no path.
+- name: Create the helper's directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ '0755' if item == status_hub_libexec_dir else '0700' }}"
+  loop: ["{{ status_hub_libexec_dir }}", "{{ status_hub_pull_dir }}"]
+
+- name: The destination directories (root writes, the collector's group reads)
+  ansible.builtin.file:
+    path: "{{ status_hub_root_dir }}/{{ item }}"
+    state: directory
+    owner: root
+    group: "{{ status_hub_group }}"
+    mode: "0750"
+  loop: "{{ status_hub_pulls | map(attribute='dest') | map('dirname') | reject('equalto', '') | unique | list }}"
+
+- name: Install the helper
+  ansible.builtin.copy:
+    src: hnx-hub-pull.py
+    dest: "{{ status_hub_libexec_dir }}/hnx-hub-pull"
+    owner: root
+    group: root
+    mode: "0755"
+  register: status_hub_pull_script
+
+- name: Write the pull key, root only
+  ansible.builtin.copy:
+    dest: "{{ status_hub_pull_dir }}/id_pull"
+    content: "{{ lookup('hnx_secret', status_hub_pull_key_ref) | trim }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  diff: false
+  register: status_hub_pull_key
+
+- name: Pin each producer's host key (strict checking; no other host key is accepted)
+  ansible.builtin.copy:
+    dest: "{{ status_hub_pull_dir }}/known_hosts"
+    content: |
+      # Managed by homelabnext (role status_hub); local changes are overwritten.
+      {% for p in status_hub_pulls %}
+      {{ status_hub_registry_hosts[p.host | string].address }} {{ p.host_key }}
+      {% endfor %}
+    owner: root
+    group: root
+    mode: "0644"
+  register: status_hub_pull_known_hosts
+
+- name: Build the helper's entries
+  ansible.builtin.set_fact:
+    status_hub_pull_entries: >-
+      {{ status_hub_pull_entries | default([]) + [{
+           'name': item.name,
+           'address': status_hub_registry_hosts[item.host | string].address | string,
+           'user': item.user,
+           'dest': item.dest}] }}
+  loop: "{{ status_hub_pulls }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Write the helper's configuration (addresses by registry host, no secrets)
+  ansible.builtin.copy:
+    dest: "{{ status_hub_pull_dir }}/pulls.json"
+    content: "{{ {'key_file': status_hub_pull_dir ~ '/id_pull', 'known_hosts': status_hub_pull_dir ~ '/known_hosts', 'root': status_hub_root_dir, 'group': status_hub_group, 'entries': status_hub_pull_entries} | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  register: status_hub_pull_config
+
+- name: Write the pull service and timer
+  ansible.builtin.template:
+    src: "hnx-hub-pull.{{ item }}.j2"
+    dest: "{{ status_hub_systemd_dir }}/hnx-hub-pull.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+  register: status_hub_pull_units
+
+- name: Pull now when the helper, its key, its pins or its configuration changed
+  ansible.builtin.systemd_service:
+    name: hnx-hub-pull.service
+    state: started
+    daemon_reload: "{{ status_hub_pull_units is changed }}"
+  when: >-
+    status_hub_start | bool and not ansible_check_mode and (status_hub_pull_script is changed
+    or status_hub_pull_key is changed or status_hub_pull_known_hosts is changed
+    or status_hub_pull_config is changed or status_hub_pull_units is changed)
+
+- name: Enable the pull timer
+  ansible.builtin.systemd_service:
+    name: hnx-hub-pull.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ status_hub_pull_units is changed }}"
+  when: status_hub_start | bool and not ansible_check_mode

@@ -1,0 +1,4 @@
+---
+group: Added
+---
+StackStorm lookup tables and the three lab-check watchers, in shadow: the binding (schema `workflows/stackstorm` 1.2) may declare `tables` (a file inside the action runner, `json-map` or `invariants-results`, an optional age bound, and for the latter the criteria of each key); the renderer runs a `lookup` only on a declared table and pins the declaration, and the runtime reads it bounded and fails the run on an unreadable, stale or malformed table, never "no row". Packs `watch-cti-freshness`, `watch-llm-server` and `watch-honeypot-lake` (hourly at :15, pinned) page through `notify.page`, whose handler (`workflows/handlers/notify-page.sh`) is now in the tree and granted to the StackStorm actor. The automation module mounts declared table directories read-only into its action runner (`stackstorm_table_mounts`, with the directory's group); lab-checks can make its results document group-readable (`lab_checks_results_group`, default unchanged).

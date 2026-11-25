@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control hardware-metrics: the collector script, its configuration and a timer that writes the
+# host's hardware state to the node exporter's textfile directory every minute.
+- name: Refuse a host that is not Debian-family (the role installs the distribution's packages)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "hardware_metrics supports Debian-family hosts only (got {{ ansible_facts['os_family'] }})"
+
+- name: Validate the settings
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Install the packages the chosen collectors need (no recommends)
+  ansible.builtin.apt:
+    name: "{{ hardware_metrics_collectors | select('in', hardware_metrics_collector_packages)
+              | map('extract', hardware_metrics_collector_packages) | flatten | unique }}"
+    state: present
+    install_recommends: false
+  when:
+    - hardware_metrics_install_packages | bool
+    - hardware_metrics_collectors | select('in', hardware_metrics_collector_packages) | list | length > 0
+
+- name: Check every chosen collector's command is on this host
+  ansible.builtin.include_tasks: readiness.yml
+
+- name: Write the collector, its configuration and its timer
+  ansible.builtin.include_tasks: config.yml

@@ -4,6 +4,7 @@
 {% set _ = units.update({s.name: {
     'jobs': s.jobs,
     'lanes': s.lanes | default(orchestration_job_unit_lanes),
+    'overlap': s.overlap | default('wait'),
     'log_dir': orchestration_job_logs_dir ~ '/' ~ s.name}}) %}
 {% endfor %}
 {{ {'version': 2,

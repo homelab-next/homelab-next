@@ -66,6 +66,11 @@ uncalled:
     workflows/broker.manifest.json (pinned by workflows/handlers/agent-job-submit.handler.json) when
     a StackStorm rule in live mode submits agent work; a manifest is data, not a caller the scanner
     reads
+  workflow-broker-notify-page: >-
+    the workflow broker's handler for notify.page: the broker runs it through
+    workflows/broker.manifest.json (pinned by workflows/handlers/notify-page.handler.json) when a
+    StackStorm rule in live mode pages (the lab-check watchers); a manifest is data, not a caller the
+    scanner reads
   overlay-vault-pass-client: >-
     a template for the private overlay repository (examples/private-overlay/): Ansible runs it
     there as the vault password client its ansible.cfg names; nothing in this repository runs a
