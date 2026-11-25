@@ -472,3 +472,57 @@ def test_only_the_named_segment_is_the_sites(path):
 def test_the_rest_of_a_site_segment_health_is_still_compared():
     got = _segment_problems("/realms/lab/.well-known/openid-configuration", expect_status=204)
     assert len(got) == 1 and got[0].startswith("services.samples.health:")
+
+
+# ------------------------------------------------- site sign-in (auth own -> idp with oidc)
+
+_CALLBACK = {"redirect_uris": ["https://data.lab.example/callback"]}
+
+
+def _own_rows():
+    rows = copy.deepcopy(ROWS)
+    rows[STORE]["object-store"]["auth"] = "own"
+    return rows
+
+
+def _sign_in_problems(**have) -> list[str]:
+    reg = lab_registry()
+    reg["services"]["samples"]["auth"] = "own"
+    reg["services"]["samples"].update(have)
+    sel = mr.selected(SITE, TREE.mods)
+    return rr.row_problems(SITE, sel, _own_rows(), reg)
+
+
+def test_a_site_may_sign_an_own_accounts_row_in_through_its_idp():
+    """oidc callbacks plus auth: idp over the module's auth: own are the site's choice."""
+    assert _sign_in_problems(auth="idp", oidc=_CALLBACK) == []
+
+
+def test_auth_idp_without_the_rows_own_callbacks_is_a_difference():
+    got = _sign_in_problems(auth="idp")
+    assert len(got) == 1 and got[0].startswith("services.samples.auth:")
+
+
+def test_the_sign_in_step_is_only_from_own():
+    """A module with no accounts (auth none) or a client-certificate row (mtls) cannot be made idp."""
+    reg = lab_registry()
+    reg["services"]["samples"].update(auth="idp", oidc=_CALLBACK)
+    got = problems(registry=reg)  # the example row's auth is absent: none
+    assert len(got) == 1 and got[0].startswith("services.samples.auth:")
+
+
+def test_the_sign_in_does_not_hide_another_difference():
+    got = _sign_in_problems(auth="idp", oidc=_CALLBACK, port=9443)
+    assert len(got) == 1 and got[0].startswith("services.samples.port:")
+
+
+def test_oidc_a_module_declares_is_compared():
+    rows = _own_rows()
+    rows[STORE]["object-store"]["oidc"] = _CALLBACK
+    reg = lab_registry()
+    reg["services"]["samples"].update(
+        auth="own", oidc={"redirect_uris": ["https://data.lab.example/other"]}
+    )
+    sel = mr.selected(SITE, TREE.mods)
+    got = rr.row_problems(SITE, sel, rows, reg)
+    assert len(got) == 1 and got[0].startswith("services.samples.oidc:")

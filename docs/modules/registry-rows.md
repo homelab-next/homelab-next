@@ -55,6 +55,12 @@ appear in the lab registry **identically, as the site binds it**
   registry: services.idp.public_hostname: keycloak (instance idp) declares one (its value is the site's), the lab registry has (absent)
   ```
 
+- single sign-on is the site's choice for a row whose module keeps its own accounts: the lab
+  registry may add `oidc` (the row's own callbacks, service schema 2.13) and, only together with
+  it, `auth: idp` where the module's row says `auth: own` (the realm renders a client for the row;
+  the module's local accounts stay). `auth: idp` without `oidc`, or over a module's `none` or
+  `mtls`, is still a difference, and an `oidc` the module declares itself is compared as any other
+  field;
 - a contributed `health.path` may name whole segments that are the site's, in the route
   parameter form `:name` (an IdP's health is its realm's discovery document,
   `/realms/:realm/.well-known/openid-configuration`, and the realm is the site's): the lab
