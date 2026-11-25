@@ -132,7 +132,14 @@ WITHHELD_PANELS = (
 )
 #: the routes of the withheld pages, and the maps' shared script: a route that is one of them
 #: or below one (``/orchestration/job``) is served only through the trusted front door
-WITHHELD_ROUTES = (*sorted(PAGE_PANELS[p] for p in WITHHELD_PANELS), "/static/maps.js")
+WITHHELD_ROUTES = (
+    *sorted(PAGE_PANELS[p] for p in WITHHELD_PANELS),
+    "/static/maps.js",
+    # the maps an agent reads as data (homelabnext.status.maps.pages.JSON_ROUTES)
+    "/topology.json",
+    "/dataflow.json",
+    "/schedule.json",
+)
 
 
 def _under(route: str, roots: tuple[str, ...]) -> bool:

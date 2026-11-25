@@ -103,3 +103,10 @@ status_hub_views_file: ""
 # capability -> url of an endpoint the collector reaches by another name than the registry alias (the
 # alias is not in that product's certificate): HNX_ENDPOINT_<CAPABILITY> in the collector's environment
 status_hub_endpoints: {}
+# The lab's guest directory and site model on the controller (guests/*.yml and site.yml of the lab
+# data): copied beside the registry so the hub draws the Topology and Baselines pages, the Dataflow
+# page (with the guests' firewall rules) and serves them as JSON. Both or neither; empty: no such pages
+# (the Dataflow and Schedule pages then draw from the registry alone). They are withheld pages
+# (ADR-0033): served only through the trusted front door.
+status_hub_guests_src: ""
+status_hub_site_src: ""

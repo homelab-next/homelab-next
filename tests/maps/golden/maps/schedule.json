@@ -4,6 +4,7 @@
   "collector": 3,
   "fleet-unit": 2,
   "pack": 1,
+  "reported": 0,
   "timer": 2
  },
  "groups": [
@@ -176,6 +177,11 @@
     }
    ],
    "title": "Status collectors"
+  },
+  {
+   "kind": "reported",
+   "rows": [],
+   "title": "Jobs the hosts report"
   }
  ],
  "now": "2026-10-21T00:00:00Z",
