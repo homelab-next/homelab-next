@@ -29,7 +29,8 @@ Slice={{ hnx_module_slice }}
 {% endif %}
 # root, because a criterion may read what an unprivileged account owns (a lane's run records); it is hardened instead:
 # no new privileges, one capability, a read-only system, writes only to its own results and state
-UMask=0077
+# the results document is root's alone (0600), or also its opted-in readers' group (0640, lab_checks_results_group)
+UMask={{ '0027' if lab_checks_results_group else '0077' }}
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
