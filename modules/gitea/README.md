@@ -375,6 +375,13 @@ The forge row has no public route, so the realm gives its client a redirect only
 it (service schema 2.13): set `auth: idp` and `oidc.redirect_uris` to that URI on the `forge` row in
 the site's registry (the host must be the row's own name and port; the registry refuses any other).
 
+The product's OpenID Connect source sends **no PKCE code challenge** (its authorization URL is built
+with no PKCE option), while the realm requires S256 from every client by default, so the IdP refuses
+the sign-in ("Missing parameter: code_challenge_method"). The row therefore also declares
+`oidc.pkce: false` with an `oidc.why` naming that gap (service schema 2.15, ADR-0034 amendment
+2026-11-25); the client stays confidential (its secret authenticates the code exchange) and keeps its
+exact redirect URI. Remove the declaration once the product sends the challenge.
+
 ## Tests and tooling
 
 `tests/modules/test_forge_module.py` (manifest, row, pins, overlay, lint),

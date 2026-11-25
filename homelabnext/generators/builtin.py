@@ -1105,12 +1105,25 @@ def _mappers(client: str) -> list[dict]:
     ]
 
 
-def _client(name: str, owner: str, redirects: list[str], root: str | None) -> dict:
+def _client(
+    name: str,
+    owner: str,
+    redirects: list[str],
+    root: str | None,
+    *,
+    pkce: bool = True,
+    public: bool = False,
+) -> dict:
     """One confidential OIDC client: authorization code with PKCE only, the trimmed scopes, and
-    the secret by reference (``$(env:...)``, substituted at import from the secret store)."""
+    the secret by reference (``$(env:...)``, substituted at import from the secret store).
+
+    ``pkce=False`` (a row's ``oidc.pkce: false``, 2.15, ADR-0034 amendment 2026-11-25) drops the
+    S256 requirement for this one client, whose product cannot send a code challenge. It is
+    refused on a public client: a public client has no secret, so the code challenge is the only
+    thing that binds the code to the browser that asked for it."""
     env = secret_env_name(client_secret_ref(name))
     out = {
-        "attributes": {"pkce.code.challenge.method": "S256"},
+        "attributes": {"pkce.code.challenge.method": "S256"} if pkce else {},
         "clientAuthenticatorType": "client-secret",
         "clientId": name,
         "defaultClientScopes": list(DEFAULT_CLIENT_SCOPES),
@@ -1123,13 +1136,17 @@ def _client(name: str, owner: str, redirects: list[str], root: str | None) -> di
         "optionalClientScopes": list(OPTIONAL_CLIENT_SCOPES),
         "protocol": "openid-connect",
         "protocolMappers": _mappers(name),
-        "publicClient": False,
+        "publicClient": public,
         "redirectUris": redirects,
         "secret": f"$(env:{env})",
         "serviceAccountsEnabled": False,
         "standardFlowEnabled": bool(redirects),
         "webOrigins": ["+"] if redirects else [],
     }
+    if not pkce and out["publicClient"]:
+        raise ValueError(
+            f"client {name}: pkce false on a public client (no secret binds its codes)"
+        )
     if root:
         out["attributes"]["post.logout.redirect.uris"] = f"{root}/*"
         out["rootUrl"] = root
@@ -1258,7 +1275,7 @@ def idp_realm(reg: Registry, reserved_usernames=None, edge_hosts=None) -> dict[s
         # 2.13: the callbacks the row declares itself (the registry has held each to the row's
         # own name and port); the only way a row with no public route gets a redirect
         redirects = ([f"{root}/*"] if root else []) + list(s.oidc_redirect_uris)
-        clients.append(_client(s.name, s.owner, redirects, root))
+        clients.append(_client(s.name, s.owner, redirects, root, pkce=s.oidc_pkce))
         if s.roles:
             roles[s.name] = [
                 {"clientRole": True, "description": f"{s.name} {r}", "name": r} for r in s.roles

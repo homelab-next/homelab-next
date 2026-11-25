@@ -30,9 +30,9 @@ def _with_shadow(mapping):
 
 
 def test_version_is_2_14_frozen_and_additive():
-    assert CURRENT["$id"].endswith("/platform/service/2.14")
-    assert FROZEN_214 == CURRENT
-    assert sc.is_additive(FROZEN_213, CURRENT) == []
+    assert FROZEN_214["$id"].endswith("/platform/service/2.14")
+    assert sc.is_additive(FROZEN_213, FROZEN_214) == []
+    assert sc.is_additive(FROZEN_214, CURRENT) == []
 
 
 def test_the_shadow_builtin_validates_in_2_14_only():

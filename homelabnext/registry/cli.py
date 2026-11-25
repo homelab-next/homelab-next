@@ -202,6 +202,10 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
             f"{len(reg.hosts)} hosts, sha256:{reg.digest[:16]}",
             file=out,
         )
+        # every PKCE exemption (2.15) is listed on each validate, so none is ever silent
+        for s in sorted(reg.services.values(), key=lambda s: s.name):
+            if not s.oidc_pkce:
+                print(f"note: pkce exemption: {s.name} (oidc.pkce false): {s.oidc_why}", file=out)
         return 0
     if args.cmd == "bindings":
         return _bindings(args, reg, out, err)

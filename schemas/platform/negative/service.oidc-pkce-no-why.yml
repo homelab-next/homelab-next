@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# oidc.pkce false needs its why (the upstream gap): an exemption without a reason is refused
+registry_version: 1
+lab: {name: northwind, domain: example.internal, svc_label: svc}
+zones:
+  mgmt: {cidr: 192.0.2.0/24}
+hosts:
+  apps-01: {address: 192.0.2.40, zone: mgmt, role: apps}
+services:
+  forge:
+    capability: forge
+    host: apps-01
+    protocol: https
+    port: 3443
+    owner: platform-team
+    version: "1.0.0"
+    tls: internal
+    auth: idp
+    oidc: {redirect_uris: ['https://forge.svc.example.internal:3443/user/oauth2/sso/callback'], pkce: false}
