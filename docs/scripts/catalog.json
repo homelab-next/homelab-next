@@ -2304,6 +2304,24 @@
     },
     {
       "exit": {
+        "0": "the metrics were written (a dead container is a metric, not a failure)",
+        "2": "usage error or an unsafe output path"
+      },
+      "id": "vector-liveness",
+      "inputs": "--compose-file FILE --status-file FILE --out FILE; runs docker compose ps and docker inspect for the container check",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the metrics file (atomic rename, 0644); one line on stdout with the same numbers",
+      "owner": "platform",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/liveness.py",
+      "purpose": "Write the log pipeline's liveness as node-exporter textfile metrics - whether its two containers run, how often they restarted, how old the sidecar's status is and how many rows each route has moved - so a pipeline that is up but delivers nothing is loud.",
+      "status": "active",
+      "trigger": [
+        "role:vector"
+      ]
+    },
+    {
+      "exit": {
         "0": "imported"
       },
       "id": "vector-log-pipeline-adapter",

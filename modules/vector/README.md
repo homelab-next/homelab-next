@@ -183,6 +183,33 @@ and the rule number stays in `finding_uid`: a detection id is never an engine ru
   bucket's key pair, in the 0600 env_file only), `tls-cert`, `tls-key` (the listener certificate, files
   the container reads; the key is 0640 `root:<gid>`, never in the compose file).
 
+## Stale socket
+
+The aggregator's listener for the sidecar's rows is a unix socket (`out.sock`) in the run directory, which is
+persistent storage shared by both containers. After a hard reset or a kill the file is left behind, the product
+does not unlink it before binding, and it panics with "Address already in use" on every start: on 2026-11-25 the
+aggregator restarted over 200 times in 19 hours while the sidecar waited for it and the lake received nothing
+(LL-603). The aggregator's entrypoint is therefore a one-line wrapper that removes exactly that one path
+(`<run dir>/out.sock`, nothing else, `rm -f --`) and then `exec`s the product, so every start of the container, by
+the engine's restart policy after a reset included, begins without the leftover. The sidecar already unlinks its
+own `in.sock` before it binds.
+
+## Liveness and the stalled-pipeline alert
+
+A timer (`hnx-vector-liveness.timer`, every minute, role task `liveness.yml`) runs `liveness.py`, which
+writes `vector_pipeline.prom` into `vector_textfile_dir` (default `/var/lib/homelabnext-textfile`; empty turns the
+timer off): `vector_pipeline_container_running`, `_container_healthy` and `_container_restarts` per service
+(`vector`, `sidecar`), `vector_pipeline_status_present`, `_status_age_seconds`, `_status_listening`,
+`_status_errors`, `vector_pipeline_rows_total{route}` (rows the sidecar sent on, per route) and
+`vector_pipeline_check_timestamp_seconds`. The host's node exporter must serve that directory (the overlay's
+`node_exporter_textfile_dir`). The monitoring module's rules page on `LogPipelineContainerDown` (5 minutes),
+`LogPipelineCrashLooping` (3 restarts in 15 minutes), `LogPipelineContainerUnhealthy` (10 minutes),
+`LogPipelineStatusStale` (no status refresh for 5 minutes, 5 minutes sustained), `LogPipelineArchiveIntakeStalled`
+(no row of the SIEM archive route, the stream that never rests, in 15 minutes) and `LogPipelineLivenessCheckStale`
+(the writer itself stopped). The archive rule matches a route named `<module>/siem-archives` (the default).
+What these watch is the pipeline up to the aggregator; the write to the object store and the lake writer's own
+tables are watched by their modules and by the source census.
+
 ## What the overlay adds
 
 - `lab/modules.yml`: `log-pipeline: [{provider: vector, instance: log-pipeline, placement: {aggregator: <host>}}]`.

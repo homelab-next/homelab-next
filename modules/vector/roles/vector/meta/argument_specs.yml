@@ -212,6 +212,10 @@ argument_specs:
         type: int
         description: "Seconds the sidecar's status may be old before health fails."
         default: 60
+      vector_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
   health:
     short_description: Fail unless both containers are healthy, the listeners answer, and the sidecar's status is fresh and names exactly the deployed tables.
     options:

@@ -16,6 +16,8 @@
       - vector_siem_syslog_port | int != vector_syslog_udp_port | int
       - vector_siem_syslog_protocol in ['udp', 'tcp']
       - vector_uid | int >= 1000 and vector_gid | int >= 1000
+      # the liveness timer's output directory: empty (off) or a canonical absolute path of at least two parts
+      - vector_textfile_dir == '' or vector_textfile_dir is match('^(/[A-Za-z0-9._-]+){2,}\Z')
       - vector_siem_logs_gid | int >= 0
       - vector_sensor_tls | bool or vector_sensor_ca_ref == ''
       - vector_sensor_ca_ref == '' or vector_sensor_ca_ref is match(vector_ref_pattern)

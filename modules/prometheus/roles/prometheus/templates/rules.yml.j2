@@ -418,6 +418,66 @@ groups:
           summary: "{{ $labels.host }} fan {{ $labels.fan_name }} has stopped"
 {% endraw %}
 {% endif %}
+  # Log pipeline liveness (module vector, textfile metrics vector_pipeline_*): the pipeline between the SIEM
+  # manager and the lake can be dark (a crash-looping aggregator, a sidecar that never got going, a stalled
+  # intake) while every host, the manager and the agents look fine. A host without the pipeline exposes none of
+  # these, so none of them fires there. The manager's archive stream never rests, so no intake for a quarter of
+  # an hour is an outage, not a quiet night.
+  - name: hnx-log-pipeline
+    rules:
+      - alert: LogPipelineContainerDown
+        expr: vector_pipeline_container_running == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} log pipeline container {{ $labels.service }} is not running: no logs reach the lake"
+{% endraw %}
+      - alert: LogPipelineCrashLooping
+        expr: delta(vector_pipeline_container_restarts[15m]) >= 3
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} log pipeline container {{ $labels.service }} restarted {{ $value }} times in 15 minutes: it is crash-looping (a stale socket or a bad configuration); read its log"
+{% endraw %}
+      - alert: LogPipelineContainerUnhealthy
+        expr: vector_pipeline_container_running == 1 and vector_pipeline_container_healthy == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} log pipeline container {{ $labels.service }} is up but has not been healthy for 10 minutes"
+{% endraw %}
+      - alert: LogPipelineStatusStale
+        expr: vector_pipeline_status_age_seconds > 300 or vector_pipeline_status_present == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} the log pipeline sidecar has not refreshed its status for over 5 minutes: nothing is being labelled or forwarded"
+{% endraw %}
+      - alert: LogPipelineArchiveIntakeStalled
+        expr: increase(vector_pipeline_rows_total{route=~".+/siem-archives"}[15m]) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} the log pipeline moved no rows of the SIEM archive stream ({{ $labels.route }}) in 15 minutes: the manager never stops writing it, so the lake is going dark"
+{% endraw %}
+      - alert: LogPipelineLivenessCheckStale
+        expr: time() - vector_pipeline_check_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} the log pipeline liveness check has not written metrics for over 5 minutes"
+{% endraw %}
 {% if prometheus_llm_probes_on | bool %}
   # one-token completions through the LLM gateway (README "Inference probes"): the path a caller takes
   - name: hnx-llm-probes

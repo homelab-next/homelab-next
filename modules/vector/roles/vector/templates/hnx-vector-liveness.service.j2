@@ -1,0 +1,10 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role vector); local changes are overwritten.
+[Unit]
+Description=homelabnext log pipeline liveness metrics (role vector)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I {{ vector_data_root }}/code/hnx_modules/vector/liveness.py --compose-file {{ vector_dir }}/docker-compose.yml --status-file {{ vector_data_root }}/run/status.json --out {{ vector_textfile_dir }}/vector_pipeline.prom
+Nice=10

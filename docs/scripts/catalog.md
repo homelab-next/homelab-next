@@ -9,7 +9,7 @@ summary_generated: true
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-126 scripts: 26 check, 34 job, 7 service, 59 tool.
+127 scripts: 26 check, 34 job, 7 service, 60 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
@@ -125,6 +125,7 @@ the header fields and the checks that keep this page honest: [docs/scripts.md](.
 | `threat-intel-helper` | [`modules/misp/roles/misp/files/hnx_misp.py`](../../modules/misp/roles/misp/files/hnx_misp.py) | tool | platform | The threat-intel role's helper for what needs a pipe or an archive (dump the database through zstd, prove a dump whole, load a dump, extract the event directories of an old files tarball). | `role:misp` | - | 0 done; 1 the command refused or failed (the reason on stderr); 2 usage error |
 | `tls-verify-lint` | [`tools/tls_verify_lint.py`](../../tools/tls_verify_lint.py) | check | maintainers | Fail when Python code, a YAML/JSON config or a Caddyfile turns TLS certificate verification off. | `ci:ci/schemas`; `make:tls-lint` | F-07 | 0 clean; 1 verification is disabled somewhere; 2 usage error or a missing dependency |
 | `trivy-scan` | [`ansible/roles/trivy/templates/scan.sh.j2`](../../ansible/roles/trivy/templates/scan.sh.j2) | job | platform | Run one scheduled Trivy package scan (root filesystem, SBOM, optionally container images) and record its exit status. | `timer:trivy/scan`; `role:trivy` | - | 0 the run finished (the scanner's own status is in last-run) |
+| `vector-liveness` | [`modules/vector/roles/vector/files/hnx_modules/vector/liveness.py`](../../modules/vector/roles/vector/files/hnx_modules/vector/liveness.py) | tool | platform | Write the log pipeline's liveness as node-exporter textfile metrics - whether its two containers run, how often they restarted, how old the sidecar's status is and how many rows each route has moved - so a pipeline that is up but delivers nothing is loud. | `role:vector` | - | 0 the metrics were written (a dead container is a metric, not a failure); 2 usage error or an unsafe output path |
 | `vector-log-pipeline-adapter` | [`modules/vector/roles/vector/files/hnx_modules/vector/log_pipeline.py`](../../modules/vector/roles/vector/files/hnx_modules/vector/log_pipeline.py) | tool | platform | Drive the sidecar's labelling path for the log-pipeline conformance suite. | `role:vector` | - | 0 imported |
 | `vector-ocsf` | [`modules/vector/roles/vector/files/hnx_modules/vector/ocsf.py`](../../modules/vector/roles/vector/files/hnx_modules/vector/ocsf.py) | tool | platform | Remap one labelled event into the rows of its OCSF classes for the sidecar. | `role:vector` | - | 0 imported |
 | `vector-package` | [`modules/vector/roles/vector/files/hnx_modules/vector/__init__.py`](../../modules/vector/roles/vector/files/hnx_modules/vector/__init__.py) | tool | platform | Mark the vector module's package, the directory the sidecar and its remap are imported from on the guest. | `role:vector` | - | 0 imported |

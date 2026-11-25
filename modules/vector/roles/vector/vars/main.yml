@@ -38,3 +38,5 @@ vector_container_tls_dir: /etc/vector/tls
 vector_tls_files: >-
   {{ [{'file': 'cert.pem', 'ref': vector_tls_cert_ref}, {'file': 'key.pem', 'ref': vector_tls_pem_ref}]
      + ([{'file': 'sensor-ca.pem', 'ref': vector_sensor_ca_ref}] if vector_sensor_ca_ref != '' else []) }}
+vector_liveness_interval: "*-*-* *:*:00"
+vector_unit_dir: /etc/systemd/system

@@ -21,6 +21,11 @@
             image: "{{ vector_repository }}"
             tag: "{{ vector_tag }}"
             digest: "{{ vector_digest }}"
+            # the aggregator's listener socket lives in the run directory on persistent storage; an unclean
+            # stop (a hard reset, a kill) leaves the file behind and the product then refuses to bind it
+            # ("Address already in use") and crash-loops forever. Every start of THIS container first removes
+            # exactly that one socket path (nothing else), so a restart policy can heal it (README, "Stale socket").
+            entrypoint: [/bin/sh, -c, 'rm -f -- "$1" && shift && exec /usr/bin/vector "$@"', vector-start, "{{ vector_run_dir }}/out.sock"]
             command: [--config, /etc/vector/vector.yaml]
             user: "{{ vector_uid | int }}:{{ vector_gid | int }}"
             group_add: >-

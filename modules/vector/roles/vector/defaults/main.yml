@@ -78,3 +78,6 @@ vector_start: true
 vector_validate_with_docker: true
 vector_health_timeout: 10
 vector_status_max_age: 60
+# Liveness (README, "Liveness and the stalled-pipeline alert"): a timer writes vector_pipeline_* metrics into the
+# host exporter's textfile directory (empty: no timer, no metrics); the monitoring rules page on them.
+vector_textfile_dir: /var/lib/homelabnext-textfile
