@@ -2470,6 +2470,24 @@
     },
     {
       "exit": {
+        "0": "the metrics were written (a dead daemon is a metric, not a failure)",
+        "2": "usage error or an unsafe output path"
+      },
+      "id": "wazuh-liveness",
+      "inputs": "--compose-file FILE --alerts-file FILE --out FILE; runs docker compose exec for the process check",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the metrics file (atomic rename, 0644); one line on stdout with the same numbers",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/hnx_wazuh_liveness.py",
+      "purpose": "Write the SIEM manager's liveness as node-exporter textfile metrics - which daemons are live processes and how old the alert stream's last write is - so a manager that is up but not working is loud.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh"
+      ]
+    },
+    {
+      "exit": {
         "0": "the set is in place and tested (changed or not)",
         "1": "the new set was refused by the configuration test or the restart and the previous set is back",
         "2": "usage error or an unsafe path"

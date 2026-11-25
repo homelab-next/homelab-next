@@ -222,6 +222,28 @@ password with `Invalid password`; the manager's API accepts its account; the ind
 with no account, answers the administrator and is not red; the dashboard serves its sign-in page; and
 the loaded rules are the site's. The compose healthchecks are the same real-process checks.
 
+The manager's alert stream is also checked: `alerts/alerts.json` must have been written within
+`wazuh_alerts_max_age_seconds` (default 900; the stream advances many times a minute, so quarter of an hour of
+silence is an outage), so a manager that is up with nothing running fails health.
+
+## Pid files
+
+The manager's pid files (`/var/ossec/var/run`) are a **tmpfs**: they live in RAM and are empty at every container
+start. On a hard reset the container's writable layer kept the old files; the product's start reads a pid file,
+finds the recycled pid alive and skips that daemon ("Process N not used by Wazuh, removing..."), so the
+container came back with no daemon running and nothing alerted (2026-11-25, 45 minutes blind). Nothing other than
+`*.pid` and `*.state` files ever lives there.
+
+## Liveness and the stale-stream alert
+
+A timer (`hnx-wazuh-liveness.timer`, every minute, role task `liveness.yml`) runs `hnx_wazuh_liveness.py`, which
+writes `siem_manager.prom` into `wazuh_textfile_dir` (default `/var/lib/homelabnext-textfile`; empty turns the
+timer off): `siem_manager_daemon_up{daemon}`, `siem_manager_daemons_running`/`_expected`,
+`siem_alerts_file_age_seconds`, `siem_alerts_file_present` and `siem_manager_check_timestamp_seconds`. The host's
+node exporter must serve that directory (the overlay's `node_exporter_textfile_dir`). The monitoring module's
+rules page on `SiemManagerDaemonsDown` (a daemon missing for 5 minutes), `SiemAlertStreamStale` (no write for 15
+minutes, 5 minutes sustained) and `SiemLivenessCheckStale` (the writer itself stopped).
+
 ## Export and restore
 
 `export` writes `export/{manager-state.tar, index/<name>.jsonl, version.txt, listing.jsonl}` (key,

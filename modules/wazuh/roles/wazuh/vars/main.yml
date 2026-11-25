@@ -54,3 +54,5 @@ wazuh_indexer_san: >-
 # a real newline for the config lines curl reads from its standard input (a Jinja string literal keeps "\n" as two characters)
 wazuh_nl: "\n"
 wazuh_bs: "\\"
+wazuh_liveness_interval: "*-*-* *:*:00"
+wazuh_unit_dir: /etc/systemd/system

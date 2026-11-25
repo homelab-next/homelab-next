@@ -27,6 +27,21 @@
       changed_when: false
       check_mode: false
 
+    - name: Stat the alert stream
+      ansible.builtin.stat:
+        path: "{{ wazuh_data_root }}/manager/logs/alerts/alerts.json"
+      register: wazuh_alerts_stat
+      check_mode: false
+    - name: The alert stream is being written (wazuh/stale-stream)
+      ansible.builtin.assert:
+        that:
+          - wazuh_alerts_stat.stat.exists
+          - (now(utc=true).timestamp() | int) - (wazuh_alerts_stat.stat.mtime | int) <= (wazuh_alerts_max_age_seconds | int)
+        fail_msg: >-
+          siem: the alert stream {{ wazuh_data_root }}/manager/logs/alerts/alerts.json has not been written for over
+          {{ wazuh_alerts_max_age_seconds }} seconds (or does not exist): the manager is up but not producing alerts;
+          check its daemons and restart the manager container (README, "Pid files")
+
     - name: Ask the enrolment service with a wrong password
       ansible.builtin.command:
         argv: [docker, compose, -f, "{{ wazuh_dir }}/docker-compose.yml", exec, -T, manager, bash, -c,

@@ -31,6 +31,12 @@ wazuh_indexer_gid: 1000
 wazuh_dashboard_uid: 1000
 wazuh_dashboard_gid: 1000
 wazuh_manager_gid: 999
+# Liveness (README, "Liveness and the stale-stream alert"): a timer writes siem_* metrics into the host
+# exporter's textfile directory (empty: no timer, no metrics). The health hook and the monitoring rule
+# call the alert stream stale when its file was last written more than this many seconds ago (the stream
+# advances many times a minute even at the quietest hour; a quarter of an hour of silence is an outage).
+wazuh_textfile_dir: /var/lib/homelabnext-textfile
+wazuh_alerts_max_age_seconds: 900
 # memory: the indexer's heap is half its container limit (the product default of 1 GiB starved it
 # on a much bigger host); the manager and the dashboard have their own limits
 wazuh_indexer_heap: 8g
