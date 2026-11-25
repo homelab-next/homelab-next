@@ -59,6 +59,25 @@
   when: hardware_metrics_units is changed
   changed_when: true
 
+# Enabled and started through the systemctl command (never under --check: on a fresh host the unit
+# this run would install does not exist yet, so asking systemd about it would fail the dry run).
+- name: Read whether the timer is enabled and active
+  ansible.builtin.command:
+    argv: ["{{ hardware_metrics_systemctl_cli }}", "{{ item }}", "{{ hardware_metrics_unit }}.timer"]
+  loop: [is-enabled, is-active]
+  register: hardware_metrics_timer_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Enable and start the timer
+  ansible.builtin.command:
+    argv: ["{{ hardware_metrics_systemctl_cli }}", enable, --now, "{{ hardware_metrics_unit }}.timer"]
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - hardware_metrics_timer_state.results[0].stdout | trim != 'enabled' or hardware_metrics_timer_state.results[1].stdout | trim != 'active'
+
 # The first run writes the metrics before the first timer tick; a collector that fails is visible in
 # the file (hw_collector_up 0) and fails health, not this step: only a run that wrote nothing fails.
 - name: Run the collector once so the metrics exist before the first timer tick

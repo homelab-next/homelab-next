@@ -24,9 +24,3 @@
 
 - name: Write the collector, its configuration and its timer
   ansible.builtin.include_tasks: config.yml
-
-- name: Enable and start the timer
-  ansible.builtin.systemd_service:
-    name: "{{ hardware_metrics_unit }}.timer"
-    enabled: true
-    state: started
