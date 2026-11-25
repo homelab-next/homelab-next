@@ -460,7 +460,9 @@ def test_the_sigma_bundles_are_compiled_to_the_names_the_stage_task_copies(tmp_p
 def _liveness():
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location("liveness", ROLE_DIR / "files" / f"hnx_{MID}_liveness.py")
+    spec = importlib.util.spec_from_file_location(
+        "liveness", ROLE_DIR / "files" / f"hnx_{MID}_liveness.py"
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -476,7 +478,7 @@ def test_the_managers_pid_directory_is_a_tmpfs_so_no_pid_file_survives_a_hard_re
 
 def test_the_liveness_metrics_say_which_daemon_is_down_and_a_missing_stream_is_stale():
     mod = _liveness()
-    up = {d: True for d in mod.DAEMONS}
+    up = dict.fromkeys(mod.DAEMONS, True)
     up[f"{MID}-db"] = False
     text = mod.render(up, 30.4, 1000.0)
     assert 'siem_manager_daemon_up{daemon="' + f"{MID}-db" + '"} 0' in text
