@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: the agent's configuration files, the audit daemon the `auto` mode looks for
+# and the virtualization types that have no kernel audit system.
+siem_agent_watch_config_file: /var/ossec/etc/ossec.conf
+siem_agent_watch_local_options_file: /var/ossec/etc/local_internal_options.conf
+siem_agent_watch_auditd_binary: /usr/sbin/auditd
+siem_agent_watch_container_types: [lxc, lxc-libvirt, container, docker, podman, openvz, systemd-nspawn]
+siem_agent_watch_remote_command_switches: [logcollector.remote_commands, sca.remote_commands]

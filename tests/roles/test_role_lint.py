@@ -85,6 +85,7 @@ SHIPPED = [
     "restore_drill",
     "rkhunter",
     "rsyslog_forward",
+    "siem_agent_watch",
     "ssh_hardening",
     "sssd_ldap",
     "status_hub",

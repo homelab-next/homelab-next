@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to upgrade (the role has no version of its own)
+  ansible.builtin.debug:
+    msg: siem_agent_watch has no version; re-run main after a change of its settings
+  tags: [upgrade]

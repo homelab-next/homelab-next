@@ -54,9 +54,17 @@
     name: agent_rehome
   when: agent_rehome_enabled | default(false) | bool
 
-- name: Enable and start the agent
+# What the agent watches (file-integrity paths, the audit log, the remote-command switches) is the
+# siem_agent_watch role's, which names no product; it reports a change so the agent restarts below.
+- name: Configure what the agent watches
+  ansible.builtin.include_role:
+    name: siem_agent_watch
+  vars:
+    siem_agent_watch_auditd: "{{ hostvars[inventory_hostname].siem_agent_watch_auditd | default('auto') }}"
+
+- name: Enable and start the agent (restarted when its watch configuration changed)
   ansible.builtin.systemd_service:
     name: wazuh-agent
     enabled: true
-    state: started
+    state: "{{ 'restarted' if siem_agent_watch_changed | default(false) | bool else 'started' }}"
     daemon_reload: true

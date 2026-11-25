@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the agent configuration
+      ansible.builtin.slurp:
+        src: "{{ siem_agent_watch_config_file }}"
+      register: conf
+    - name: Read the agent's local options
+      ansible.builtin.slurp:
+        src: "{{ siem_agent_watch_local_options_file }}"
+      register: opts
+    - name: Look for the audit daemon
+      ansible.builtin.stat:
+        path: "{{ siem_agent_watch_auditd_binary }}"
+      register: auditd_binary
+    - name: Fail unless the watch configuration is in place
+      ansible.builtin.assert:
+        that:
+          - "'BEGIN homelabnext siem-agent' in (conf.content | b64decode)"
+          - (conf.content | b64decode).count(siem_agent_watch_audit_log) == (1 if want_audit else 0)
+          - opts.content | b64decode | regex_findall('(?m)^' ~ item ~ '=0$') | length == 1
+        fail_msg: "the agent's watch configuration is missing or differs from the role's ({{ item }})"
+      loop: "{{ siem_agent_watch_remote_command_switches }}"
+  vars:
+    want_audit: >-
+      {{ siem_agent_watch_auditd == 'enabled'
+         or (siem_agent_watch_auditd == 'auto' and auditd_binary.stat.exists
+             and (ansible_facts['virtualization_type'] | default('')) not in siem_agent_watch_container_types) }}
+  tags: [health]

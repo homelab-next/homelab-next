@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Paths reach an XML element: refuse anything that could close it or add markup.
+- name: Validate the watched paths and the audit mode
+  ansible.builtin.assert:
+    that:
+      - siem_agent_watch_auditd in ['auto', 'enabled', 'disabled']
+      - (siem_agent_watch_fim_realtime_paths + siem_agent_watch_fim_paths) | select('match', '^/[A-Za-z0-9._/-]*\Z') | list | length == (siem_agent_watch_fim_realtime_paths + siem_agent_watch_fim_paths) | length
+      - siem_agent_watch_fim_ignore | select('match', '^[A-Za-z0-9._/|()$^~\\\\-]+\Z') | list | length == siem_agent_watch_fim_ignore | length
+      - siem_agent_watch_audit_log is match('^/[A-Za-z0-9._/-]+\Z')
+    fail_msg: >-
+      siem_agent_watch: watched paths are absolute and of [A-Za-z0-9._/-] only (no markup), the audit
+      log likewise, the ignore patterns of [A-Za-z0-9._/|()$^~\\-] only, and the audit mode is auto, enabled or disabled

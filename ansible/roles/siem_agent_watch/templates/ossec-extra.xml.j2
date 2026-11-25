@@ -1,0 +1,20 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+<ossec_config>
+  <syscheck>
+{% for path in siem_agent_watch_fim_realtime_paths %}
+    <directories realtime="yes" check_all="yes" report_changes="no">{{ path }}</directories>
+{% endfor %}
+{% for path in siem_agent_watch_fim_paths %}
+    <directories check_all="yes">{{ path }}</directories>
+{% endfor %}
+{% for pattern in siem_agent_watch_fim_ignore %}
+    <ignore type="sregex">{{ pattern }}</ignore>
+{% endfor %}
+  </syscheck>
+{% if siem_agent_watch_audit_log_on | bool %}
+  <localfile>
+    <log_format>audit</log_format>
+    <location>{{ siem_agent_watch_audit_log }}</location>
+  </localfile>
+{% endif %}
+</ossec_config>

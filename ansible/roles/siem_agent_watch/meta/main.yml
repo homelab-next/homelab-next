@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: What the SIEM endpoint agent watches - file-integrity paths, the audit log - and that the manager can run no command on the host.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []
