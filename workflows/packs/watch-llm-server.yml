@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: Apache-2.0
+# watch-llm-server: every hour at :15 (UTC) look up the watch-llm-server row of table:lab.checks and
+# page when it is not ok.
+# Replaces the old lab's llm-server-watch timer, which the lab's checks register already ports as
+# criteria (N-07..N-10: the model gateway, the small and large backends, the orchestration
+# controller and its backends).  The row is the binding's: table:lab.checks is the invariants
+# runner's results document (format invariants-results), and the binding's `keys` name the criteria
+# of this schedule id, so the row is ok only when every one of them passed (docs/stackstorm.md,
+# "Tables"). :15 reads the document the hourly run at :07 wrote; a run every 30 minutes would read
+# the same one twice.  A table that cannot be read fails the run (never "no row"); a key the binding
+# does not map pages as missing.  Bound in shadow only (the site's binding): it records the page it
+# would send, nothing more.  Schedule: `15 * * * *`, schedule id watch-llm-server.
+pack: watch-llm-server
+version: 1
+description: Page when a lab check of the local model servers is not ok.
+trigger:
+  event: homelabnext.schedule.fired
+  where:
+    - {ref: $event.data.schedule, equals: watch-llm-server}
+actor: profile:workflow-agents
+broker_manifest: workflows/broker.manifest.json
+steps:
+  - id: check
+    kind: enrich
+    op: lookup
+    table: table:lab.checks
+    key: $event.data.schedule
+  - id: page
+    kind: action
+    action: notify.page
+    target: svc:notify
+    when:
+      - {ref: $steps.check.found, equals: true}
+      - {ref: $steps.check.row.ok, equals: false}
+    params:
+      rota: lab-watch
+      alert_id: $event.data.schedule
+      title: $steps.check.row.summary
+  - id: page-missing
+    kind: action
+    action: notify.page
+    target: svc:notify
+    when:
+      - {ref: $steps.check.found, equals: false}
+    params:
+      rota: lab-watch
+      alert_id: $event.data.schedule
+      title: "watch-llm-server: no row in table:lab.checks"
+fixtures:
+  - name: red-pages
+    event:
+      specversion: "1.0"
+      id: evt-watch-llm-server-red-pages
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:15:00Z"
+      data: {schedule: watch-llm-server, fired_at: "2026-01-01T12:15:00Z", cron: "15 * * * *"}
+    lookups:
+      table:lab.checks:
+        watch-llm-server: {ok: false, criteria: {N-07: pass, N-08: pass, N-09: pass, N-10: fail}, red: [N-10], summary: "watch-llm-server: N-10 fail"}
+    expect:
+      calls:
+        - action: notify.page
+          target: svc:notify
+          params: {rota: lab-watch, alert_id: watch-llm-server, title: "watch-llm-server: N-10 fail"}
+          result: executed
+  - name: green-is-quiet
+    event:
+      specversion: "1.0"
+      id: evt-watch-llm-server-green-is-quiet
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:15:00Z"
+      data: {schedule: watch-llm-server, fired_at: "2026-01-01T12:15:00Z", cron: "15 * * * *"}
+    lookups:
+      table:lab.checks:
+        watch-llm-server: {ok: true, criteria: {N-07: pass, N-08: pass, N-09: pass, N-10: pass}, red: [], summary: "watch-llm-server: N-07, N-08, N-09, N-10 pass"}
+    expect:
+      calls: []
+  - name: missing-row-pages
+    event:
+      specversion: "1.0"
+      id: evt-watch-llm-server-missing-row-pages
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:15:00Z"
+      data: {schedule: watch-llm-server, fired_at: "2026-01-01T12:15:00Z", cron: "15 * * * *"}
+    lookups:
+      table:lab.checks: {}
+    expect:
+      calls:
+        - action: notify.page
+          target: svc:notify
+          params: {rota: lab-watch, alert_id: watch-llm-server, title: "watch-llm-server: no row in table:lab.checks"}
+          result: executed
+  - name: another-schedule-ignored
+    event:
+      specversion: "1.0"
+      id: evt-watch-llm-server-other
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:15:00Z"
+      data: {schedule: not-watch-llm-server, fired_at: "2026-01-01T12:15:00Z"}
+    expect:
+      triggered: false
+      calls: []

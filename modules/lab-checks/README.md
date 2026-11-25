@@ -50,6 +50,13 @@ The runner exits 1 when a criterion is red and 100 when one could not be measure
    endpoint with no TLS).
 4. Run the install twice (the second `changed=0`), then the hooks.
 
+**Letting another module read the results (opt-in).** By default the results document is root's alone (0600).
+`lab_checks_results_group: <group>` makes the role create that system group and the results directory
+`root:<group> 02750`, so the document is `root:<group> 0640` (the unit's umask becomes 0027; a document an earlier run
+wrote is set by the role). Nothing else of the module is shared: the state, the credentials and the configuration keep
+their owner. The workflow engine's lookup steps use it: mount `<data root>/results` into its action runner with that
+group (the automation module's `stackstorm_table_mounts`, docs/stackstorm.md, "Tables").
+
 ## Proving it pages
 
 Add a criterion whose observable fails (for example `exit 1`), run `systemctl start hnx-<id>.service`: one page

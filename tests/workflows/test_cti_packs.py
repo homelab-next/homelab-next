@@ -223,8 +223,8 @@ def test_watch_packs_validate_and_notify_only_on_a_stale_row(name, action):
     assert run_fixture(doc, quiet, manifest=manifest()).calls == []
     for fx in doc["fixtures"]:
         assert not run_fixture(doc, fx, manifest=manifest()).problems
-    # the pack is a reference pack, as new-critical-alert is: not pinned or bound until its
-    # lookup runs on the engine and the site's notify handlers exist
+    # the pack is a reference pack, as new-critical-alert is: not pinned or bound until something
+    # writes its table (table:cti.watch) as a file a binding can declare (docs/stackstorm.md, Tables)
     assert doc["pack"] not in {p["pack"] for p in load_doc(ROOT / "workflows/deploy.yml")["pins"]}
 
 

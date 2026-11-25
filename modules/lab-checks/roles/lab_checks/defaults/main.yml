@@ -20,6 +20,11 @@ lab_checks_data_root: "/var/lib/hnx-modules/{{ lab_checks_logical_id }}"
 lab_checks_bin_dir: /usr/local/libexec/homelabnext
 lab_checks_owner: root
 lab_checks_owner_group: root
+# Opt-in: a host group that may READ the results document (e.g. a workflow engine's action runner that
+# looks the criteria up). Empty (the default): the results stay root's, 0600. Set: the role creates the
+# group (a system group), the results directory becomes root:<group> 02750 (new files inherit the group),
+# the run's umask lets the group read (0027) and the document is root:<group> 0640. Nothing else is shared.
+lab_checks_results_group: ''
 # a calendar, never an interval (LL-041); hourly, off the hour so the checks do not all land with every other timer
 lab_checks_oncalendar: "*-*-* *:07:00 UTC"
 lab_checks_max_runtime_s: 900

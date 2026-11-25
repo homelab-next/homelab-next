@@ -18,6 +18,13 @@
       {{ stackstorm_release_dir | default((stackstorm_release_recorded.content | default('') | b64decode | trim) or (stackstorm_data_root ~ '/pack-releases/none')) }}
   tags: [health, backup, restore, export, upgrade]
 
+- name: The table mounts of the action runner (stackstorm_table_mounts)
+  ansible.builtin.include_tasks:
+    file: tables.yml
+    apply:
+      tags: [health, backup, restore, export, upgrade]
+  tags: [health, backup, restore, export, upgrade]
+
 - name: Build the application spec
   vars:
     _st2: "{{ stackstorm_release_repository }}"
@@ -45,9 +52,10 @@
       compose_app_validate_with_docker: "{{ stackstorm_validate_with_docker }}"
       compose_app_network_subnet: "{{ stackstorm_network_subnet }}"
       compose_app_bind_extra: >-
-        {{ [{'path': stackstorm_broker_socket_dir,
-             'reason': 'the broker socket the forward keeps up, mounted so the action runner can reach the broker'}]
-           if stackstorm_broker_tunnel_enabled | bool else [] }}
+        {{ ([{'path': stackstorm_broker_socket_dir,
+              'reason': 'the broker socket the forward keeps up, mounted so the action runner can reach the broker'}]
+            if stackstorm_broker_tunnel_enabled | bool else [])
+           + stackstorm_table_binds }}
       compose_app_spec:
         services:
           mongo:
@@ -161,7 +169,9 @@
                   stackstorm_data_root ~ '/python:' ~ stackstorm_c_python_root ~ ':ro',
                   stackstorm_data_root ~ '/dist:' ~ stackstorm_c_dist ~ ':ro',
                   stackstorm_data_root ~ '/state:' ~ stackstorm_c_state]
-                 + ([stackstorm_broker_socket_dir ~ ':/run/hnx-broker'] if stackstorm_broker_tunnel_enabled | bool else []) }}
+                 + ([stackstorm_broker_socket_dir ~ ':/run/hnx-broker'] if stackstorm_broker_tunnel_enabled | bool else [])
+                 + stackstorm_table_volumes }}
+            group_add: "{{ stackstorm_table_gids }}"
             healthcheck: "{{ {'test': _hc_proc + ['/opt/stackstorm/st2/bin/st2actionrunner']} | combine(_hc_times) }}"
           st2rulesengine:
             image: "{{ _st2 }}/st2rulesengine"

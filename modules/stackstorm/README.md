@@ -176,6 +176,16 @@ compare it with the timer it replaces (docs/stackstorm.md, "Shadow, then live").
 **binding change in git** with a `promotion` entry (a shadow window of at least 7 days and parity
 evidence), then a re-render, a new pinned pack and this setting.
 
+**Tables.** A bound pack's `lookup` step reads a table the binding declares (`tables`): a file inside the
+action runner (docs/stackstorm.md, "Tables"). `stackstorm_table_mounts` puts each table's host directory there,
+read-only, at `/opt/hnx-tables/<name>`, and gives the runner the directory's group by number (`group_add`), e.g.
+`[{name: lab-checks, path: /var/lib/hnx-modules/lab-checks/results, group: hnx-lab-results}]` with lab-checks'
+`lab_checks_results_group: hnx-lab-results`. A directory, not a file (a writer that replaces its file would leave a
+file mount on the old copy). The role refuses a relative path, one outside `stackstorm_table_roots` (default
+`/var/lib/hnx-modules`, three parts or more), this module's own data root or anything nested with it, a name or
+directory twice; readiness refuses a missing directory (the engine would create it empty, as root) and a group that
+does not exist on the guest (deploy the module that writes the table first). Empty (the default): nothing is mounted.
+
 The RBAC the role applies (`[rbac] enable`): `st2admin` is `system_admin`. **`stanley`**, the user a
 rule runs executions as (no password, no token anyone holds), is **not**: it holds the custom role
 `hnx_runner`, one grant, `key_value_pair_view` on `st2kv.system:homelabnext.kv_key`. Why that
