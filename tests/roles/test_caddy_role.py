@@ -533,6 +533,8 @@ def test_the_default_logger_redacts_credentials_in_urls_and_headers(tmp_path):
     d_query, d_headers = _filter_rules(caddyfile)
     assert (a_query, a_headers) == (d_query, d_headers)  # one redaction list, two loggers
     assert {"code", "state", "id_token", "session_state"} <= a_query
+    # the sign-in redirect's Location carries the escaped URI: its credential values are redacted too
+    assert "resp_headers>Location regexp" in access
     query, headers = _filter_rules(caddyfile)
     for name in (
         "api_key",

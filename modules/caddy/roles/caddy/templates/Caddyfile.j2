@@ -33,6 +33,8 @@
 				request>headers>Cookie replace REDACTED
 				request>headers>Proxy-Authorization replace REDACTED
 				resp_headers>Set-Cookie replace REDACTED
+				# the sign-in redirect carries the request's URI, escaped, in Location (rd=...%3Ftoken%3D...)
+				resp_headers>Location regexp "(?i)(token|api_?key|api-key|access_token|id_token|code|state|session_state)(%3d|=)(?:[^&%]|%[^2]|%2[^6])*" "${1}${2}REDACTED"
 			}
 {% endmacro %}
 
