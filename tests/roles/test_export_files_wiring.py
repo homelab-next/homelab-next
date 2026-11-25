@@ -15,7 +15,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 APPS = sorted(
     p
-    for p in (ROOT / "modules").glob("*/roles/*/tasks/app.yml")
+    for p in [
+        *(ROOT / "modules").glob("*/roles/*/tasks/app.yml"),
+        *(ROOT / "ansible/roles").glob("*/tasks/app.yml"),
+    ]
     if "compose_app_export_files" in p.read_text()
 )
 
@@ -38,7 +41,7 @@ def _spec_files(app_yml: Path):
 
 
 def test_the_stateful_products_without_a_database_server_are_covered():
-    assert len(APPS) >= 3
+    assert len(APPS) >= 5
 
 
 @pytest.mark.parametrize("app", APPS, ids=lambda p: p.parts[-4])
