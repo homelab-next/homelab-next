@@ -147,9 +147,9 @@ def _render(src, ctx):
     """The unit template as Ansible renders it (dirname and basename are Ansible's filters)."""
     import os.path
 
-    from jinja2 import Environment
+    from jinja2 import Environment, select_autoescape
 
-    env = Environment(keep_trailing_newline=True)
+    env = Environment(keep_trailing_newline=True, autoescape=select_autoescape(default=False))
     env.filters.update(dirname=os.path.dirname, basename=os.path.basename)
     return env.from_string(src).render(**ctx)
 
