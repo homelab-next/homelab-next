@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import pwd
+import subprocess
 import time
 from pathlib import Path
 
@@ -228,6 +229,21 @@ def test_an_identity_provider_adds_its_ca_to_the_trust_and_nothing_else_to_the_e
     bundle = (tmp_path / "app" / "tls" / "ca-bundle.pem").read_text()
     assert PUBLIC_ROOTS.strip() in bundle and PKI[2].strip() in bundle
     assert bundle.index(PUBLIC_ROOTS.strip()) < bundle.index(PKI[2].strip())
+    # real line breaks between and after the certificates (a literal backslash-n fused the public
+    # store's last END line with the lab CA's BEGIN line, so a PEM reader lost both): every line
+    # is a PEM line, the bundle ends in a newline, and openssl reads both certificates from it
+    assert "\\n" not in bundle and bundle.endswith("-----END CERTIFICATE-----\n")
+    assert (
+        bundle.count("\n-----BEGIN CERTIFICATE-----")
+        == bundle.count("-----BEGIN CERTIFICATE-----") - 1
+    )
+    path = tmp_path / "app" / "tls" / "ca-bundle.pem"
+    read = subprocess.run(
+        ["openssl", "storeutl", "-noout", "-certs", str(path)], capture_output=True, text=True
+    )
+    assert read.returncode == 0 and "Total found: 2" in read.stdout + read.stderr, (
+        read.stdout + read.stderr
+    )
     assert "o" * 24 not in (tmp_path / "app" / "docker-compose.yml").read_text()
 
 
