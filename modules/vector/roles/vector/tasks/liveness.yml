@@ -3,7 +3,30 @@
 # textfile metrics once a minute (are both containers running and healthy, how often did they restart, how old
 # is the sidecar's status, how many rows has each route moved) and the monitoring rules page on them.
 # Off when vector_textfile_dir is empty.
-# the writer itself (code/hnx_modules/vector/liveness.py) is copied with the package by files.yml
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ vector_last_run_dir }}"
+    last_run_group: "{{ vector_last_run_group }}"
+    last_run_writer: "{{ vector_last_run_writer }}"
+
+- name: The directory for the liveness writer exists
+  ansible.builtin.file:
+    path: /usr/local/libexec/homelabnext
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the liveness writer (the package's own file, run by its shebang)
+  ansible.builtin.copy:
+    src: "{{ vector_code_src }}/liveness.py"
+    dest: /usr/local/libexec/homelabnext/hnx-vector-liveness
+    owner: root
+    group: root
+    mode: "0755"
 
 - name: The textfile directory exists
   ansible.builtin.file:

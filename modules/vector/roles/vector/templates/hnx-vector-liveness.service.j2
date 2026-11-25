@@ -6,5 +6,8 @@ After=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 -I {{ vector_data_root }}/code/hnx_modules/vector/liveness.py --compose-file {{ vector_dir }}/docker-compose.yml --status-file {{ vector_data_root }}/run/status.json --out {{ vector_textfile_dir }}/vector_pipeline.prom
+# the timer's runs are reported to the shared last-run record (the writer runs privileged: +)
+ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ vector_last_run_dir }} --group {{ vector_last_run_group }} --job timer:vector/hnx-vector-liveness --unit %n --calendar "{{ vector_liveness_interval }}" --delay 0
+ExecStart=/usr/local/libexec/homelabnext/hnx-vector-liveness --compose-file {{ vector_dir }}/docker-compose.yml --status-file {{ vector_data_root }}/run/status.json --out {{ vector_textfile_dir }}/vector_pipeline.prom --owner {{ vector_textfile_owner }}
+ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ vector_last_run_dir }} --group {{ vector_last_run_group }} --job timer:vector/hnx-vector-liveness --unit %n --calendar "{{ vector_liveness_interval }}" --delay 0
 Nice=10

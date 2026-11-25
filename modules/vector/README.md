@@ -202,7 +202,8 @@ timer off): `vector_pipeline_container_running`, `_container_healthy` and `_cont
 (`vector`, `sidecar`), `vector_pipeline_status_present`, `_status_age_seconds`, `_status_listening`,
 `_status_errors`, `vector_pipeline_rows_total{route}` (rows the sidecar sent on, per route) and
 `vector_pipeline_check_timestamp_seconds`. The host's node exporter must serve that directory (the overlay's
-`node_exporter_textfile_dir`). The monitoring module's rules page on `LogPipelineContainerDown` (5 minutes),
+`node_exporter_textfile_dir`); the file is mode 0600 owned by `vector_textfile_owner` (default `root`), so set
+that to the user the exporter runs as. The monitoring module's rules page on `LogPipelineContainerDown` (5 minutes),
 `LogPipelineCrashLooping` (3 restarts in 15 minutes), `LogPipelineContainerUnhealthy` (10 minutes),
 `LogPipelineStatusStale` (no status refresh for 5 minutes, 5 minutes sustained), `LogPipelineArchiveIntakeStalled`
 (no row of the SIEM archive route, the stream that never rests, in 15 minutes) and `LogPipelineLivenessCheckStale`

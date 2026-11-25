@@ -81,3 +81,8 @@ vector_status_max_age: 60
 # Liveness (README, "Liveness and the stalled-pipeline alert"): a timer writes vector_pipeline_* metrics into the
 # host exporter's textfile directory (empty: no timer, no metrics); the monitoring rules page on them.
 vector_textfile_dir: /var/lib/homelabnext-textfile
+# The user that owns the metrics file (mode 0600, read only by it): the user the exporter runs as.
+vector_textfile_owner: root
+vector_last_run_dir: /var/lib/homelabnext/last-run
+vector_last_run_group: root
+vector_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

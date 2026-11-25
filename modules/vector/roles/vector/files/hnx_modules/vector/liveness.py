@@ -1,12 +1,14 @@
+#!/usr/bin/python3 -I
 # SPDX-License-Identifier: Apache-2.0
 # hnx-script:
 #   id: vector-liveness
 #   kind: tool
 #   purpose: Write the log pipeline's liveness as node-exporter textfile metrics - whether its two containers run, how often they restarted, how old the sidecar's status is and how many rows each route has moved - so a pipeline that is up but delivers nothing is loud.
 #   owner: platform
-#   trigger: [role:vector]
-#   inputs: "--compose-file FILE --status-file FILE --out FILE; runs docker compose ps and docker inspect for the container check"
-#   outputs: "the metrics file (atomic rename, 0644); one line on stdout with the same numbers"
+#   trigger: [timer:vector/hnx-vector-liveness, role:vector]
+#   installs_to: /usr/local/libexec/homelabnext/hnx-vector-liveness
+#   inputs: "--compose-file FILE --status-file FILE --out FILE [--owner USER]; runs docker compose ps and docker inspect for the container check"
+#   outputs: "the metrics file (atomic rename, 0600); one line on stdout with the same numbers"
 #   exit:
 #     "0": the metrics were written (a dead container is a metric, not a failure)
 #     "2": usage error or an unsafe output path
@@ -24,6 +26,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -123,7 +126,7 @@ def render(states: dict[str, dict], status: dict | None, now: float) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_atomic(out: Path, text: str) -> None:
+def write_atomic(out: Path, text: str, owner: str | None = None) -> None:
     out = out.resolve()
     if len(out.parts) < 4 or out.suffix != ".prom":
         raise ValueError(f"refusing an unsafe output path: {out}")
@@ -131,7 +134,8 @@ def write_atomic(out: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
-        os.chmod(tmp, 0o644)
+        if owner:
+            shutil.chown(tmp, user=owner)  # mkstemp made it 0600: only its owner reads it
         os.replace(tmp, out)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -143,12 +147,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--compose-file", required=True)
     ap.add_argument("--status-file", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--owner", default=None, help="user that owns the file and reads it (mode 0600)"
+    )
     args = ap.parse_args(argv)
     now = time.time()
     states = {s: container_state(args.compose_file, s) for s in SERVICES}
     text = render(states, read_status(Path(args.status_file)), now)
     try:
-        write_atomic(Path(args.out), text)
+        write_atomic(Path(args.out), text, args.owner)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2

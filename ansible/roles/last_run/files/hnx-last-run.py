@@ -36,6 +36,7 @@
 #     - timer:status_hub/hnx-hub-pull
 #     - timer:trino/lake-maintenance
 #     - timer:trivy/scan
+#     - timer:vector/hnx-vector-liveness
 #     - timer:velociraptor_server/cycle
 #   inputs: the job's id, unit, schedule and record directory (arguments); systemd's SERVICE_RESULT, EXIT_CODE and EXIT_STATUS (finish)
 #   outputs: <dir>/<job id as a file name>.json, mode 0640, group-readable by --group
