@@ -108,6 +108,10 @@ class Service:
     edge_tls: dict | None = None
     #: 2.13: the callbacks the row's own product serves for a sign-in at the IdP (``oidc.redirect_uris``)
     oidc_redirect_uris: tuple[str, ...] = ()
+    #: 2.15: False when the row's client is exempt from the realm's PKCE-only rule (``oidc.pkce``),
+    #: with the upstream gap that makes it necessary (``oidc.why``)
+    oidc_pkce: bool = True
+    oidc_why: str = ""
 
     @property
     def is_primary(self) -> bool:
@@ -486,7 +490,12 @@ def oidc_problems(sname: str, s: Mapping[str, Any], lab: Mapping[str, Any]) -> l
     answers by (a primary its capability, an eval or retiring row its row name) with the row's own
     port, or the row's ``public_hostname`` on the default port; no dot segment or encoded slash
     can walk the path out of the callback the product serves."""
-    uris = (s.get("oidc") or {}).get("redirect_uris")
+    oidc = s.get("oidc") or {}
+    uris = oidc.get("redirect_uris")
+    if oidc.get("pkce") is False and not str(oidc.get("why", "")).strip():
+        return [
+            f"service {sname}: oidc.pkce false needs oidc.why (the upstream gap that makes it necessary)"
+        ]
     if not uris:
         return []
     if s.get("auth") != "idp":
@@ -965,6 +974,8 @@ def build_registry(doc: dict) -> Registry:
             replica_of=s.get("replica_of"),
             edge_tls=s.get("edge_tls"),
             oidc_redirect_uris=tuple((s.get("oidc") or {}).get("redirect_uris", ())),
+            oidc_pkce=(s.get("oidc") or {}).get("pkce", True) is not False,
+            oidc_why=(s.get("oidc") or {}).get("why", ""),
         )
     return Registry(
         lab_name=lab["name"],
