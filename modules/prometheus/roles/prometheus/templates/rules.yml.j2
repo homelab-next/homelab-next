@@ -333,7 +333,7 @@ groups:
     rules:
       # an HTTP(S) probe (the blackbox exporter, one per published service) failed for the whole window
       - alert: ProbeDown
-        expr: probe_success == 0
+        expr: probe_success{job="probe"} == 0
         for: {{ prometheus_alert_probe_down_for }}
         labels:
           severity: critical
