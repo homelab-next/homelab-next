@@ -35,6 +35,7 @@
               - "{{ caddy_data_root }}/edge-tls:{{ caddy_edge_tls_dir }}:ro"
               - "{{ caddy_data_root }}/data:/data"
               - "{{ caddy_data_root }}/state:/config"
+              - "{{ caddy_log_root }}:{{ caddy_container_log_dir }}"
             mem_limit: "{{ caddy_mem_limit }}"
             healthcheck:
               test: [CMD, wget, -q, -T, "5", -O, /dev/null, "http://127.0.0.1:{{ caddy_container_health_port }}/"]  # no-raw-endpoint: allow the container probes its own loopback health site

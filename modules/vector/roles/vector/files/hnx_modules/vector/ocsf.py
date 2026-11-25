@@ -275,6 +275,44 @@ def _drop_none(row: dict[str, Any]) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------------------- the mappers
+def _caddy_access(
+    event: Mapping[str, Any],
+    data: Mapping[str, Any],
+    seed: str,
+    now: datetime,
+    log_source: Any,
+    agent_name: Any,
+) -> dict[str, Any] | None:
+    """One line of the edge's access log (Caddy's JSON, read by the host's SIEM agent and decoded by
+    the manager into ``data``): the client, the site it asked for, the method, the URI, the status
+    and the bytes sent.  ``data.logger`` is the access logger's name, so an error-level line of the
+    default logger (``http.log.error``, which also carries a ``request``) is not an access."""
+    request = data.get("request")
+    logger = data.get("logger")
+    if not isinstance(request, Mapping) or not (
+        isinstance(logger, str) and logger.startswith("http.log.access")
+    ):
+        return None
+    client = _first(request.get("client_ip"), request.get("remote_ip"))
+    if not _s(client, 64):
+        return None
+    status = _int(data.get("status"))
+    status = status if status is not None and 100 <= status <= 599 else None
+    agents = _get(request, "headers", "User-Agent")
+    agent = agents[0] if isinstance(agents, list) and agents else None
+    row = _row(
+        "http_activity", event, seed, now, 0, 1, 0 if status is None else (1 if status < 400 else 2),
+        None, log_source, "edge-access-log",
+    )  # fmt: skip
+    row.update(
+        http_method=_s(request.get("method"), 16), url=_s(request.get("uri"), 2048),
+        http_status=status, user_agent=_s(agent, 512), bytes_out=_int(data.get("size")),
+        src_endpoint=_endpoint(client, request.get("remote_port")),
+        dst_endpoint=_endpoint(hostname=request.get("host")), host_name=_s(agent_name),
+    )  # fmt: skip
+    return _drop_none(row)
+
+
 def siem(
     event: Mapping[str, Any], seed: str, now: datetime, ids: Mapping[str, str]
 ) -> list[tuple[str, dict[str, Any]]]:
@@ -450,6 +488,10 @@ def siem(
         )  # fmt: skip
         out.append(("process_activity", _drop_none(row)))
 
+    access = _caddy_access(event, data, seed, now, log_source, agent_name)
+    if access:
+        out.append(("http_activity", access))
+
     if (
         decoder in {"web-accesslog", "json"}
         and (data.get("url") or data.get("protocol"))
@@ -505,6 +547,44 @@ def cef_client(line: str) -> str | None:
     return src.strip() if isinstance(src, str) and src.strip() else None
 
 
+_QNAP_FIELD = re.compile(
+    r"(?:^|[\s,\[])(Users?|Source IP|Connection type|Action)\s*:\s*([^,]*?)\s*(?=,|$)", re.I
+)
+
+
+def _qnap_login(
+    event: Mapping[str, Any], seed: str, now: datetime
+) -> list[tuple[str, dict[str, Any]]]:
+    """A NAS connection-log line forwarded by syslog (``Users: <name>, Source IP: <ip>, Connection
+    type: <proto>, ..., Action: Login OK|Login Fail``, QNAP's connection log) becomes an
+    authentication row; any other syslog line stays in the raw archive only.  The field names are
+    the connection log's own; check the first real lines from the device against this
+    (``tests/modules/golden/log-pipeline/syslog-nas.in.json`` holds the shape the mapping assumes)."""
+    text = str(event.get("full_log") or "")
+    fields = {k.lower(): v for k, v in _QNAP_FIELD.findall(text)}
+    user = fields.get("users") or fields.get("user")
+    action = (fields.get("action") or "").lower()
+    ip = fields.get("source ip")
+    if not (user and ip and "login" in action) or not _s(ip, 64):
+        return []
+    fail = "fail" in action or "denied" in action or "invalid" in action
+    ok = not fail and ("ok" in action or "success" in action)
+    if not fail and not ok:
+        return []
+    loc = str(event.get("location") or "")
+    peer = loc.removeprefix("syslog:") if loc.startswith("syslog:") else None
+    row = _row(
+        "authentication", event, seed, now, 1, 2 if fail else 1, 2 if fail else 1,
+        text, "nas-syslog", "nas-syslog",
+    )  # fmt: skip
+    row.update(
+        user_name=_s(user, 128), src_endpoint=_endpoint(ip),
+        dst_endpoint=_endpoint(peer) if peer and _s(peer, 64) else None,
+        auth_protocol=_s(fields.get("connection type"), 32),
+    )  # fmt: skip
+    return [("authentication", _drop_none(row))]
+
+
 def syslog(
     event: Mapping[str, Any], seed: str, now: datetime, ids: Mapping[str, str]
 ) -> list[tuple[str, dict[str, Any]]]:
@@ -512,7 +592,7 @@ def syslog(
     no flow (no ``src``/``dst``) becomes none (the raw archive still holds it)."""
     cef = parse_cef(str(event.get("full_log") or ""))
     if not cef:
-        return []
+        return _qnap_login(event, seed, now)
     ext = cef["ext"]
     sev = cef_severity(cef["severity"])
     src = _endpoint(ext.get("src"), ext.get("spt"), ext.get("shost"))

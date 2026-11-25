@@ -95,3 +95,8 @@
     caddy_start | bool and not ansible_check_mode and
     (caddy_sites_written is changed or caddy_caddyfile_written is changed
      or caddy_edge_tls_written is changed or caddy_edge_tls_removed is changed)
+
+# The SIEM agent on this host reads the access log (the agent is its own control; this only adds one
+# marked localfile block when its configuration exists).
+- name: The SIEM agent reads the access log
+  ansible.builtin.include_tasks: siem.yml

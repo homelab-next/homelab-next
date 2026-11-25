@@ -696,6 +696,10 @@ def _golden_run():
         run({"route": "vector/syslog-udp", "peer": OTHER_PEER, "line": line})
         for line in g("router-cef.in.json")[:1]
     ]
+    out["syslog-nas"] = [
+        run({"route": "vector/syslog-udp", "peer": "198.51.100.250", "line": line})
+        for line in g("syslog-nas.in.json")
+    ]
     out["sensor-stream"] = [
         run({"route": "vector/sensor-stream", "event": e}) for e in g("sensor-stream.in.json")
     ]
@@ -916,3 +920,41 @@ def test_the_remap_never_trusts_a_severity_the_event_brings():
     ev = alert(MODEL, severity_id=6, severity=6)
     rows = run({"route": "vector/siem-alerts", "event": ev})
     assert [r["row"]["severity_id"] for r in rows if r["table"] == "detection_finding"] == [1]
+
+
+def test_an_edge_access_line_becomes_an_http_activity_row_with_client_site_status_and_uri():
+    """The edge's access log (Caddy JSON, read by the host's SIEM agent): the client is the source,
+    the site asked for the destination host, and a 4xx/5xx reads as a failure; the default logger's
+    error line (it also carries a request, but is not an access) maps to no http_activity row."""
+    ok, missing, error = (
+        [r for r in rows_of("agent-stream", i, "http_activity")] for i in (8, 9, 10)
+    )
+    assert len(ok) == 1 and len(missing) == 1 and error == []
+    row = ok[0]
+    assert row["src_endpoint"] == {"ip": "203.0.113.50", "port": 51234}
+    assert row["dst_endpoint"] == {"hostname": "hub.example.internal"}
+    assert (row["http_method"], row["url"], row["http_status"], row["status_id"]) == (
+        "GET", "/status.json", 200, 1,
+    )  # fmt: skip
+    assert row["user_agent"] == "curl/8.9.0" and row["host_name"] == "hnx-edge-01"
+    assert missing[0]["http_status"] == 404 and missing[0]["status_id"] == 2
+    assert missing[0]["dst_endpoint"]["hostname"] == "no-such.example.internal"
+
+
+def test_a_nas_connection_log_login_is_an_authentication_row_and_the_rest_stays_raw():
+    """QNAP's connection log over syslog: a login failure/success is an authentication row (user,
+    source address, protocol) against the NAS as destination; a file access and an event-log line
+    keep only their raw row."""
+    exp = json.loads((GOLDEN / "expected.json").read_text())["syslog-nas"]
+    tables = [[r["table"] for r in event_rows] for event_rows in exp]
+    assert tables == [
+        ["raw_archive", "authentication"], ["raw_archive", "authentication"],
+        ["raw_archive"], ["raw_archive"],
+    ]  # fmt: skip
+    fail, ok = rows_of("syslog-nas", 0, "authentication")[0], rows_of("syslog-nas", 1, "authentication")[0]
+    assert (fail["user_name"], fail["status_id"], fail["auth_protocol"]) == ("admin", 2, "HTTP")
+    assert fail["src_endpoint"] == {"ip": "203.0.113.77"}
+    assert fail["dst_endpoint"] == {"ip": "198.51.100.250"}
+    assert (ok["user_name"], ok["status_id"], ok["auth_protocol"]) == ("backup", 1, "SSH")
+    raw = rows_of("syslog-nas", 0, "raw_archive")[0]
+    assert raw["location"] == "syslog:198.51.100.250" and raw["decoder_name"] == "syslog"

@@ -65,6 +65,7 @@ sso.example.internal {
 			tls_server_name idp.svc.example.internal
 		}
 	}
+	log hnx_access
 }
 
 hub.example.internal {
@@ -83,4 +84,5 @@ hub.example.internal {
 			tls_server_name status-hub.svc.example.internal
 		}
 	}
+	log hnx_access
 }

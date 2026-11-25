@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# The SIEM agent reads the edge's access log (JSON lines). The agent is its own control (the
+# siem-agent baseline); this only adds one localfile block, under its own marker, when the agent's
+# configuration exists, and says so when it does not (the same contract as the IDS and zeek modules).
+- name: Is the SIEM agent installed
+  ansible.builtin.stat:
+    path: "{{ caddy_siem_agent_conf }}"
+  register: caddy_siem_conf
+
+- name: Say so when the agent is not there
+  ansible.builtin.debug:
+    msg: "caddy: {{ caddy_siem_agent_conf }} not found; the access log is written but no SIEM agent reads it yet (apply the siem-agent control to this host)"
+  when: not caddy_siem_conf.stat.exists
+
+- name: Add the access log as a localfile
+  ansible.builtin.blockinfile:
+    path: "{{ caddy_siem_agent_conf }}"
+    marker: "<!-- {mark} {{ caddy_siem_marker }} -->"
+    block: "{{ lookup('ansible.builtin.template', 'siem-localfile.xml.j2') }}"
+  register: caddy_siem_written
+  when: caddy_siem_conf.stat.exists
+
+- name: Restart the agent to read it
+  ansible.builtin.systemd:
+    name: "{{ caddy_siem_agent_unit }}"
+    state: restarted
+  when: caddy_siem_conf.stat.exists and caddy_siem_written is changed and caddy_start | bool
