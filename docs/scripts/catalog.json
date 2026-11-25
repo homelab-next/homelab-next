@@ -2474,15 +2474,17 @@
         "2": "usage error or an unsafe output path"
       },
       "id": "wazuh-liveness",
-      "inputs": "--compose-file FILE --alerts-file FILE --out FILE; runs docker compose exec for the process check",
+      "inputs": "--compose-file FILE --alerts-file FILE --out FILE [--group GROUP]; runs docker compose exec for the process check",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-wazuh-liveness",
       "kind": "tool",
       "language": "python",
-      "outputs": "the metrics file (atomic rename, 0644); one line on stdout with the same numbers",
+      "outputs": "the metrics file (atomic rename, 0640); one line on stdout with the same numbers",
       "owner": "platform",
       "path": "modules/wazuh/roles/wazuh/files/hnx_wazuh_liveness.py",
       "purpose": "Write the SIEM manager's liveness as node-exporter textfile metrics - which daemons are live processes and how old the alert stream's last write is - so a manager that is up but not working is loud.",
       "status": "active",
       "trigger": [
+        "timer:wazuh/hnx-wazuh-liveness",
         "role:wazuh"
       ]
     },
