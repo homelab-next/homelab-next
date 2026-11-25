@@ -18,3 +18,6 @@ DEST = DOC3 + ".5"
 OTHER_DEST = DOC3 + ".1"
 DOC_A = DOC1 + ".4"  # arbitrary documentation addresses of a parsing test
 DOC_B = DOC3 + ".8"
+NAS_PEER = DOC2 + ".250"  # the NAS the syslog route hears from
+NAS_CLIENT = DOC3 + ".77"  # a client the NAS logged a failed sign-in for
+WEB_CLIENT = DOC3 + ".50"  # a client of the edge proxy

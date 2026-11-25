@@ -282,3 +282,17 @@ caddy_pem_cert_pattern: '-----BEGIN CERTIFICATE-----'
 caddy_pem_key_pattern: '-----BEGIN (EC |RSA )?PRIVATE KEY-----'
 # the deletes every site must run first (homelabnext.edge_identity.IDENTITY_HEADERS.strip_patterns)
 caddy_identity_marks: ["*auth-request*", "*auth_request*"]
+
+# --- the access log (read by the host's SIEM agent) -------------------------------------------------
+# every request, one JSON line, credentials redacted (Caddyfile.j2); the directory is the container
+# user's, the agent (root) reads it. The host path is under the data root; rotation is Caddy's own.
+caddy_log_root: "{{ caddy_data_root }}/logs"
+caddy_container_log_dir: /var/log/caddy
+caddy_access_log_name: access.log
+caddy_access_log_roll_size: 50MiB
+caddy_access_log_roll_keep: 5
+caddy_access_log_roll_keep_for: 168h
+# the SIEM agent on this host (the siem-agent control) reads it: one marked localfile block in the
+# agent's configuration, added only when that configuration exists (the zeek and IDS modules' contract)
+caddy_siem_agent_conf: /var/ossec/etc/ossec.conf
+caddy_siem_marker: "hnx caddy access log"

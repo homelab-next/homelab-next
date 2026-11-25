@@ -58,6 +58,7 @@ login.lab.example {
 	request_header -*auth_request*
 	import hnx_strip_foreign_identity
 	reverse_proxy https://idp.svc.example.internal:9443
+	log hnx_access
 }
 
 status.lab.example {
@@ -67,4 +68,5 @@ status.lab.example {
 	import hnx_strip_foreign_identity
 	import hnx_forward_auth hub-viewers
 	reverse_proxy https://status-hub.svc.example.internal:8443
+	log hnx_access
 }
