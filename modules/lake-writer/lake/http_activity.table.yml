@@ -4,6 +4,7 @@ id: table:soc.http_activity
 owner: lake-writer
 schema: roles/lake_writer/files/schemas/http_activity.v1.json
 retention_days: 365
+tlp: red
 maintenance:
   compact: true
   expire_snapshots_days: 7
