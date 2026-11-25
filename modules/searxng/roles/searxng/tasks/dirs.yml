@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's; config/ (the container's settings directory) belongs to the
+# container's user alone, so the file in it, which holds the secret key, is readable by nobody else.
+- name: Create the data root and the settings directory
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ searxng_data_root }}", owner: "{{ searxng_owner }}", group: "{{ searxng_group }}", mode: "0750"}
+    - {path: "{{ searxng_data_root }}/config", owner: "{{ searxng_uid | int }}", group: "{{ searxng_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"

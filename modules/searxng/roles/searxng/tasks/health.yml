@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy; the settings file is private (0600); the health
+# path answers 200; and a REAL JSON search (q and format=json, the call the consumers make) answers
+# 200 with a `results` list that is not empty. A metasearch whose engines are all blocked still
+# answers 200 with no results, so zero results FAIL unless the site says otherwise
+# (searxng_health_require_results false); a body that is not a result list fails either way.
+# Read-only: the search leaves nothing behind.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: searxng
+        compose_app_dir: "{{ searxng_app.compose_app_dir }}"
+        compose_app_spec: "{{ searxng_app.compose_app_spec }}"
+    - name: Read the settings file's mode (it holds the secret key)
+      ansible.builtin.stat:
+        path: "{{ searxng_data_root }}/config/settings.yml"
+      register: searxng_settings_stat
+    - name: The settings file exists and only its owner can read it
+      ansible.builtin.assert:
+        that:
+          - searxng_settings_stat.stat.exists
+          - searxng_settings_stat.stat.mode == '0600'
+        fail_msg: "searxng: {{ searxng_data_root }}/config/settings.yml must exist with mode 0600 (it holds the secret key)"
+    - name: The health path /healthz answers
+      ansible.builtin.uri:
+        url: "http://{{ searxng_bind }}:{{ searxng_port | int }}/healthz"
+        status_code: 200
+        timeout: "{{ searxng_health_timeout | int }}"
+      changed_when: false
+      check_mode: false
+    - name: A JSON search answers (the format the consumers call)
+      ansible.builtin.uri:
+        url: "http://{{ searxng_bind }}:{{ searxng_port | int }}/search?q={{ searxng_health_query | urlencode }}&format=json"
+        status_code: 200
+        return_content: true
+        timeout: "{{ searxng_health_timeout | int }}"
+      register: searxng_search
+      changed_when: false
+      check_mode: false
+    - name: The answer is a list of results
+      ansible.builtin.assert:
+        that:
+          - searxng_search.json is defined
+          - searxng_search.json is mapping
+          - searxng_search.json.results is defined
+          - searxng_search.json.results is sequence and searxng_search.json.results is not string
+        fail_msg: "searxng: the JSON search did not answer a document with a results list (is the json format enabled?)"
+    - name: The search found something (an empty answer is not healthy)
+      ansible.builtin.assert:
+        that: searxng_search.json.results | length > 0
+        fail_msg: >-
+          searxng: the search for '{{ searxng_health_query }}' returned no results (every engine may be
+          blocked or the guest may have no route out); set searxng_health_require_results to false
+          only for a site that accepts that
+      when: searxng_health_require_results | bool
+  tags: [health]

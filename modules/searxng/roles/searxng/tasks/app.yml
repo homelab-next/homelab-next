@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). No environment
+# holds a secret: the settings file (0600, in the config directory the container mounts) does. The
+# container runs as the image's own user with every capability dropped and no-new-privileges.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    searxng_app:
+      compose_app_name: searxng
+      compose_app_dir: "{{ searxng_dir }}"
+      compose_app_data_dir: "{{ searxng_data_root }}"
+      compose_app_export_dir: "{{ searxng_data_root }}/export"
+      compose_app_owner: "{{ searxng_owner }}"
+      compose_app_group: "{{ searxng_group }}"
+      compose_app_start: "{{ searxng_start }}"
+      compose_app_validate_with_docker: "{{ searxng_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          searxng:
+            image: "{{ searxng_repository }}"
+            tag: "{{ searxng_tag }}"
+            digest: "{{ searxng_digest }}"
+            user: "{{ searxng_uid | int }}:{{ searxng_gid | int }}"
+            ports: ["{{ searxng_bind }}:{{ searxng_port | int }}:{{ searxng_container_port }}"]
+            volumes: ["{{ searxng_data_root }}/config:{{ searxng_container_config }}"]
+            mem_limit: "{{ searxng_mem_limit }}"
+            healthcheck:
+              test: [CMD, wget, -q, -T, "5", -O, /dev/null, "http://{{ searxng_container_probe_host }}:{{ searxng_container_port }}/healthz"]
+              interval: 30s
+              timeout: 5s
+              retries: 5
+              start_period: 20s
+  tags: [health, backup, restore, export, upgrade]

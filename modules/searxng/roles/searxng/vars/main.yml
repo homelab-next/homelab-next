@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+searxng_container_port: 8080
+# the container probes its own health path on its own loopback name
+searxng_container_probe_host: localhost
+# where the config directory is mounted in the container (the product reads settings.yml there)
+searxng_container_config: /etc/searxng
+searxng_repository: "{{ searxng_image.split('@')[0].rsplit(':', 1)[0] }}"
+searxng_tag: "{{ searxng_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+searxng_digest: "{{ searxng_image.split('@')[1] | default('') }}"
+searxng_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+searxng_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z'
+searxng_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+# the secret key: 32 or more characters of one safe alphabet (it is put in a YAML string and an
+# environment-free file, never a shell)
+searxng_key_pattern: '^[A-Za-z0-9._~+=-]{32,256}\Z'
+# an instance name: 1 to 64 printable ASCII characters (it is rendered as a JSON string)
+searxng_name_pattern: '^[ -~]{1,64}\Z'
+# an engine's name as the product spells it (letters, digits, spaces, dots, dashes, underscores)
+searxng_engine_pattern: '^[a-z0-9][a-z0-9 ._-]{0,63}\Z'
+searxng_query_pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}\Z'

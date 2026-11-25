@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes, keyed by the slot and renamed to
+# the instance the site selects; version is product.version (never repeated here), host is the
+# module's host role. The lab registry (lab/services.yml) must carry it exactly as bound
+# (hnx modules check, docs/modules/registry-rows.md). Internal only: no public_hostname and no
+# public route (a site that wants an edge route adds one with the public_hostname and the grant).
+# auth: own - the service has no accounts; the guest's firewall admits only the named callers.
+# The health path is the product's own.
+services:
+  web-search:
+    capability: web-search
+    impl: searxng
+    host: server
+    protocol: http
+    port: 8095
+    health: {kind: http, path: /healthz, expect_status: 200}
+    owner: operator
+    tls: none
+    auth: own
+    tags: [search]
+    description: The metasearch service; callers ask /search?q=...&format=json. Internal only, no public route.
