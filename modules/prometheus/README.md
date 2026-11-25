@@ -67,7 +67,7 @@ names a real host, address, VM id or secret value; those live only in the privat
   certificate, edge and backend), any other by the name it answers by. An edge answer of 2xx, 3xx,
   401 or 403 is up (a sign-in redirect is the edge working); a 5xx, a refused connection, a bad
   certificate or no answer inside `prometheus_probe_timeout` is down. The `ProbeDown` rule
-  (`probe_success == 0`, `for: 5m` = `prometheus_alert_probe_down_for`, critical) goes through the
+  (`probe_success{job="probe"} == 0`, `for: 5m` = `prometheus_alert_probe_down_for`, critical) goes through the
   same state-diffed forwarder as every other alert, so a probe going red posts once, and its
   recovery posts once. Limit: a row behind the edge's forward auth answers with the sign-in redirect
   whether or not its backend is up, so for those the probe proves the name, certificate and edge;

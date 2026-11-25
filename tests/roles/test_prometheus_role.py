@@ -857,7 +857,7 @@ def test_probes_on_render_the_target_list_the_job_the_modules_and_the_rule(tmp_p
     assert {"target_label": "__address__", "replacement": "blackbox:9115"} in job["relabel_configs"]
     rules = yaml.safe_load((data / "rules.yml").read_text())
     by = {x["alert"]: x for g in rules["groups"] for x in g["rules"] if "alert" in x}
-    assert by["ProbeDown"]["expr"] == "probe_success == 0"
+    assert by["ProbeDown"]["expr"] == 'probe_success{job="probe"} == 0'
     assert by["ProbeDown"]["for"] == "5m" and by["ProbeDown"]["labels"]["severity"] == "critical"
     mods = yaml.safe_load((data / "blackbox/blackbox.yml").read_text())["modules"]
     assert set(mods) == {"http_edge", "http_2xx"}
@@ -1004,6 +1004,8 @@ tests:
       - {series: 'probe_success{job="probe", service="a", instance="https://a.example.internal/"}', values: '0x15'}
       - {series: 'probe_success{job="probe", service="b", instance="https://b.example.internal/"}', values: '0x3 1x12'}
       - {series: 'probe_success{job="probe", service="c", instance="https://c.example.internal/"}', values: '1x15'}
+      # an LLM completion probe failing is LlmProbeFailed's, never a second ProbeDown for the same failure
+      - {series: 'probe_success{job="llm-probe", role="main-reasoner", instance="main-reasoner"}', values: '0x15'}
     alert_rule_test:
       - eval_time: 3m
         alertname: ProbeDown
