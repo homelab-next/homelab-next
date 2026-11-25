@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy, in an open format: every table's checkpoint and last-run record (JSON) under
+# <data root>/export/<stamp>/state/. Built beside its final name and renamed into place, so a
+# half-written export is never mistaken for a finished one. The rows are the lake's, exported there;
+# the staged batches are the object store's.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Name this export
+      ansible.builtin.set_fact:
+        lake_writer_export_stamp: "{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}"
+    - name: Build the export beside its final name
+      ansible.builtin.file:
+        path: "{{ lake_writer_export_dir }}/.{{ lake_writer_export_stamp }}.incoming"
+        state: directory
+        owner: "{{ lake_writer_owner }}"
+        group: "{{ lake_writer_owner_group }}"
+        mode: "0700"
+    - name: Make the state directory in it
+      ansible.builtin.file:
+        path: "{{ lake_writer_export_dir }}/.{{ lake_writer_export_stamp }}.incoming/state"
+        state: directory
+        owner: "{{ lake_writer_owner }}"
+        group: "{{ lake_writer_owner_group }}"
+        mode: "0700"
+    - name: Copy the state into it (each file keeps its own owner and mode)
+      ansible.builtin.command:
+        argv: [cp, -a, "{{ lake_writer_state_dir }}/.", "{{ lake_writer_export_dir }}/.{{ lake_writer_export_stamp }}.incoming/state/"]
+      changed_when: true
+    - name: Rename it into place
+      ansible.builtin.command:
+        argv: [mv, -T, "{{ lake_writer_export_dir }}/.{{ lake_writer_export_stamp }}.incoming", "{{ lake_writer_export_dir }}/{{ lake_writer_export_stamp }}"]
+      changed_when: true
+  tags: [export]

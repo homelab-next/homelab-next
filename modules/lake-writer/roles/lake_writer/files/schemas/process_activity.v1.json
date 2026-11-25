@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/lake-writer/ocsf/process_activity/1.0",
+  "title": "Process Activity",
+  "description": "Pinned subset of the OCSF Process Activity class (OCSF 1.3.0, class_uid 1007) as the lake-writer module stores it in the soc namespace. Flat top-level columns plus one-level structs; the table, Arrow schema and DDL are generated from this file (homelabnext.lake).",
+  "x-lake": {
+    "table": "process_activity",
+    "ocsf_class": "process_activity",
+    "ocsf_class_uid": 1007,
+    "ocsf_version": "1.3.0",
+    "key": [
+      "uid"
+    ],
+    "time_column": "time",
+    "partition": "day(time)"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "uid",
+    "time",
+    "class_uid",
+    "category_uid",
+    "activity_id",
+    "severity_id",
+    "process_name"
+  ],
+  "properties": {
+    "uid": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Stable content-derived event id. This is the idempotency (content) key of the table."
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Event time, RFC 3339 with an explicit offset; stored as UTC."
+    },
+    "class_uid": {
+      "const": 1007,
+      "type": "integer"
+    },
+    "category_uid": {
+      "const": 1,
+      "type": "integer"
+    },
+    "activity_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 99
+    },
+    "type_uid": {
+      "type": "integer"
+    },
+    "severity_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6
+    },
+    "status_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 99
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "metadata": {
+      "type": "object",
+      "description": "OCSF metadata object (subset).",
+      "additionalProperties": false,
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "product": {
+          "type": "string"
+        },
+        "log_source": {
+          "type": "string"
+        }
+      }
+    },
+    "process_name": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "process_pid": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "process_path": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "process_cmd_line": {
+      "type": "string",
+      "maxLength": 8192
+    },
+    "parent_process_name": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "parent_process_pid": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "user_name": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "host_name": {
+      "type": "string",
+      "maxLength": 253
+    },
+    "tlp": {
+      "type": "string",
+      "enum": [
+        "clear",
+        "green",
+        "amber",
+        "amber+strict",
+        "red"
+      ],
+      "description": "The row's TLP 2.0 label (ADR-0033 decision 5), set from the event's labels.hnx_tlp by the log pipeline; the lake refuses a row without one. Not an OCSF attribute."
+    }
+  }
+}

@@ -227,15 +227,21 @@ def _forward_auth_snippet(endpoint: str, identity: IdentityHeaders | None = None
         "\t\t\t}\n"
         "\t\t}\n"
         "\t\t# the session cookie is the auth proxy's alone: no upstream sees it (after the check)\n"
-        f'\t\trequest_header Cookie "{SESSION_COOKIE_FIND}" "$1"\n'
+        f'\t\trequest_header Cookie "{SESSION_COOKIE_FIND}" ""\n'
+        f'\t\trequest_header Cookie "{SESSION_COOKIE_LEAD}" ""\n'
         "\t}\n"
         "}\n"
     )
 
 
 #: the regular expression that deletes every part of the auth proxy's session cookie from a
-#: ``Cookie`` header (keeping the separator before it; any other cookie stays), case-insensitively
-SESSION_COOKIE_FIND = rf"(?i)(^|;\s*){AUTH_PROXY_COOKIE}[^=;]*=[^;]*"
+#: ``Cookie`` header together with the ``;`` before it (any other cookie stays), case-insensitively;
+#: a cookie first in the header leaves its following ``;`` behind, which :data:`SESSION_COOKIE_LEAD`
+#: (the next directive) removes: an upstream's strict cookie parser (OpenSearch Dashboards') rejects
+#: the whole header on a leading ``;``, which logged every user out on the next request
+SESSION_COOKIE_FIND = rf"(?i)(?:;\s*)?{AUTH_PROXY_COOKIE}[^=;]*=[^;]*"
+#: the leading ``;`` the previous deletion can leave when the session cookie was first
+SESSION_COOKIE_LEAD = r"^;\s*"
 
 
 #: the auth proxy check's query parameter naming the groups a signed-in user must be in one of
@@ -501,9 +507,9 @@ def caddy(reg: Registry, edge_hosts=None) -> dict[str, str]:
     "prometheus",
     "Prometheus scrape_configs for services exposing metrics",
     "monitoring (Prometheus)",
-    options=("node_targets",),
+    options=("node_targets", "probe_targets"),
 )
-def prometheus(reg: Registry, node_targets=None) -> dict[str, str]:
+def prometheus(reg: Registry, node_targets=None, probe_targets=None) -> dict[str, str]:
     jobs = []
     credentials = {}
     for s in reg.rows(*OBSERVED_TIERS):
@@ -551,7 +557,58 @@ def prometheus(reg: Registry, node_targets=None) -> dict[str, str]:
         out[scrape_path.rpartition("/")[0] + "/node_targets.yml"] = _yaml_doc(
             reg, _node_targets(reg, node_targets)
         )
+    if probe_targets is not None:
+        out[scrape_path.rpartition("/")[0] + "/probe_targets.yml"] = _yaml_doc(
+            reg, _probe_targets(reg, probe_targets)
+        )
     return out
+
+
+#: the blackbox module a probe of a row published at the edge uses (any answer the edge itself
+#: gives: a login redirect or a refusal is "up"; a 5xx or no answer is "down") and the module of a
+#: direct probe of a row's own declared health endpoint (the expected status is a label)
+PROBE_MODULE_EDGE = "http_edge"
+PROBE_MODULE_DIRECT = "http_2xx"
+
+
+def _probe_targets(reg: Registry, spec) -> list[dict]:
+    """The HTTP(S) up/down probe targets (``probe_targets`` option, ``{exclude}``): every row of
+    the observed tiers that is published at the edge (``public_hostname``) or declares an http
+    health endpoint.  A routed row is probed by its edge name (what a user types: it proves the
+    name, the certificate, the edge and the backend answer), any other by the name it answers by.
+    A row that is neither routed nor has an http health endpoint is not probed."""
+    if not isinstance(spec, dict) or set(spec) - {"exclude"}:
+        raise GeneratorRefusal("probe_targets: a mapping with optionally exclude")
+    exclude = spec.get("exclude", [])
+    if isinstance(exclude, str) or any(not isinstance(n, str) for n in exclude):
+        raise GeneratorRefusal("probe_targets: exclude is a list of service row names")
+    rows = reg.rows(*OBSERVED_TIERS)
+    unknown = sorted(set(exclude) - {s.name for s in rows})
+    if unknown:
+        raise GeneratorRefusal(f"probe_targets: exclude names no observed service row: {unknown}")
+    entries = []
+    for s in rows:
+        if s.name in exclude:
+            continue
+        http_health = s.health.get("kind") == "http"
+        if not s.public_hostname and not http_health:
+            continue
+        path = s.health["path"] if http_health else "/"
+        if s.public_hostname:
+            url = f"https://{s.public_hostname}{path}"
+            labels = {"module": PROBE_MODULE_EDGE, "via": "edge"}
+        else:
+            scheme = s.scheme if s.scheme in ("http", "https") else "http"
+            url = f"{scheme}://{reg.address_of(s)}:{s.port}{path}"
+            expect = s.health.get("expect_status", 200)
+            # a health endpoint that is declared to answer other than 2xx is "up" on any
+            # answer the service itself gives, as the edge's is
+            module = PROBE_MODULE_DIRECT if expect < 300 else PROBE_MODULE_EDGE
+            labels = {"module": module, "via": "service", "expect_status": str(expect)}
+        entries.append(
+            {"targets": [url], "labels": {**labels, "owner": s.owner, "service": s.name}}
+        )
+    return entries
 
 
 def _node_targets(reg: Registry, spec) -> list[dict]:
@@ -1048,12 +1105,25 @@ def _mappers(client: str) -> list[dict]:
     ]
 
 
-def _client(name: str, owner: str, redirects: list[str], root: str | None) -> dict:
+def _client(
+    name: str,
+    owner: str,
+    redirects: list[str],
+    root: str | None,
+    *,
+    pkce: bool = True,
+    public: bool = False,
+) -> dict:
     """One confidential OIDC client: authorization code with PKCE only, the trimmed scopes, and
-    the secret by reference (``$(env:...)``, substituted at import from the secret store)."""
+    the secret by reference (``$(env:...)``, substituted at import from the secret store).
+
+    ``pkce=False`` (a row's ``oidc.pkce: false``, 2.15, ADR-0034 amendment 2026-11-25) drops the
+    S256 requirement for this one client, whose product cannot send a code challenge. It is
+    refused on a public client: a public client has no secret, so the code challenge is the only
+    thing that binds the code to the browser that asked for it."""
     env = secret_env_name(client_secret_ref(name))
     out = {
-        "attributes": {"pkce.code.challenge.method": "S256"},
+        "attributes": {"pkce.code.challenge.method": "S256"} if pkce else {},
         "clientAuthenticatorType": "client-secret",
         "clientId": name,
         "defaultClientScopes": list(DEFAULT_CLIENT_SCOPES),
@@ -1066,13 +1136,17 @@ def _client(name: str, owner: str, redirects: list[str], root: str | None) -> di
         "optionalClientScopes": list(OPTIONAL_CLIENT_SCOPES),
         "protocol": "openid-connect",
         "protocolMappers": _mappers(name),
-        "publicClient": False,
+        "publicClient": public,
         "redirectUris": redirects,
         "secret": f"$(env:{env})",
         "serviceAccountsEnabled": False,
         "standardFlowEnabled": bool(redirects),
         "webOrigins": ["+"] if redirects else [],
     }
+    if not pkce and out["publicClient"]:
+        raise ValueError(
+            f"client {name}: pkce false on a public client (no secret binds its codes)"
+        )
     if root:
         out["attributes"]["post.logout.redirect.uris"] = f"{root}/*"
         out["rootUrl"] = root
@@ -1198,7 +1272,10 @@ def idp_realm(reg: Registry, reserved_usernames=None, edge_hosts=None) -> dict[s
     for s in gated:
         # a redirect is under a public route, which is a primary's alone
         root = f"https://{s.public_hostname}" if s.public_hostname and s.is_primary else None
-        clients.append(_client(s.name, s.owner, [f"{root}/*"] if root else [], root))
+        # 2.13: the callbacks the row declares itself (the registry has held each to the row's
+        # own name and port); the only way a row with no public route gets a redirect
+        redirects = ([f"{root}/*"] if root else []) + list(s.oidc_redirect_uris)
+        clients.append(_client(s.name, s.owner, redirects, root, pkce=s.oidc_pkce))
         if s.roles:
             roles[s.name] = [
                 {"clientRole": True, "description": f"{s.name} {r}", "name": r} for r in s.roles

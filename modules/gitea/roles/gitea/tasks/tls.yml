@@ -17,6 +17,37 @@
   register: gitea_tls_files
   no_log: true
 
+# With an OpenID Connect issuer to trust, the container's SSL_CERT_FILE replaces the image's own root
+# store, so it must hold both: the host's public roots (an issuer behind a public edge certificate, as a
+# realm published at the edge is) and the lab CA (an issuer, or a git remote, behind the lab's own).
+- name: Read the host's public root store for the issuer's trust
+  ansible.builtin.slurp:
+    src: "{{ gitea_system_ca_file }}"
+  register: gitea_system_ca
+  when: gitea_oidc_enabled | bool
+
+- name: Refuse a public root store that holds no certificate
+  ansible.builtin.assert:
+    that: (gitea_system_ca.content | b64decode) is search(gitea_pem_cert_pattern)
+    fail_msg: >-
+      {{ gitea_system_ca_file }} holds no PEM certificate: the issuer's public certificate could not be
+      verified (install the host's ca-certificates, or point gitea_system_ca_file at a PEM root store)
+    quiet: true
+  when: gitea_oidc_enabled | bool
+
+- name: Write the trust bundle (the host's public roots, then the lab CA)
+  ansible.builtin.copy:
+    # double-quoted, as the other certificate files: YAML turns each \n into a real line break (a
+    # folded scalar would leave a literal backslash-n and fuse the two certificates' PEM lines)
+    content: "{{ (gitea_system_ca.content | b64decode | trim) ~ '\n' ~ (lookup('hnx_secret', gitea_ca_ref) | trim) ~ '\n' }}"
+    dest: "{{ gitea_dir }}/tls/ca-bundle.pem"
+    owner: "{{ gitea_owner }}"
+    group: "{{ gitea_gid | int }}"
+    mode: "0644"
+  register: gitea_ca_bundle_file
+  no_log: true
+  when: gitea_oidc_enabled | bool
+
 - name: Write the SSH host keys (the source's, on a migration, so known_hosts entries stay valid)
   ansible.builtin.copy:
     content: "{{ lookup('hnx_secret', item.value) | trim ~ '\n' }}"

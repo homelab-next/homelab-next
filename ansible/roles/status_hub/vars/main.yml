@@ -27,3 +27,18 @@ status_hub_host_names: >-
 status_hub_trusted_proxy_hosts: >-
   {{ status_hub_trusted_proxies | map('string') | select('in', status_hub_host_names)
      | map('extract', status_hub_host_names) | unique | sort }}
+# The collector verifies https sources against the lab CA (plus any extra certificate): one bundle,
+# used as the collector's SSL_CERT_FILE. Only with TLS, where the CA reference is set.
+status_hub_ca_bundle: "{{ status_hub_tls | bool }}"
+status_hub_ca_bundle_path: "{{ status_hub_tls_dir }}/ca-bundle.crt"
+# Fixed: the shared last-run writer every role timer runs (role last_run).
+status_hub_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
+# Fixed (the units name it literally, so the script catalog can follow them): where the token helper is installed.
+status_hub_libexec_dir: /usr/local/libexec/hnx-hub
+# Login-issued tokens live in one store area of the collector's file-form secrets, hub-login: a source
+# reads a login by its name in that area (the file <status_hub_issued_dir>/hub-login/<name>),
+# a reference shaped like every other store reference (an area and a name), so the leak scan reads it as a reference.
+status_hub_login_area: hub-login
+status_hub_login_dir: "{{ status_hub_issued_dir }}/{{ status_hub_login_area }}"
+# Pulled status files: the helper's directory (key, pinned host keys, configuration), root only.
+status_hub_pull_dir: "{{ status_hub_config_dir }}/pull"

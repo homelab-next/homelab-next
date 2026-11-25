@@ -1,0 +1,29 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role stackstorm); local changes are overwritten.
+[Unit]
+Description=homelabnext bus forward for the event bridge (ssh -L to a loopback-only bus on another host)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ stackstorm_events_forward_user }}
+# The bus listens on loopback on its own host; the login on that host may only forward to it (its
+# key and sshd Match block). The host key is pinned (never trusted on first use), and a forward
+# that cannot bind its loopback end is a failure. The bridge's bus login goes through the forward
+# encrypted; the bus still authenticates the bridge's own bus user.
+ExecStart=/usr/bin/ssh -N -T -p {{ stackstorm_events_forward_ssh_port | int }} \
+  -i {{ stackstorm_events_forward_state_dir }}/events.key -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o StrictHostKeyChecking=yes -o UserKnownHostsFile={{ stackstorm_events_forward_state_dir }}/known_hosts -o GlobalKnownHostsFile=/dev/null \
+  -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+  -o ForwardAgent=no -o ForwardX11=no \
+  -L {{ stackstorm_events_forward_local }}:{{ stackstorm_events_forward_remote }} \
+  {{ stackstorm_events_forward_ssh_user }}@{{ stackstorm_events_forward_host }}
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

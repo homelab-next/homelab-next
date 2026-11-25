@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# The account, then the directories, one owner each: the data root is root's, read by the module's
+# group; state/ is the module's user's (each table's run writes its checkpoint and last-run record
+# there); export/ is root's (the export, backup and restore hooks run as root). The configuration
+# directory is root's; the credentials directory is root-only.
+- name: Create the module's group
+  ansible.builtin.group:
+    name: "{{ lake_writer_group }}"
+    system: true
+  when: lake_writer_manage_accounts | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the module's user (no home, no shell)
+  ansible.builtin.user:
+    name: "{{ lake_writer_user }}"
+    group: "{{ lake_writer_group }}"
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+  when: lake_writer_manage_accounts | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the data root and the export directory (root's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ lake_writer_owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ lake_writer_data_root }}", group: "{{ lake_writer_group }}", mode: "0750"}
+    - {path: "{{ lake_writer_export_dir }}", group: "{{ lake_writer_owner_group }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the state directory (the module's user's)
+  ansible.builtin.file:
+    path: "{{ lake_writer_state_dir }}"
+    state: directory
+    owner: "{{ lake_writer_user }}"
+    group: "{{ lake_writer_group }}"
+    mode: "0700"
+  tags: [backup, export, restore, upgrade]

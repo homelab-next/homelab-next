@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/lake-writer/raw_archive/1.0",
+  "title": "Raw archive event",
+  "description": "Every event the SIEM manager archived, before any OCSF remap: the raw-archive table of the soc namespace, which the source census reads to judge each log source against its own cadence. Not an OCSF class (class uid 0: the platform's own, in these conventions).",
+  "x-lake": {
+    "table": "raw_archive",
+    "ocsf_class": "raw_archive",
+    "ocsf_class_uid": 0,
+    "ocsf_version": "1.3.0",
+    "key": [
+      "uid"
+    ],
+    "time_column": "time",
+    "partition": "day(time)"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "uid",
+    "time",
+    "location"
+  ],
+  "properties": {
+    "uid": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Stable content-derived event id; the idempotency (content) key."
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The manager's event timestamp, RFC 3339 with an explicit offset; stored as UTC."
+    },
+    "location": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "description": "The log source's location as the manager records it (a file, a journal unit, an agent module): with decoder_name, the census's source key."
+    },
+    "decoder_name": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "agent_id": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "agent_name": {
+      "type": "string",
+      "maxLength": 253
+    },
+    "agent_ip": {
+      "type": "string",
+      "maxLength": 45
+    },
+    "rule_id": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "rule_level": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 16
+    },
+    "source": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "full_log": {
+      "type": "string",
+      "maxLength": 65536
+    },
+    "tlp": {
+      "type": "string",
+      "enum": [
+        "clear",
+        "green",
+        "amber",
+        "amber+strict",
+        "red"
+      ],
+      "description": "The row's TLP 2.0 label (ADR-0033 decision 5), set from the event's labels.hnx_tlp by the log pipeline; the lake refuses a row without one. Not an OCSF attribute."
+    },
+    "route": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "The log pipeline's route the event arrived on (its dataset, the TLP declaration's key)."
+    },
+    "source_kind": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "The kind of source the pipeline judged the event to be (the remap it took)."
+    },
+    "raw": {
+      "type": "string",
+      "maxLength": 65536,
+      "description": "The whole event as the pipeline received it (JSON, labels removed), cut at 64 KiB."
+    }
+  }
+}

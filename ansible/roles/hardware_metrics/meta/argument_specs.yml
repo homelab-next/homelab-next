@@ -1,0 +1,197 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the board tool when needed, the collector, its configuration and its timer, and run it once.
+    options:
+      hardware_metrics_collectors:
+        type: list
+        elements: str
+        required: true
+        description: The collectors to run on this host, a non-empty list of zfs, ipmi, nvidia, xe and hypervisor (required).
+      hardware_metrics_textfile_dir: &id001
+        type: path
+        description: The node exporter's textfile directory the metrics file is written to (control metrics-agent's textfile_dir).
+        default: /var/lib/homelabnext-textfile
+      hardware_metrics_interval: &id002
+        type: str
+        description: systemd OnCalendar of the collector's timer.
+        default: '*-*-* *:*:00 UTC'
+      hardware_metrics_zpool_cli: &id003
+        type: str
+        description: The pool tool the zfs collector reads (list and status only).
+        default: zpool
+      hardware_metrics_ipmitool_cli: &id004
+        type: str
+        description: The board tool the ipmi collector reads (sensor list and event log only, in-band).
+        default: ipmitool
+      hardware_metrics_nvidia_smi_cli: &id005
+        type: str
+        description: The GPU tool the nvidia collector reads (a query only).
+        default: nvidia-smi
+      hardware_metrics_guests_cli: &id006
+        type: str
+        description: The hypervisor's API tool the hypervisor collector reads (a get of the guest list only).
+        default: pvesh
+      hardware_metrics_guest_conf_dirs: &id007
+        type: list
+        description: Where the hypervisor keeps the guests' configuration files (read for the start-at-boot flag).
+        default:
+        - /etc/pve/qemu-server
+        - /etc/pve/lxc
+        elements: path
+      hardware_metrics_drm_dir: &id008
+        type: path
+        description: The kernel's DRM class directory the xe collector reads.
+        default: /sys/class/drm
+      hardware_metrics_node: &id009
+        type: str
+        description: 'This node''s name in the hypervisor''s cluster: the hypervisor collector lists its guests only.'
+        default: '{{ ansible_facts[''hostname''] | default(inventory_hostname_short) }}'
+      hardware_metrics_install_packages: &id010
+        type: bool
+        description: Install the packages a chosen collector needs (the board tool); off, readiness only checks they exist.
+        default: true
+      hardware_metrics_conf_dir: &id011
+        type: path
+        description: Where the collector's JSON configuration is written.
+        default: /etc/homelabnext
+      hardware_metrics_libexec_dir: &id012
+        type: path
+        description: Where the collector is installed.
+        default: /usr/local/libexec/homelabnext
+      hardware_metrics_systemd_dir: &id013
+        type: path
+        description: Where the collector's units are installed.
+        default: /etc/systemd/system
+      hardware_metrics_systemctl_cli: &id014
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      hardware_metrics_health_max_age_seconds: &id015
+        type: int
+        description: health fails when the metrics file is older than this.
+        default: 300
+      hardware_metrics_last_run_dir: &id016
+        type: path
+        description: Where each run writes its last-run record (role last_run; the status hub's job-last-run mapping reads
+          it).
+        default: /var/lib/homelabnext/last-run
+      hardware_metrics_last_run_group: &id017
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      hardware_metrics_pci_dir: &id018
+        type: path
+        description: The kernel's PCI device directory (the GPU collectors count the vendor's display functions there).
+        default: /sys/bus/pci/devices
+      hardware_metrics_proc_dir: &id019
+        type: path
+        description: The process directory the xe collector reads DRM client memory from.
+        default: /proc
+      hardware_metrics_journal_cli: &id020
+        type: str
+        description: The journal tool the GPU collectors read this boot's kernel log with (driver error reports).
+        default: journalctl
+      hardware_metrics_expect_gpu_processes: &id021
+        type: bool
+        description: A workload is expected to compute on this host's GPUs at all times (an alert fires when none does).
+        default: false
+  config:
+    short_description: Write the collector, its configuration and its units, and run it once (no package install).
+    options:
+      hardware_metrics_collectors:
+        type: list
+        elements: str
+        required: true
+        description: The collectors to run on this host, a non-empty list of zfs, ipmi, nvidia, xe and hypervisor (required).
+      hardware_metrics_textfile_dir: *id001
+      hardware_metrics_interval: *id002
+      hardware_metrics_zpool_cli: *id003
+      hardware_metrics_ipmitool_cli: *id004
+      hardware_metrics_nvidia_smi_cli: *id005
+      hardware_metrics_guests_cli: *id006
+      hardware_metrics_guest_conf_dirs: *id007
+      hardware_metrics_drm_dir: *id008
+      hardware_metrics_node: *id009
+      hardware_metrics_install_packages: *id010
+      hardware_metrics_conf_dir: *id011
+      hardware_metrics_libexec_dir: *id012
+      hardware_metrics_systemd_dir: *id013
+      hardware_metrics_systemctl_cli: *id014
+      hardware_metrics_health_max_age_seconds: *id015
+      hardware_metrics_last_run_dir: *id016
+      hardware_metrics_last_run_group: *id017
+      hardware_metrics_pci_dir: *id018
+      hardware_metrics_proc_dir: *id019
+      hardware_metrics_journal_cli: *id020
+      hardware_metrics_expect_gpu_processes: *id021
+  health:
+    short_description: Fail unless the metrics file is fresh and every chosen collector read its source.
+    options:
+      hardware_metrics_collectors:
+        type: list
+        elements: str
+        required: true
+        description: The collectors to run on this host, a non-empty list of zfs, ipmi, nvidia, xe and hypervisor (required).
+      hardware_metrics_textfile_dir: *id001
+      hardware_metrics_interval: *id002
+      hardware_metrics_zpool_cli: *id003
+      hardware_metrics_ipmitool_cli: *id004
+      hardware_metrics_nvidia_smi_cli: *id005
+      hardware_metrics_guests_cli: *id006
+      hardware_metrics_guest_conf_dirs: *id007
+      hardware_metrics_drm_dir: *id008
+      hardware_metrics_node: *id009
+      hardware_metrics_install_packages: *id010
+      hardware_metrics_conf_dir: *id011
+      hardware_metrics_libexec_dir: *id012
+      hardware_metrics_systemd_dir: *id013
+      hardware_metrics_systemctl_cli: *id014
+      hardware_metrics_health_max_age_seconds: *id015
+      hardware_metrics_last_run_dir: *id016
+      hardware_metrics_last_run_group: *id017
+      hardware_metrics_pci_dir: *id018
+      hardware_metrics_proc_dir: *id019
+      hardware_metrics_journal_cli: *id020
+      hardware_metrics_expect_gpu_processes: *id021
+  readiness:
+    short_description: Fail unless the settings hold and every chosen collector's command is on this host.
+    options:
+      hardware_metrics_collectors:
+        type: list
+        elements: str
+        required: true
+        description: The collectors to run on this host, a non-empty list of zfs, ipmi, nvidia, xe and hypervisor (required).
+      hardware_metrics_textfile_dir: *id001
+      hardware_metrics_interval: *id002
+      hardware_metrics_zpool_cli: *id003
+      hardware_metrics_ipmitool_cli: *id004
+      hardware_metrics_nvidia_smi_cli: *id005
+      hardware_metrics_guests_cli: *id006
+      hardware_metrics_guest_conf_dirs: *id007
+      hardware_metrics_drm_dir: *id008
+      hardware_metrics_node: *id009
+      hardware_metrics_install_packages: *id010
+      hardware_metrics_conf_dir: *id011
+      hardware_metrics_libexec_dir: *id012
+      hardware_metrics_systemd_dir: *id013
+      hardware_metrics_systemctl_cli: *id014
+      hardware_metrics_health_max_age_seconds: *id015
+      hardware_metrics_last_run_dir: *id016
+      hardware_metrics_last_run_group: *id017
+      hardware_metrics_pci_dir: *id018
+      hardware_metrics_proc_dir: *id019
+      hardware_metrics_journal_cli: *id020
+      hardware_metrics_expect_gpu_processes: *id021
+  backup:
+    short_description: Nothing to back up (no data of its own).
+    options: {}
+  restore:
+    short_description: Nothing to restore (main renders everything again).
+    options: {}
+  upgrade:
+    short_description: Nothing pinned (packages follow the patching control).
+    options: {}
+  export:
+    short_description: Nothing to export.
+    options: {}

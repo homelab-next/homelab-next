@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# The ephemeral CI runner pool as one module role (modules/ci-runner): a host that keeps N job slots,
+# each slot one throwaway VM booted from a pinned golden image with one single-use runner
+# registration, destroyed after its one job. Nothing here is a lab value: the pinned artefacts'
+# locations and digests, the feeder's public key and the resolver addresses are the overlay's.
+# ci_runner_logical_id (required): the instance id, e.g. ci-runner
+# ci_runner_base_image_url (required): the cloud image the golden image is built from (an https URL)
+# ci_runner_base_image_sha256 (required): its sha256 (the image is refused on any other digest)
+# ci_runner_agent_url (required): the runner agent's release archive (an https URL)
+# ci_runner_agent_sha256 (required): its sha256
+# ci_runner_feed_pubkey (required): the feeder's SSH public key (its only command is the slot script's feed)
+# ci_runner_resolvers (required): the IPv4 resolver addresses the job VMs' DNS goes to (the host's own)
+
+ci_runner_config_dir: "/etc/hnx/{{ ci_runner_logical_id }}"
+# the module's data root (docs/modules/data.md): images/ (the base and golden images), spool/
+# (registrations waiting for a slot), slots/<n>/ (one job's throwaway files)
+ci_runner_data_root: "/var/lib/hnx-modules/{{ ci_runner_logical_id }}"
+ci_runner_user: "hnx-{{ ci_runner_logical_id }}"
+ci_runner_group: "hnx-{{ ci_runner_logical_id }}"
+ci_runner_manage_accounts: true
+# the group sshd admits (the baseline's AllowGroups): the slots' account joins it for the feeder's key, which is
+# forced to one command (no shell, no forwarding, no terminal)
+ci_runner_feed_ssh_group: hnx-ssh
+
+# --- the slots ------------------------------------------------------------------------------------
+ci_runner_slots: 4
+ci_runner_slot_vcpus: 4
+ci_runner_slot_memory_mb: 8192
+# the copy-on-write disk each job VM gets over the golden image (sparse: only what the job writes)
+ci_runner_slot_disk_gb: 80
+# a VM still running this long after boot is killed (the forge's own job limit is longer)
+ci_runner_job_timeout_s: 10800
+# a slot that finds no registration waits this long, then ends its run and is started again
+ci_runner_claim_wait_s: 60
+# the tail of each slot's last console kept for a post-mortem (the rest goes with the slot)
+ci_runner_console_keep_bytes: 262144
+
+# --- the golden image -----------------------------------------------------------------------------
+ci_runner_build_vcpus: 8
+ci_runner_build_memory_mb: 8192
+ci_runner_build_disk_gb: 40
+ci_runner_build_timeout_s: 3600
+# the hosted image's name the setup actions read (their prebuilt toolchains are built for it)
+ci_runner_hosted_os_name: ubuntu24
+# packages added to the golden image beyond the toolchain the role always installs
+ci_runner_extra_packages: []
+# a Go release archive put on the PATH (https URL and sha256 together; empty: none), as hosted images carry one
+ci_runner_go_url: ""
+ci_runner_go_sha256: ""
+# command-line tools installed with pipx onto the PATH (name==version), as hosted images carry some
+ci_runner_pipx_packages: []
+
+# Pythons put in the golden image's tool cache (/opt/hostedtoolcache), as a hosted image has them, so the setup action
+# finds them instead of downloading one per job: a list of {url, sha256} of the setup action's python-versions release
+# archives (https URL and sha256 together)
+ci_runner_toolcache_pythons: []
+
+# --- the host's egress table (the job VMs' traffic leaves as ci_runner_user) -----------------------
+# TCP and UDP ports the VMs may reach on public addresses; everything private, link-local,
+# shared (CGNAT, tailnets), loopback, multicast and IPv6 is refused
+ci_runner_egress_tcp_ports: [80, 443]
+ci_runner_egress_udp_ports: [123, 443]
+
+ci_runner_health_max_waiting_s: 900

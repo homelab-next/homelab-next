@@ -182,14 +182,15 @@ def compiled_backends() -> list[str]:
 def run_compiled(
     root: Path, backend: str, reference: RunReport, mapping_path: Path | None = None
 ) -> BackendRun:
-    """Every deployable rule's fixtures through ``backend``'s compiled artefact, compared with
+    """Every deployable rule's fixtures (and those of a rule awaiting its source, which ships the
+    day the source is enrolled) through ``backend``'s compiled artefact, compared with
     ``reference`` (the :func:`run_all` report) fixture by fixture."""
     root = Path(root)
     engine = CompiledEngine(get_backend(backend), _fixture_mapping(root, mapping_path))
     ref = {(rr.det_id, r.fixture.path): r.fired for rr in reference.rules for r in rr.results}
     out = BackendRun(backend, RunReport([]))
     for rule in load_rules(root):
-        if not rule.deployable:
+        if not rule.deployable and not rule.awaiting_source:
             continue
         try:
             engine.compile(rule)

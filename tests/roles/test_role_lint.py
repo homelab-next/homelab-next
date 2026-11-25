@@ -56,6 +56,7 @@ def test_every_rule_has_a_fixture():
 
 
 SHIPPED = [
+    "agent_rehome",
     "aide",
     "auditd",
     "broker",
@@ -69,6 +70,7 @@ SHIPPED = [
     "events_bus",
     "example_service",
     "greenbone_target",
+    "hardware_metrics",
     "hnx_runtime",
     "last_run",
     "lynis",
@@ -76,6 +78,7 @@ SHIPPED = [
     "module_census",
     "needrestart",
     "nftables_host",
+    "nut_ups",
     "nvidia_container_toolkit",
     "open_webui",
     "os_hardening",

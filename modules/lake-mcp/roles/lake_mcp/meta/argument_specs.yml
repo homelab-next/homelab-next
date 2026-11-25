@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: The read-only lake MCP server's settings, the reader's credential, the service account and the restricted SSH keys that start it over stdio.
+    options: &opts
+      lake_mcp_logical_id:
+        type: str
+        description: The instance's id (the module's selection instance).
+        required: true
+      lake_mcp_catalog:
+        type: str
+        description: The query engine's catalog the server reads (a catalog the engine holds read-only is the strongest choice; the session catalog of every statement).
+        required: true
+      lake_mcp_schemas:
+        type: list
+        elements: str
+        description: The schemas list_tables and describe_table look at (query may name any table the account may read).
+        required: true
+      lake_mcp_user:
+        type: str
+        description: The service account the server runs as and the restricted keys log in as.
+        default: hnx-lake-mcp
+      lake_mcp_group:
+        type: str
+        description: The service account's group.
+        default: hnx-lake-mcp
+      lake_mcp_ssh_group:
+        type: str
+        description: The group sshd admits (role ssh_hardening's AllowGroups) the account joins; empty for none.
+        default: hnx-ssh
+      lake_mcp_home:
+        type: str
+        description: The account's home (holds .ssh/authorized_keys).
+        default: /var/lib/hnx-modules/lake-mcp
+      lake_mcp_config_dir:
+        type: str
+        description: Where the settings, the credential and the CA are written.
+        default: /etc/hnx-modules/lake-mcp
+      lake_mcp_hnx_bin:
+        type: str
+        description: The hnx command of the runtime release (role hnx_runtime with the mcp extra); the forced command is `hnx lake mcp`.
+        default: /opt/hnx/bin/hnx
+      lake_mcp_lake_query_id:
+        type: str
+        description: The registry row of the lake query service (its URL is the endpoint when lake_mcp_endpoint is empty).
+        default: lake-query
+      lake_mcp_endpoint:
+        type: str
+        description: An explicit https endpoint (empty resolves the registry row at deploy time).
+        default: ""
+      lake_mcp_lake_user:
+        type: str
+        description: The engine account the server signs in as (its own reader).
+        default: lake-mcp
+      lake_mcp_reader_cred:
+        type: str
+        description: The secret reference of the reader's engine password.
+        default: secret:lake-mcp/reader-password
+      lake_mcp_ca_ref:
+        type: str
+        description: The secret reference of a private CA certificate that verifies the endpoint (empty uses the system roots).
+        default: ""
+      lake_mcp_max_rows:
+        type: int
+        description: The most rows a query returns (1-5000).
+        default: 500
+      lake_mcp_timeout_s:
+        type: int
+        description: The time limit of a statement, seconds (1-300), client-side and the engine's own.
+        default: 60
+      lake_mcp_authorized_keys:
+        type: list
+        elements: str
+        description: The public keys (type, base64, an optional comment) that may start the server over SSH; each is installed restricted to the forced command.
+        default: []
+      lake_mcp_ssh_from:
+        type: list
+        elements: str
+        description: The client addresses or CIDRs each key is accepted from (sshd from=); empty accepts any address the firewall admits.
+        default: []
+      lake_mcp_root_owner:
+        type: str
+        description: The owner of what only root may write (a role test runs unprivileged and sets its own).
+        default: root
+      lake_mcp_check_as_user:
+        type: bool
+        description: Health runs the server's --check as the service account (a role test sets false).
+        default: true
+  health:
+    short_description: Fail unless the files and keys are in place and restricted, and the server signs in and lists the allowed tables.
+    options: *opts
+  readiness:
+    short_description: Fail unless the host has the runtime release with the server and every credential is set.
+    options: *opts
+  backup:
+    short_description: Nothing to back up (no data of its own).
+    options: *opts
+  restore:
+    short_description: Nothing to restore (re-run main).
+    options: *opts
+  upgrade:
+    short_description: Prove the installed release answers the server command and record it.
+    options: *opts
+  export:
+    short_description: Nothing to export (no data of its own).
+    options: *opts

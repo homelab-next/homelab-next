@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+# The network-sensor provider on Zeek (docs/modules.md; README.md beside this file): the network
+# security monitor, one hardened container per capture interface from the official image pinned by
+# tag and digest, with the fingerprinting packages pinned and built into a local image. It runs
+# through systemd units that call the container engine directly, not compose_app: a capture needs
+# the host network namespace, which compose_app refuses by design. Logs are JSON files the log
+# pipeline tails. Every real value (the host, the capture NICs) is the site's: the overlay's
+# lab/modules.yml, lab/services.yml and secret store.
+manifest_version: "1.0"
+id: zeek
+kind: provider
+title: A network monitor on Zeek
+description: Fills the network-sensor slot with Zeek, one container per capture interface from the
+  official image pinned by digest plus pinned fingerprint packages (JA3, JA4, HASSH, ATT&CK
+  analytics) and a self-signed-certificate field, JSON logs with a flow id shared with the IDS, and
+  a health hook that fails a stopped capture, packet drops over a bound or a silent stats heartbeat.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: zeek
+  version: 8.0.8
+licence:
+  kind: open-source
+  spdx: BSD-3-Clause
+credentials: []
+identifiers:
+  - {kind: service-name, name: zeek, on_remove: keep}
+requires:
+  hosts:
+    - role: sensor
+      kind: host
+      footprint: {cpu: 2, memory_mb: 4096, disk_gb: 40}
+      roles: [role:zeek]
+      purpose: the capture host (one container per capture interface; the host needs the container engine, applied first)
+provides:
+  slots:
+    network-sensor:
+      adapter: homelabnext.conform.adapters.network_sensor:make
+      provisional: true
+      reason: network-sensor has no contract yet; the observable is the capture's own health (running, packet drops under a bound, the stats heartbeat written), which the role's health hook proves
+egress:
+  - host: sensor
+    to: [internet]
+    purpose: the image pull and the package fetch at build time (the pinned image from its registry, the packages from their source repositories); nothing at run time
+contributes:
+  roles:
+    - file: roles/zeek
+  preflight:
+    - {role: role:zeek, hook: readiness}
+  docs:
+    - file: README.md
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned base-image bump (tag and digest): the role's upgrade hook validates it, then it converges (rebuild, then each capture unit restarts)"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: false
+    discard_reason: the monitor keeps no data of its own (its logs are a rotating buffer the pipeline ships; the image is rebuilt from pins)
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

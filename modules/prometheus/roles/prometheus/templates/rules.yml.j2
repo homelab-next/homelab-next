@@ -56,3 +56,387 @@ groups:
 {% raw %}
           summary: "{{ $labels.instance }} has under {% endraw %}{{ prometheus_alert_memory_available_percent | int }}{% raw %}% of its memory available"
 {% endraw %}
+      # UPS protection (control ups-protection, role nut_ups): the textfile metrics of a host with a USB UPS.
+      # A host with no UPS exposes none of these, so none of them fires there.
+      - alert: UpsOnBattery
+        expr: nut_ups_on_battery == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} is running on UPS battery (mains lost); a clean shutdown follows at low battery"
+{% endraw %}
+      - alert: UpsLowBattery
+        expr: nut_ups_low_battery == 1
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} UPS reports low battery: the host is shutting down"
+{% endraw %}
+      - alert: UpsMonitorDown
+        expr: nut_monitor_active == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} nut-monitor (the UPS shutdown controller) is not running: no automatic shutdown on power loss"
+{% endraw %}
+      - alert: UpsUnreadable
+        expr: nut_ups_up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} the UPS does not answer (driver or USB cable)"
+{% endraw %}
+      - alert: UpsCheckStale
+        expr: time() - nut_ups_check_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} the UPS check has not written metrics for over 5 minutes"
+{% endraw %}
+  # Hardware (README "Hardware alerts"): the host exporter's own temperature sensors, and the families the
+  # hardware-metrics control writes (pools, the board's sensors and event log, GPUs, the hypervisor's guests).
+  # A host without a family exposes nothing of it, so the rule never fires there.
+  - name: hnx-hardware
+    rules:
+      # one power and one load series per GPU, whichever way its driver reports them (a power reading, or
+      # an energy counter; a load percentage, or the engines' idle time)
+      - record: hw:gpu_power_watts
+        expr: hw_gpu_power_watts or rate(hw_gpu_energy_joules_total[2m])
+      - record: hw:gpu_utilization_percent
+        expr: hw_gpu_utilization_percent or clamp_min(100 * (1 - min without (gt) (rate(hw_gpu_idle_residency_seconds_total[2m]))), 0)
+      - alert: CpuTemperatureHigh
+        expr: max by (instance, host, chip) (node_hwmon_temp_celsius * on (instance, chip) group_left node_hwmon_chip_names{chip_name=~"{{ prometheus_cpu_temp_chips }}"}) > {{ prometheus_alert_cpu_temp_warning_celsius | int }}
+        for: {{ prometheus_alert_cpu_temp_warning_for }}
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} CPU {{ $labels.chip }} is at {{ $value }} C{% endraw %} (warning over {{ prometheus_alert_cpu_temp_warning_celsius | int }} C)"
+      - alert: CpuTemperatureCritical
+        expr: max by (instance, host, chip) (node_hwmon_temp_celsius * on (instance, chip) group_left node_hwmon_chip_names{chip_name=~"{{ prometheus_cpu_temp_chips }}"}) > {{ prometheus_alert_cpu_temp_critical_celsius | int }}
+        for: {{ prometheus_alert_cpu_temp_critical_for }}
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} CPU {{ $labels.chip }} is at {{ $value }} C{% endraw %} (critical over {{ prometheus_alert_cpu_temp_critical_celsius | int }} C): check fans and cooling now"
+      - alert: NvmeTemperatureHigh
+        expr: node_hwmon_temp_celsius{sensor="temp1"} * on (instance, chip) group_left node_hwmon_chip_names{chip_name="nvme"} > {{ prometheus_alert_nvme_temp_warning_celsius | int }}
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} {{ $labels.chip }} composite temperature is {{ $value }} C{% endraw %} (warning over {{ prometheus_alert_nvme_temp_warning_celsius | int }} C)"
+      - alert: NvmeTemperatureCritical
+        expr: node_hwmon_temp_celsius{sensor="temp1"} * on (instance, chip) group_left node_hwmon_chip_names{chip_name="nvme"} > {{ prometheus_alert_nvme_temp_critical_celsius | int }}
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} {{ $labels.chip }} composite temperature is {{ $value }} C{% endraw %} (critical over {{ prometheus_alert_nvme_temp_critical_celsius | int }} C)"
+      - alert: GpuTemperatureHigh
+        expr: hw_gpu_temperature_celsius > {{ prometheus_alert_gpu_temp_warning_celsius | int }}
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} GPU {{ $labels.gpu }} ({{ $labels.bus }}) is at {{ $value }} C{% endraw %} (warning over {{ prometheus_alert_gpu_temp_warning_celsius | int }} C)"
+      - alert: GpuTemperatureCritical
+        expr: hw_gpu_temperature_celsius > {{ prometheus_alert_gpu_temp_critical_celsius | int }}
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} GPU {{ $labels.gpu }} ({{ $labels.bus }}) is at {{ $value }} C{% endraw %} (critical over {{ prometheus_alert_gpu_temp_critical_celsius | int }} C): it is near its slowdown temperature"
+      # a sustained draw over the site's cap (a brief spike above it during prefill is accepted: the window)
+      - alert: GpuPowerOverCap
+        expr: hw:gpu_power_watts > {{ prometheus_alert_gpu_power_cap_watts | int }}
+        for: {{ prometheus_alert_gpu_power_for }}
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} GPU {{ $labels.gpu }} ({{ $labels.bus }}) has drawn {{ $value }} W{% endraw %} for {{ prometheus_alert_gpu_power_for }}, over the {{ prometheus_alert_gpu_power_cap_watts | int }} W cap"
+      # the limit in force is over the site's cap: the cap was not applied (a restarted guest whose cap
+      # script did not run), so nothing stops the card drawing its full default power
+      - alert: GpuPowerCapNotApplied
+        expr: hw_gpu_power_limit_watts > {{ prometheus_alert_gpu_power_cap_watts | int }}
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} GPU {{ $labels.gpu }} ({{ $labels.bus }}) power limit is {{ $value }} W{% endraw %}, over the {{ prometheus_alert_gpu_power_cap_watts | int }} W cap: re-apply the cap"
+      # the host was given more GPUs than the driver can reach, or the driver says it lost one (a card
+      # fallen off the bus, a firmware link down): the workload on it is gone or on the CPU
+      - alert: GpuLost
+        expr: hw_gpu_lost > 0 or (hw_gpu_pci_devices - hw_gpu_count) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} {{ $labels.driver }}: {{ $value }} GPU(s) cannot be reached by the driver (lost, fallen off the bus or not bound)"
+{% endraw %}
+      - alert: GpuCountDropped
+        expr: hw_gpu_count < max_over_time(hw_gpu_count[1d])
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} {{ $labels.driver }}: only {{ $value }} GPU(s) are reachable, fewer than in the last day"
+{% endraw %}
+      # a new error report of the GPU driver in the kernel log (an Xid fault, a wedged device); fires
+      # for the window, then clears
+      - alert: GpuDriverError
+        expr: increase(hw_gpu_driver_errors_total[{{ prometheus_alert_board_event_window }}]) > 0
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} {{ $labels.driver }} driver reported a GPU fault in the kernel log (journalctl -k)"
+{% endraw %}
+      # a host whose GPUs should always carry a workload (the inference server) has no process holding
+      # GPU memory: the server restarted on the CPU after a card fault, or is not running
+      - alert: GpuNotComputing
+        expr: sum by (instance, host, driver) (hw_gpu_compute_processes) == 0 and on (instance, driver) hw_gpu_processes_expected == 1
+        for: {{ prometheus_alert_gpu_idle_for }}
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} no process is computing on its {{ $labels.driver }} GPUs: the inference server fell back to the CPU or stopped"
+{% endraw %}
+      - alert: PoolUnhealthy
+        expr: hw_zfs_pool_healthy * on (instance, pool) group_left (health) hw_zfs_pool_health_info == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} pool {{ $labels.pool }} is {{ $labels.health }}"
+{% endraw %}
+      - alert: PoolDeviceErrors
+        expr: hw_zfs_pool_device_errors > 0
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} pool {{ $labels.pool }} has {{ $value }} {{ $labels.kind }} errors on its devices (zpool status; zpool clear once handled)"
+{% endraw %}
+      - alert: PoolDataErrors
+        expr: hw_zfs_pool_data_errors > 0
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} pool {{ $labels.pool }} has permanent errors in {{ $value }} file(s) (zpool status -v)"
+{% endraw %}
+      - alert: PoolAlmostFull
+        expr: hw_zfs_pool_capacity_percent >= {{ prometheus_alert_pool_used_percent | int }}
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} pool {{ $labels.pool }} is {{ $value }}% full{% endraw %} (warning at {{ prometheus_alert_pool_used_percent | int }}%)"
+      - alert: BoardSensorCritical
+        expr: hw_ipmi_sensor_state{kind!="fan"} >= 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} board sensor {{ $labels.sensor }} ({{ $labels.kind }}) is past its critical threshold or asserts a fault"
+{% endraw %}
+      - alert: BoardSensorWarning
+        expr: hw_ipmi_sensor_state{kind!="fan"} == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} board sensor {{ $labels.sensor }} ({{ $labels.kind }}) is past its non-critical threshold"
+{% endraw %}
+      - alert: FanFailed
+        expr: max without (kind) (hw_ipmi_sensor_state{kind="fan"} >= 2) or (hw_ipmi_fan_rpm == 0)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} fan {{ $labels.sensor }} has stopped or is under its critical speed"
+{% endraw %}
+      # a fan that had a reading in the last day has none now, while the board itself still answers
+      - alert: FanReadingLost
+        expr: (max_over_time(hw_ipmi_fan_rpm[1d]) unless on (instance, sensor) hw_ipmi_fan_rpm) and on (instance) (hw_collector_up{collector="ipmi"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} fan {{ $labels.sensor }} no longer reports a speed (unplugged or dead)"
+{% endraw %}
+      # a new critical, non-recoverable or failure entry in the board's event log (thermal trip, a
+      # critical threshold crossed, a power supply failure); fires for the window, then clears
+      - alert: BoardCriticalEvent
+        expr: (increase(hw_ipmi_sel_critical_events_total[{{ prometheus_alert_board_event_window }}]) > 0) * on (instance) group_left (sensor, event) hw_ipmi_sel_last_critical_info
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} board event log: {{ $labels.sensor }}: {{ $labels.event }}"
+{% endraw %}
+      - alert: GuestDown
+        expr: hw_guest_running == 0 and on (instance, vmid) hw_guest_onboot == 1
+        for: {{ prometheus_alert_guest_down_for }}
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} guest {{ $labels.vmid }} ({{ $labels.name }}) is not running but is set to start at boot"
+{% endraw %}
+      - alert: HardwareMetricsStale
+        expr: time() - hw_collector_last_run_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} hardware metrics have not been written for over 5 minutes (hnx-hardware-metrics.timer)"
+{% endraw %}
+      - alert: HardwareCollectorDown
+        expr: hw_collector_up == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} hardware collector {{ $labels.collector }} cannot read its source (journalctl -u hnx-hardware-metrics)"
+{% endraw %}
+{% if prometheus_probes_enabled | bool %}
+  - name: hnx-probes
+    rules:
+      # an HTTP(S) probe (the blackbox exporter, one per published service) failed for the whole window
+      - alert: ProbeDown
+        expr: probe_success{job="probe"} == 0
+        for: {{ prometheus_alert_probe_down_for }}
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.service }} is down: the probe of {{ $labels.instance }} has failed"
+{% endraw %}
+{% endif %}
+{% if prometheus_snmp_enabled | bool %}
+  # SNMP-polled network gear and storage (README "SNMP polling"): an interface is watched when its job's
+  # watch_ports matched its ifName (the scrape adds watched="1"); the NAS families are the role's
+  # nas_storage module. A device that does not answer is a TargetDown of its snmp job.
+  - name: hnx-snmp
+    rules:
+      - alert: NetworkPortDown
+        expr: ifOperStatus{watched="1"} != 1 and on (instance, ifIndex) ifAdminStatus == 1
+        for: {{ prometheus_alert_port_down_for }}
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.host }} port {{ $labels.ifName }} is down (enabled, but no link)"
+{% endraw %}
+      - alert: NetworkPortErrors
+        expr: (rate(ifInErrors{watched="1"}[10m]) + rate(ifOutErrors{watched="1"}[10m])) * 60 > {{ prometheus_alert_port_errors_per_minute | int }}
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.host }} port {{ $labels.ifName }} has {{ $value | humanize }} errors a minute{% endraw %} (over {{ prometheus_alert_port_errors_per_minute | int }}): cable, transceiver or duplex"
+      - alert: NetworkPortSpeedDropped
+        expr: ifHighSpeed{watched="1"} > 0 and ifHighSpeed{watched="1"} < max_over_time(ifHighSpeed{watched="1"}[7d]) and on (instance, ifIndex) ifOperStatus == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.host }} port {{ $labels.ifName }} linked at {{ $value }} Mb/s, below its speed of the last week (a renegotiation: cable or port)"
+{% endraw %}
+      - alert: NasDiskUnhealthy
+        expr: nas_disk_status != 0 or nas_disk_smart_good == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.host }} disk {{ $labels.disk_name }} is not healthy (status or SMART)"
+{% endraw %}
+      - alert: NasDiskTemperatureHigh
+        expr: nas_disk_temperature_celsius > {{ prometheus_alert_nas_disk_temp_celsius | int }}
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.host }} disk {{ $labels.disk_name }} is at {{ $value }} C{% endraw %} (over {{ prometheus_alert_nas_disk_temp_celsius | int }} C)"
+      - alert: NasVolumeNotReady
+        expr: nas_volume_status_ready == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.host }} volume {{ $labels.volume_name }} is not ready (degraded, rebuilding or failed)"
+{% endraw %}
+      - alert: NasVolumeAlmostFull
+        expr: (1 - nas_volume_free_kilobytes / nas_volume_size_kilobytes) * 100 >= {{ prometheus_alert_nas_volume_used_percent | int }} and nas_volume_size_kilobytes > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.host }} volume {{ $labels.volume_name }} is {{ $value | humanize }}% full{% endraw %} (warning at {{ prometheus_alert_nas_volume_used_percent | int }}%)"
+      - alert: NasFanStopped
+        expr: nas_fan_rpm == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.host }} fan {{ $labels.fan_name }} has stopped"
+{% endraw %}
+{% endif %}
+{% if prometheus_llm_probes_on | bool %}
+  # one-token completions through the LLM gateway (README "Inference probes"): the path a caller takes
+  - name: hnx-llm-probes
+    rules:
+      - alert: LlmProbeFailed
+        expr: probe_success{job="llm-probe"} == 0
+        for: {{ prometheus_alert_llm_probe_failed_for }}
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "the gateway cannot serve model role {{ $labels.role }}: a one-token completion failed (refused, upstream unavailable or timed out)"
+{% endraw %}
+      - alert: LlmProbeSlow
+        expr: probe_duration_seconds{job="llm-probe"} > {{ prometheus_alert_llm_probe_slow_seconds | int }} and on (instance, role) probe_success{job="llm-probe"} == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "model role {{ $labels.role }} took {{ $value | humanize }} s for a one-token completion{% endraw %} (over {{ prometheus_alert_llm_probe_slow_seconds | int }} s): a GPU fault (CPU fallback) or a saturated server"
+{% endif %}

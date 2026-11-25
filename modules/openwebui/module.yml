@@ -2,7 +2,8 @@
 # The chat provider on Open WebUI (docs/modules.md; README.md beside this file): the core open_webui
 # role (a compose_app container from a pinned image) with this module's policy. Models only through
 # the lab's own gateway, with this app's own key and the headers the gateway reads (X-HNX-TLP,
-# X-HNX-Tag); no provider key of its own, web search and every other feature that calls out off;
+# X-HNX-Tag); no provider key of its own, web search only through the lab's metasearch service (opt-in)
+# and every other feature that calls out off;
 # sign-in through the identity provider (a client the realm generator renders for the row) and one
 # break-glass local administrator. Every real value (the guest, its address, the public name, the
 # secret values) is the site's: the overlay's lab/modules.yml, lab/services.yml, group variables and

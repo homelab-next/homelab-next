@@ -1,0 +1,237 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: "Install the pinned client release, the server-generated client configuration and a unit, and wait for enrolment."
+    options:
+      velociraptor_client_logical_id: &logical
+        type: str
+        description: "The registry id of the forensics server this client belongs to."
+        required: true
+      velociraptor_client_config_ref: &config_ref
+        type: str
+        description: 'secret:<name> of the client configuration the server generated (its client/client.config.yaml).'
+        default: secret:velociraptor/client-config
+      velociraptor_client_config_file: &config_file
+        type: str
+        description: 'A controller-side path of a client configuration file, used INSTEAD of the reference when set.'
+        default: ''
+      velociraptor_client_version: &version
+        type: str
+        description: "The release to install; must have a pinned sha256 in the role and equal the server image's release."
+        default: 0.77.1
+      velociraptor_client_release_repository: &release_repository
+        type: str
+        description: 'The https base of the release downloads (fetched on the controller, never on the host).'
+        default: https://github.com/Velocidex/velociraptor/releases/download
+      velociraptor_client_binary_src: &binary_src
+        type: str
+        description: 'A controller-side path of the release binary, used INSTEAD of fetching it; still held to the pinned sha256.'
+        default: ''
+      velociraptor_client_controller_cache: &controller_cache
+        type: path
+        description: 'Where the controller keeps the fetched binary.'
+        default: /var/tmp/hnx-velociraptor
+      velociraptor_client_owner: &owner
+        type: str
+        description: 'The owner of the binary, the configuration directory and the configuration.'
+        default: root
+      velociraptor_client_group: &group
+        type: str
+        description: 'The group of the binary, the configuration directory and the configuration.'
+        default: root
+      velociraptor_client_install_path: &install_path
+        type: path
+        description: 'Where the binary is installed on the host.'
+        default: /usr/local/bin/velociraptor
+      velociraptor_client_config_dir: &config_dir
+        type: path
+        description: 'The configuration directory on the host.'
+        default: /etc/velociraptor
+      velociraptor_client_writeback: &writeback
+        type: str
+        description: "The client's identity file (Client.writeback_linux), set in the installed configuration; for a host that runs another client too. Empty keeps the server-generated value."
+        default: ''
+      velociraptor_client_start: &start
+        type: bool
+        description: 'Enable and start the unit and wait for enrolment (false: install only).'
+        default: true
+      velociraptor_client_ready_timeout: &ready_timeout
+        type: int
+        description: 'Seconds to wait after the start for the client to enrol.'
+        default: 120
+      velociraptor_client_server_host: &server_host
+        type: str
+        description: "The server host's inventory name: when set, the role asks that server whether it sees this client (empty: not asked)."
+        default: ""
+      velociraptor_client_server_script: &server_script
+        type: path
+        description: "The server role's script on that host."
+        default: /usr/local/libexec/homelabnext/hnx-velociraptor
+      velociraptor_client_server_script_config: &server_script_config
+        type: path
+        description: "The server script's configuration on that host."
+        default: /etc/homelabnext/velociraptor.json
+      velociraptor_client_seen_max_age_s: &seen_max_age
+        type: int
+        description: "How recently the server must have seen this client."
+        default: 300
+      velociraptor_client_service: &service
+        type: str
+        description: 'The systemd unit''s name (a host that still runs another client gives this one its own).'
+        default: velociraptor-client
+      velociraptor_client_systemctl_cli: &systemctl_cli
+        type: str
+        description: 'The systemctl command.'
+        default: systemctl
+      velociraptor_client_unit_dir: &unit_dir
+        type: str
+        description: 'Where the unit is written.'
+        default: /etc/systemd/system
+  health:
+    short_description: "Fail unless the binary is the pinned release, the configuration is the server's generated one and owner-only, the unit is active and the client has enrolled."
+    options:
+      velociraptor_client_logical_id: *logical
+      velociraptor_client_config_ref: *config_ref
+      velociraptor_client_config_file: *config_file
+      velociraptor_client_version: *version
+      velociraptor_client_release_repository: *release_repository
+      velociraptor_client_binary_src: *binary_src
+      velociraptor_client_controller_cache: *controller_cache
+      velociraptor_client_owner: *owner
+      velociraptor_client_group: *group
+      velociraptor_client_install_path: *install_path
+      velociraptor_client_config_dir: *config_dir
+      velociraptor_client_writeback: *writeback
+      velociraptor_client_start: *start
+      velociraptor_client_ready_timeout: *ready_timeout
+      velociraptor_client_server_host: *server_host
+      velociraptor_client_server_script: *server_script
+      velociraptor_client_server_script_config: *server_script_config
+      velociraptor_client_seen_max_age_s: *seen_max_age
+      velociraptor_client_service: *service
+      velociraptor_client_systemctl_cli: *systemctl_cli
+      velociraptor_client_unit_dir: *unit_dir
+  readiness:
+    short_description: "Fail unless the client configuration resolves and is a real client configuration (not empty, not a placeholder, no private key) and the release is pinned."
+    options:
+      velociraptor_client_logical_id: *logical
+      velociraptor_client_config_ref: *config_ref
+      velociraptor_client_config_file: *config_file
+      velociraptor_client_version: *version
+      velociraptor_client_release_repository: *release_repository
+      velociraptor_client_binary_src: *binary_src
+      velociraptor_client_controller_cache: *controller_cache
+      velociraptor_client_owner: *owner
+      velociraptor_client_group: *group
+      velociraptor_client_install_path: *install_path
+      velociraptor_client_config_dir: *config_dir
+      velociraptor_client_writeback: *writeback
+      velociraptor_client_start: *start
+      velociraptor_client_ready_timeout: *ready_timeout
+      velociraptor_client_server_host: *server_host
+      velociraptor_client_server_script: *server_script
+      velociraptor_client_server_script_config: *server_script_config
+      velociraptor_client_seen_max_age_s: *seen_max_age
+      velociraptor_client_service: *service
+      velociraptor_client_systemctl_cli: *systemctl_cli
+      velociraptor_client_unit_dir: *unit_dir
+  backup:
+    short_description: "Nothing to back up (the configuration is in the secret store, the identity is re-created on enrolment)."
+    options:
+      velociraptor_client_logical_id: *logical
+      velociraptor_client_config_ref: *config_ref
+      velociraptor_client_config_file: *config_file
+      velociraptor_client_version: *version
+      velociraptor_client_release_repository: *release_repository
+      velociraptor_client_binary_src: *binary_src
+      velociraptor_client_controller_cache: *controller_cache
+      velociraptor_client_owner: *owner
+      velociraptor_client_group: *group
+      velociraptor_client_install_path: *install_path
+      velociraptor_client_config_dir: *config_dir
+      velociraptor_client_writeback: *writeback
+      velociraptor_client_start: *start
+      velociraptor_client_ready_timeout: *ready_timeout
+      velociraptor_client_server_host: *server_host
+      velociraptor_client_server_script: *server_script
+      velociraptor_client_server_script_config: *server_script_config
+      velociraptor_client_seen_max_age_s: *seen_max_age
+      velociraptor_client_service: *service
+      velociraptor_client_systemctl_cli: *systemctl_cli
+      velociraptor_client_unit_dir: *unit_dir
+  restore:
+    short_description: "Nothing to restore: refuses and says so."
+    options:
+      velociraptor_client_logical_id: *logical
+      velociraptor_client_config_ref: *config_ref
+      velociraptor_client_config_file: *config_file
+      velociraptor_client_version: *version
+      velociraptor_client_release_repository: *release_repository
+      velociraptor_client_binary_src: *binary_src
+      velociraptor_client_controller_cache: *controller_cache
+      velociraptor_client_owner: *owner
+      velociraptor_client_group: *group
+      velociraptor_client_install_path: *install_path
+      velociraptor_client_config_dir: *config_dir
+      velociraptor_client_writeback: *writeback
+      velociraptor_client_start: *start
+      velociraptor_client_ready_timeout: *ready_timeout
+      velociraptor_client_server_host: *server_host
+      velociraptor_client_server_script: *server_script
+      velociraptor_client_server_script_config: *server_script_config
+      velociraptor_client_seen_max_age_s: *seen_max_age
+      velociraptor_client_service: *service
+      velociraptor_client_systemctl_cli: *systemctl_cli
+      velociraptor_client_unit_dir: *unit_dir
+  upgrade:
+    short_description: "Validate a bump of the client release against the role's pinned checksums."
+    options:
+      velociraptor_client_logical_id: *logical
+      velociraptor_client_config_ref: *config_ref
+      velociraptor_client_config_file: *config_file
+      velociraptor_client_version: *version
+      velociraptor_client_release_repository: *release_repository
+      velociraptor_client_binary_src: *binary_src
+      velociraptor_client_controller_cache: *controller_cache
+      velociraptor_client_owner: *owner
+      velociraptor_client_group: *group
+      velociraptor_client_install_path: *install_path
+      velociraptor_client_config_dir: *config_dir
+      velociraptor_client_writeback: *writeback
+      velociraptor_client_start: *start
+      velociraptor_client_ready_timeout: *ready_timeout
+      velociraptor_client_server_host: *server_host
+      velociraptor_client_server_script: *server_script
+      velociraptor_client_server_script_config: *server_script_config
+      velociraptor_client_seen_max_age_s: *seen_max_age
+      velociraptor_client_service: *service
+      velociraptor_client_systemctl_cli: *systemctl_cli
+      velociraptor_client_unit_dir: *unit_dir
+      velociraptor_client_target_version:
+        type: str
+        description: The release to move to (must have a pinned sha256 in the role).
+        required: true
+  export:
+    short_description: "Nothing to export (the module's data is the server's)."
+    options:
+      velociraptor_client_logical_id: *logical
+      velociraptor_client_config_ref: *config_ref
+      velociraptor_client_config_file: *config_file
+      velociraptor_client_version: *version
+      velociraptor_client_release_repository: *release_repository
+      velociraptor_client_binary_src: *binary_src
+      velociraptor_client_controller_cache: *controller_cache
+      velociraptor_client_owner: *owner
+      velociraptor_client_group: *group
+      velociraptor_client_install_path: *install_path
+      velociraptor_client_config_dir: *config_dir
+      velociraptor_client_writeback: *writeback
+      velociraptor_client_start: *start
+      velociraptor_client_ready_timeout: *ready_timeout
+      velociraptor_client_server_host: *server_host
+      velociraptor_client_server_script: *server_script
+      velociraptor_client_server_script_config: *server_script_config
+      velociraptor_client_seen_max_age_s: *seen_max_age
+      velociraptor_client_service: *service
+      velociraptor_client_systemctl_cli: *systemctl_cli
+      velociraptor_client_unit_dir: *unit_dir

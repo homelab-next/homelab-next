@@ -1,0 +1,131 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Resolve the notify endpoint
+  ansible.builtin.set_fact:
+    lab_checks_notify_url: "{{ lookup('hnx_registry', lab_checks_notify_id, field='url') }}"
+
+- name: Refuse a notify endpoint that is not http(s), or a token over plain http
+  ansible.builtin.assert:
+    that:
+      - lab_checks_notify_url is match('^https?://')
+      - lab_checks_notify_url is match('^https://') or lab_checks_notify_allow_plain_http | bool
+    fail_msg: "lab-checks: the notify endpoint {{ lab_checks_notify_url }} is not http(s), or the token would go over plain http (set lab_checks_notify_allow_plain_http for a LAN endpoint with no TLS)"
+
+- name: Install the probe and the pager
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ lab_checks_bin_dir }}/{{ item.src }}"
+    owner: "{{ lab_checks_owner }}"
+    group: "{{ lab_checks_owner_group }}"
+    mode: "0755"
+  loop:
+    - {src: hnx-lab-probe}
+    - {src: hnx-lab-notify}
+  loop_control:
+    label: "{{ item.src }}"
+
+- name: Write the publish token (owner-only)
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', lab_checks_notify_publisher_ref) | trim }}\n"
+    dest: "{{ lab_checks_publish_file }}"
+    owner: "{{ lab_checks_owner }}"
+    group: "{{ lab_checks_owner_group }}"
+    mode: "0400"
+  no_log: true
+
+- name: Write the CA the probes verify internal TLS with (a certificate, no key)
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', lab_checks_ca_ref) | trim }}\n"
+    dest: "{{ lab_checks_ca_file }}"
+    owner: "{{ lab_checks_owner }}"
+    group: "{{ lab_checks_owner_group }}"
+    mode: "0644"
+  no_log: true
+  when: lab_checks_ca_ref != ''
+
+- name: Write the pager's configuration (no secret in it)
+  ansible.builtin.copy:
+    content: "{{ {'url': lab_checks_notify_url, 'topic': lab_checks_notify_topic, 'token_file': lab_checks_publish_file} | to_nice_json }}\n"
+    dest: "{{ lab_checks_notify_config }}"
+    owner: "{{ lab_checks_owner }}"
+    group: "{{ lab_checks_owner_group }}"
+    mode: "0644"
+
+# the register is checked on the host BEFORE the unit can run it: a register that does not validate would
+# otherwise be found at the first hourly run, as a fatal exit 2 nobody is paged for
+- name: Stage the register beside its final name
+  ansible.builtin.copy:
+    src: "{{ lab_checks_register_src }}"
+    dest: "{{ lab_checks_register_file }}.incoming"
+    owner: "{{ lab_checks_owner }}"
+    group: "{{ lab_checks_owner_group }}"
+    mode: "0644"
+  register: lab_checks_staged
+  changed_when: false
+
+- name: Validate the staged register (runs no criterion; a bad register exits 2)
+  ansible.builtin.command:
+    argv:
+      - "{{ lab_checks_hnx_bin }}"
+      - invariants
+      - run
+      - "{{ lab_checks_register_file }}.incoming"
+      - --only
+      - __validate-only__
+      - --out
+      - "{{ lab_checks_state_dir }}/.validate.json"
+      - --no-notify
+  register: lab_checks_validate
+  changed_when: false
+  failed_when: lab_checks_validate.rc != 0
+  # in check mode the staging copy above did not write, so there is nothing on the host to validate
+  when: not ansible_check_mode
+
+- name: Put the register in place
+  ansible.builtin.copy:
+    src: "{{ lab_checks_register_src }}"
+    dest: "{{ lab_checks_register_file }}"
+    owner: "{{ lab_checks_owner }}"
+    group: "{{ lab_checks_owner_group }}"
+    mode: "0644"
+  register: lab_checks_register_copy
+
+- name: Remove the staging files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: ["{{ lab_checks_register_file }}.incoming", "{{ lab_checks_state_dir }}/.validate.json"]
+  changed_when: false
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ lab_checks_last_run_dir }}"
+    last_run_group: "{{ lab_checks_last_run_group }}"
+    last_run_writer: "{{ lab_checks_last_run_writer }}"
+
+- name: Write the units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ lab_checks_unit_dir }}/{{ item.dest }}"
+    owner: "{{ lab_checks_owner }}"
+    group: "{{ lab_checks_owner_group }}"
+    mode: "0644"
+  loop:
+    - {src: lab-checks.service.j2, dest: "{{ lab_checks_unit }}"}
+    - {src: lab-checks.timer.j2, dest: "{{ lab_checks_timer }}"}
+  loop_control:
+    label: "{{ item.dest }}"
+  register: lab_checks_units
+
+- name: Reload systemd after a unit changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: lab_checks_units.changed | bool and not ansible_check_mode and lab_checks_start | bool
+
+- name: Enable the timer (a run in progress is never restarted)
+  ansible.builtin.systemd_service:
+    name: "{{ lab_checks_timer }}"
+    enabled: true
+    state: "{{ 'restarted' if lab_checks_units.changed else 'started' }}"
+  when: not ansible_check_mode and lab_checks_start | bool

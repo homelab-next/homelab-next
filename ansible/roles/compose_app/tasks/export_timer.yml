@@ -1,0 +1,148 @@
+# SPDX-License-Identifier: Apache-2.0
+# The scheduled, application-consistent dump (ADR-0042 decision 2, ADR-0008 decision 1): one
+# systemd timer per application runs hnx-export-run, which dumps every database engine the spec
+# runs (or compose_app_export_engines names) from inside its own container into the export
+# directory, where the guest's image backup picks it up; a restore drill reads it from there.
+# Opt-in with compose_app_export_timer; an application with no supported engine renders nothing.
+- name: Work out the dump jobs (a database image, or the explicit override; none disables)
+  ansible.builtin.set_fact:
+    compose_app_export_jobs: >-
+      {%- set out = [] -%}
+      {%- for sname, svc in compose_app_spec.services | dictsort -%}
+      {%- set base = (svc.image | string).split('/')[-1] -%}
+      {%- set auto = 'postgres' if base is match('^(postgres|postgis|pgvector|timescaledb)') else ('mysql' if base is match('^(mariadb|mysql)') else '') -%}
+      {%- set engine = compose_app_export_engines[sname] | default(auto) -%}
+      {%- if engine in ['postgres', 'mysql'] -%}
+      {%- set _ = out.append({'service': sname, 'engine': engine}) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+    compose_app_export_images: >-
+      {%- set out = {} -%}
+      {%- for sname, svc in compose_app_spec.services | dictsort -%}
+      {%- set _ = out.update({sname: svc.image ~ ':' ~ svc.tag ~ '@' ~ svc.digest}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Refuse an engine the dump does not know
+  ansible.builtin.assert:
+    that:
+      - compose_app_export_engines.values() | reject('in', ['postgres', 'mysql', 'none']) | list | length == 0
+      - compose_app_export_engines.keys() | reject('in', compose_app_spec.services.keys() | list) | list | length == 0
+    fail_msg: "compose_app_export_engines: each key is a service of the spec and each value postgres, mysql or none"
+
+- name: Remove the timer an application with no database no longer wants
+  when: compose_app_export_jobs | length == 0
+  block:
+    - name: Look for the units an earlier run left
+      ansible.builtin.stat:
+        path: "{{ compose_app_unit_dir }}/hnx-export-{{ compose_app_name }}.timer"
+      register: compose_app_export_left
+    - name: Disable and delete them
+      when: compose_app_export_left.stat.exists
+      block:
+        - name: Disable the timer
+          ansible.builtin.command:
+            argv: ["{{ compose_app_systemctl_cli }}", disable, --now, "hnx-export-{{ compose_app_name }}.timer"]
+          changed_when: true
+          failed_when: false
+        - name: Delete the unit files
+          ansible.builtin.file:
+            path: "{{ compose_app_unit_dir }}/hnx-export-{{ compose_app_name }}.{{ item }}"
+            state: absent
+          loop: [service, timer]
+        - name: Reload systemd
+          ansible.builtin.command:
+            argv: ["{{ compose_app_systemctl_cli }}", daemon-reload]
+          changed_when: true
+
+- name: Install the dump timer
+  when: compose_app_export_jobs | length > 0
+  block:
+    - name: Create the script directory
+      ansible.builtin.file:
+        path: "{{ compose_app_export_script | dirname }}"
+        state: directory
+        owner: "{{ compose_app_owner }}"
+        group: "{{ compose_app_group }}"
+        mode: "0755"
+
+    # A module that bind-mounts export/db into its database container for its own export hook owns
+    # it as the database's user (keycloak, lakekeeper, openproject, intelowl, dfir-iris): the dump
+    # only creates the directory when it is missing and never changes an existing one's owner or
+    # mode, or each deploy would hand it back and forth (the dump runs as root and writes beneath it).
+    - name: Look for the export directory
+      ansible.builtin.stat:
+        path: "{{ compose_app_export_dir }}/db"
+      register: compose_app_export_db_dir
+
+    - name: Create the export directory when it is missing
+      ansible.builtin.file:
+        path: "{{ compose_app_export_dir }}/db"
+        state: directory
+        owner: "{{ compose_app_owner }}"
+        group: "{{ compose_app_group }}"
+        mode: "0700"
+      when: not compose_app_export_db_dir.stat.exists
+
+    - name: Install the dump script
+      ansible.builtin.copy:
+        src: hnx-export-run.py
+        dest: "{{ compose_app_export_script }}"
+        owner: "{{ compose_app_owner }}"
+        group: "{{ compose_app_group }}"
+        mode: "0755"
+
+    - name: Write the manifest
+      ansible.builtin.copy:
+        content: "{{ {'app': compose_app_name, 'compose_file': compose_app_dir ~ '/docker-compose.yml', 'export_dir': compose_app_export_dir ~ '/db', 'jobs': compose_app_export_jobs, 'images': compose_app_export_images} | to_nice_json }}\n"
+        dest: "{{ compose_app_export_manifest }}"
+        owner: "{{ compose_app_owner }}"
+        group: "{{ compose_app_group }}"
+        mode: "0600"
+
+    - name: Install the shared last-run writer and the record directory (role last_run)
+      ansible.builtin.include_role:
+        name: last_run
+      vars:
+        last_run_dir: "{{ compose_app_export_last_run_dir }}"
+        last_run_group: "{{ compose_app_export_last_run_group }}"
+        last_run_writer: "{{ compose_app_export_last_run_writer }}"
+
+    - name: Write the service unit
+      ansible.builtin.template:
+        src: export.service.j2
+        dest: "{{ compose_app_unit_dir }}/hnx-export-{{ compose_app_name }}.service"
+        owner: "{{ compose_app_owner }}"
+        group: "{{ compose_app_group }}"
+        mode: "0644"
+      register: compose_app_export_service_unit
+
+    - name: Write the timer unit
+      ansible.builtin.template:
+        src: export.timer.j2
+        dest: "{{ compose_app_unit_dir }}/hnx-export-{{ compose_app_name }}.timer"
+        owner: "{{ compose_app_owner }}"
+        group: "{{ compose_app_group }}"
+        mode: "0644"
+      register: compose_app_export_timer_unit
+
+    - name: Ask whether the timer is enabled
+      ansible.builtin.command:
+        argv: ["{{ compose_app_systemctl_cli }}", is-enabled, "hnx-export-{{ compose_app_name }}.timer"]
+      register: compose_app_export_enabled
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Reload systemd (units changed)
+      ansible.builtin.command:
+        argv: ["{{ compose_app_systemctl_cli }}", daemon-reload]
+      when: (compose_app_export_service_unit is changed or compose_app_export_timer_unit is changed)
+      changed_when: true
+
+    - name: Enable and start the timer
+      ansible.builtin.command:
+        argv: ["{{ compose_app_systemctl_cli }}", enable, --now, "hnx-export-{{ compose_app_name }}.timer"]
+      when: (compose_app_export_service_unit is changed or compose_app_export_timer_unit is changed) or compose_app_export_enabled.stdout | default('') | trim != 'enabled'
+      changed_when: true

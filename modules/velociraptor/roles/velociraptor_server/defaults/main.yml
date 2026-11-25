@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# The endpoint-forensics server (modules/velociraptor): one container, its generated server
+# configuration (and the certificate authority in it) kept on a data volume and never regenerated,
+# one hunt principal that can only collect an allow-listed set of artifacts, and a timer that runs
+# the baseline hunt and records the fleet's state.
+# velociraptor_server_logical_id (required): the instance's registry id, e.g. endpoint-forensics
+# velociraptor_server_frontend_hostname (required): the name or address the clients dial; it is
+#   baked into the client configuration at the server's FIRST start, so choose it before that
+velociraptor_server_image: "ghcr.io/velocidex/velociraptor-server:0.77.1@sha256:1935d0a77e3f4f644732d6917688f9a490df44e02d4e3034e53aa7188fe92ae0"
+# published on the guest's own address, never all interfaces
+velociraptor_server_bind: "{{ ansible_host }}"
+# the clients' port (not proxied: the clients speak their own mutual-TLS protocol on it) and the GUI's
+velociraptor_server_frontend_port: 8000
+velociraptor_server_gui_port: 8890
+velociraptor_server_dir: /opt/compose/velociraptor
+velociraptor_server_owner: root
+velociraptor_server_group: root
+velociraptor_server_data_root: /var/lib/hnx-modules/velociraptor
+# the container's user and group: an id no account on the host has
+velociraptor_server_uid: 61100
+velociraptor_server_gid: 61100
+velociraptor_server_admin_login_ref: secret:velociraptor/admin-password
+# the hunt principal: the module's own API account (never the administrator)
+velociraptor_server_hunt_principal: hnx-hunt
+# who may read the client configuration and the hunt results (the log pipeline's agent reads them)
+velociraptor_server_client_config_group: root
+velociraptor_server_results_group: root
+velociraptor_server_mem_limit: 2g
+velociraptor_server_start: true
+velociraptor_server_validate_with_docker: true
+velociraptor_server_ready_timeout: 180
+# set only when a restore or a migration deliberately brings a different certificate authority:
+# the role otherwise refuses to go on when the recorded authority changed (LL-087)
+velociraptor_server_accept_new_ca: false
+# the hunt cycle: a calendar from velociraptor_server_schedules (vars/main.yml), a hunt every
+# hunt_interval_hours, collected collect_after_minutes later; a client counts as fresh when heard
+# within stale_after_minutes; the criteria want at least min_clients enrolled
+velociraptor_server_schedule: "*-*-* *:0/5:00 UTC"
+velociraptor_server_hunt_interval_hours: 24
+velociraptor_server_collect_after_minutes: 60
+velociraptor_server_stale_after_minutes: 15
+velociraptor_server_min_clients: 1
+velociraptor_server_systemctl_cli: systemctl
+velociraptor_server_unit_dir: /etc/systemd/system
+velociraptor_server_last_run_dir: /var/lib/homelabnext/last-run
+velociraptor_server_last_run_group: root
+# health also requires this many enrolled clients seen within the stale window (0: health does not
+# count clients; a site that has enrolled its fleet sets it, so a fleet that never reached the
+# server cannot read green)
+velociraptor_server_health_min_clients: 0

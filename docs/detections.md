@@ -1,6 +1,6 @@
 ---
-summary: 'Detections authored in a Sigma subset: layout, ATT&CK coverage counted only from tested rules, ATT&CK-id validation, known-id snapshots and writing tests.'
-summary_of: outline:sha256:64e5dbedaeb5f722
+summary: 'Detections as Sigma: layout, the Sigma lane on the engine (bindings, awaiting-source, engine fixtures), ATT&CK coverage, known-id snapshots, native rules.'
+summary_of: outline:sha256:a7fe3ad2e5df6703
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Detections
@@ -30,12 +30,12 @@ events in the generic shape. A rule a backend cannot express is named on stderr 
 the bundle, and `compile` exits 1; the rest of the bundle is still written.
 
 `run` also drives the fixtures through each backend that can evaluate its own artefact (an
-`evaluate(artifact, event)` method; today the `wazuh` stub, which reads a compiled rule as the
+`evaluate(artifact, event)` method; today the `wazuh` backend, which reads a compiled rule as the
 engine does: every `field` present and matching, a `negate` field present and not matching). The
 rule is compiled with the generic field map for this, so the compiled form is tested and not the
 engine's field names. A must_fire or must_not_fire fixture whose compiled result is not the
 reference evaluator's is printed as `[DIVERGES]` and fails `run`; a rule the backend cannot
-express is printed as `[not expressible]`. The stub emits case-insensitivity as scoped
+express is printed as `[not expressible]`. The backend emits case-insensitivity as scoped
 `(?i:...)` groups, so an alternation of patterns is valid in Python's `re` as well as PCRE2.
 
 `map --check` fails unless `det_map.yml` is exactly what `map` would write: every live rule has a
@@ -181,3 +181,77 @@ assert problems == [], "\n".join(problems)
 The validator duck-types on `det_id` and `attack_techniques`; call sites that already hold a
 backend's `known_technique_ids()` set can pass that set directly instead of constructing a
 snapshot.
+
+## Native rules (ADR-0006 decision 4, ADR-0049 decision 2)
+
+A detection is Sigma unless Sigma cannot carry it. A native rule is the engine's own rule or decoder
+file, with a stated reason from a closed list: `engine-correlation` (frequency, timeframe, same-field
+or parent-rule chains), `decoder` (it reads a field only the engine's decoder produces),
+`list-lookup` (an engine-side list) or `stock-override` (it changes the level of, or silences, a
+rule the product ships; human-approve, and it names the stock rule ids it changes). The layout, in
+a detections root (the SIEM module's, or the overlay module's for the lab's own rules):
+
+```
+native/index.yml                  the registry: schema, engine, range, one entry per file
+native/rules/<name>.xml           the engine's rule files
+native/decoders/<name>.xml        the engine's decoder files
+native/native.baseline.json       the ratchet: {"count": N, "stock-override": M}
+fixtures/<slug>/{must_fire,must_not_fire}/*.json   raw engine input: {event, location, format, rule_id}
+```
+
+`python -m homelabnext.detections lint --native` fails on a missing or unlisted reason, a det id a
+Sigma rule also has, a rule number outside the module's range or declared twice, a fixture kind
+missing, a `<location>` with regular-expression characters and no `type="pcre2"` (it loads clean and
+never matches), and a count above the baseline (only a reviewed change raises it). `python -m
+homelabnext.detections run --native --manager-url URL --ca FILE` (the account's password in
+`HNX_MANAGER_API_PASSWORD`) sends every fixture through the manager's own rule tester
+(`PUT /logtest`) and fails on a missed must-fire or a fired must-not-fire. The runner keeps itself under 240 requests a minute (the manager API refuses past 300 with 429) and, on a 429 anyway, waits `Retry-After` or backs off 2, 4, 8 ... seconds, five tries. Native fixtures are not
+orphans to the Sigma lint. An entry whose events the rule tester cannot reach (a file-integrity event comes from the agent's own daemon, not as a log line) says `proof: live` and a `live_test` (the steps and the alert that proves it) instead of fixtures; the engine run skips it, and the post-deploy live test is its proof. Native rules count in the engine's own coverage only.
+
+## The Sigma lane on the engine
+
+A Sigma rule ships to the engine as compiled XML, loaded by the SIEM module beside its native rules
+(modules/wazuh README, "The Sigma lane"). Three things make the compiled form a real rule rather
+than a well-formed one:
+
+**Logsource bindings.** `mappings/<backend>.yml` may carry a `logsources:` list. Each binding
+matches Sigma logsource keys (`product`, `category`, `service`; the binding matching the most keys
+wins), names ONE engine base its rules chain from (`parent`: `if_sid`, `if_group` or `decoded_as`;
+a multi-valued `if_sid` beside a field condition matches nothing on the engine, so it is refused),
+and maps Sigma field names to the decoder's (`fields`). With bindings present, a rule compiles only
+through its binding's fields: a rule no binding names, or a Sigma field the binding does not map,
+is not expressible and is named by `compile`, never passed through under its Sigma name. A field
+written `raw:<template>` is matched on the raw line by the rule's one `<regex type="pcre2">`, the
+template being a PCRE2 fragment with one `{}` for the value (`raw:"id\.resp_h":"{}"`); it is for a
+value the decoder keeps only in a static field the engine will not match by pattern (an address
+list), takes equals/contains/startswith/endswith, and is the engine's to prove (the compiled-form
+evaluator refuses it).
+
+```yaml
+fields: {}
+logsources:
+  - name: sensor-http
+    match: {product: zeek, service: http}
+    parent: {if_sid: 900380}             # the site's native HTTP base classifier
+    fields: {c-uri: uri, DestinationIp: 'raw:"id\.resp_h":"{}"'}
+```
+
+**Rules awaiting their source.** `hnx_source: awaiting-source` marks a rule ported and tested whose
+telemetry is not collected yet (an endpoint class not enrolled). Its fixtures run, through the
+reference evaluator and the compiled form, and `compile` compiles it (so a port the engine cannot
+take fails now, not on enrolment day), but it is left out of the bundle and out of
+`attack_coverage.json`. Removing the marker is the change that ships it; give it engine fixtures
+from the real source in the same change.
+
+**Engine fixtures.** `engine_fixtures/<slug>/{must_fire,must_not_fire}/*.json` hold raw engine
+input in the native fixtures' shape (`event`, `location`, `format`) plus a `provenance` (where the
+line came from: a lake row, a capture, and what was changed in it); the expected rule is the det
+map's number, never one written in the file. `python -m homelabnext.detections run --engine
+--manager-url URL --ca FILE --user NAME` (the password in `HNX_MANAGER_API_PASSWORD`) sends them
+through the deployed manager's rule tester and fails on a missed must-fire, a fired must-not-fire,
+and a deployed rule with no engine fixture of either kind: the binding's base, the sibling order
+and the decoder's field names are only proved there. `lint` reports orphan engine fixtures and
+malformed ones.
+
+`map --base N` starts a new map's numbers at `N` (an existing map continues after its highest
+number, live or retired); `compile <backend> --out FILE` writes the bundle to a file.

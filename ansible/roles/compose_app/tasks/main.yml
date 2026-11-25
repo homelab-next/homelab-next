@@ -166,3 +166,7 @@
       ansible.builtin.command:
         argv: ["{{ compose_app_systemctl_cli }}", daemon-reload]
       changed_when: true
+
+- name: Schedule the application-consistent database dump
+  ansible.builtin.include_tasks: export_timer.yml
+  when: compose_app_export_timer | bool

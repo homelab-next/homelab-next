@@ -1,0 +1,190 @@
+# SPDX-License-Identifier: Apache-2.0
+# After the manager is up (its init has filled its directories): the site's native rules and decoders,
+# the alert integration and the internal options go in, and the manager's daemons restart ONCE when any
+# of them changed. The rules are loaded by files/hnx_wazuh_rules.py: it runs the manager's own
+# configuration test before the restart and puts the previous set back when the test or the restart
+# fails (checklist D-03; the product's `-t` alone is not enough, so the daemons' liveness is checked
+# too). Only files named hnx-*.xml are ever written or removed; the manager's own rule files are not
+# touched.
+- name: Write the internal options (the manager's agents-facing limits; remote commands off)
+  ansible.builtin.copy:
+    content: |
+      # Managed by homelabnext (role wazuh)
+      logcollector.remote_commands=0
+      wazuh_command.remote_commands=0
+      monitord.keep_log_days={{ wazuh_logs_keep_days | int }}
+    dest: "{{ wazuh_data_root }}/manager/etc/local_internal_options.conf"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_manager_gid | int }}"
+    mode: "0640"
+  register: wazuh_options_file
+
+- name: Install the alert integration's files
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ wazuh_data_root }}/manager/integrations/{{ item.dest }}"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_manager_gid | int }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {src: custom-hnx-alert, dest: custom-hnx-alert, mode: "0750"}
+    - {src: custom-hnx-alert.py, dest: custom-hnx-alert.py, mode: "0750"}
+  loop_control:
+    label: "{{ item.dest }}"
+  when: wazuh_alert_forward_url | length > 0
+  register: wazuh_integration_files
+
+- name: Write the integration's settings (source, TLP label, rule-to-detection map)
+  ansible.builtin.copy:
+    content: "{{ {'source': wazuh_alert_source, 'tlp': wazuh_alert_tlp, 'detections': wazuh_detection_ids} | to_nice_json(sort_keys=true) }}\n"
+    dest: "{{ wazuh_data_root }}/manager/integrations/hnx-alert.json"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_manager_gid | int }}"
+    mode: "0640"
+  when: wazuh_alert_forward_url | length > 0
+  register: wazuh_integration_cfg
+
+- name: Write the forwarder's Authorization header value
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', wazuh_alert_auth_ref) }}\n"
+    dest: "{{ wazuh_data_root }}/manager/integrations/hnx-alert.auth"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_manager_gid | int }}"
+    mode: "0640"
+  when: wazuh_alert_forward_url | length > 0
+  register: wazuh_integration_auth
+  no_log: true
+
+- name: List the site's native files (rules and decoders, on the controller)
+  ansible.builtin.set_fact:
+    wazuh_native_wanted: >-
+      {{ (query('ansible.builtin.fileglob', wazuh_native_dir ~ '/rules/*') | map('basename') | map('regex_replace', '^', 'rules/') | list
+          + query('ansible.builtin.fileglob', wazuh_native_dir ~ '/decoders/*') | map('basename') | map('regex_replace', '^', 'decoders/') | list)
+         if wazuh_native_dir | length > 0 else [] }}
+
+- name: Refuse a native file whose name the loader will not take
+  ansible.builtin.assert:
+    that: wazuh_native_wanted | map('regex_replace', '^[a-z]+/', '') | reject('match', wazuh_native_file_pattern) | list | length == 0
+    fail_msg: >-
+      siem: native rule and decoder files are named like my-rule.xml (lower case, digits, - and _,
+      .xml), in rules/ and decoders/ of {{ wazuh_native_dir }}; they are installed as hnx-<name>.xml
+
+- name: The site's Sigma rules, proved and compiled on the controller (docs/detections.md, "The Sigma lane on the engine")
+  when: wazuh_sigma_roots | length > 0
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  block:
+    - name: A scratch directory for the compiled bundles
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: hnx-wazuh-sigma-
+      register: wazuh_sigma_scratch
+      changed_when: false
+
+    - name: Prove each root (lint, the fixtures through the reference evaluator and the compiled form, the det map current)
+      ansible.builtin.command:
+        argv: "{{ wazuh_hnx_cli + ['detections', '--root', item.0, item.1] + (['--check'] if item.1 == 'map' else []) }}"
+      loop: "{{ wazuh_sigma_roots | product(['lint', 'run', 'map']) | list }}"
+      loop_control:
+        label: "{{ item.1 }} {{ item.0 }}"
+      changed_when: false
+
+    - name: Compile each root's bundle for this engine (a rule it cannot express fails the deploy)
+      ansible.builtin.command:
+        argv: "{{ wazuh_hnx_cli + ['detections', '--root', item, 'compile', 'wazuh', '--out',
+                  wazuh_sigma_scratch.path ~ '/zz-sigma-' ~ idx ~ '.xml'] }}"
+      loop: "{{ wazuh_sigma_roots }}"
+      loop_control:
+        index_var: idx
+      changed_when: false
+
+- name: The Sigma bundles to load (after every native file, so a rule's parent is loaded first)
+  ansible.builtin.set_fact:
+    # no regular-expression backreference here: inside a folded scalar the replacement's backslash reaches the filter
+    # doubled and the name came out as a literal zz-sigma-\\1.xml (the first live deploy, 2026-11-24)
+    wazuh_sigma_wanted: >-
+      {{ range(wazuh_sigma_roots | length) | map('string') | map('regex_replace', '^', 'rules/zz-sigma-')
+         | map('regex_replace', '$', '.xml') | list }}
+    wazuh_native_wanted: >-
+      {{ wazuh_native_wanted + (range(wazuh_sigma_roots | length) | map('string') | map('regex_replace', '^', 'rules/zz-sigma-')
+         | map('regex_replace', '$', '.xml') | list) }}
+
+- name: Refuse a native file that takes a Sigma bundle's name
+  ansible.builtin.assert:
+    that: wazuh_native_wanted | select('match', '^rules/zz-sigma-') | list | length == wazuh_sigma_roots | length
+    fail_msg: "siem: native rule files named zz-sigma-*.xml are reserved for the compiled Sigma bundles"
+
+- name: Stage the native directories on the guest
+  ansible.builtin.file:
+    path: "{{ wazuh_data_root }}/config/native/{{ item }}"
+    state: directory
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0750"
+  loop: [rules, decoders]
+
+- name: Stage the native files
+  ansible.builtin.copy:
+    src: "{{ wazuh_native_dir }}/{{ item }}"
+    dest: "{{ wazuh_data_root }}/config/native/{{ item }}"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0640"
+  loop: "{{ wazuh_native_wanted | difference(wazuh_sigma_wanted) }}"
+  register: wazuh_native_staged
+
+- name: Stage the compiled Sigma bundles
+  ansible.builtin.copy:
+    src: "{{ wazuh_sigma_scratch.path }}/{{ item | basename }}"
+    dest: "{{ wazuh_data_root }}/config/native/{{ item }}"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0640"
+  loop: "{{ wazuh_sigma_wanted }}"
+  register: wazuh_sigma_staged
+
+- name: Remove the controller's scratch directory
+  ansible.builtin.file:
+    path: "{{ wazuh_sigma_scratch.path }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  changed_when: false
+  when: wazuh_sigma_scratch.path is defined
+
+- name: Find what is staged
+  ansible.builtin.find:
+    paths: ["{{ wazuh_data_root }}/config/native/rules", "{{ wazuh_data_root }}/config/native/decoders"]
+    file_type: any
+  register: wazuh_native_present
+
+- name: Unstage what the site no longer has
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ wazuh_native_present.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: (item.path | regex_replace('^.*/native/', '')) not in wazuh_native_wanted
+
+- name: Copy the rules tool
+  ansible.builtin.copy:
+    src: hnx_wazuh_rules.py
+    dest: "{{ wazuh_data_root }}/config/hnx_wazuh_rules.py"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0750"
+
+- name: Test, load and restart (the previous set comes back when either fails)
+  ansible.builtin.command:
+    argv: >-
+      {{ ['python3', '-I', wazuh_data_root ~ '/config/hnx_wazuh_rules.py', 'sync',
+          '--stage', wazuh_data_root ~ '/config/native', '--etc', wazuh_data_root ~ '/manager/etc',
+          '--compose', wazuh_dir ~ '/docker-compose.yml', '--prev', wazuh_data_root ~ '/config/native-previous']
+         + (['--force-restart'] if (wazuh_options_file is changed or wazuh_integration_files is changed
+                                    or wazuh_integration_cfg is changed or wazuh_integration_auth is changed
+                                    or wazuh_restart_services | default([]) | length > 0) else []) }}
+  register: wazuh_rules_run
+  changed_when: (wazuh_rules_run.stdout | from_json).changed

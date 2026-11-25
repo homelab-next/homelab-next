@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# The collector: a timer that runs `hnx status collect` so state.json exists and is fresh (ADR-0013;
+# docs/status.md section 2). The hub (hnx-hub.service) only reads that file.
+- name: Create the collector's directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ status_hub_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ status_hub_root_dir }}", owner: "{{ status_hub_user }}", mode: "0750"}
+    - {path: "{{ status_hub_issued_dir }}", owner: root, mode: "0750"}
+    - {path: "{{ status_hub_login_dir }}", owner: root, mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Write the CA bundle the collector verifies https sources against (the lab CA and any extra certificate)
+  ansible.builtin.copy:
+    dest: "{{ status_hub_ca_bundle_path }}"
+    content: |
+      {% for ref in ([status_hub_client_ca_ref] + status_hub_extra_ca_refs) %}
+      {{ lookup('hnx_secret', ref) | trim }}
+      {% endfor %}
+    owner: root
+    group: "{{ status_hub_group }}"
+    mode: "0640"
+  no_log: true
+  diff: false
+  when: status_hub_ca_bundle | bool
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ status_hub_last_run_dir }}"
+    last_run_group: "{{ status_hub_last_run_group }}"
+    last_run_writer: "{{ status_hub_last_run_writer }}"
+
+- name: Write the collector's service and timer
+  ansible.builtin.template:
+    src: "hnx-hub-collect.{{ item }}.j2"
+    dest: "{{ status_hub_systemd_dir }}/hnx-hub-collect.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+  register: status_hub_collect_units
+
+- name: Refresh login-issued tokens
+  ansible.builtin.include_tasks: login_tokens.yml
+  when: status_hub_logins | length > 0
+
+- name: Pull the producers' status files
+  ansible.builtin.include_tasks: pulls.yml
+  when: status_hub_pulls | length > 0
+
+- name: Enable the collector's timer (a pass every minute; the first one runs now)
+  ansible.builtin.systemd_service:
+    name: hnx-hub-collect.timer
+    enabled: true
+    state: "{{ 'restarted' if status_hub_collect_units is changed else 'started' }}"
+    daemon_reload: "{{ status_hub_collect_units is changed }}"
+  when: status_hub_start | bool and not ansible_check_mode

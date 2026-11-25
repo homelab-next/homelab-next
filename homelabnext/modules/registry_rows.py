@@ -23,13 +23,15 @@ field whose value differs, a field one side has and the other does not.  The fie
 :data:`SITE_FIELDS` are the lab's own facts about a row (a generic module cannot know them) and are
 compared only when the module's row sets them; the fields in :data:`SITE_BOUND_FIELDS`
 (``public_hostname``, ``edge_tls``) must be present when the module's row declares them, with
-whatever value the site gives.  A host role the site does not place is a problem
+whatever value the site gives.  A contributed ``health.path`` may name a site segment ``:name``
+(an IdP's realm): the registry's path must then be the same path with that segment filled.  A host role the site does not place is a problem
 of its own (the registry's ``host`` cannot be judged), and the other fields are still compared.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -41,11 +43,12 @@ __all__ = ["SITE_BOUND_FIELDS", "SITE_FIELDS", "Expected", "expected_rows", "row
 #: the fields of a registry row that are the lab's, not the module's: compared only when the
 #: module's row sets them.  ``standing`` (ADR-0039: whether this row is the capability's primary,
 #: an eval, retiring or legacy, with its ``until`` and ``why``), ``backup_job`` (the lab's backup
-#: schedule) and ``scope`` (the writer-tool scope, which only narrows what agents file about the
-#: service).  Never ``clients``: extra zones widen who may reach the service (firewall edges, the
+#: schedule), ``scope`` (the writer-tool scope, which only narrows what agents file about the
+#: service) and ``status_sources`` (what the site's status hub collects about the row: the site
+#: decides what it watches, a module need not know the hub).  Never ``clients``: extra zones widen who may reach the service (firewall edges, the
 #: agent access map), so a registry that adds them differs from the module, and the module must
 #: say so too
-SITE_FIELDS = frozenset({"standing", "backup_job", "scope"})
+SITE_FIELDS = frozenset({"standing", "backup_job", "scope", "status_sources"})
 
 #: the fields whose *value* is the site's but whose *presence* is the module's: a module that
 #: publishes a row (an IdP's sign-in pages) declares ``public_hostname`` (and, for a ``tls:
@@ -55,6 +58,14 @@ SITE_FIELDS = frozenset({"standing", "backup_job", "scope"})
 #: name), whatever it is.  A row whose module does not declare the field stays compared as any
 #: other, so a site can never make a module's internal row public
 SITE_BOUND_FIELDS = frozenset({"public_hostname", "edge_tls"})
+
+#: single sign-on is the site's choice for a row whose module keeps its own accounts: a registry
+#: row may add ``oidc`` (its own callbacks, service schema 2.13; the registry checks they name the
+#: row's own host and port) and, with it, ``auth: idp`` where the module's row says ``auth: own``
+#: (the IdP's realm then renders a client for it; the module's local accounts stay).  Only that
+#: one step: ``auth: idp`` without ``oidc``, or over a module's ``none``/``mtls``, stays a
+#: difference, and a module that declares ``oidc`` itself is compared as any other field
+SITE_SIGN_IN_FROM, SITE_SIGN_IN_TO = "own", "idp"
 
 #: the longest value a problem prints before it is cut (a row's field can be a large mapping)
 SHOWN = 120
@@ -181,9 +192,50 @@ def _site_bound_ok(field: str, value: Any) -> bool:
     return isinstance(value, Mapping) and str(value.get("ca", "")).startswith("secret:")
 
 
+def _site_sign_in(field: str, row: Mapping[str, Any], have: Mapping[str, Any]) -> bool:
+    """The registry signs a module's own-accounts row in through the site's IdP
+    (:data:`SITE_SIGN_IN_FROM`): ``oidc`` the module does not declare, and the ``auth`` step it
+    carries, are the site's."""
+    if "oidc" in row or not isinstance(have.get("oidc"), Mapping) or not have["oidc"]:
+        return False
+    if field == "oidc":
+        return True
+    return (
+        field == "auth"
+        and row.get("auth") == SITE_SIGN_IN_FROM
+        and have.get("auth") == SITE_SIGN_IN_TO
+    )
+
+
+#: a whole path segment of a contributed health path that is the site's (``:realm``, the route
+#: parameter form, which the row schema's path characters allow): the module knows the path's
+#: shape, the site names the segment (an IdP's health is its realm's discovery document, and the
+#: realm's name is the site's)
+_SITE_SEGMENT = re.compile(r"(?<=/):[a-z][a-z0-9_-]*(?=/|\Z)")
+
+
+def _path_matches(want: str, got: str) -> bool:
+    """``got`` is ``want`` with each ``:name`` segment filled by one path segment that is not
+    itself a parameter."""
+    parts = _SITE_SEGMENT.split(want)
+    pattern = "[^/:][^/]*".join(re.escape(p) for p in parts)
+    return re.fullmatch(pattern, got) is not None
+
+
 def _same(field: str, a: Any, b: Any) -> bool:
     if field == "version" and a is not _ABSENT and b is not _ABSENT:
         return str(a) == str(b)  # an unquoted YAML version reads as a number
+    if (
+        field == "health"
+        and isinstance(a, Mapping)
+        and isinstance(b, Mapping)
+        and isinstance(a.get("path"), str)
+        and isinstance(b.get("path"), str)
+        and _SITE_SEGMENT.search(a["path"])
+    ):
+        rest_a = {k: v for k, v in a.items() if k != "path"}
+        rest_b = {k: v for k, v in b.items() if k != "path"}
+        return rest_a == rest_b and _path_matches(a["path"], b["path"])
     return a == b
 
 
@@ -217,6 +269,8 @@ def row_problems(
             if field in SITE_FIELDS and field not in e.row:
                 continue
             want, got = e.row.get(field, _ABSENT), have.get(field, _ABSENT)
+            if _site_sign_in(field, e.row, have):
+                continue
             if field in SITE_BOUND_FIELDS and want is not _ABSENT:
                 if got is _ABSENT:
                     out.append(

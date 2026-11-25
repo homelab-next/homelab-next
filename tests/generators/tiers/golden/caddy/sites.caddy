@@ -21,7 +21,8 @@
 			}
 		}
 		# the session cookie is the auth proxy's alone: no upstream sees it (after the check)
-		request_header Cookie "(?i)(^|;\s*)__Host-hnx_auth[^=;]*=[^;]*" "$1"
+		request_header Cookie "(?i)(?:;\s*)?__Host-hnx_auth[^=;]*=[^;]*" ""
+		request_header Cookie "^;\s*" ""
 	}
 }
 

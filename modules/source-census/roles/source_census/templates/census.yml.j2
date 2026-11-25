@@ -1,0 +1,4 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (module source-census, role source_census); local changes are overwritten.
+# No secret is in this file: the credential entries are owner-only files beside it.
+{{ (source_census_settings | combine({'lake': {'ca_file': source_census_lake_ca_file}}, recursive=True) if source_census_lake_ca_file != '' else source_census_settings) | to_nice_yaml(indent=2) }}

@@ -7,6 +7,15 @@ summary_of: outline:sha256:2fdd5ae7b30885dd
 - **Status:** proposed
 - **Date:** 2026-10-15
 - **Related:** ADR-0004, ADR-0005
+- **Status note (2026-11-22):** decision 1's schedule and decision 2's drill now exist as code. `compose_app_export_timer`
+  (`ansible/roles/compose_app/tasks/export_timer.yml`) installs a nightly `hnx-export-run` that dumps every PostgreSQL and
+  MariaDB/MySQL service of an application from inside its container (`pg_dump -Fc` per database plus the globals, `--single-transaction`
+  for MariaDB), verified and atomically replaced, into `<export dir>/db` with a sha256 listing and a manifest that says what the
+  dump does not carry. `restore_drill_timer` installs a daily `hnx-restore-drill` that restores one guest's newest backup to scratch
+  (alternating the primary and the second copy), checks the image, re-verifies every application export in it against its listing,
+  destroys the scratch and records the result (`drills.json`, `guests` and `services`); `hnx recovery drills check` judges those
+  records. Still open: an open-format dump (STIX, JSON) for the products whose own export hook is not a database dump, and the
+  results transport that carries `drills.json` to the status hub (ADR-0049 decision 7).
 - **Status note (2026-10-28):** decisions 1 and 2 are not yet met as written; the decision is unchanged. Today `ansible/roles/compose_app/tasks/export.yml` exports a tar.gz of the live data directory, not an open-format dump (JSON, STIX, SQL), and the `restore_drill` role runs the backup product's image-level drill (`restore_drill_cli`), not a restore from an export.
 - **Amended:** 2026-11-07 by ADR-0040 (decision 6): export and import become methods of each
   stateful slot's protocol, with a round-trip requirement; and by ADR-0042 (decision 2): a dump

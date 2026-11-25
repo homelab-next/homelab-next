@@ -1,0 +1,4 @@
+---
+group: Added
+---
+Role `siem_agent_watch` (included by the `siem-agent` control's role): one managed `<ossec_config>` block appended to the agent's configuration with real-time file-integrity watches on `/etc/ssh`, `/etc/pam.d`, `/etc/sudoers.d`, `/etc/audit/rules.d` and `/etc/cron.d` and scheduled watches on `/usr/local/{bin,sbin}` (the vendor defaults stay), the kernel audit log as a source only where the guest has one (`siem_agent_watch_auditd`: `auto` = the audit daemon is installed and the host is not a container, since an unprivileged container has no kernel audit system; `enabled`; `disabled`), and the agent's `logcollector` and `sca` remote-command switches pinned to 0. The role names no product, so no product-name count rises; it reports a change and the including role restarts the agent once. Bad paths (markup, relative) are refused before the file is touched; health fails on a missing block, a wrong audit source or a switch turned on.

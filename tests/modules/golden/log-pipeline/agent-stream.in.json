@@ -1,0 +1,224 @@
+[
+  {
+    "agent": {
+      "id": "001",
+      "ip": "198.51.100.130",
+      "name": "infer-core"
+    },
+    "data": {
+      "dstuser": "root",
+      "srcip": "203.0.113.9"
+    },
+    "decoder": {
+      "name": "sshd"
+    },
+    "full_log": "Failed password for root from 203.0.113.9 port 4022",
+    "location": "/var/log/auth.log",
+    "rule": {
+      "description": "Multiple failed logins",
+      "groups": [
+        "syslog",
+        "sshd",
+        "authentication_failed"
+      ],
+      "id": "5712",
+      "level": 12,
+      "mitre": {
+        "id": [
+          "T1110"
+        ]
+      }
+    },
+    "timestamp": "2026-11-22T10:00:00.000+0000"
+  },
+  {
+    "agent": {
+      "id": "002",
+      "ip": "198.51.100.40",
+      "name": "lake-core"
+    },
+    "data": {
+      "vulnerability": {
+        "cve": "CVE-2026-0001",
+        "cvss": {
+          "cvss3": {
+            "base_score": 7.5
+          }
+        },
+        "package": {
+          "name": "libexample",
+          "version": "1.2.3"
+        },
+        "severity": "High",
+        "title": "Example flaw"
+      }
+    },
+    "decoder": {
+      "name": "json"
+    },
+    "location": "vulnerability-detector",
+    "rule": {
+      "description": "Package vulnerable",
+      "groups": [
+        "vulnerability-detector"
+      ],
+      "id": "23504",
+      "level": 7
+    },
+    "timestamp": "2026-11-22T10:01:00.000+0000"
+  },
+  {
+    "agent": {
+      "id": "002",
+      "ip": "198.51.100.40",
+      "name": "lake-core"
+    },
+    "data": {
+      "sca": {
+        "check": {
+          "id": "1001",
+          "result": "failed",
+          "title": "Ensure example is set"
+        },
+        "policy": "Example hardening"
+      }
+    },
+    "decoder": {
+      "name": "sca"
+    },
+    "location": "sca",
+    "rule": {
+      "description": "Policy check failed",
+      "groups": [
+        "sca"
+      ],
+      "id": "19007",
+      "level": 3
+    },
+    "timestamp": "2026-11-22T10:02:00.000+0000"
+  },
+  {
+    "agent": {
+      "id": "002",
+      "ip": "198.51.100.40",
+      "name": "lake-core"
+    },
+    "decoder": {
+      "name": "syscheck_integrity_changed"
+    },
+    "location": "syscheck",
+    "rule": {
+      "description": "Integrity checksum changed",
+      "groups": [
+        "syscheck",
+        "syscheck_entry_modified"
+      ],
+      "id": "550",
+      "level": 7
+    },
+    "syscheck": {
+      "event": "modified",
+      "path": "/etc/pam.d/example",
+      "sha256_after": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+      "uname_after": "root"
+    },
+    "timestamp": "2026-11-22T10:03:00.000+0000"
+  },
+  {
+    "agent": {
+      "id": "002",
+      "ip": "198.51.100.40",
+      "name": "lake-core"
+    },
+    "data": {
+      "audit": {
+        "auid": "1000",
+        "exe": "/usr/bin/curl",
+        "execve": {
+          "a0": "curl",
+          "a1": "-s",
+          "a2": "http://example.invalid/",
+          "argc": "3"
+        },
+        "pid": "4242"
+      }
+    },
+    "decoder": {
+      "name": "auditd"
+    },
+    "location": "/var/log/audit/audit.log",
+    "rule": {
+      "description": "Audit: command executed",
+      "groups": [
+        "audit"
+      ],
+      "id": "80792",
+      "level": 3
+    },
+    "timestamp": "2026-11-22T10:04:00.000+0000"
+  },
+  {
+    "agent": {
+      "id": "001",
+      "ip": "198.51.100.130",
+      "name": "infer-core"
+    },
+    "data": {
+      "dstuser": "alice",
+      "srcip": "203.0.113.9"
+    },
+    "decoder": {
+      "name": "sshd"
+    },
+    "full_log": "Accepted publickey for alice from 203.0.113.9 port 4023",
+    "location": "/var/log/auth.log",
+    "timestamp": "2026-11-22T10:05:00.000+0000"
+  },
+  {
+    "agent": {
+      "id": "009",
+      "ip": "198.51.100.250",
+      "name": "unlisted"
+    },
+    "data": {},
+    "decoder": {
+      "name": "json"
+    },
+    "location": "x",
+    "rule": {
+      "description": "Critical thing",
+      "groups": [
+        "local"
+      ],
+      "id": "5901",
+      "level": 15
+    },
+    "timestamp": "2026-11-22T10:06:00.000+0000"
+  },
+  {
+    "agent": {
+      "id": "001",
+      "ip": "198.51.100.130",
+      "name": "infer-core"
+    },
+    "data": {},
+    "decoder": {
+      "name": "json"
+    },
+    "labels": {
+      "hnx_runtime": "none",
+      "hnx_tlp": "clear"
+    },
+    "location": "x",
+    "rule": {
+      "description": "Self-labelled",
+      "groups": [
+        "local"
+      ],
+      "id": "5902",
+      "level": 2
+    },
+    "timestamp": "2026-11-22T10:07:00.000+0000",
+    "tlp": "clear"
+  }
+]

@@ -14,7 +14,7 @@ this module **deploys** it, it does not define it.
 | Why containers | StackStorm 3.9 packages target Ubuntu 22.04 and Rocky 9; the lab's base is Debian 13 |
 | Runs as | `compose_app`, every container in the module's role slice (`cgroup_parent`), no capability but `st2web`'s four (nginx starts as root), `no-new-privileges`, every image pinned by tag **and** digest |
 | Row | `automation` (`impl: stackstorm`), http, port 9101, `auth: own`, **no public route** |
-| Status | the hub's existing `poll-stackstorm` reader (`status_sources` on the row; fixture `tests/status/fixtures/stackstorm-executions.json`) |
+| Status | the hub's existing `poll-stackstorm` reader (`status_sources` on the row; fixture `tests/status/fixtures/stackstorm-executions.json`), and `stackstorm-shadow` (built-in `automation-shadow`, schema 2.14): the shadow evidence per rule over 7 days, for promotion reviews |
 | Shadow first | every rule ships **disabled** and every pack rule is in **shadow mode** (it records the broker request it would make and sends nothing) |
 
 ## What runs where
@@ -88,6 +88,14 @@ hashes from the package index's JSON API, and regenerate `roles/stackstorm/files
    (`constraints/ci.txt`), `stackstorm_hnx_bootstrap` (`constraints/bootstrap.txt`);
    `stackstorm_events_endpoint` (`tls://...`), `stackstorm_events_ca_file`,
    `stackstorm_events_api_prefix` (the bridge account's import prefix, `JS.HNX.API` in the lab);
+   or, while the bus listens on loopback on its own host (role `events_bus` has no TLS listener),
+   the **bus forward**: `stackstorm_events_forward_enabled: true`, `stackstorm_events_endpoint`
+   `nats://<loopback>:<a free local port>` (the forward's end on this guest), `stackstorm_events_forward_host`,
+   `stackstorm_events_forward_host_key` (the bus host's public key line, pinned),
+   `stackstorm_events_forward_remote` (`<the bus's loopback address>:<port>`, as the bus host sees it)
+   and the key's secret (`stackstorm_events_forward_key_ref`); the bus host gets the matching login
+   in `events_bus_forward_logins` (its public key and this guest's address as `from`) and admits
+   SSH from this guest;
    `stackstorm_broker_host`, `stackstorm_broker_host_key` (the broker host's public key line,
    pinned), `stackstorm_broker_ssh_user`; `stackstorm_enabled_rules` (empty: all off);
    `stackstorm_operator_users` as wanted. The memory budget below is the default; the budget
@@ -167,6 +175,16 @@ it would have made (`result: shadow`, its `request_id` and `request_digest`) and
 compare it with the timer it replaces (docs/stackstorm.md, "Shadow, then live"). Going live is a
 **binding change in git** with a `promotion` entry (a shadow window of at least 7 days and parity
 evidence), then a re-render, a new pinned pack and this setting.
+
+**Tables.** A bound pack's `lookup` step reads a table the binding declares (`tables`): a file inside the
+action runner (docs/stackstorm.md, "Tables"). `stackstorm_table_mounts` puts each table's host directory there,
+read-only, at `/opt/hnx-tables/<name>`, and gives the runner the directory's group by number (`group_add`), e.g.
+`[{name: lab-checks, path: /var/lib/hnx-modules/lab-checks/results, group: hnx-lab-results}]` with lab-checks'
+`lab_checks_results_group: hnx-lab-results`. A directory, not a file (a writer that replaces its file would leave a
+file mount on the old copy). The role refuses a relative path, one outside `stackstorm_table_roots` (default
+`/var/lib/hnx-modules`, three parts or more), this module's own data root or anything nested with it, a name or
+directory twice; readiness refuses a missing directory (the engine would create it empty, as root) and a group that
+does not exist on the guest (deploy the module that writes the table first). Empty (the default): nothing is mounted.
 
 The RBAC the role applies (`[rbac] enable`): `st2admin` is `system_admin`. **`stanley`**, the user a
 rule runs executions as (no password, no token anyone holds), is **not**: it holds the custom role

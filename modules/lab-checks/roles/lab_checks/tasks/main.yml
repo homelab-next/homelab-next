@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+# a reference with no secret behind it is refused here, before any file is written
+- name: The secret resolves, in its form
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Create the directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: The results reader (only with reader keys)
+  ansible.builtin.include_tasks: reader.yml
+
+- name: Write the scripts, the register, the pager's configuration and the units
+  ansible.builtin.include_tasks: config.yml

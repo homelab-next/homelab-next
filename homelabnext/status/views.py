@@ -96,12 +96,18 @@ PAGE_PANELS = {
     "projects": "/projects",
     # the Orchestration page (homelabnext.orchestration.pages), with ``--orchestration DB``
     "orchestration": "/orchestration",
+    # the register pages (homelabnext.status.registers), served with ``--registers DIR``
+    "kanban": "/kanban",
+    "lessons": "/lessons",
+    "runbooks": "/runbooks",
+    "invariants": "/invariants",
 }
 STRATEGY_PANELS = frozenset({"strategy", "requirements", "objectives", "rfis"})
 MAP_PANELS = frozenset({"topology", "dataflow", "architecture", "roadmap"})
 DIRECTORY_PANELS = frozenset({"links", "schedule", "roster", "mcp-servers"})
 #: the pages :class:`homelabnext.status.maps.MapSite` serves and ``hnx status render`` writes
 GENERATED_PANELS = MAP_PANELS | DIRECTORY_PANELS
+REGISTER_PANELS = frozenset({"kanban", "lessons", "runbooks", "invariants"})
 PRIVATE_PANELS = frozenset({"agent-detail", "agent-access-log", "approvals"})
 PRIVATE_GROUP = "private"
 #: the TLP ceiling of each tier (ADR-0033 decision 8): anonymous readers of the public view and
@@ -122,6 +128,7 @@ WITHHELD_PANELS = (
         {"strategy", "requirements", "objectives", "rfis", "baselines", "projects", "orchestration"}
     )
     | GENERATED_PANELS
+    | REGISTER_PANELS
 )
 #: the routes of the withheld pages, and the maps' shared script: a route that is one of them
 #: or below one (``/orchestration/job``) is served only through the trusted front door
@@ -460,7 +467,10 @@ def _page_available(
     maps: frozenset[str] = frozenset(),
     projects: bool = False,
     orchestration: bool = False,
+    registers: bool = False,
 ) -> bool:
+    if panel in REGISTER_PANELS:
+        return registers
     if panel in GENERATED_PANELS:
         return panel in maps
     if panel in STRATEGY_PANELS:
@@ -490,6 +500,7 @@ def build_status(
     maps: Iterable[str] = (),
     projects: bool = False,
     orchestration: bool = False,
+    registers: bool = False,
 ) -> dict[str, Any]:
     """The ``status.json`` document (see the module docstring).  ``agents``: the summary tier's
     sessions (``{"sessions", "counts"}``) when an activity store is configured, else None.
@@ -498,7 +509,9 @@ def build_status(
     ``approvals``: the Approvals page is served (``agents.yml`` configures it);
     ``maps``: the map and directory panels whose inputs are configured (:mod:`homelabnext.status.maps`);
     ``projects``: the Projects page is served (a projects directory is configured);
-    ``orchestration``: the Orchestration page is served (a telemetry store is configured)."""
+    ``orchestration``: the Orchestration page is served (a telemetry store is configured);
+    ``registers``: the register pages (Kanban, Lessons, Runbooks, Invariants) are served (a
+    register directory is configured)."""
     if capability_pages is None:
         from homelabnext.conform.registry import CAPABILITIES
 
@@ -525,6 +538,7 @@ def build_status(
                     maps=served_maps,
                     projects=projects,
                     orchestration=orchestration,
+                    registers=registers,
                 ),
             }
             if v.get("group"):

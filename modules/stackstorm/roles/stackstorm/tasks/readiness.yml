@@ -10,6 +10,23 @@
       ansible.builtin.include_tasks: validate.yml
     - name: Every credential resolves in its form
       ansible.builtin.include_tasks: credentials.yml
+    - name: Each table directory is there (a missing one would be created empty, as root, by the engine)
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      loop: "{{ stackstorm_table_mounts }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: stackstorm_table_dirs
+    - name: The table directories are directories
+      vars:
+        _missing: >-
+          {{ stackstorm_table_dirs.results | default([])
+             | rejectattr('stat.isdir', 'true') | map(attribute='item.path') | list }}
+      ansible.builtin.assert:
+        that: _missing | length == 0
+        fail_msg: "stackstorm: table directory {{ _missing }} is missing or not a directory: deploy the module that writes it first"
+    - name: Each table group resolves on the guest
+      ansible.builtin.include_tasks: tables.yml
     - name: The rendered pack is there and shadow-first
       ansible.builtin.include_tasks: pack_check.yml
     - name: The wheel is where the pin says

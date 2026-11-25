@@ -52,3 +52,17 @@ compose_app_network_subnet: ""
 compose_app_boot_unit: false
 compose_app_unit_dir: /etc/systemd/system
 compose_app_systemctl_cli: systemctl
+# The scheduled, application-consistent database dump (tasks/export_timer.yml; ADR-0042 decision 2):
+# a timer per application dumps each PostgreSQL / MariaDB / MySQL service of the spec from inside
+# its container into compose_app_export_dir (read by the guest's image backup and the restore
+# drill). Opt-in, so a lab turns it on for every host in one group variable. Engines are found by
+# image name; compose_app_export_engines {service: postgres|mysql|none} overrides (none disables).
+compose_app_export_timer: false
+compose_app_export_engines: {}
+# 07:30 UTC is 01:30 to 02:30 in the lab's zone, before the 04:30 (America/Chicago) image backup
+compose_app_export_calendar: "*-*-* 07:30:00 UTC"
+compose_app_export_script: /usr/local/libexec/homelabnext/hnx-export-run
+compose_app_export_manifest: "{{ compose_app_dir }}/export-manifest.json"
+compose_app_export_last_run_dir: /var/lib/homelabnext/last-run
+compose_app_export_last_run_group: root
+compose_app_export_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

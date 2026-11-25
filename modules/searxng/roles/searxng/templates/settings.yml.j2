@@ -1,0 +1,27 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role searxng). Do not edit. This file holds the instance's secret key: 0600.
+# use_default_settings keeps the product's whole default engine set; only what is named below is
+# changed.
+use_default_settings: true
+general:
+  instance_name: {{ searxng_instance_name | to_json }}
+search:
+  safe_search: {{ searxng_safe_search | int }}
+  # json is required: the lab's callers ask /search?q=...&format=json
+  formats: [html, json]
+server:
+  secret_key: {{ searxng_secret_value | to_json }}
+  image_proxy: true
+  # the limiter needs a key-value store and blocks API callers: this is an internal service whose
+  # callers are programs, and the guest's firewall decides who may reach it
+  limiter: false
+  public_instance: false
+outgoing:
+  request_timeout: {{ searxng_request_timeout | float }}
+{% if searxng_engines_disabled | length > 0 %}
+engines:
+{% for name in searxng_engines_disabled %}
+  - name: {{ name | to_json }}
+    disabled: true
+{% endfor %}
+{% endif %}

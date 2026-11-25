@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Install the slot script and the feeder (the feeder runs on the trusted side; a copy here documents the pair)
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - {src: hnx_ci_slot.py, dest: "{{ ci_runner_slot_script }}"}
+    - {src: hnx_ci_feeder.py, dest: "{{ ci_runner_feeder_script }}"}
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Write the slot configuration
+  ansible.builtin.copy:
+    dest: "{{ ci_runner_slot_config }}"
+    owner: root
+    group: "{{ ci_runner_group }}"
+    mode: "0640"
+    content: "{{ {'data_root': ci_runner_data_root,
+                  'slots': ci_runner_slots | int,
+                  'vcpus': ci_runner_slot_vcpus | int,
+                  'memory_mb': ci_runner_slot_memory_mb | int,
+                  'disk_gb': ci_runner_slot_disk_gb | int,
+                  'job_timeout_s': ci_runner_job_timeout_s | int,
+                  'claim_wait_s': ci_runner_claim_wait_s | int,
+                  'console_keep_bytes': ci_runner_console_keep_bytes | int,
+                  'qemu': ci_runner_qemu,
+                  'qemu_img': ci_runner_qemu_img,
+                  'iso_tool': ci_runner_iso_tool} | to_nice_json }}\n"
+
+- name: Write the feed key, forced to the feed command (no shell, no forwarding, no terminal)
+  ansible.builtin.copy:
+    dest: "{{ ci_runner_data_root }}/feed/.ssh/authorized_keys"
+    owner: root
+    group: "{{ ci_runner_group }}"
+    mode: "0640"
+    content: >-
+      restrict,command="env HNX_CI_CONFIG={{ ci_runner_slot_config }} {{ ci_runner_slot_script }} feed"
+      {{ ci_runner_feed_pubkey }}
+
+- name: Write the egress table
+  ansible.builtin.template:
+    src: egress.nft.j2
+    dest: "{{ ci_runner_egress_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/nft -c -f %s
+  register: ci_runner_egress_written
+
+- name: Write the units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ ci_runner_unit_dir }}/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - {src: egress.service.j2, dest: "{{ ci_runner_egress_unit }}"}
+    - {src: slot.service.j2, dest: "{{ ci_runner_slot_unit }}"}
+  loop_control:
+    label: "{{ item.dest }}"
+  register: ci_runner_units
+# the slots read the script and the configuration afresh on every run (one job each), so a change
+# takes effect at each slot's next run and a running job is never interrupted
+
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: ci_runner_units is changed
+
+- name: Enable the egress table's unit and load the table now (before any VM can start)
+  ansible.builtin.systemd_service:
+    name: "{{ ci_runner_egress_unit }}"
+    state: started
+    enabled: true
+  when: not ansible_check_mode
+
+# the file replaces the table in one transaction (it never leaves the VMs without it)
+- name: Load a changed egress table
+  ansible.builtin.command:
+    argv: [/usr/sbin/nft, -f, "{{ ci_runner_egress_file }}"]
+  changed_when: true
+  when: ci_runner_egress_written is changed and not ansible_check_mode

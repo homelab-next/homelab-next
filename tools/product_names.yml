@@ -168,6 +168,34 @@ allow:
     reason: "the object-store provider module (modules/garage) names the lake's bucket (iceberg-warehouse: fixed, the table metadata embeds s3://iceberg-warehouse/ paths) and its two peer modules of the lake; the module's own product is its own"
   - path: "modules/iceberg-rest/**"
     reason: "the lake-catalog provider module (modules/iceberg-rest) names the object store it writes to and the query engine its conformance run needs, and the catalog name and warehouse the lake fixes (iceberg, s3://iceberg-warehouse/)"
+  - path: "modules/lakekeeper/**"
+    reason: "the second lake-catalog provider module (modules/lakekeeper, the architecture's catalog) names the object store it writes to, the query engine its conformance run needs and the catalog name the lake fixes (iceberg), and the earlier catalog it takes tables over from (its README)"
+  - path: "tests/modules/test_lakekeeper_module.py"
+    reason: "the tests of the lakekeeper provider module: its manifest, its target and an overlay that selects it in place of the other lake-catalog provider, by the module ids, which are the products' names"
+  - path: "tests/roles/test_lakekeeper_role.py"
+    reason: "the tests of the lakekeeper role (modules/lakekeeper/roles/lakekeeper), named for the module id as a module role must be (role:<module id>), against a stand-in for the catalog's own API"
+  - path: "tools/migrate/catalog_register.py"
+    reason: "registers one lake catalog's tables into another by their metadata files: it reads the earlier catalog's SQLite schema (its table is named for the product) and speaks the Iceberg REST API, the product-specific migration step of the lake's catalog move"
+  - path: "tools/tests/test_catalog_register.py"
+    reason: "the tests of tools/migrate/catalog_register.py against a stand-in for the two catalog APIs, and a SQLite file in the earlier catalog's schema"
+  - path: "ansible/roles/open_webui/tasks/app.yml"
+    products: [searxng]
+    reason: "Open WebUI's own web-search settings for the lab's metasearch service: the engine value it reads (WEB_SEARCH_ENGINE) and the setting that carries its query URL are named for the product in the pinned release (the web-search provider module modules/searxng makes the name a linted product; these lines were added by #637 before it)"
+  - path: "ansible/roles/open_webui/vars/main.yml"
+    products: [searxng]
+    reason: "the reserved-name pattern refuses every Open WebUI setting that calls out of the lab, including the product-named web-search settings (the web-search provider module modules/searxng makes the name a linted product; this file was counted debt before it)"
+  - path: "tests/roles/test_serving_roles.py"
+    products: [searxng]
+    reason: "a refused extra setting of the open_webui role named for the product, proving the reserved-name pattern (the web-search provider module modules/searxng makes the name a linted product; this file was counted debt before it)"
+  - path: "schemas/platform/**"
+    products: [lakekeeper]
+    reason: "the registry row schema's examples and negative fixtures name the lake's catalog as the impl of a lake-catalog row (the lakekeeper provider module makes the name a linted product; these files were counted debt before it)"
+  - path: "homelabnext/swap/rehearsal.py"
+    products: [lakekeeper]
+    reason: "the swap rehearsal's candidate adapter id names the lake pair it rehearses (the lakekeeper provider module makes the name a linted product; this file was counted debt before it)"
+  - path: "tests/generators/fixtures/inj-owner.services.yml"
+    products: [lakekeeper]
+    reason: "a generator injection fixture's service row names the lake's catalog as its impl (the lakekeeper provider module makes the name a linted product; this file was counted debt before it)"
   - path: "modules/trino/**"
     reason: "the lake-query provider module (modules/trino) names the catalog name the lake fixes (iceberg: the lake's writers say iceberg.<schema>.<table>), the object store and the catalog it talks to, and the retention procedures the engine's Iceberg connector defines"
   - path: "tests/modules/test_lake_modules.py"
@@ -186,7 +214,7 @@ allow:
   - path: "compose/lab-in-a-box/config/garage.toml"
     reason: "the lab-in-a-box's object store configuration (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
   - path: "compose/lab-in-a-box/docker-compose.yml"
-    products: [garage]
+    products: [garage, lakekeeper]
     reason: "the lab-in-a-box's compose stack runs Garage as its object store (image pinned by digest, its settings, its aliases) (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
   - path: "tests/agent/test_agent_knowledge.py"
     products: [garage]
@@ -203,7 +231,7 @@ allow:
   - path: "tests/conform/test_s3_adapter.py"
     reason: "the S3 adapter's tests against a fake of the product's signature behaviour (v1 and v2) (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
   - path: "tests/graph/test_graph.py"
-    products: [garage]
+    products: [garage, lakekeeper]
     reason: "the knowledge graph's image-to-product mapping, whose examples are the lab's images (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
   - path: "tests/modules/test_prometheus_module.py"
     reason: "the tests of the metrics provider module (modules/prometheus): its manifest, adapter and an overlay that selects it, by the module's id, which is its product's name"

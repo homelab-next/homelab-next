@@ -80,6 +80,16 @@ gitea_fixed_env:
   GITEA__packages__ENABLED: "true"
   GITEA__mailer__ENABLED: "false"
   GITEA__cron_0X2E_update_checker__ENABLED: "false"
+  # git's own housekeeping, bounded (hermes-vault, 838 MiB of loose objects, was repacked by the
+  # `git gc --auto` of every receive-pack: an unbounded pack-objects, throttled at the slice's
+  # MemoryHigh for 8 h while it starved the web worker). gc.auto=0 keeps gc out of the push path,
+  # Gitea's own scheduled repository GC (cron.git_gc_repos) does it, one thread and bounded delta
+  # memory, with a timeout long enough for a big repository (the default 60 s kills it).
+  GITEA__git_0X2E_config__gc_0X2E_auto: "0"
+  GITEA__git_0X2E_config__pack_0X2E_threads: "1"
+  GITEA__git_0X2E_config__pack_0X2E_windowMemory: 256m
+  GITEA__git_0X2E_config__pack_0X2E_deltaCacheSize: 128m
+  GITEA__git_0X2E_timeout__GC: "3600"
   GITEA__other__SHOW_FOOTER_VERSION: "false"
 # the [oauth2_client] section: no automatic registration, and an account is linked only by signing in to it
 gitea_oauth_client_settings:

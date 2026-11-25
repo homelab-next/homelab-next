@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# The endpoint-forensics client baseline control (modules/velociraptor): the pinned release binary,
+# the client configuration the SERVER generated (it carries the server's certificate authority and
+# dial addresses; nothing is written by hand), and a systemd unit. One enrolment per host.
+# velociraptor_client_logical_id (required): the registry id of the forensics server this client
+#   belongs to, e.g. endpoint-forensics
+# The configuration comes from the secret store by reference (the operator stores the file the
+# server's role wrote to client/client.config.yaml); a controller-side file may be given instead.
+velociraptor_client_config_ref: secret:velociraptor/client-config
+# a path on the controller of a client configuration file: used INSTEAD of the reference when set
+velociraptor_client_config_file: ""
+# the release the binary is, which must be the server image's release; its sha256 is pinned in
+# vars/main.yml and a release without a pin is refused
+velociraptor_client_version: "0.77.1"
+velociraptor_client_release_repository: "https://github.com/Velocidex/velociraptor/releases/download"
+# a path on the controller of the release binary (a host with no route to the release site, or a
+# lab that keeps its own copy): used INSTEAD of fetching it, and still held to the pinned sha256
+velociraptor_client_binary_src: ""
+# where the controller keeps the binary it fetched (the hosts fetch nothing: this module's
+# endpoint role declares no egress)
+velociraptor_client_controller_cache: /var/tmp/hnx-velociraptor
+# the owner of the binary, the configuration directory and the configuration (root: the client runs as root)
+velociraptor_client_owner: root
+velociraptor_client_group: root
+velociraptor_client_install_path: /usr/local/bin/velociraptor
+velociraptor_client_config_dir: /etc/velociraptor
+# the client's identity file, when the host already runs another client (a migration: two clients must
+# never share one) or the default (/etc/velociraptor.writeback.yaml) is wrong for the host; empty: the
+# server-generated configuration's own value is kept
+velociraptor_client_writeback: ""
+velociraptor_client_start: true
+# seconds to wait, after the start, for the client to enrol (its identity file appears)
+velociraptor_client_ready_timeout: 120
+# the unit's name: a host that still runs another client (a migration) gives this one its own
+velociraptor_client_service: velociraptor-client
+velociraptor_client_systemctl_cli: systemctl
+velociraptor_client_unit_dir: /etc/systemd/system
+# The server's own sighting of this client (the identity file is written before the client ever
+# reaches a server, so on its own it proves nothing): the server host's inventory name; when set,
+# the role asks the server (delegated, the server role's script) whether it lists this client and
+# saw it within velociraptor_client_seen_max_age_s, and fails otherwise. Empty: not asked.
+velociraptor_client_server_host: ""
+velociraptor_client_server_script: /usr/local/libexec/homelabnext/hnx-velociraptor
+velociraptor_client_server_script_config: /etc/homelabnext/velociraptor.json
+velociraptor_client_seen_max_age_s: 300

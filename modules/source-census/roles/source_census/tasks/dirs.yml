@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: The service group
+  ansible.builtin.group:
+    name: "{{ source_census_group }}"
+    system: true
+
+- name: The service user (no login, no home)
+  ansible.builtin.user:
+    name: "{{ source_census_user }}"
+    group: "{{ source_census_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: The directories (the state is the service user's alone)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ source_census_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ source_census_root }}", owner: "{{ source_census_root_owner }}", mode: "0755"}
+    - {path: "{{ source_census_state_dir }}", owner: "{{ source_census_user }}", mode: "0750"}
+    - {path: "{{ source_census_config_dir }}", owner: "{{ source_census_root_owner }}", mode: "0755"}
+    - {path: "{{ source_census_cred_dir }}", owner: "{{ source_census_user }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"

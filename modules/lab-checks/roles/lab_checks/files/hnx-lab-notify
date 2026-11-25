@@ -1,0 +1,72 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: lab-checks-notify
+#   kind: tool
+#   purpose: Publish one page (title, body) from the invariants runner to the notify service's topic, with the publish token read from an owner-only file.
+#   owner: platform
+#   trigger: [role:lab_checks]
+#   inputs: "--config FILE TITLE BODY (the config is JSON: url, topic, token_file)"
+#   outputs: one POST to <url>/<topic>
+#   exit:
+#     "0": the notify service accepted the message
+#     "1": it did not (the runner then keeps the state and retries next run)
+#     "2": bad arguments or configuration
+"""The page sender of module lab-checks.  ``hnx invariants run --notify-cmd`` calls it with the title and
+body as the last two arguments; it exits non-zero when the page could not be delivered, so the runner
+keeps its state and the page is retried on the next run instead of being lost."""
+
+from __future__ import annotations
+
+import json
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def send(cfg: dict, title: str, body: str, opener=urllib.request.urlopen) -> None:
+    with open(cfg["token_file"], encoding="utf-8") as f:
+        token = f.read().strip()
+    broken = "broken" in title.lower()
+    url = cfg["url"].rstrip("/") + "/" + urllib.parse.quote(cfg["topic"], safe="")
+    req = urllib.request.Request(
+        url,
+        data=body.encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": "Bearer " + token,
+            "Title": title.encode("ascii", "replace").decode("ascii"),
+            "Priority": "4" if broken else "3",
+            "Tags": "rotating_light" if broken else "white_check_mark",
+        },
+    )
+    with opener(req, timeout=20) as r:
+        if not 200 <= r.status < 300:
+            raise OSError(f"notify answered HTTP {r.status}")
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 4 or argv[0] != "--config":
+        print("usage: hnx-lab-notify --config FILE TITLE BODY", file=sys.stderr)
+        return 2
+    try:
+        with open(argv[1], encoding="utf-8") as f:
+            cfg = json.load(f)
+        if not all(isinstance(cfg.get(k), str) and cfg[k] for k in ("url", "topic", "token_file")):
+            raise ValueError("url, topic and token_file are required")
+        if urllib.parse.urlsplit(cfg["url"]).scheme not in ("http", "https"):
+            raise ValueError("url is not http(s)")
+    except (OSError, ValueError) as e:
+        print(f"hnx-lab-notify: bad configuration ({type(e).__name__})", file=sys.stderr)
+        return 2
+    try:
+        send(cfg, argv[2], argv[3])
+    except (OSError, urllib.error.URLError) as e:
+        print(f"hnx-lab-notify: not delivered ({type(e).__name__})", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

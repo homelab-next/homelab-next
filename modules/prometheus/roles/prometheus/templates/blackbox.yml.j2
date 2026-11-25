@@ -1,0 +1,57 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role prometheus); local changes are overwritten.
+# The probe modules the generated probe targets name. http_edge: any answer the edge itself gives
+# is up (a login redirect, a refusal), a 5xx or no answer is down; no redirect is followed, so the
+# probe never reaches the sign-in page's own host. http_2xx: a service's own health endpoint
+# answering with a 2xx status. Certificates are always verified (against the system roots, plus the
+# lab CA when prometheus_probe_ca_ref names one).
+modules:
+  http_edge:
+    prober: http
+    timeout: {{ prometheus_probe_timeout }}
+    http:
+      method: GET
+      no_follow_redirects: true
+      valid_status_codes: [200, 201, 202, 203, 204, 206, 301, 302, 303, 304, 307, 308, 401, 403]
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+{% if prometheus_probe_ca_ref != '' %}
+      tls_config:
+        ca_file: {{ prometheus_container_blackbox_dir }}/probe-ca.pem
+{% endif %}
+  http_2xx:
+    prober: http
+    timeout: {{ prometheus_probe_timeout }}
+    http:
+      method: GET
+      valid_status_codes: []
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+{% if prometheus_probe_ca_ref != '' %}
+      tls_config:
+        ca_file: {{ prometheus_container_blackbox_dir }}/probe-ca.pem
+{% endif %}
+{% if prometheus_llm_probes_on | bool %}
+{% for r in prometheus_llm_probe_roles %}
+  # a one-token chat completion of model role {{ r }} through the gateway: 200 with a choices list is up
+  {{ 'llm_' ~ r | replace('-', '_') }}:
+    prober: http
+    timeout: {{ prometheus_llm_probe_timeout[:-1] | int - 5 }}s
+    http:
+      method: POST
+      headers:
+        Content-Type: application/json
+      body: {{ {'model': r, 'messages': [{'role': 'user', 'content': 'Reply with the single word OK.'}], 'max_tokens': 1, 'stream': false} | to_json | to_json }}
+      valid_status_codes: [200]
+      fail_if_body_not_matches_regexp: ['"choices"']
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+      authorization:
+        type: Bearer
+        credentials_file: {{ prometheus_container_probe_auth_dir }}/gateway-key
+{% if prometheus_probe_ca_ref != '' %}
+      tls_config:
+        ca_file: {{ prometheus_container_blackbox_dir }}/probe-ca.pem
+{% endif %}
+{% endfor %}
+{% endif %}

@@ -293,6 +293,15 @@ def probe(
                         break
                     data += chunk
             except (ssl.SSLError, OSError) as exc:
+                if not data and isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+                    # TLS 1.3 finishes the client's handshake before the server judges the client
+                    # certificate, so the hub's alert can arrive after the send that failed: read
+                    # it from the socket (it stays queued after the peer's reset) before judging
+                    try:
+                        tls.recv(1)
+                    except (ssl.SSLError, OSError) as later:
+                        if _alerted(later):
+                            exc = later
                 if _alerted(exc) and not data:
                     return _refused(with_cert, exc)
                 return ProbeResult(False, "closed", f"closed without an alert: {_why(exc)}")

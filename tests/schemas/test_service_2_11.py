@@ -19,10 +19,13 @@ FROZEN_210 = json.loads((ROOT / "schemas/_frozen/2.10/platform/service.json").re
 DOC = yaml.safe_load((ROOT / "examples/services.yml").read_text())
 
 
+FROZEN_211 = json.loads((ROOT / "schemas/_frozen/2.11/platform/service.json").read_text())
+
+
 def test_version_is_2_11_frozen_and_additive():
-    assert CURRENT["$id"].endswith("/platform/service/2.11")
-    assert json.loads((ROOT / "schemas/_frozen/2.11/platform/service.json").read_text()) == CURRENT
-    assert sc.is_additive(FROZEN_210, CURRENT) == []
+    assert FROZEN_211["$id"].endswith("/platform/service/2.11")
+    assert sc.is_additive(FROZEN_210, FROZEN_211) == []
+    assert sc.is_additive(FROZEN_211, CURRENT) == []
 
 
 def test_metrics_scheme_and_auth_are_retained_by_the_model():

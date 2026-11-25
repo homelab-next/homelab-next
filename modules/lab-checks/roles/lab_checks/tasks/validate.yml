@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# Refuse a bad input before anything is read or written: the names that end up in unit names and
+# paths are checked here, so no later task has to trust them.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - lab_checks_logical_id is match('^[a-z][a-z0-9-]{0,30}\Z')
+      - lab_checks_register_src is match('^/.+')
+      - lab_checks_notify_id is match('^[a-z][a-z0-9-]{0,62}\Z')
+      - lab_checks_notify_topic is match('^[A-Za-z0-9_-]{1,64}\Z')
+      - lab_checks_notify_publisher_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - lab_checks_ca_ref == '' or lab_checks_ca_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - lab_checks_notify_ceiling in ['clear', 'green', 'amber', 'red']
+      - lab_checks_oncalendar is match('^[A-Za-z0-9 *:/,.-]{3,80} UTC\Z')
+      - lab_checks_max_runtime_s | int >= 60
+      - lab_checks_results_max_age_s | int >= 60
+      - lab_checks_results_group == '' or lab_checks_results_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - lab_checks_results_group not in ['root', lab_checks_owner_group]
+      - >-
+        [lab_checks_config_dir, lab_checks_data_root, lab_checks_bin_dir, lab_checks_hnx_bin]
+        | reject('match', '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z') | list | length == 0
+      - lab_checks_results_readers is sequence and lab_checks_results_readers is not string
+      - lab_checks_results_readers | select('match', '^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ssh-rsa) [A-Za-z0-9+/]{40,}={0,3}( [A-Za-z0-9@._-]{1,64})?\Z') | list | length == lab_checks_results_readers | length
+      - lab_checks_results_reader_from | select('match', '^[0-9a-f.:/]{2,49}\Z') | list | length == lab_checks_results_reader_from | length
+      - lab_checks_reader_user is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - lab_checks_reader_ssh_group == '' or lab_checks_reader_ssh_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - lab_checks_reader_home is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z')
+    fail_msg: >-
+      lab-checks: an input is invalid (the instance id, the register's path, the notify id, topic and
+      secret reference, the ceiling, a calendar with an explicit UTC, the caps, the reader keys, addresses and
+      account, absolute paths of at least two components and the optional results reader group, never root or
+      the owner's, are all checked)
+  tags: [readiness, health, upgrade]

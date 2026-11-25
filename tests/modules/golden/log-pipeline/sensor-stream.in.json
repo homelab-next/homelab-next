@@ -1,0 +1,92 @@
+[
+  {
+    "alert": {
+      "metadata": {
+        "signature_severity": [
+          "Informational"
+        ]
+      },
+      "severity": 1,
+      "signature": "EX policy cleartext pin",
+      "signature_id": 2100001
+    },
+    "dest_ip": "203.0.113.5",
+    "dest_port": 443,
+    "event_type": "alert",
+    "proto": "TCP",
+    "src_ip": "198.51.100.130",
+    "src_port": 40000,
+    "timestamp": "2026-11-22T10:20:00.123456+0000"
+  },
+  {
+    "alert": {
+      "metadata": {
+        "signature_severity": [
+          "Major"
+        ]
+      },
+      "severity": 3,
+      "signature": "EX exploit attempt",
+      "signature_id": 2100002
+    },
+    "dest_ip": "203.0.113.6",
+    "dest_port": 80,
+    "event_type": "alert",
+    "proto": "TCP",
+    "src_ip": "198.51.100.40",
+    "src_port": 41000,
+    "timestamp": "2026-11-22T10:20:01.000000+0000"
+  },
+  {
+    "alert": {
+      "severity": 2,
+      "signature": "EX scan",
+      "signature_id": 2100003
+    },
+    "dest_ip": "203.0.113.6",
+    "event_type": "alert",
+    "src_ip": "198.51.100.40",
+    "timestamp": "2026-11-22T10:20:02.000000+0000"
+  },
+  {
+    "answers": [
+      "203.0.113.80"
+    ],
+    "id.orig_h": "198.51.100.130",
+    "id.orig_p": 53211,
+    "id.resp_h": "203.0.113.53",
+    "id.resp_p": 53,
+    "proto": "udp",
+    "qtype_name": "A",
+    "query": "example.invalid",
+    "rcode": 0,
+    "ts": 1795390802.5,
+    "uid": "Cabc123"
+  },
+  {
+    "conn_state": "SF",
+    "duration": 1.5,
+    "id.orig_h": "198.51.100.130",
+    "id.orig_p": 53212,
+    "id.resp_h": "203.0.113.80",
+    "id.resp_p": 443,
+    "orig_bytes": 512,
+    "proto": "tcp",
+    "resp_bytes": 2048,
+    "ts": 1795390803.0,
+    "uid": "Cdef456"
+  },
+  {
+    "host": "example.invalid",
+    "id.orig_h": "198.51.100.40",
+    "id.orig_p": 53213,
+    "id.resp_h": "203.0.113.81",
+    "id.resp_p": 80,
+    "method": "GET",
+    "status_code": 200,
+    "ts": 1795390804.0,
+    "uid": "Cghi789",
+    "uri": "/index",
+    "user_agent": "example-agent"
+  }
+]

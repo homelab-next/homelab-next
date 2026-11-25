@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the read-only lake MCP server on the guest the site placed the module's `server`
+# role on. Needs the runtime release with the mcp extra (role hnx_runtime) on the guest.
+#   ansible-playbook -i <inventory with --selection> modules/lake-mcp/playbooks/install.yml
+- name: Install the lake MCP server
+  hosts: mod_lake_mcp_server
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: lake_mcp
+        tasks_from: readiness
+      tags: [mod_lake_mcp]
+  roles:
+    - role: lake_mcp
+      tags: [mod_lake_mcp]

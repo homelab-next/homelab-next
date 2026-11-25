@@ -53,8 +53,27 @@
     owner: root
     group: "{{ status_hub_group }}"
     mode: "0640"
-  loop: [agents, views]
+  loop: "{{ ['agents'] if status_hub_views_file | length > 0 else ['agents', 'views'] }}"
   register: status_hub_config
+
+- name: Install the lab's own views (replacing the built-in menu)
+  ansible.builtin.copy:
+    src: "{{ status_hub_views_file }}"
+    dest: "{{ status_hub_config_dir }}/views.yml"
+    owner: root
+    group: "{{ status_hub_group }}"
+    mode: "0640"
+  register: status_hub_views_installed
+  when: status_hub_views_file | length > 0
+
+- name: Create the register files' directory
+  ansible.builtin.file:
+    path: "{{ status_hub_registers_dir }}"
+    state: directory
+    owner: root
+    group: "{{ status_hub_group }}"
+    mode: "0750"
+  when: status_hub_registers_dir | length > 0
 
 - name: Check the views against their schema and the registry
   ansible.builtin.command:
@@ -126,6 +145,7 @@
     state: >-
       {{ 'restarted' if (status_hub_unit is changed or status_hub_registry_file is changed
          or status_hub_config is changed or status_hub_env is changed
+         or (status_hub_views_installed is defined and status_hub_views_installed is changed)
          or status_hub_tls_files is changed) else 'started' }}
   when: status_hub_start | bool
 
@@ -152,3 +172,7 @@
 - name: Check the TLS listener (refused without a client certificate)
   ansible.builtin.include_tasks: tls_probe.yml
   when: status_hub_start | bool and status_hub_tls | bool
+
+- name: Collect the registered status sources (a timer; state.json for the hub to read)
+  ansible.builtin.include_tasks: collect.yml
+  when: status_hub_collect | bool

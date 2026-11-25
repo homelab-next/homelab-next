@@ -1,0 +1,17 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role restore_drill); local changes are overwritten.
+[Unit]
+Description=Restore drill: one guest from one copy, restored to scratch, checked and destroyed (ADR-0042)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ restore_drill_last_run_dir }} --group {{ restore_drill_last_run_group }} --job timer:restore_drill/drill --unit %n --calendar "{{ restore_drill_timer_calendar }}" --delay 600
+# the path is literal (what the script catalog checks); restore_drill_cli is where the role installs it
+ExecStart=/usr/local/sbin/hnx-restore-drill --config {{ restore_drill_config_file }} rotate
+# restoring a large image and checking it is slow; nothing here has a wall-clock deadline but a runaway
+TimeoutStartSec=8h
+Nice=10
+IOSchedulingClass=idle
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ restore_drill_last_run_dir }} --group {{ restore_drill_last_run_group }} --job timer:restore_drill/drill --unit %n --calendar "{{ restore_drill_timer_calendar }}" --delay 600

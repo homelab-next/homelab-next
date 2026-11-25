@@ -265,12 +265,98 @@ func (cl *call) urlPart() string {
 		if json.Unmarshal(cl.body[k], &v) != nil {
 			continue
 		}
+		if k == "tools" || k == "functions" {
+			v = withoutToolSchemas(v)
+		}
 		if found = findURLPart(v); found != "" {
 			break
 		}
 	}
 	cl.urlParts = &found
 	return found
+}
+
+// withoutToolSchemas returns the tools / functions list with each tool's JSON Schema
+// (function.parameters, or parameters directly) taken out and checked separately: a schema
+// names parameters, so a parameter called url is a name the model fills in, not something a
+// backend fetches (docs/gateway.md). The rest of every tool is returned for the normal scan.
+// A schema that fails schemaCarriesURL is kept in the result so the normal scan refuses it.
+func withoutToolSchemas(v any) any {
+	list, ok := v.([]any)
+	if !ok {
+		return v
+	}
+	out := make([]any, 0, len(list))
+	for _, it := range list {
+		out = append(out, stripSchema(it, true))
+	}
+	return out
+}
+
+func stripSchema(it any, descend bool) any {
+	m, ok := it.(map[string]any)
+	if !ok {
+		return it
+	}
+	cp := make(map[string]any, len(m))
+	for k, x := range m {
+		switch {
+		case k == "parameters" && !schemaCarriesURL(x):
+			// exempt: only names of parameters, no URL value anywhere in it
+		case k == "function" && descend:
+			cp[k] = stripSchema(x, false)
+		default:
+			cp[k] = x
+		}
+	}
+	return cp
+}
+
+// schemaKeyMaps are the schema keywords whose object keys are NAMES (of parameters or of
+// definitions), the only place a key called url is allowed.
+var schemaKeyMaps = map[string]bool{"properties": true, "patternProperties": true, "$defs": true, "definitions": true, "dependentSchemas": true}
+
+// schemaCarriesURL reports whether a JSON Schema holds a URL anywhere but as a parameter
+// name: a url key outside a name map, or any value-carrying keyword (default, enum, const,
+// examples, ...) whose value contains a url key or a URL-typed part.
+func schemaCarriesURL(v any) bool {
+	switch v := v.(type) {
+	case map[string]any:
+		for k, x := range v {
+			if schemaKeyMaps[k] {
+				names, ok := x.(map[string]any)
+				if !ok {
+					return true
+				}
+				for _, sub := range names {
+					if schemaCarriesURL(sub) {
+						return true
+					}
+				}
+				continue
+			}
+			if k == "url" || strings.HasSuffix(k, "_url") {
+				return true
+			}
+			switch k {
+			case "default", "enum", "const", "examples", "example":
+				if findURLPart(x) != "" || hasURLField(x) {
+					return true
+				}
+			default:
+				if schemaCarriesURL(x) {
+					return true
+				}
+			}
+		}
+	case []any:
+		for _, x := range v {
+			if schemaCarriesURL(x) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // findURLPart looks through v (a part, or lists of them) for a URL-bearing part.

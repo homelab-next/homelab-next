@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# The lab's continuous checks as one module role (modules/lab-checks): the site's invariants register, an
+# hourly unit that runs it with `hnx invariants run`, a state-diffed page to the notify service when a criterion
+# is NEWLY red (and once when it recovers), and the read-only probes the criteria use. Nothing here is a lab
+# value: the register, the notify instance and the secret are the site's.
+# lab_checks_logical_id (required): the instance id, e.g. lab-checks
+# lab_checks_register_src (required): a file on the controller, the site's invariants register (YAML)
+lab_checks_notify_id: notify
+lab_checks_notify_topic: lab-checks
+lab_checks_notify_publisher_ref: secret:lab-checks/notify-token
+# a page carries criterion evidence (lab data, red by default); the channel is only the operators'
+# an optional CA certificate (PEM, public) the probes verify internal TLS services with, written to <config dir>/ca.pem
+# (empty: no file; a probe of an internal TLS service then names no --ca and uses the system roots)
+lab_checks_ca_ref: ''
+lab_checks_notify_ceiling: red
+lab_checks_notify_allow_plain_http: false
+lab_checks_config_dir: "/etc/hnx/{{ lab_checks_logical_id }}"
+# the module's data root (docs/modules/data.md): results/ and state/ (both derived, nothing to restore)
+lab_checks_data_root: "/var/lib/hnx-modules/{{ lab_checks_logical_id }}"
+lab_checks_bin_dir: /usr/local/libexec/homelabnext
+lab_checks_owner: root
+lab_checks_owner_group: root
+# Opt-in: a host group that may READ the results document (e.g. a workflow engine's action runner that
+# looks the criteria up). Empty (the default): the results stay root's, 0600. Set: the role creates the
+# group (a system group), the results directory becomes root:<group> 02750 (new files inherit the group),
+# the run's umask lets the group read (0027) and the document is root:<group> 0640. Nothing else is shared.
+lab_checks_results_group: ''
+# a calendar, never an interval (LL-041); hourly, off the hour so the checks do not all land with every other timer
+lab_checks_oncalendar: "*-*-* *:07:00 UTC"
+lab_checks_max_runtime_s: 900
+# health: the results document must be younger than this many seconds (two missed runs)
+lab_checks_results_max_age_s: 7800
+lab_checks_start: true
+lab_checks_unit_dir: /etc/systemd/system
+lab_checks_systemctl_cli: systemctl
+lab_checks_health_timeout: 10
+lab_checks_last_run_dir: /var/lib/homelabnext/last-run
+lab_checks_last_run_group: root
+lab_checks_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
+# restore: the directory a prior export wrote
+lab_checks_restore_source: ""
+# The results reader (ADR-0049 decision 7, "The results transport"): the public keys (type, base64, an optional comment)
+# that may fetch the last results document over SSH, e.g. the status hub's pull key. Each is installed with `restrict` and a
+# forced command that prints that one file, read-only; the account has a locked password and reads a copy the unit publishes
+# after every run (group-readable to the account alone). Empty: no account, no copy, nothing changes.
+lab_checks_results_readers: []
+# the client addresses each reader key is accepted from (sshd `from=`; empty: any address the guest firewall admits)
+lab_checks_results_reader_from: []
+lab_checks_reader_user: hnx-lab-results
+# the group sshd allows (role ssh_hardening's AllowGroups) the account joins; empty: none
+lab_checks_reader_ssh_group: hnx-ssh
+lab_checks_reader_home: /var/lib/hnx-lab-results

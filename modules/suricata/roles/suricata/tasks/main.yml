@@ -1,0 +1,162 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install and converge the sensor. Order matters and is the safety design:
+#   package -> configuration written (the previous copy kept) -> rules -> HOME_NET generated and
+#   tested by suricata_enroll (a staged copy of the whole configuration, suricata -T) -> a final
+#   suricata -T of the live configuration, the deploy gate (LL-281: a ruleset that does not load
+#   leaves a sensor that looks up and sees nothing) -> only then the service is started or restarted.
+# A failed gate restores the previous configuration and stops the run; the running sensor is untouched.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Preflight the capture interfaces and the guest list
+  ansible.builtin.include_tasks: readiness.yml
+
+- name: Install the pinned package and the rule updater
+  ansible.builtin.apt:
+    name:
+      - "suricata={{ suricata_package_version }}"
+      - suricata-update
+      - logrotate
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: suricata_install_packages | bool
+
+- name: Create the log and rule directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: ["{{ suricata_log_dir }}", "{{ suricata_lib_dir }}"]
+
+- name: Is the sensor running now
+  ansible.builtin.command:
+    argv: ["{{ suricata_systemctl_cli }}", is-active, --quiet, suricata.service]
+  register: suricata_was_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: suricata_service_manage | bool
+
+- name: Is there a configuration already
+  ansible.builtin.stat:
+    path: "{{ suricata_config_dir }}/{{ suricata_config_file }}"
+  register: suricata_prev
+
+- name: Would the configuration change
+  ansible.builtin.template:
+    src: suricata.yaml.j2
+    dest: "{{ suricata_config_dir }}/{{ suricata_config_file }}"
+    mode: "0644"
+  check_mode: true
+  register: suricata_conf_would
+
+- name: Keep the previous configuration to restore if the gate fails (only when it is about to change)
+  ansible.builtin.copy:
+    src: "{{ suricata_config_dir }}/{{ suricata_config_file }}"
+    dest: "{{ suricata_config_dir }}/{{ suricata_config_file }}.hnx-prev"
+    remote_src: true
+    mode: "0644"
+  when: suricata_prev.stat.exists and suricata_conf_would is changed
+
+- name: Render the configuration
+  ansible.builtin.template:
+    src: suricata.yaml.j2
+    dest: "{{ suricata_config_dir }}/{{ suricata_config_file }}"
+    mode: "0644"
+  register: suricata_conf
+
+- name: Rules, HOME_NET and the gate
+  block:
+    # The configuration includes the address-groups file suricata_enroll writes, and suricata-update
+    # reads (and tests) the whole configuration before it fetches: on a first install that file does
+    # not exist yet and the fetch fails. A placeholder is written when the file is missing (or is
+    # still an earlier placeholder), with every standard group the rules name (a rule naming an
+    # undefined group fails the load); suricata_enroll replaces it with the real HOME_NET before the
+    # gate, and the service is never started on it. A real file is never touched.
+    - name: Look for the address-groups include
+      ansible.builtin.stat:
+        path: "{{ suricata_config_dir }}/{{ suricata_groups_file }}"
+      register: suricata_groups_now
+
+    - name: Read it, to tell a placeholder from the real file
+      ansible.builtin.slurp:
+        src: "{{ suricata_config_dir }}/{{ suricata_groups_file }}"
+      register: suricata_groups_text
+      when: suricata_groups_now.stat.exists
+
+    - name: A placeholder address-groups include on a first install (replaced by suricata_enroll before the gate)
+      ansible.builtin.copy:
+        dest: "{{ suricata_config_dir }}/{{ suricata_groups_file }}"
+        content: |
+          %YAML 1.1
+          ---
+          # placeholder (role suricata, first install): suricata_enroll replaces this file before the deploy gate
+          HOME_NET: "[::1]"
+          {% for name, value in suricata_placeholder_groups | dictsort %}
+          {{ name }}: {{ value | to_json }}
+          {% endfor %}
+        mode: "0644"
+      vars:
+        suricata_placeholder_groups: >-
+          {{ (lookup('ansible.builtin.file', role_path ~ '/../../../../ansible/roles/suricata_enroll/vars/main.yml')
+              | from_yaml).suricata_enroll_standard_groups }}
+      when: >-
+        not suricata_groups_now.stat.exists
+        or (suricata_groups_text.content | b64decode) is search('placeholder \\(role suricata, first install\\)')
+
+    - name: Enable the rule sources and fetch the rules
+      ansible.builtin.include_tasks: rules.yml
+
+    - name: Generate HOME_NET from the enrolled guests (tested with the whole configuration)
+      ansible.builtin.include_role:
+        name: suricata_enroll
+      vars:
+        suricata_enroll_guests: "{{ suricata_guests }}"
+        suricata_enroll_config_dir: "{{ suricata_config_dir }}"
+        suricata_enroll_config_file: "{{ suricata_config_file }}"
+        suricata_enroll_groups_file: "{{ suricata_groups_file }}"
+        suricata_enroll_suricata_cli: "{{ suricata_cli }}"
+        suricata_enroll_suricatasc_cli: "{{ suricata_suricatasc_cli }}"
+        suricata_enroll_reload: "{{ (suricata_reload | bool) and (suricata_was_active.rc | default(1)) == 0 and suricata_conf is not changed }}"
+
+    - name: The deploy gate, a full load of the live configuration and ruleset (suricata -T)
+      ansible.builtin.command:
+        argv: ["{{ suricata_cli }}", -T, -c, "{{ suricata_config_dir }}/{{ suricata_config_file }}"]
+      changed_when: false
+      check_mode: false
+  rescue:
+    - name: Restore the previous configuration
+      ansible.builtin.copy:
+        src: "{{ suricata_config_dir }}/{{ suricata_config_file }}.hnx-prev"
+        dest: "{{ suricata_config_dir }}/{{ suricata_config_file }}"
+        remote_src: true
+        mode: "0644"
+      when: suricata_prev.stat.exists and suricata_conf is changed
+    - name: Stop the run; the running sensor was not touched
+      ansible.builtin.fail:
+        msg: >-
+          suricata: the configuration or ruleset did not load (suricata -T) or HOME_NET was refused;
+          the previous configuration was restored and the running sensor was not restarted
+
+- name: Alert-only log for the SIEM agent
+  ansible.builtin.include_tasks: siem.yml
+  when: suricata_siem_agent_manage | bool
+
+- name: Rotation rule
+  ansible.builtin.include_tasks: units.yml
+
+- name: Start the sensor, or restart it only when its configuration changed
+  when: suricata_service_manage | bool
+  block:
+    - name: Enable and start
+      ansible.builtin.systemd:
+        name: suricata.service
+        enabled: true
+        state: started
+        daemon_reload: true
+    - name: Restart for a changed configuration (the gate passed)
+      ansible.builtin.systemd:
+        name: suricata.service
+        state: restarted
+      when: suricata_conf is changed and (suricata_was_active.rc | default(1)) == 0

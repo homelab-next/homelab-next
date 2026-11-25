@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's; state/ (checkpoints and disk buffers) and run/ (the two
+# sockets) belong to the containers' user, and the code, the label rules, the tables, the config
+# and the certificate are root's, readable by the container's group, so a container can read what
+# it runs and cannot change it.
+- name: Create the data root and its directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ vector_data_root }}", owner: "{{ vector_owner }}", group: "{{ vector_group }}", mode: "0750"}
+    - {path: "{{ vector_data_root }}/state", owner: "{{ vector_uid | int }}", group: "{{ vector_gid | int }}", mode: "0700"}
+    - {path: "{{ vector_data_root }}/run", owner: "{{ vector_uid | int }}", group: "{{ vector_gid | int }}", mode: "0700"}
+    - {path: "{{ vector_data_root }}/config", owner: "{{ vector_owner }}", group: "{{ vector_group }}", mode: "0750"}
+    - {path: "{{ vector_data_root }}/tables", owner: "{{ vector_owner }}", group: "{{ vector_group }}", mode: "0750"}
+    - {path: "{{ vector_data_root }}/tls", owner: "{{ vector_owner }}", group: "{{ vector_group }}", mode: "0750"}
+    - {path: "{{ vector_data_root }}/code", owner: "{{ vector_owner }}", group: "{{ vector_group }}", mode: "0755"}
+    - {path: "{{ vector_data_root }}/code/hnx_modules", owner: "{{ vector_owner }}", group: "{{ vector_group }}", mode: "0755"}
+    - {path: "{{ vector_data_root }}/code/hnx_modules/vector", owner: "{{ vector_owner }}", group: "{{ vector_group }}", mode: "0755"}
+    - {path: "{{ vector_data_root }}/lib", owner: "{{ vector_owner }}", group: "{{ vector_group }}", mode: "0755"}
+    - {path: "{{ vector_data_root }}/lib/homelabnext", owner: "{{ vector_owner }}", group: "{{ vector_group }}", mode: "0755"}
+    - {path: "{{ vector_data_root }}/lib/homelabnext/logpipeline", owner: "{{ vector_owner }}", group: "{{ vector_group }}", mode: "0755"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

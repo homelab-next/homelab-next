@@ -327,6 +327,8 @@ What the module needs on the guest and no module provides, with the check that f
   prefers and the internet (global unicast only). An in-lab service that fills no slot (a feed
   reader, an enrichment service, a research service, a graph store) is neither, so under the
   egress policy those stages are dropped until such a service has a slot or a feature row this
-  module can name.
+  module can name. The lab's metasearch service is one: the `web-search` slot is an **optional**
+  egress target of the worker (`grants.egress.cti-pipeline.worker: [internet, svc:web-search]` in a
+  site that selects it), which the collect stage reaches through the app's `SEARXNG_URL`.
 - The units are never enabled: nothing runs a job but the dispatcher (or an operator writing a run
   file and starting the unit by hand).

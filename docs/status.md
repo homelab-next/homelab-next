@@ -1,6 +1,6 @@
 ---
-summary: 'The read-only status hub: sources, views, the status.json contract, events, agent activity, the mTLS edge hop from both sides and the Approvals page.'
-summary_of: outline:sha256:dd4201ec73c6b397
+summary: 'The read-only status hub: sources, views, status.json, events, agent activity, the collector, the mTLS edge hop, Approvals and the register pages.'
+summary_of: outline:sha256:a2abca1cd516f58b
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Status hub: one read-only place for activity and status
@@ -94,6 +94,8 @@ Built-in mappers for sources this repository has:
 | `agentmetry-audit` | Agentmetry's `GET /api/v1/audit/status` (`poll-http-json`, section 7) | `audit-trail`: warn when off, empty, or silent past `warn_after_s` |
 | `prometheus-alerts` | Prometheus `GET /api/v1/alerts` (`poll-prometheus` only, section 7) | one per firing alert, by severity |
 | `job-last-run` | a directory of last-run records (`poll-file`, below), or one record, or a list of them | one per job and host, `<job id>@<host>`: fail when the run failed, warn when the next one is overdue |
+| `table-snapshot-age` | a lake catalog's REST `LoadTableResult` for one table (`poll-http-json`; registry 2.12) | one item (`mapping.item`): the age of the newest snapshot against `warn_after_s` and `fail_after_s`; no snapshot is warn |
+| `backup-snapshot-age` | a backup server datastore's snapshot list, `GET /api2/json/admin/datastore/<store>/snapshots` (`poll-http-json`; registry 2.12) | one per backup group, `<type>/<id>`: the newest snapshot's age against the same limits; a failed verification is fail; an empty datastore is fail |
 
 ### Scheduled jobs: last-run records (`job-last-run`, registry 2.6)
 
@@ -189,6 +191,55 @@ hub.notify(notifier)  # state-diffed, transitions only
 hub.publish(publisher, observations, "svc:metrics")  # onto the bus (homelabnext.events)
 ```
 
+### Running the collector on the hub's host (role `status_hub`)
+
+`hnx status serve` only reads `state.json`; something has to write it. With `status_hub_collect: true`
+the role installs `hnx-hub-collect.timer` (a calendar, `*-*-* *:*:00 UTC`, never a monotonic timer) that
+starts `hnx-hub-collect.service`, a hardened oneshot running `hnx status collect` as the hub's user
+against the registry copy, with `--root` (the directory poll-file producers deliver into,
+`status_hub_root_dir`) and `--secrets-dir` (`status_hub_issued_dir`). Each source runs when its own
+`interval_s` is due, so a source that stops being collected reads `stale` at the page within its
+`stale_after_s` (decision 5): the collector going quiet turns every tile stale, not green.
+
+Credentials are the registry's `secret:` references: list them in `status_hub_secret_refs` (they
+become `HNX_SECRET_*` in the units' environment file) or let the helper below write them as files.
+The collector verifies https sources against one bundle, `tls/ca-bundle.crt` (the client CA plus
+`status_hub_extra_ca_refs`, for a product that signs its own certificate), through `SSL_CERT_FILE`;
+this needs the hub's TLS settings. `status_hub_views_file` replaces the built-in two-entry menu with
+the lab's own views (checked with `hnx status views check`), `status_hub_registers_dir` is passed to
+`hnx status serve --registers`, and `status_hub_notify_topic` (with `status_hub_notify_ceiling`) pages
+`fail`/`stale` transitions through the registry's `notify` service.
+
+#### Login-issued tokens
+
+Some products issue a bearer token only for a login that expires in hours (a form post of a user name
+and password). `status_hub_logins` lists them, each `{name, service, path, username, password_ref}`;
+a root-run timer (`hnx-hub-login-token.timer`, every 4 hours by default) runs the helper, which posts
+the form to the registry row's url + `path` over verified https (no redirect, no proxy from the
+environment, a password file only root reads) and writes the answer to `<status_hub_issued_dir>/hub-login/<name>`
+by rename, as a file only the hub's user reads (mode 0600, created that way), so a failed login leaves the previous token in place. A source's `auth` then reads that file
+by the login's name in the one store area `hub-login` (the login `flow-reader` is
+`{secret: "secret:hub-login/flow-reader"}`), so its reference has the area-and-name shape of any
+other store reference. The login account should be read-only where the product
+allows; where it has a single user (the product's own limit) the credential is the administrator's,
+held in a root-only file on the hub's host and never in the unit's environment.
+
+#### Pulled status files
+
+A `poll-file` source reads a file under the status root, so something has to put it there. For a file
+produced on another host (the invariants runner's results document, ADR-0049 decision 7 "The results
+transport") the hub **pulls**: `status_hub_pulls` lists `{name, host, user, host_key, dest}`, and a
+root-run timer (`hnx-hub-pull.timer`, every 5 minutes by default) dials each registry `host` (its
+registry address) as `user` with the key `status_hub_pull_key_ref` (a root-only file, never in a unit's
+environment), checks the host against the pinned `host_key` (strict, no other key accepted) and sends
+**no command**: the producer's key line is `restrict` with a forced command that prints one file
+(lab-checks' `lab_checks_results_readers`). The answer must be a non-empty JSON object under a size cap;
+it is written to `<status_hub_root_dir>/<dest>` (mode 0640, the hub's group) by rename, so a failed pull
+leaves the previous file, which then reads stale at the source's `stale_after_s`. The `dest` is the
+hub's own configuration for the host it dialled, never a name the stream supplies. The producer never
+reaches the hub: only the hub's address needs SSH to the producer. Short-lived certificates instead of a
+static key (ADR-0049) can replace the key without changing the producer's forced command.
+
 ## 3. Views (`examples/status/views.yml`)
 
 ```yaml
@@ -208,7 +259,7 @@ menu:
 Schema: `schemas/status/views.schema.json`; `hnx status views check` also checks the menu ids are
 unique, `main` is a panel view, a `select` names registered sources and modules, an external
 entry names a registered service unless it is `optional` (then it is shown as unavailable), and
-every entry and export declares its TLP ceiling (views 1.10; see
+every entry and export declares its TLP ceiling (views 1.10; the register panels are 1.11; see
 [TLP ceilings and release transforms](#tlp-ceilings-and-release-transforms)).
 `hnx status views check --preview public` also prints what the public tier is shown,
 `status.json` through its release transform, built from `--state` without a server
@@ -370,6 +421,7 @@ Each sits in the `private` group at `red` (`WITHHELD_PANELS` in `homelabnext/sta
 | `strategy`, `requirements`, `objectives`, `rfis` | public, no group | the lab's strategy records: priorities, intelligence requirements and their gaps |
 | `projects` | public, no group | the lab's own work, steps and blockers |
 | `orchestration` | public, no group | agent jobs, profiles, backends and gateway turns |
+| `kanban`, `lessons`, `runbooks`, `invariants` | new (views 1.11) | the lab's work queue, its failure history, its procedures and the live verdict of its standing checks |
 | `baselines` | public, no group | per-guest defense coverage: which guest lacks which layer |
 | `topology`, `dataflow`, `architecture`, `roadmap` | `group: maps` | guests, zones, flows, the lab's controls; the topology reads every observation and the UPS states unfiltered |
 | `links`, `schedule`, `roster`, `mcp-servers` | `group: directory` | the service directory and its sign-ins, every scheduled job, the agent roster (which reads the sessions unfiltered) and the MCP servers with their grants |
@@ -536,6 +588,43 @@ and lane (outcomes, p50/p95 wall time and queue wait, tokens, cache-read share, 
 fallbacks, input vs output size), the trend by day, and one job's gateway turns. It reads the
 telemetry store `hnx orchestration` fills, names and numbers only; see
 [orchestration telemetry](orchestration-telemetry.md) ([[orchestration-telemetry]]).
+
+### Register pages: Kanban, Lessons, Runbooks, Invariants
+
+`hnx status serve --registers DIR` adds four read-only pages, menu entries `panel: kanban`,
+`lessons`, `runbooks` and `invariants` (views schema 1.11; routes `/kanban`, `/lessons`,
+`/runbooks`, `/invariants`), rendered server-side from YAML register files in `DIR`
+(`homelabnext/status/registers.py`). They replace the old repository's hand-built dev pages: the
+register is edited in its repository, the hub only shows a snapshot of it.
+
+| File in `DIR` | Page | Shows |
+|---|---|---|
+| `kanban.yml` | `/kanban` | cards by column (Blocked, To Do, In Progress, Projects); a project (`PRJ-NNN`) with its steps and done count, step cards (`PRJ-NNN.M`), tags and dates; `?status=done` is the archive. The RFI column is generated from the task queue and is not in the snapshot |
+| `lessons.yml` | `/lessons` | per lesson: symptom, contributing factors, root cause, corrective action, preventive control, verification, status, recurrences, systems |
+| `runbooks.yml` | `/runbooks` | per runbook: summary, access, a checklist whose every step carries its own verify, key files, rollback, and every lesson sharing a systems tag (tags compared with `_` and `-` equal) |
+| `invariants.yml`, `invariants.results.json` | `/invariants` | per criterion: statement, observable, expected, and the live verdict from the results file (an `auto` criterion with no result is `untested`; a red one opens by default and shows its remediation, or says none is recorded). Without the results file the page says so |
+| `meta.json` | every page | `{"commit", "fetched_at"}`: the git commit the files are a snapshot of and when they were fetched |
+
+**Snapshot, not live.** Each page shows the commit and `fetched_at`; a snapshot older than two
+hours, or whose age cannot be read, gets a loud `STALE` banner. Whatever syncs `DIR` from git
+owns that freshness; the hub never fetches.
+
+**Filters** are query strings only (the console's CSP allows no script and no form): `?q=` text
+search, `?status=` (the column on Kanban, the runbook kind on Runbooks, `pass|fail|error|untested|
+deferred` on Invariants, the lesson status on Lessons), `?system=` (Lessons, Runbooks), `?pillar=`
+(Invariants), `?id=` (one record, opened) and `?page=`. A page holds at most 25 records (40
+cards on Kanban); chips under the title link the values.
+
+**Reading.** Each file is parsed once with the repository's budgeted unique-key YAML loader
+(nothing is executed; a file above 16 MiB is refused unread) and cached by mtime, size and
+inode, so a request never re-parses an unchanged file; a malformed or missing file gives its own
+page an error banner and does not affect the others. Every value is escaped; the inline markup
+the registers carry in prose (`<code>`, `<strong>`) is kept, and anything else, links included, is
+shown as text.
+
+**Withheld.** Private group, `red`, served only through the trusted front door and in no public
+view; the menu entry shows as unavailable (not an error) when `--registers` is not given. They
+are served live only: `hnx status render` does not write them.
 
 ### Baselines page
 
@@ -1141,6 +1230,30 @@ reported; `states` changes that (`{canceled: warn}`, keys are StackStorm's execu
 `limit` is at most 100, StackStorm's `api.max_page_size` for a non-admin key; a summary says when
 the window held more than one page. Use a read-only API key (an RBAC role with
 `action_execution_list`/`action_execution_view` only).
+
+**Shadow evidence** (`builtin: automation-shadow`, service schema 2.14): the same kind and key,
+another question: what has each rule done in shadow? ([stackstorm](stackstorm.md), "Shadow, then
+live".)
+
+```yaml
+- id: stackstorm-shadow
+  kind: poll-stackstorm
+  target: {path: /api/v1/executions}
+  interval_s: 900
+  timeout_s: 30
+  auth: {secret: "secret:stackstorm/status-token", header: St2-Api-Key}
+  mapping: {builtin: automation-shadow, window_s: 604800, limit: 100}
+```
+
+It pages `?action=homelabnext.step&limit=<limit>&offset=..&sort_desc=true&timestamp_gt=<now -
+window_s>&include_attributes=id,action,status,start_timestamp,parameters,result` (at most 50
+pages; a summary says when it stopped there) and makes one item per pack, `shadow:<pack>` (the pack
+of rule `on_<pack>`): `would-act` counts the step runs that recorded the broker request they would
+have made (`result: shadow`, the item's value), `quiet` the ones whose `when` did not hold
+(`skipped`), `failed` the failed or timed-out ones (the item is then `warn`), `other` a live result
+or a refusal; with the first and latest record in the window. A running or canceled step is
+evidence neither way. `shadow` totals the would-act records. The window defaults to 7 days, the
+shadow window `st2-live` asks for; a rule with no record in it has no item. `states` is not taken.
 
 ### Apache NiFi (`poll-nifi`)
 

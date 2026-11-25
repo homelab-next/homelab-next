@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+# Retire the predecessor once this module owns the captures (defaults: zeek_retired_*). Units first:
+# a predecessor's watchdog timer restarts its stopped containers. Each step acts only on what is
+# still enabled, active, restartable or running, so a second run changes nothing.
+- name: The predecessor units still enabled
+  ansible.builtin.command:
+    argv: ["{{ zeek_systemctl_cli }}", is-enabled, "{{ item }}"]
+  loop: "{{ zeek_retired_units }}"
+  register: zeek_retired_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only: a dry run must read the real state
+
+- name: The predecessor units still active
+  ansible.builtin.command:
+    argv: ["{{ zeek_systemctl_cli }}", is-active, "{{ item }}"]
+  loop: "{{ zeek_retired_units }}"
+  register: zeek_retired_active
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only: a dry run must read the real state
+
+- name: Disable and stop a predecessor unit
+  ansible.builtin.command:
+    argv: ["{{ zeek_systemctl_cli }}", disable, --now, "{{ item.0.item }}"]
+  loop: "{{ zeek_retired_enabled.results | zip(zeek_retired_active.results) | list }}"
+  loop_control: {label: "{{ item.0.item }}"}
+  when: item.0.stdout | trim == 'enabled' or item.1.rc == 0
+  changed_when: true
+
+- name: The predecessor containers (running, restart policy)
+  ansible.builtin.command:
+    argv: ["{{ zeek_docker_cli }}", inspect, --format, "{{ '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' }}", "{{ item }}"]
+  loop: "{{ zeek_retired_containers }}"
+  register: zeek_retired_ctrs
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only: a dry run must read the real state
+
+- name: Keep a predecessor container from restarting
+  ansible.builtin.command:
+    argv: ["{{ zeek_docker_cli }}", update, --restart=no, "{{ item.item }}"]
+  loop: "{{ zeek_retired_ctrs.results }}"
+  loop_control: {label: "{{ item.item }}"}
+  when: item.rc == 0 and (item.stdout.split() | last) != 'no'
+  changed_when: true
+
+- name: Stop a running predecessor container
+  ansible.builtin.command:
+    argv: ["{{ zeek_docker_cli }}", stop, "{{ item.item }}"]
+  loop: "{{ zeek_retired_ctrs.results }}"
+  loop_control: {label: "{{ item.item }}"}
+  when: item.rc == 0 and (item.stdout.split() | first) == 'true'
+  changed_when: true

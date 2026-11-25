@@ -10,6 +10,7 @@
       - node_exporter_service is match('^[A-Za-z0-9@._-]+\Z')
       - node_exporter_defaults_file is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z')
       - node_exporter_state_dir is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z')
+      - node_exporter_textfile_dir == '' or node_exporter_textfile_dir is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z')
       - node_exporter_health_timeout | int > 0
     fail_msg: >-
       node_exporter: the guest's own IPv4 address to listen on (not all interfaces), a port, a

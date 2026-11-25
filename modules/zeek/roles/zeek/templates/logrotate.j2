@@ -1,0 +1,13 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (module zeek); do not edit. Zeek running standalone does not rotate its logs:
+# truncate-in-place keeps the files the pipeline tails open and bounds the disk (LL-145 shape).
+{{ zeek_log_root }}/*/*.log {
+    daily
+    maxsize {{ zeek_logrotate_max_size }}
+    rotate {{ zeek_logrotate_keep }}
+    compress
+    delaycompress
+    copytruncate
+    missingok
+    notifempty
+}

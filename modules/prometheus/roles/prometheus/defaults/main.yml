@@ -92,3 +92,73 @@ prometheus_state_dir: /var/lib/homelabnext/prometheus
 # per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
 prometheus_last_run_dir: /var/lib/homelabnext/last-run
 prometheus_last_run_group: root
+# HTTP(S) up/down probes (the Kuma function). Off by default; on, the role runs a blackbox exporter
+# beside the service (a second container of the same compose project, pinned by digest), renders
+# the probe target list from the registry (every row published at the edge, or declaring an http
+# health endpoint, less prometheus_probe_exclude: a row published at the edge is probed by its edge
+# name, any other by the name it answers by) and a ProbeDown rule that goes through the same
+# state-diffed forwarder as every other alert. An edge answer of 2xx, 3xx, 401 or 403 is "up"
+# (a login redirect is the edge working); a 5xx, a refused connection, a bad certificate or no
+# answer in prometheus_probe_timeout is "down".
+prometheus_probes_enabled: false
+prometheus_probe_exclude: []
+prometheus_probe_interval: 60s
+prometheus_probe_timeout: 10s
+# A private CA (a secret holding its PEM) the probes also trust: services on the lab's internal
+# certificates are then verified, not refused. Written beside the probe modules as the system roots
+# plus this CA, so a probe of a publicly certified name still verifies. Empty: the system roots only.
+prometheus_probe_ca_ref: ""
+prometheus_probe_system_roots: /etc/ssl/certs/ca-certificates.crt
+prometheus_alert_probe_down_for: 5m
+prometheus_blackbox_image: "docker.io/prom/blackbox-exporter:v0.28.0@sha256:e753ff9f3fc458d02cca5eddab5a77e1c175eee484a8925ac7d524f04366c2fc"
+prometheus_blackbox_mem_limit: 128m
+# Hardware alerts (README "Hardware alerts"): the host exporter's own CPU and NVMe temperature
+# sensors, and the families the hardware-metrics control writes (pools, the board's sensors and event
+# log, GPUs, the hypervisor's guests). A host without a family never fires its rules.
+prometheus_alert_cpu_temp_warning_celsius: 85
+prometheus_alert_cpu_temp_critical_celsius: 92
+prometheus_alert_cpu_temp_warning_for: 5m
+prometheus_alert_cpu_temp_critical_for: 1m
+prometheus_alert_nvme_temp_warning_celsius: 70
+prometheus_alert_nvme_temp_critical_celsius: 80
+prometheus_alert_gpu_temp_warning_celsius: 85
+prometheus_alert_gpu_temp_critical_celsius: 92
+# the site's per-GPU power cap: a sustained draw over it, and a power limit in force above it, alert
+prometheus_alert_gpu_power_cap_watts: 200
+prometheus_alert_gpu_power_for: 5m
+prometheus_alert_pool_used_percent: 85
+prometheus_alert_board_event_window: 30m
+prometheus_alert_guest_down_for: 5m
+# a host expected to compute on its GPUs (hardware-metrics expect_gpu_processes) with no process
+# holding GPU memory for this long: the workload fell back to the CPU or died
+prometheus_alert_gpu_idle_for: 10m
+# SNMP polling (README "SNMP polling"), off by default. On, an SNMP exporter runs beside the service
+# (another container of the compose project, pinned by digest, no published port) and every entry of
+# prometheus_snmp_targets is a job of its own: {host: <registry host id>, modules: [<module>...],
+# watch_ports: <regex of ifName>}. The address is the registry host's; the community is read from the
+# store by reference (prometheus_snmp_community_ref) and written owner-group readable for the exporter
+# alone. watch_ports names the interfaces whose state, errors and speed alert (anchored; empty: none).
+# modules: the exporter's own (if_mib, system, ...) and the role's nas_storage (disks, fans, volumes).
+prometheus_snmp_enabled: false
+prometheus_snmp_targets: []
+prometheus_snmp_community_ref: ""
+prometheus_snmp_interval: 60s
+prometheus_snmp_timeout: 30s
+prometheus_snmp_image: "docker.io/prom/snmp-exporter:v0.31.0@sha256:e5f1aba929145cea2a3bad89c29959efaec0dc26fb87e3761414616a1a392c1c"
+prometheus_snmp_mem_limit: 128m
+prometheus_alert_port_down_for: 5m
+prometheus_alert_port_errors_per_minute: 10
+prometheus_alert_nas_disk_temp_celsius: 55
+prometheus_alert_nas_volume_used_percent: 85
+# LLM completion probes through the gateway (README "Inference probes"), off by default; needs
+# prometheus_probes_enabled (the blackbox exporter). Every prometheus_llm_probe_interval, each role of
+# prometheus_llm_probe_roles is asked for a one-token chat completion through the gateway row
+# prometheus_llm_probe_gateway with the key prometheus_llm_probe_key_ref: a refusal, a 5xx (upstream
+# unavailable) or no answer in the timeout is down, and a slow answer alerts.
+prometheus_llm_probe_gateway: ""
+prometheus_llm_probe_roles: []
+prometheus_llm_probe_key_ref: ""
+prometheus_llm_probe_interval: 5m
+prometheus_llm_probe_timeout: 90s
+prometheus_alert_llm_probe_failed_for: 10m
+prometheus_alert_llm_probe_slow_seconds: 60

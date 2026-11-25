@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+# The pinned release binary, held to its sha256 wherever it comes from. The controller fetches it
+# (or the lab's own copy is given), the host fetches nothing; a host whose binary already has the
+# pinned sha256 is left alone.
+- name: Ask the sha256 of the installed binary
+  ansible.builtin.stat:
+    path: "{{ velociraptor_client_install_path }}"
+    checksum_algorithm: sha256
+  register: velociraptor_client_installed
+
+- name: Create the controller's download directory when a fetch is owed (owner only)
+  ansible.builtin.file:
+    path: "{{ velociraptor_client_controller_cache }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when:
+    - velociraptor_client_binary_src | length == 0
+    - velociraptor_client_installed.stat.checksum | default('') != velociraptor_client_checksums[velociraptor_client_version]
+
+- name: Fetch the release on the controller when the host's binary is not the pinned one, refused unless its sha256 is
+  ansible.builtin.get_url:
+    url: "{{ velociraptor_client_release_repository }}/v{{ velociraptor_client_version }}/{{ velociraptor_client_binary_name }}"
+    dest: "{{ velociraptor_client_controller_cache }}/{{ velociraptor_client_binary_name }}"
+    checksum: "sha256:{{ velociraptor_client_checksums[velociraptor_client_version] }}"
+    mode: "0700"
+    use_proxy: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when:
+    - velociraptor_client_binary_src | length == 0
+    - velociraptor_client_installed.stat.checksum | default('') != velociraptor_client_checksums[velociraptor_client_version]
+
+- name: Ask the sha256 of the lab's own copy
+  ansible.builtin.stat:
+    path: "{{ velociraptor_client_binary_src }}"
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  become: false
+  register: velociraptor_client_given
+  when: velociraptor_client_binary_src | length > 0
+
+- name: The lab's own copy is the pinned release
+  ansible.builtin.assert:
+    that:
+      - velociraptor_client_given.stat.exists
+      - velociraptor_client_given.stat.checksum == velociraptor_client_checksums[velociraptor_client_version]
+    fail_msg: "velociraptor client: {{ velociraptor_client_binary_src }} is not the pinned release {{ velociraptor_client_version }} (sha256 differs or the file is missing)"
+  when: velociraptor_client_binary_src | length > 0
+
+- name: Install the binary (only when it differs from the pinned one)
+  ansible.builtin.copy:
+    src: "{{ velociraptor_client_binary_src if velociraptor_client_binary_src | length > 0 else velociraptor_client_controller_cache ~ '/' ~ velociraptor_client_binary_name }}"
+    dest: "{{ velociraptor_client_install_path }}"
+    owner: "{{ velociraptor_client_owner }}"
+    group: "{{ velociraptor_client_group }}"
+    mode: "0755"
+  when: velociraptor_client_installed.stat.checksum | default('') != velociraptor_client_checksums[velociraptor_client_version]
+  register: velociraptor_client_binary
+
+- name: The installed binary is the pinned release
+  ansible.builtin.stat:
+    path: "{{ velociraptor_client_install_path }}"
+    checksum_algorithm: sha256
+  register: velociraptor_client_after
+  check_mode: false
+
+- name: Refuse a binary that is not the pinned release
+  ansible.builtin.assert:
+    that: >-
+      ansible_check_mode
+      or velociraptor_client_after.stat.checksum | default('') == velociraptor_client_checksums[velociraptor_client_version]
+    fail_msg: "velociraptor client: {{ velociraptor_client_install_path }} is not the pinned release {{ velociraptor_client_version }}"

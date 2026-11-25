@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the checkpoints from an export (lake_writer_restore_source: <export>/ holding state/<table>/
+# checkpoint.json). Each is checked first (the shared state file form, a table of this module's own);
+# the timers are stopped only for the copy and a running writer is waited for. The restored
+# checkpoint may be behind the lake: the writer reconciles it with the lake's own mark on its next run.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: A restore source is named, and is an absolute directory of its own
+      ansible.builtin.assert:
+        that:
+          - lake_writer_restore_source is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+){2,}\Z')
+          - lake_writer_restore_source is not match('^' ~ (lake_writer_state_dir | regex_escape) ~ '(/|\Z)')
+        fail_msg: "lake-writer: lake_writer_restore_source must be an absolute path of at least two components, outside the live state directory"
+    - name: Read the exported checkpoints
+      ansible.builtin.slurp:
+        src: "{{ lake_writer_restore_source }}/state/{{ item }}/checkpoint.json"
+      register: lake_writer_restore_checkpoints
+      loop: "{{ lake_writer_tables }}"
+      failed_when: false
+    - name: Every exported checkpoint that exists is the shared state file form
+      ansible.builtin.assert:
+        that: (item.content | b64decode | from_json).schema_version | default(0) == 1
+        fail_msg: "lake-writer: {{ lake_writer_restore_source }}/state/{{ item.item }}/checkpoint.json is not a checkpoint"
+      loop: "{{ lake_writer_restore_checkpoints.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.content is defined
+    - name: Stop the timers while the state is replaced
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+      loop: "{{ lake_writer_timers }}"
+      when: not ansible_check_mode and lake_writer_start | bool
+    - name: Wait for a running writer to finish
+      ansible.builtin.command:
+        argv: "{{ [lake_writer_systemctl_cli, 'is-active', '--quiet', 'hnx-' ~ lake_writer_logical_id ~ '@' ~ item ~ '.service'] }}"
+      register: lake_writer_running
+      until: lake_writer_running.rc != 0
+      retries: 60
+      delay: 10
+      changed_when: false
+      failed_when: false
+      loop: "{{ lake_writer_tables }}"
+      when: not ansible_check_mode and lake_writer_start | bool
+    - name: Install each checkpoint
+      ansible.builtin.copy:
+        content: "{{ item.content | b64decode | trim }}\n"
+        dest: "{{ lake_writer_state_dir }}/{{ item.item }}/checkpoint.json"
+        owner: "{{ lake_writer_user }}"
+        group: "{{ lake_writer_group }}"
+        mode: "0600"
+      loop: "{{ lake_writer_restore_checkpoints.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.content is defined
+    - name: Arm the timers again
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: started
+      loop: "{{ lake_writer_timers }}"
+      when: not ansible_check_mode and lake_writer_start | bool
+  tags: [restore]

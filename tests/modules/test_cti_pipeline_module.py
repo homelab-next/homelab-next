@@ -49,7 +49,13 @@ def test_the_manifest_is_a_feature_with_its_own_secrets_and_internet_egress_only
         "cap:inference",
     ]
     assert m["egress"] == [
-        {"host": "worker", "to": ["internet"], "purpose": m["egress"][0]["purpose"]}
+        {"host": "worker", "to": ["internet"], "purpose": m["egress"][0]["purpose"]},
+        {
+            "host": "worker",
+            "to": ["svc:web-search"],
+            "optional": True,
+            "purpose": m["egress"][1]["purpose"],
+        },
     ]
     assert [d["id"] for d in m["data"]] == ["store"] and m["lifecycle"]["remove"][
         "export_first"
@@ -85,7 +91,20 @@ def _args(ov: Path) -> list[str]:
     ]  # fmt: skip
 
 
-def overlay(tmp: Path, grant: bool = True) -> Path:
+def _slot_provider(slot: str) -> tuple[str, Path]:
+    """The one in-tree module that provides ``slot`` (its id and directory)."""
+    found = [
+        (m["id"], d)
+        for d in sorted((ROOT / "modules").iterdir())
+        if (d / "module.yml").is_file()
+        for m in [ld.load_yaml(d / "module.yml")]
+        if slot in (m.get("provides") or {}).get("slots", {})
+    ]
+    assert len(found) == 1, found
+    return found[0]
+
+
+def overlay(tmp: Path, grant: bool = True, web_search: bool = False) -> Path:
     lab = tmp / "lab"
     (lab / "guests").mkdir(parents=True)
     reg = ld.load_yaml(ROOT / "examples" / "services.yml")
@@ -124,8 +143,20 @@ def overlay(tmp: Path, grant: bool = True) -> Path:
         "features": {"cti-pipeline": {"placement": {"worker": "agents"}}},
         "incumbents": incumbents,
     }
+    if web_search:  # the lab's metasearch slot, filled by its provider module on the same guest
+        pid, pdir = _slot_provider("web-search")
+        row = ld.load_yaml(pdir / "registry" / "services.yml")["services"]["web-search"]
+        version = ld.load_yaml(pdir / "module.yml")["product"]["version"]
+        reg["services"]["web-search"] = dict(row, host="agents-1", version=version)
+        (lab / "services.yml").write_text(_dump(reg))
+        sel["slots"]["web-search"] = [
+            {"provider": pid, "instance": "web-search", "placement": {"server": "agents"}}
+        ]
     if grant:
-        sel["grants"] = {"egress": {"cti-pipeline": {"worker": ["internet"]}}}
+        to = ["internet", "svc:web-search"] if web_search else ["internet"]
+        sel["grants"] = {"egress": {"cti-pipeline": {"worker": to}}}
+        if web_search:
+            sel["grants"]["egress"][_slot_provider("web-search")[0]] = {"server": ["internet"]}
     (lab / "modules.yml").write_text(_dump(sel))
     return tmp
 
@@ -161,6 +192,17 @@ def test_its_internet_egress_needs_the_sites_grant(tmp_path, capsys):
     code = mcli.main(["check", *_args(overlay(tmp_path, grant=False))])
     out = capsys.readouterr().out
     assert code == 1 and "egress" in out, out
+
+
+def test_the_metasearch_egress_is_optional_and_a_grant_of_it_is_accepted(tmp_path, capsys):
+    # no grant of it is owed (the overlay above grants internet only and checks clean) ...
+    code = mcli.main(["check", *_args(overlay(tmp_path / "a", web_search=True, grant=False))])
+    out = capsys.readouterr().out
+    assert code == 1 and "svc:web-search" not in out, out  # only the internet grant is owed
+    # ... and a site that selects a metasearch service may grant it
+    code = mcli.main(["check", *_args(overlay(tmp_path / "b", web_search=True))])
+    out = capsys.readouterr().out
+    assert code == 0, out
 
 
 # ----------------------------------------------------------------------------- lint

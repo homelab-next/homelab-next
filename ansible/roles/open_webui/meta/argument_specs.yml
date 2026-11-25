@@ -61,6 +61,19 @@ argument_specs:
         type: str
         description: "secret:<name> of the break-glass administrator's password (with open_webui_admin_email)."
         default: ""
+      open_webui_web_search_id:
+        type: str
+        description: "Registry id of the lab's metasearch service (capability in open_webui_web_search_capabilities); empty keeps web search off."
+        default: ""
+      open_webui_web_search_capabilities:
+        type: list
+        elements: str
+        description: "Registry capabilities the web search id may resolve to."
+        default: [web-search]
+      open_webui_web_search_result_count:
+        type: int
+        description: "Results a web search puts in front of the model (1 to 20)."
+        default: 5
       open_webui_session_key_ref: &session
         type: str
         description: "secret:<name> of the session signing key (WEBUI_SECRET_KEY)."

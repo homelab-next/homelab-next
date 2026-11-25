@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Does the manager already hold the site's replacement for the product's generic json decoder (an
+# hnx-*.xml under <data root>/manager/etc/decoders that defines <decoder name="json">)? Sets
+# wazuh_json_native_present. The product's decoder file is only ever excluded once this is true: an
+# exclusion with no replacement makes the manager refuse to load its rules and never become healthy.
+# A missing directory (a first install: the product's init has not run) finds nothing.
+- name: Find the site's native decoders that define the json decoder
+  ansible.builtin.find:
+    paths: ["{{ wazuh_data_root }}/manager/etc/decoders"]
+    patterns: ["hnx-*.xml"]
+    contains: '<decoder\s+name="json"'
+  register: wazuh_json_native_found
+  check_mode: false
+
+- name: Remember whether a replacement json decoder is in place
+  ansible.builtin.set_fact:
+    wazuh_json_native_present: "{{ wazuh_json_native_found.files | default([]) | length > 0 }}"

@@ -66,6 +66,10 @@ nifi_events_id: events
 nifi_events_url: ""
 # nifi_warehouse and nifi_region (required, no default): the lake's fixed warehouse (s3://<bucket>/,
 # the tables' metadata embeds its paths) and the object store's S3 region, the lake modules' own values
+# the path the catalog serves its API under, appended to its address in the flows' catalog parameter
+# ("" for the reference catalog, /catalog for a catalog that serves it there); nifi_warehouse is then
+# the catalog's warehouse NAME instead of s3://<bucket>/
+nifi_catalog_path: ""
 nifi_s3_access_key_ref: secret:nifi/s3-access-key
 nifi_s3_signing_ref: secret:nifi/s3-secret-key
 nifi_events_auth_ref: secret:nifi/events-token

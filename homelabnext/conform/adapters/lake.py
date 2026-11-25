@@ -35,7 +35,7 @@ from __future__ import annotations
 import os
 import re
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from homelabnext._http import check_plaintext, credential_opener, is_loopback
@@ -81,13 +81,26 @@ def _header_safe(value: str, ref: str) -> str:
     return value
 
 
-def _url(capability: str, resolver: Any, domain: str | None, allow_plaintext: bool) -> str:
+def _url(
+    capability: str,
+    resolver: Any,
+    domain: str | None,
+    allow_plaintext: bool,
+    *,
+    credentials: bool = True,
+) -> str:
     ep = resolve(capability, resolver=resolver, domain=domain, schemes=("http", "https"))
     try:
-        check_plaintext(ep.url, credentials=True, allow_plaintext=allow_plaintext)
+        check_plaintext(ep.url, credentials=credentials, allow_plaintext=allow_plaintext)
     except ValueError as exc:
         raise LakeError(f"{capability} endpoint: {exc}") from None
     return ep.url
+
+
+#: what ``engine_options`` may set on the engine client (make_clients)
+ENGINE_OPTIONS = frozenset(
+    {"catalog", "schema", "source", "timeout", "max_bytes", "session", "monotonic"}
+)
 
 
 def make_clients(
@@ -103,24 +116,44 @@ def make_clients(
     credential: str | None = None,
     catalog_credential: str | None = None,
     ca_file: str | None = None,
+    engine_options: Mapping[str, Any] | None = None,
 ) -> tuple[Any, RestCatalog]:
     """The engine client and the catalog client :func:`make_lake` reads and writes through, as
     ``user`` (see the module doc for ``credential`` and ``catalog_credential``); nothing is sent
-    while they are built."""
+    while they are built.  ``engine_options`` are the engine client's own settings among
+    :data:`ENGINE_OPTIONS` (a session catalog and schema, session properties, the per-request
+    timeout, the reply size bound); never its endpoint, user, sign-in or opener, which are this
+    function's to set."""
+    extra = dict(engine_options or {})
+    unknown = sorted(set(extra) - ENGINE_OPTIONS)
+    if unknown:
+        raise AdapterConfigError(f"engine_options: not an engine setting {unknown}")
     wh = warehouse or os.environ.get(warehouse_env, "")
     if not wh:
         raise LookupError(f"no warehouse: pass warehouse= or set {warehouse_env}")
     query_url = _url("lake-query", resolver, domain, allow_plaintext)
-    catalog_url = _url("lake-catalog", resolver, domain, allow_plaintext)
+    # the catalog is sent only its own bearer token (never the engine's password): a catalog without
+    # sign-in (a network-only catalog, the site's choice) may be plain http when no token goes to it
+    catalog_url = _url(
+        "lake-catalog",
+        resolver,
+        domain,
+        allow_plaintext,
+        credentials=catalog_credential is not None,
+    )
     if credential is None and not is_loopback(urllib.parse.urlsplit(query_url).hostname):
         raise LakeError(
             f"lake-query endpoint is not loopback, so {user!r} must sign in to the engine: pass "
             f"credential= (a secret reference, conventionally {reader_secret(user)})"
         )
     signed_in = credential is not None or catalog_credential is not None
-    for capability, url in (("lake-query", query_url), ("lake-catalog", catalog_url)):
+    sends = (
+        ("lake-query", query_url, credential is not None),
+        ("lake-catalog", catalog_url, catalog_credential is not None),
+    )
+    for capability, url, sent in sends:
         parts = urllib.parse.urlsplit(url)
-        if signed_in and parts.scheme != "https" and not is_loopback(parts.hostname):
+        if sent and parts.scheme != "https" and not is_loopback(parts.hostname):
             # allow_plaintext cannot send a password in clear to another host (the engine's
             # password authenticator takes it over https only anyway)
             raise LakeError(f"{capability} endpoint: a credential goes over https only")
@@ -132,7 +165,7 @@ def make_clients(
     if catalog_credential is not None:
         token, ref = _secret(catalog_credential, "catalog_credential"), catalog_credential
         bearer = lambda: f"Bearer {_header_safe(token(), ref)}"  # noqa: E731
-    engine = TrinoHTTP(query_url, user=user, auth=auth, opener=opener)
+    engine = TrinoHTTP(query_url, user=user, auth=auth, opener=opener, **extra)
     catalog = RestCatalog(
         catalog_url,
         warehouse=wh,
@@ -148,10 +181,27 @@ def make_lake(
     *,
     namespace: str = "auto",
     trino_catalog: str = "iceberg",
+    schemas: Any = None,
+    ensure: bool = True,
+    evolve_additive: bool = False,
     **clients: Any,
 ) -> TrinoRestLake:
     """The lake of the registry's ``lake-query`` and ``lake-catalog`` endpoints: ``clients`` are
-    :func:`make_clients`' keywords (``domain``, ``warehouse``, ``user``, ``credential``, ...)."""
+    :func:`make_clients`' keywords (``domain``, ``warehouse``, ``user``, ``credential``, ...).
+
+    ``schemas`` are the tables the lake knows (default: the core's pinned OCSF subsets) and
+    ``ensure`` says whether building it creates the namespace and any missing table (default: it
+    does; ``False`` creates and alters nothing, so a reader or a checker never makes a table).
+    ``evolve_additive`` (with ``ensure``) adds the pinned optional columns an existing table lacks,
+    and nothing else (a writer of its own fresh tables, never an imported one)."""
     engine, catalog = make_clients(**clients)
     ns = f"hnx_conform_{run_token()}" if namespace == "auto" else namespace
-    return TrinoRestLake(engine, catalog, namespace=ns, trino_catalog=trino_catalog)
+    return TrinoRestLake(
+        engine,
+        catalog,
+        namespace=ns,
+        trino_catalog=trino_catalog,
+        schemas=schemas,
+        ensure=ensure,
+        evolve_additive=evolve_additive,
+    )

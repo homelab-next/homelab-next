@@ -1,0 +1,249 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: lab-checks-probe
+#   kind: tool
+#   purpose: Small read-only probes a lab criterion's observable runs (an HTTP status, a TCP connect, a DNS answer, a metrics value, a last-run record); each exits by the invariants runner's semantics.
+#   owner: platform
+#   trigger: [role:lab_checks]
+#   inputs: "http URL [--status N,N] [--ca FILE] [--timeout S] | tcp HOST PORT [--timeout S] | dns RESOLVER NAME [--type A] [--expect ADDR] [--timeout S] [--port N] | prom BASE_URL QUERY (--min N | --max N | --eq N) [--empty fail|zero] | lastrun DIR JOB MAX_AGE_S [--now EPOCH]"
+#   outputs: one line of evidence on stdout (the reason on a failure)
+#   exit:
+#     "0": the probe held
+#     "1": the thing probed is wrong or absent (a failed criterion)
+#     "100": the probe could not measure (bad usage, an unreadable record, the metrics API unreachable)
+"""Probes for the criteria of module lab-checks (modules/lab-checks/README.md).
+
+Exit status follows the invariants runner: 0 pass, 1 to 99 fail, 100 or more could not measure (the
+check itself is broken, which is neither a pass nor a fail).  Everything here is read-only and uses
+the standard library only."""
+
+from __future__ import annotations
+
+import argparse
+import calendar
+import json
+import socket
+import ssl
+import struct
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+PASS, FAIL, CANT = 0, 1, 100
+QTYPES = {"A": 1, "AAAA": 28, "CNAME": 5, "NS": 2, "TXT": 16}
+
+
+class Cant(Exception):
+    """The probe could not measure."""
+
+
+def _out(code: int, text: str) -> int:
+    sys.stdout.write(text.strip()[:600] + "\n")
+    return code
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):  # a redirect is an answer, not something to follow
+        return None
+
+
+def http(url: str, statuses: set[int], ca: str | None, timeout: float) -> int:
+    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+        raise Cant(f"not an http(s) URL: {url!r}")
+    ctx = ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=ctx))
+    try:
+        with opener.open(urllib.request.Request(url, method="GET"), timeout=timeout) as r:
+            status = r.status
+    except urllib.error.HTTPError as e:
+        status = e.code
+    except (urllib.error.URLError, OSError, ssl.SSLError) as e:
+        return _out(FAIL, f"{url}: no answer ({type(e).__name__}: {getattr(e, 'reason', e)})")
+    if status in statuses:
+        return _out(PASS, f"{url}: HTTP {status}")
+    return _out(FAIL, f"{url}: HTTP {status}, wanted {sorted(statuses)}")
+
+
+def tcp(host: str, port: int, timeout: float) -> int:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return _out(PASS, f"{host}:{port}: connected")
+    except OSError as e:
+        return _out(FAIL, f"{host}:{port}: {type(e).__name__}: {e}")
+
+
+def dns_query(name: str, qtype: str, ident: int = 0x4A5B) -> bytes:
+    q = struct.pack(">HHHHHH", ident, 0x0100, 1, 0, 0, 0)
+    for label in name.rstrip(".").split("."):
+        if not label or len(label) > 63:
+            raise Cant(f"not a DNS name: {name!r}")
+        q += bytes([len(label)]) + label.encode("ascii")
+    return q + b"\x00" + struct.pack(">HH", QTYPES[qtype], 1)
+
+
+def dns_answers(reply: bytes, ident: int = 0x4A5B) -> tuple[int, list[str]]:
+    """(rcode, the A/AAAA addresses in the answer section) of a reply to dns_query."""
+    if len(reply) < 12 or struct.unpack(">H", reply[:2])[0] != ident:
+        raise Cant("a malformed or foreign DNS reply")
+    flags, qd, an = struct.unpack(">HHH", reply[2:8])
+    i = 12
+    for _ in range(qd):  # skip the question
+        while reply[i]:
+            i += 1 + reply[i]
+        i += 5
+    out = []
+    for _ in range(an):
+        while reply[i] and not reply[i] & 0xC0:  # a name: labels, or a pointer ending it
+            i += 1 + reply[i]
+        i += 2 if reply[i] & 0xC0 else 1
+        typ, _cls, _ttl, rdlen = struct.unpack(">HHIH", reply[i : i + 10])
+        i += 10
+        rd = reply[i : i + rdlen]
+        i += rdlen
+        if typ == 1 and rdlen == 4:
+            out.append(socket.inet_ntoa(rd))
+        elif typ == 28 and rdlen == 16:
+            out.append(socket.inet_ntop(socket.AF_INET6, rd))
+    return flags & 0xF, out
+
+
+def dns(resolver: str, name: str, qtype: str, expect: str | None, timeout: float, port: int = 53) -> int:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(timeout)
+    try:
+        s.sendto(dns_query(name, qtype), (resolver, port))
+        reply = s.recvfrom(4096)[0]
+    except OSError as e:
+        return _out(FAIL, f"{resolver}: {name} {qtype}: no answer ({type(e).__name__})")
+    finally:
+        s.close()
+    rcode, addrs = dns_answers(reply)
+    if rcode != 0 or not addrs:
+        return _out(FAIL, f"{resolver}: {name} {qtype}: rcode {rcode}, {len(addrs)} answer(s)")
+    if expect and expect not in addrs:
+        return _out(FAIL, f"{resolver}: {name} {qtype}: {addrs}, wanted {expect}")
+    return _out(PASS, f"{resolver}: {name} {qtype} -> {','.join(addrs)}")
+
+
+def prom_value(base: str, query: str, empty: str, timeout: float) -> float:
+    url = base.rstrip("/") + "/api/v1/query?" + urllib.parse.urlencode({"query": query})
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:  # noqa: S310 (http(s) checked below)
+            doc = json.load(r)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise Cant(f"the metrics API did not answer ({type(e).__name__})") from e
+    if doc.get("status") != "success":
+        raise Cant(f"the metrics API refused the query: {str(doc.get('error'))[:120]}")
+    res = doc["data"]["result"]
+    if not res:
+        if empty == "zero":
+            return 0.0
+        raise ValueError("the query returned no series")
+    return sum(float(r["value"][1]) for r in res)
+
+
+def prom(base: str, query: str, op: str, bound: float, empty: str, timeout: float) -> int:
+    if urllib.parse.urlsplit(base).scheme not in ("http", "https"):
+        raise Cant(f"not an http(s) URL: {base!r}")
+    try:
+        v = prom_value(base, query, empty, timeout)
+    except ValueError as e:
+        return _out(FAIL, f"{query}: {e}")
+    ok = {"min": v >= bound, "max": v <= bound, "eq": v == bound}[op]
+    return _out(PASS if ok else FAIL, f"{query} = {v:g} (want {op} {bound:g})")
+
+
+def lastrun(dirpath: str, job: str, max_age: int, now: float) -> int:
+    """The shared last-run record (homelabnext.status.last-run/1) of ``job``: finished, succeeded,
+    and ended within ``max_age`` seconds.  A run in progress is judged by its start: it is fine
+    while it is younger than ``max_age`` (the previous result is not in the record)."""
+    path = f"{dirpath.rstrip('/')}/{job.replace(':', '%3A').replace('/', '%2F')}.json"
+    try:
+        with open(path, encoding="utf-8") as f:
+            rec = json.load(f)
+    except FileNotFoundError:
+        return _out(FAIL, f"{job}: no last-run record (never ran)")
+    except (OSError, ValueError) as e:
+        raise Cant(f"{path}: unreadable ({type(e).__name__})") from e
+    if rec.get("running"):
+        at = _ts(rec.get("started_at"))
+        age = int(now - at)
+        if age > max_age:
+            return _out(FAIL, f"{job}: running for {age} s, over {max_age} s")
+        return _out(PASS, f"{job}: in progress, started {age} s ago")
+    at = _ts(rec.get("finished_at"))
+    age = int(now - at)
+    if rec.get("result") != "success":
+        return _out(FAIL, f"{job}: last run {rec.get('result')} (exit {rec.get('exit_status')})")
+    if age > max_age:
+        return _out(FAIL, f"{job}: last success {age} s ago, over {max_age} s")
+    return _out(PASS, f"{job}: succeeded {age} s ago")
+
+
+def _ts(v) -> int:
+    try:
+        return calendar.timegm(time.strptime(v, "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError) as e:
+        raise Cant(f"unreadable timestamp {v!r}") from e
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="hnx-lab-probe")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    h = sub.add_parser("http")
+    h.add_argument("url")
+    h.add_argument("--status", default="200")
+    h.add_argument("--ca")
+    h.add_argument("--timeout", type=float, default=10)
+    t = sub.add_parser("tcp")
+    t.add_argument("host")
+    t.add_argument("port", type=int)
+    t.add_argument("--timeout", type=float, default=5)
+    d = sub.add_parser("dns")
+    d.add_argument("resolver")
+    d.add_argument("name")
+    d.add_argument("--type", default="A", choices=sorted(QTYPES))
+    d.add_argument("--expect")
+    d.add_argument("--timeout", type=float, default=5)
+    d.add_argument("--port", type=int, default=53)
+    p = sub.add_parser("prom")
+    p.add_argument("base")
+    p.add_argument("query")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--min", type=float)
+    g.add_argument("--max", type=float)
+    g.add_argument("--eq", type=float)
+    p.add_argument("--empty", choices=["fail", "zero"], default="fail")
+    p.add_argument("--timeout", type=float, default=15)
+    lr = sub.add_parser("lastrun")
+    lr.add_argument("dir")
+    lr.add_argument("job")
+    lr.add_argument("max_age", type=int)
+    lr.add_argument("--now", type=float)
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit as e:
+        return CANT if e.code else 0
+    try:
+        if a.cmd == "http":
+            return http(a.url, {int(x) for x in a.status.split(",")}, a.ca, a.timeout)
+        if a.cmd == "tcp":
+            return tcp(a.host, a.port, a.timeout)
+        if a.cmd == "dns":
+            return dns(a.resolver, a.name, a.type, a.expect, a.timeout, a.port)
+        if a.cmd == "prom":
+            op = "min" if a.min is not None else "max" if a.max is not None else "eq"
+            bound = {"min": a.min, "max": a.max, "eq": a.eq}[op]
+            return prom(a.base, a.query, op, bound, a.empty, a.timeout)
+        return lastrun(a.dir, a.job, a.max_age, a.now if a.now is not None else time.time())
+    except Cant as e:
+        return _out(CANT, f"cannot measure: {e}")
+    except ValueError as e:
+        return _out(CANT, f"cannot measure: bad value ({e})")
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

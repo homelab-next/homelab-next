@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: stop and remove the container and delete the settings file (it holds the secret key). The
+# service keeps no data, so there is nothing to export first (module.yml lifecycle.remove). The
+# compose project is kept for the operator to archive or delete; the decommission audit
+# (module.yml lifecycle.remove.audit) checks nothing still names the service.
+- name: Remove SearXNG
+  hosts: mod_searxng_server
+  become: true
+  tasks:
+    - name: Stop and remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ searxng_dir | default('/opt/compose/searxng') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the settings file (it holds the secret key)
+      ansible.builtin.file:
+        path: "{{ searxng_data_root | default('/var/lib/hnx-modules/searxng') }}/config/settings.yml"
+        state: absent

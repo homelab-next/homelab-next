@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: stop and disable the capture units and take the managed files off. The logs under the log
+# root (a rotating buffer the pipeline ships) and the built image are kept; safe to run again, or on
+# a half-removed host. The decommission audit (module.yml lifecycle.remove.audit) checks nothing
+# still names the service.
+- name: Remove the network monitor
+  hosts: mod_zeek_sensor
+  become: true
+  tasks:
+    - name: Find the capture units
+      ansible.builtin.find:
+        paths: "{{ zeek_unit_dir | default('/etc/systemd/system') }}"
+        patterns: ["hnx-zeek-*.service"]
+      register: zeek_remove_units
+    - name: Stop and disable each capture unit
+      ansible.builtin.systemd:
+        name: "{{ item.path | basename }}"
+        state: stopped
+        enabled: false
+      loop: "{{ zeek_remove_units.files }}"
+      loop_control: {label: "{{ item.path | basename }}"}
+      failed_when: false
+    - name: Delete the unit files and the rotation rule
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ (zeek_remove_units.files | map(attribute='path') | list) + [(zeek_logrotate_dir | default('/etc/logrotate.d')) ~ '/hnx-zeek'] }}"

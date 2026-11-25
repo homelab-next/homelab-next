@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless every dependency is there before anything is written: systemd and python3 on the host,
+# the adapter's source on the control host and every secret in its form.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Look for systemd on the host
+      ansible.builtin.stat:
+        path: /run/systemd/system
+      register: alert_intake_systemd_stat
+    - name: The host runs systemd
+      ansible.builtin.assert:
+        that: alert_intake_systemd_stat.stat.isdir | default(false)
+        fail_msg: "alert-intake: the host does not run systemd (the webhook is a unit)"
+    - name: The interpreter the unit runs is there
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "import json, ssl, http.server, urllib.request"]
+      changed_when: false
+    - name: Look for the adapter's source file on the control host
+      ansible.builtin.stat:
+        path: "{{ alert_intake_adapter_file }}"
+      delegate_to: localhost
+      become: false
+      register: alert_intake_adapter_stat
+    - name: Look for the shared libraries on the control host
+      ansible.builtin.stat:
+        path: "{{ alert_intake_homelabnext_dir }}/{{ item }}"
+      delegate_to: localhost
+      become: false
+      register: alert_intake_shared_stat
+      loop: "{{ alert_intake_shared_files }}"
+    - name: The shared libraries are all there
+      ansible.builtin.assert:
+        that: alert_intake_shared_stat.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: "alert-intake: alert_intake_homelabnext_dir {{ alert_intake_homelabnext_dir }} lacks a shared-library file ({{ alert_intake_shared_files }})"
+    - name: The adapter's source is a file
+      ansible.builtin.assert:
+        that: alert_intake_adapter_stat.stat.isreg | default(false)
+        fail_msg: "alert-intake: alert_intake_adapter_file {{ alert_intake_adapter_file }} is not a file on the control host"
+  tags: [readiness]

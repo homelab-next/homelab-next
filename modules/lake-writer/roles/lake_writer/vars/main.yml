@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# Derived, not configurable: the names every task and template shares.
+lake_writer_marker: "managed by homelab-next (modules/lake-writer)"
+# the one lake namespace this writer writes (the script refuses any other, and so does validate)
+lake_writer_namespace: soc
+lake_writer_known_tables:
+  - authentication
+  - compliance_finding
+  - detection_finding
+  - dns_activity
+  - file_activity
+  - http_activity
+  - network_activity
+  - process_activity
+  - raw_archive
+  - vulnerability_finding
+# installed at a fixed path (the unit's ExecStart names it)
+lake_writer_script: "{{ lake_writer_bin_dir }}/hnx-lake-writer"
+# the homelab-next runtime release's interpreter (role hnx_runtime): the script imports the platform's
+# lake library and its lake and object-store clients from it; its shebang names it
+lake_writer_runtime_python: /opt/hnx/current/bin/python
+lake_writer_env_file: "{{ lake_writer_config_dir }}/lake-writer.env"
+lake_writer_auth_dir: "{{ lake_writer_config_dir }}/credentials"
+lake_writer_login_env_file: "{{ lake_writer_auth_dir }}/logins.env"
+lake_writer_ca_file: "{{ lake_writer_config_dir }}/lake-ca.pem"
+lake_writer_schema_dir: "{{ lake_writer_config_dir }}/schemas"
+lake_writer_state_dir: "{{ lake_writer_data_root }}/state"
+lake_writer_export_dir: "{{ lake_writer_data_root }}/export"
+# one template service and one template timer: an instance is a table (hnx-<id>@<table>.timer)
+lake_writer_service_unit: "hnx-{{ lake_writer_logical_id }}@.service"
+lake_writer_timer_unit: "hnx-{{ lake_writer_logical_id }}@.timer"
+lake_writer_timers: "{{ lake_writer_tables | map('regex_replace', '^', 'hnx-' ~ lake_writer_logical_id ~ '@') | map('regex_replace', '$', '.timer') | list }}"
+# the names the script's clients read a login under, whatever secret the site keeps it in: the role
+# writes the site's value into the matching HNX_SECRET_* variable (the credentials file, the hooks' environment)
+lake_writer_login_alias: secret:lake-writer/lake-password
+lake_writer_bearer_alias: secret:lake-writer/catalog-token
+lake_writer_forms:
+  login: '^[A-Za-z0-9._~+/=:@%^-]{8,512}\Z'
+  s3: '^[A-Za-z0-9._~+/=:-]{8,128}\Z'
+  bearer: '^[A-Za-z0-9._~+/=:-]{8,2048}\Z'
+# the environment a hook (not a unit) runs the script with: the endpoints and the logins in the names
+# the platform's clients read. The logins are secrets: every task that uses this carries no_log.
+lake_writer_script_env:
+  HNX_LW_NAMESPACE: "{{ lake_writer_namespace }}"
+  HNX_LW_TABLES: "{{ lake_writer_tables | join(',') }}"
+  HNX_LW_STAGING_BUCKET: "{{ lake_writer_staging_bucket }}"
+  HNX_LW_STAGING_PREFIX: "{{ lake_writer_staging_prefix }}"
+  HNX_LW_STATE_DIR: "{{ lake_writer_state_dir }}"
+  HNX_LW_SCHEMA_DIR: "{{ lake_writer_schema_dir }}"
+  HNX_LW_LAKE_USER: "{{ lake_writer_lake_user }}"
+  HNX_LW_LAKE_WAREHOUSE: "{{ lake_writer_lake_warehouse }}"
+  HNX_LW_LAKE_CREDENTIAL: "{{ lake_writer_login_alias }}"
+  HNX_LW_CATALOG_CREDENTIAL: "{{ lake_writer_bearer_alias if lake_writer_catalog_bearer_ref != '' else '' }}"
+  HNX_LW_LAKE_CA_FILE: "{{ lake_writer_ca_file if lake_writer_lake_ca_ref != '' else '' }}"
+  HNX_LW_S3_REGION: "{{ lake_writer_s3_region }}"
+  HNX_LW_S3_ALLOW_PLAINTEXT: "{{ 'true' if lake_writer_object_store_allow_plaintext | bool else 'false' }}"
+  HNX_ENDPOINT_LAKE_QUERY: "{{ lake_writer_effective_lake_query_url | default('') }}"
+  HNX_ENDPOINT_LAKE_CATALOG: "{{ lake_writer_effective_lake_catalog_url | default('') }}"
+  HNX_ENDPOINT_OBJECT_STORE: "{{ lake_writer_effective_object_store_url | default('') }}"
+  HNX_LW_S3_ACCESS_KEY: "{{ lookup('hnx_secret', lake_writer_s3_id_ref) }}"
+  HNX_LW_S3_SECRET_KEY: "{{ lookup('hnx_secret', lake_writer_s3_key_ref) }}"
+  HNX_SECRET_LAKE_WRITER_LAKE_PASSWORD: "{{ lookup('hnx_secret', lake_writer_lake_login_ref) }}"
+  HNX_SECRET_LAKE_WRITER_CATALOG_TOKEN: "{{ lookup('hnx_secret', lake_writer_catalog_bearer_ref) if lake_writer_catalog_bearer_ref != '' else '' }}"

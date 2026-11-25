@@ -10,7 +10,8 @@
 # (sso.<domain>) and the secret name of the lab CA the edge verifies this row's certificate with
 # (edge_tls.server_name too, when the certificate is not issued for the capability alias). The
 # IdP's own login is the route's auth (auth: own); the edge reaches it over TLS (tls: internal).
-# The health path is the master realm's discovery document, which every instance has.
+# The health path is the site's realm's discovery document (:realm, the site's realm name): the
+# realm the edge publishes, so the same path answers at the public name and at the service.
 services:
   idp:
     capability: idp
@@ -18,7 +19,7 @@ services:
     host: server
     protocol: https
     port: 8443
-    health: {kind: http, path: /realms/master/.well-known/openid-configuration, expect_status: 200}
+    health: {kind: http, path: /realms/:realm/.well-known/openid-configuration, expect_status: 200}
     owner: operator
     tls: internal
     auth: own

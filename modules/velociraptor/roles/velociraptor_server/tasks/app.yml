@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app).
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    velociraptor_server_app:
+      compose_app_name: velociraptor
+      compose_app_dir: "{{ velociraptor_server_dir }}"
+      compose_app_data_dir: "{{ velociraptor_server_data_root }}"
+      compose_app_export_dir: "{{ velociraptor_server_data_root }}/export"
+      compose_app_owner: "{{ velociraptor_server_owner }}"
+      compose_app_group: "{{ velociraptor_server_group }}"
+      compose_app_start: "{{ velociraptor_server_start }}"
+      compose_app_validate_with_docker: "{{ velociraptor_server_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          velociraptor:
+            image: "{{ velociraptor_server_repository }}"
+            tag: "{{ velociraptor_server_tag }}"
+            digest: "{{ velociraptor_server_digest }}"
+            user: "{{ velociraptor_server_uid | int }}:{{ velociraptor_server_gid | int }}"
+            command: "{{ velociraptor_server_command }}"
+            environment: >-
+              {{ velociraptor_server_fixed_env | combine({'VELOCIRAPTOR_HOSTNAME': velociraptor_server_frontend_hostname}) }}
+            ports:
+              - "{{ velociraptor_server_bind }}:{{ velociraptor_server_frontend_port | int }}:{{ velociraptor_server_container_frontend_port }}"
+              - "{{ velociraptor_server_bind }}:{{ velociraptor_server_gui_port | int }}:{{ velociraptor_server_container_gui_port }}"
+            volumes:
+              - "{{ velociraptor_server_data_root }}/etc:{{ velociraptor_server_container_etc }}"
+              - "{{ velociraptor_server_data_root }}/datastore:{{ velociraptor_server_container_datastore }}"
+              - "{{ velociraptor_server_data_root }}/custom_artifacts:{{ velociraptor_server_container_artifacts }}:ro"
+            mem_limit: "{{ velociraptor_server_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, "nc -z localhost 8000 && nc -z localhost 8889"]
+              interval: 30s
+              timeout: 5s
+              retries: 5
+              start_period: 60s
+  tags: [health, backup, restore, export, upgrade]

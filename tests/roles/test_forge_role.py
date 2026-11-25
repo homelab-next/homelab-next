@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import pwd
+import subprocess
 import time
 from pathlib import Path
 
@@ -64,6 +65,8 @@ GUEST = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())["hosts"
 DEFAULTS = yaml.safe_load((Path(ROLE) / "defaults" / "main.yml").read_text())
 REPO = DEFAULTS[f"{MID}_image"].split("@")[0].rsplit(":", 1)[0]
 PKI = make_pki(Path(__import__("tempfile").mkdtemp()))
+# a second CA standing in for the host's public root store
+PUBLIC_ROOTS = make_pki(Path(__import__("tempfile").mkdtemp()))[2]
 SSH_TYPES = ("ed25519", "rsa", "ecdsa")
 SUFFIX = {"ed25519": "ed", "rsa": "rsa", "ecdsa": "ecdsa"}
 VALUES = {
@@ -203,11 +206,14 @@ def _first_an_identity_provider_adds_its_ca_to_the_trust_and_nothing_else_to_the
 ):
     ref = f"secret:{MID}/oidc-client-secret"
     env = {**SECRETS, secret_env_name(ref): "o" * 24}
+    roots = tmp_path / "public-roots.pem"
+    roots.write_text(PUBLIC_ROOTS)
     v = pv(
         tmp_path,
         oidc_enabled=True,
         oidc_issuer_url="https://sso.example.internal/realms/lab",
         oidc_client_id="forge",
+        system_ca_file=str(roots),
     )
     return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": env}
 
@@ -217,8 +223,51 @@ def test_an_identity_provider_adds_its_ca_to_the_trust_and_nothing_else_to_the_e
     r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     svc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"][MID]
-    assert svc["environment"]["SSL_CERT_FILE"] == "/tls/ca.pem"
+    # the trust replaces the image's own store, so it carries the public roots (an issuer behind a
+    # public edge certificate) AND the lab CA, not the lab CA alone
+    assert svc["environment"]["SSL_CERT_FILE"] == "/tls/ca-bundle.pem"
+    bundle = (tmp_path / "app" / "tls" / "ca-bundle.pem").read_text()
+    assert PUBLIC_ROOTS.strip() in bundle and PKI[2].strip() in bundle
+    assert bundle.index(PUBLIC_ROOTS.strip()) < bundle.index(PKI[2].strip())
+    # real line breaks between and after the certificates (a literal backslash-n fused the public
+    # store's last END line with the lab CA's BEGIN line, so a PEM reader lost both): every line
+    # is a PEM line, the bundle ends in a newline, and openssl reads both certificates from it
+    assert "\\n" not in bundle and bundle.endswith("-----END CERTIFICATE-----\n")
+    assert (
+        bundle.count("\n-----BEGIN CERTIFICATE-----")
+        == bundle.count("-----BEGIN CERTIFICATE-----") - 1
+    )
+    path = tmp_path / "app" / "tls" / "ca-bundle.pem"
+    read = subprocess.run(
+        ["openssl", "storeutl", "-noout", "-certs", str(path)], capture_output=True, text=True
+    )
+    assert read.returncode == 0 and "Total found: 2" in read.stdout + read.stderr, (
+        read.stdout + read.stderr
+    )
     assert "o" * 24 not in (tmp_path / "app" / "docker-compose.yml").read_text()
+
+
+def _first_an_identity_provider_with_no_public_roots_is_refused(tmp_path):
+    ref = f"secret:{MID}/oidc-client-secret"
+    env = {**SECRETS, secret_env_name(ref): "o" * 24}
+    roots = tmp_path / "empty-roots.pem"
+    roots.write_text("no certificate here\n")
+    v = pv(
+        tmp_path,
+        oidc_enabled=True,
+        oidc_issuer_url="https://sso.example.internal/realms/lab",
+        oidc_client_id="forge",
+        system_ca_file=str(roots),
+    )
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": env}
+
+
+@first_run(_first_an_identity_provider_with_no_public_roots_is_refused)
+def test_an_identity_provider_with_no_public_roots_is_refused(first):
+    r, tmp_path = first
+    assert r.returncode != 0
+    assert "holds no PEM certificate" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "tls" / "ca-bundle.pem").exists()
 
 
 # ----------------------------------------------------------------------------- refusals

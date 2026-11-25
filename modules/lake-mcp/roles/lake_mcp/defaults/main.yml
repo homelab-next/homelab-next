@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# The service account the server runs as, and that the restricted SSH key logs in as (a login shell, a
+# locked password; the key's forced command is the only thing it runs). It joins the group sshd allows
+# (role ssh_hardening's AllowGroups) when one is named.
+lake_mcp_user: hnx-lake-mcp
+lake_mcp_group: hnx-lake-mcp
+lake_mcp_ssh_group: hnx-ssh
+lake_mcp_home: /var/lib/hnx-modules/lake-mcp
+lake_mcp_config_dir: /etc/hnx-modules/lake-mcp
+lake_mcp_hnx_bin: /opt/hnx/bin/hnx
+# the lake-query endpoint: the registry row's URL (empty endpoint: resolved from lake_mcp_lake_query_id at deploy time)
+lake_mcp_lake_query_id: lake-query
+lake_mcp_endpoint: ""
+# the engine account the server signs in as (its own reader: the site's access rules let it read, and nothing else)
+lake_mcp_lake_user: lake-mcp
+lake_mcp_reader_cred: secret:lake-mcp/reader-password
+# a private CA that verifies the endpoint, by secret reference (empty: the system roots)
+lake_mcp_ca_ref: ""
+# the limits (homelabnext.lake.mcp_tools: max_rows at most 5000, timeout_s at most 300)
+lake_mcp_max_rows: 500
+lake_mcp_timeout_s: 60
+# the restricted keys: public keys (type, base64, optional comment) that may start the server over SSH stdio;
+# each is installed with `restrict` (no pty, no forwarding of any kind) and the forced command
+lake_mcp_authorized_keys: []
+# the client addresses each key is accepted from (sshd `from=`; empty: any address the firewall admits)
+lake_mcp_ssh_from: []
+# the owner of what only root may write (a role test runs unprivileged and sets its own)
+lake_mcp_root_owner: root
+# health runs the server's --check as the service account (a role test sets false)
+lake_mcp_check_as_user: true

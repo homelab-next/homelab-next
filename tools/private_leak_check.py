@@ -696,6 +696,9 @@ def _policy_findings(root: Path, files: list[str], sealed_paths: list[str]) -> l
     return out
 
 
+EXEMPTIONS_FILE = ".leak-exemptions.json"
+
+
 def check_private(root: Path) -> list[Finding]:
     marker = root / MARKER
     if not marker.is_file():
@@ -714,6 +717,14 @@ def check_private(root: Path) -> list[Finding]:
     ]
     files, out = _files(root)
     out += _policy_findings(root, [rel for rel, _ in files], sealed_paths)
+    # reviewed waivers of one exact high-entropy string in one file (tools/leak_scan.py, "reviewed exemptions"):
+    # an optional file at the root; an entry that waives nothing is a finding, so it cannot rot
+    exempt_file = root / EXEMPTIONS_FILE
+    try:
+        exemptions = leak_scan.load_exemptions(str(exempt_file) if exempt_file.is_file() else None)
+    except leak_scan.ConfigError as exc:
+        raise ConfigError(str(exc)) from exc
+    used: set[int] = set()
     for rel, f in files:
         if _is_key_file(rel):
             out.append(Finding(rel, "key-file", "a decryption key must never be committed"))
@@ -743,8 +754,10 @@ def check_private(root: Path) -> list[Finding]:
             if why:
                 out.append(Finding(rel, "vault-unencrypted", why))
                 continue
-        for h in leak_scan.scan_text(masked(text), rel, patterns):
+        for h in leak_scan.scan_text(masked(text), rel, patterns, exemptions=exemptions, used=used):
             out.append(Finding(rel, "secret", f"line {h.line}: {h.pattern} {h.shown}"))
+    for msg in leak_scan.stale_exemptions(exemptions, used):
+        out.append(Finding(EXEMPTIONS_FILE, "stale-exemption", msg))
     return out
 
 

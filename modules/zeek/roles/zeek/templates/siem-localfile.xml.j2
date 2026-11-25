@@ -1,0 +1,11 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+<ossec_config>
+{% for cap in zeek_capture_interfaces %}
+{% for stream in zeek_siem_streams %}
+  <localfile>
+    <log_format>json</log_format>
+    <location>{{ zeek_log_root }}/{{ cap.slug }}/{{ stream }}.log</location>
+  </localfile>
+{% endfor %}
+{% endfor %}
+</ossec_config>

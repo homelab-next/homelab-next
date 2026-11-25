@@ -44,6 +44,59 @@
       - prometheus_heartbeat_topic == '' or prometheus_heartbeat_topic is match('^[A-Za-z0-9_-]{1,64}\Z')
       - prometheus_heartbeat_topic != prometheus_notify_topic
       - prometheus_heartbeat_every_minutes | int >= 1 and prometheus_heartbeat_every_minutes | int <= 60
+      - prometheus_probes_enabled is boolean
+      - prometheus_probe_exclude is sequence and prometheus_probe_exclude is not string
+      - prometheus_probe_exclude | reject('string') | list | length == 0
+      - prometheus_probe_exclude | reject('match', '^[a-z0-9][a-z0-9-]*\Z') | list | length == 0
+      - prometheus_probe_interval is match(prometheus_interval_pattern)
+      - prometheus_probe_timeout is match('^[1-9][0-9]?s\Z')
+      - prometheus_probe_ca_ref == '' or prometheus_probe_ca_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - (prometheus_probe_timeout[:-1] | int) < (prometheus_probe_interval[:-1] | int * (60 if prometheus_probe_interval.endswith('m') else 1))
+      - prometheus_alert_probe_down_for is match(prometheus_duration_pattern)
+      - prometheus_blackbox_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      - prometheus_blackbox_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      # hardware alerts: temperatures in range, warning under critical, a cap in watts, plain durations
+      - prometheus_alert_cpu_temp_warning_celsius | int >= 40 and prometheus_alert_cpu_temp_warning_celsius | int < prometheus_alert_cpu_temp_critical_celsius | int
+      - prometheus_alert_cpu_temp_critical_celsius | int <= 110
+      - prometheus_alert_nvme_temp_warning_celsius | int >= 40 and prometheus_alert_nvme_temp_warning_celsius | int < prometheus_alert_nvme_temp_critical_celsius | int
+      - prometheus_alert_nvme_temp_critical_celsius | int <= 100
+      - prometheus_alert_gpu_temp_warning_celsius | int >= 40 and prometheus_alert_gpu_temp_warning_celsius | int < prometheus_alert_gpu_temp_critical_celsius | int
+      - prometheus_alert_gpu_temp_critical_celsius | int <= 110
+      - prometheus_alert_gpu_power_cap_watts | int >= 10 and prometheus_alert_gpu_power_cap_watts | int <= 1000
+      - prometheus_alert_pool_used_percent | int >= 1 and prometheus_alert_pool_used_percent | int <= 99
+      - >-
+        [prometheus_alert_cpu_temp_warning_for, prometheus_alert_cpu_temp_critical_for, prometheus_alert_gpu_power_for,
+         prometheus_alert_board_event_window, prometheus_alert_guest_down_for, prometheus_alert_gpu_idle_for,
+         prometheus_alert_port_down_for, prometheus_alert_llm_probe_failed_for] | reject('match', prometheus_duration_pattern) | list | length == 0
+      # SNMP: plain registry host ids with known modules and a plain interface pattern, a secret reference
+      - prometheus_snmp_enabled is boolean
+      - prometheus_snmp_targets is sequence and prometheus_snmp_targets is not string
+      - prometheus_snmp_targets | rejectattr('host', 'defined') | list | length == 0
+      - prometheus_snmp_targets | map(attribute='host') | reject('match', '^[a-z0-9][a-z0-9-]*\Z') | list | length == 0
+      - prometheus_snmp_targets | map(attribute='host') | unique | list | length == prometheus_snmp_targets | length
+      - prometheus_snmp_targets | rejectattr('modules', 'defined') | list | length == 0
+      - prometheus_snmp_targets | map(attribute='modules') | map('length') | select('equalto', 0) | list | length == 0
+      - prometheus_snmp_targets | map(attribute='modules') | flatten | difference(prometheus_snmp_known_modules) | length == 0
+      - prometheus_snmp_targets | map(attribute='watch_ports', default='') | reject('match', prometheus_snmp_watch_pattern) | list | length == 0
+      - not (prometheus_snmp_enabled | bool) or prometheus_snmp_community_ref is match(prometheus_ref_pattern)
+      - not (prometheus_snmp_enabled | bool) or prometheus_snmp_targets | length > 0
+      - prometheus_snmp_interval is match(prometheus_interval_pattern)
+      - prometheus_snmp_timeout is match('^[1-9][0-9]?s\Z')
+      - prometheus_snmp_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      - prometheus_snmp_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - prometheus_alert_port_errors_per_minute | int >= 1
+      - prometheus_alert_nas_disk_temp_celsius | int >= 30 and prometheus_alert_nas_disk_temp_celsius | int <= 80
+      - prometheus_alert_nas_volume_used_percent | int >= 1 and prometheus_alert_nas_volume_used_percent | int <= 99
+      # LLM probes: plain role names through a registry row with a key, only beside the blackbox exporter
+      - prometheus_llm_probe_roles is sequence and prometheus_llm_probe_roles is not string
+      - prometheus_llm_probe_roles | reject('match', prometheus_llm_role_pattern) | list | length == 0
+      - prometheus_llm_probe_roles | length == 0 or prometheus_probes_enabled | bool
+      - prometheus_llm_probe_roles | length == 0 or prometheus_llm_probe_gateway is match('^[a-z0-9][a-z0-9-]*\Z')
+      - prometheus_llm_probe_roles | length == 0 or prometheus_llm_probe_key_ref is match(prometheus_ref_pattern)
+      - prometheus_llm_probe_interval is match('^[1-9][0-9]?m\Z')
+      - prometheus_llm_probe_timeout is match('^[1-9][0-9]{1,2}s\Z')
+      - prometheus_llm_probe_timeout[:-1] | int >= 15 and prometheus_llm_probe_timeout[:-1] | int <= (prometheus_llm_probe_interval[:-1] | int * 60)
+      - prometheus_alert_llm_probe_slow_seconds | int >= 1
     fail_msg: >-
       prometheus: a registry id, an image pinned by tag and digest, the guest's IPv4 address to
       publish on (not all interfaces), ports, a container uid and gid of 1000 or more, absolute
@@ -51,7 +104,11 @@
       evaluation intervals like 30s, a memory limit like 768m, the hnx command (bare or by absolute
       path, or an absolute python running homelabnext.cli), an absolute registry path, plain host names to exclude, alert durations like 10m and
       percentages 1-99, a notify logical id and topic, a priority 1-5, a secret:<name> token
-      reference, an alert schedule of every minute or every 30 seconds, a read-only mount-point pattern of plain regex characters and a positive number of minutes, a heartbeat topic (not the alert topic, or empty to turn the dead-man off) and 1-60 minutes between heartbeats
+      reference, an alert schedule of every minute or every 30 seconds, a read-only mount-point pattern of plain regex characters and a positive number of minutes, a heartbeat topic (not the alert topic, or empty to turn the dead-man off) and 1-60 minutes between heartbeats, probes on or off with plain service names to exclude, a probe interval like 60s and a whole-seconds timeout shorter than it, an empty probe CA or a secret reference, a duration for ProbeDown and a blackbox image pinned by tag and digest with a memory limit like 128m;
+      hardware thresholds in range (warning under critical, a GPU cap in watts, durations like 5m); SNMP targets of
+      plain registry host ids, each with known modules and a plain interface pattern, and a community secret reference
+      when SNMP is on, an image pinned by digest; LLM probe roles of plain names only beside the blackbox exporter, with a
+      gateway registry id, a key reference, an interval in minutes and a timeout of 15 s or more inside it
   tags: [health, backup, restore, export, upgrade, readiness]
 
 # The pinned compose network is judged in ONE place, compose_app's network_subnet.yml (RFC 1918,

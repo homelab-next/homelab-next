@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes. It is keyed by the slot and
+# renamed to the instance the site selects; version is product.version (never repeated here), and
+# host is the module's host role, which the site places on a host. The lab registry
+# (lab/services.yml) must carry it exactly as bound (hnx modules check, docs/modules/registry-rows.md).
+# The sensor listens on nothing (passive capture), so its health is the host's SSH, as in the
+# worked four-box lab; capture health is the role's health hook.
+services:
+  network-sensor:
+    capability: network-sensor
+    impl: suricata
+    host: sensor
+    protocol: ssh
+    port: 22
+    health: {kind: tcp}
+    owner: operator
+    tls: none
+    tags: [network-sensor]
+    description: Suricata on a capture host; it listens on nothing. Its health is the host's SSH; the capture itself is proved by the role's health hook (running, drops under a bound, eve growing).

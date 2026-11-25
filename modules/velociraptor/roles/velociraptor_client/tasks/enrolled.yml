@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# The client writes its identity to its writeback file once the server accepted it: a running unit
+# that never enrolled (wrong authority, wrong address) is the failure this finds.
+- name: Name the writeback file
+  ansible.builtin.set_fact:
+    velociraptor_client_writeback: >-
+      {{ (velociraptor_client_config_text | from_yaml).Client.writeback_linux | default(velociraptor_client_default_writeback) }}
+  no_log: true
+  tags: [health]
+
+- name: Wait for the client's identity
+  ansible.builtin.slurp:
+    src: "{{ velociraptor_client_writeback }}"
+  register: velociraptor_client_identity
+  until: velociraptor_client_identity.content is defined and (velociraptor_client_identity.content | b64decode) is search('client_id:\s*C\.[0-9a-f]{16}')
+  retries: "{{ ((velociraptor_client_ready_timeout | int) / 5) | int }}"
+  delay: 5
+  failed_when: false
+  no_log: true
+  tags: [health]
+
+- name: The client enrolled
+  ansible.builtin.assert:
+    that:
+      - velociraptor_client_identity.content is defined
+      - (velociraptor_client_identity.content | b64decode) is search('client_id:\s*C\.[0-9a-f]{16}')
+    fail_msg: >-
+      velociraptor client: no client identity in {{ velociraptor_client_writeback }} after
+      {{ velociraptor_client_ready_timeout }} seconds: the client did not enrol (the authority or the
+      address in its configuration is not the server's: journalctl -u {{ velociraptor_client_service }})
+  tags: [health]
+
+- name: The server sees this client (a sighting on the server, not only a local identity)
+  when: velociraptor_client_server_host | length > 0
+  tags: [health]
+  block:
+    - name: Ask the server whether it lists this client and saw it lately
+      ansible.builtin.command:
+        argv:
+          - "{{ velociraptor_client_server_script }}"
+          - --config
+          - "{{ velociraptor_client_server_script_config }}"
+          - client-seen
+          - --client-id
+          - "{{ (velociraptor_client_identity.content | b64decode | regex_search('client_id:\\s*(C\\.[0-9a-f]{16})', '\\1')) | first }}"
+          - --max-age-s
+          - "{{ velociraptor_client_seen_max_age_s | int }}"
+      delegate_to: "{{ velociraptor_client_server_host | default(inventory_hostname, true) }}"
+      become: true
+      register: velociraptor_client_seen
+      until: velociraptor_client_seen.rc == 0
+      retries: "{{ ((velociraptor_client_ready_timeout | int) / 5) | int }}"
+      delay: 5
+      changed_when: false
+      failed_when: false
+      check_mode: false
+    - name: The server saw the client
+      ansible.builtin.assert:
+        that: velociraptor_client_seen.rc == 0
+        fail_msg: >-
+          velociraptor client: the server ({{ velociraptor_client_server_host }}) does not see this client after
+          {{ velociraptor_client_ready_timeout }} seconds ({{ velociraptor_client_seen.stderr | default('') | trim }}): the dial
+          address or the authority in its configuration is not that server's (journalctl -u {{ velociraptor_client_service }})
+

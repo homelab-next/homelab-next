@@ -8,7 +8,8 @@ summary_of: outline:sha256:881053abbe9b00d9
 - **Date:** 2026-10-31
 - **Amended:** 2026-11-06 (decision 4, the username claim; decision 3, the note on public
   routes); 2026-11-13 (decision 2, the second factor: a passkey or a client certificate, never a
-  one-time code, by the operator; reserved usernames)
+  one-time code, by the operator; reserved usernames); 2026-11-25 (decision 2, a per-row PKCE
+  exemption for a confidential client whose product sends no PKCE parameters)
 - **Related:** ADR-0017 (the broker's approval gate, approvers by SSO issuer and subject);
   ADR-0027 (modules, the product-name lint); ADR-0030 (agents act only through the broker);
   [architecture](../architecture.md) (layer 4); [idp](../systems/idp.md);
@@ -89,6 +90,14 @@ one IdP product.
    create or rename a user into one. A realm import of users bypasses validators, so the IdP
    module's health hook also fails while a user with a reserved name exists. A name an
    approver allowlist or a proof scenario has used is never handed to a person.
+   **PKCE exemption (amendment 2026-11-25).** Every client requires S256 PKCE
+   unless its row declares `oidc.pkce: false` with an `oidc.why` naming the upstream gap (service
+   schema 2.15): a product whose OAuth2 login never sends the PKCE parameters (the lab's forge at the time,
+   whose OpenID Connect source builds its authorization URL with no PKCE option) could otherwise
+   not sign in at all. The exemption is that row's alone, only for a confidential client (the
+   generator refuses it on a public one, which has no secret to bind its codes), the client keeps
+   its exact redirect URIs, and `hnx registry validate` prints a `note: pkce exemption` line for
+   every one so none is silent. Remove the declaration when the product sends them.
 3. **Forward auth goes through an auth proxy** (registry capability `auth-proxy`; the default is
    oauth2-proxy) next to the edge, for every app with no OIDC login of its own. The generated
    `hnx_forward_auth` Caddy snippet proxies the auth proxy's `/oauth2/*` paths under each site,

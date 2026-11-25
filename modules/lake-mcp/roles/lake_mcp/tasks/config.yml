@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# The server's settings (no secret in them): the endpoint, the reader, the catalog, the schemas the
+# listing looks at, and the limits.
+- name: The settings
+  ansible.builtin.copy:
+    dest: "{{ lake_mcp_config_file }}"
+    content: |
+      # Managed by homelabnext (module lake-mcp); local changes are overwritten. No secret is here: the
+      # reader's password is the owner-only file credential_file.
+      {{ lake_mcp_settings | combine({'ca_file': lake_mcp_ca_file} if lake_mcp_ca_ref != '' else {}) | to_nice_yaml(indent=2) }}
+    owner: "{{ lake_mcp_root_owner }}"
+    group: "{{ lake_mcp_group }}"
+    mode: "0644"

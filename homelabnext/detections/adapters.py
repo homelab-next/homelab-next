@@ -14,9 +14,10 @@ it, and ``validate-techniques`` loads ``known_ids_snapshot`` itself when the met
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from .sigma import Rule
 
@@ -29,12 +30,83 @@ class MissingEngineId(Exception):
     """The target has no engine id for this det: (run the det map generator)."""
 
 
+class BindingError(ValueError):
+    """A logsource binding in ``mappings/<backend>.yml`` is malformed."""
+
+
+#: the Sigma logsource keys a binding may match on
+LOGSOURCE_KEYS = ("product", "category", "service")
+_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}\Z")
+
+
+@dataclass(frozen=True)
+class Binding:
+    """Where one Sigma logsource lands in an engine: the rules for it chain from ``parent`` (the
+    engine's own base for that telemetry, backend-specific) and read ``fields`` (Sigma field ->
+    the engine's name for it). A rule whose logsource matches a binding is compiled ONLY with that
+    binding's fields: a Sigma field it does not name is refused, never passed through under its
+    Sigma name (a field the engine never sets loads clean and never fires)."""
+
+    name: str
+    match: dict[str, str]
+    parent: dict[str, Any]
+    fields: dict[str, str]
+
+    def matches(self, logsource: dict[str, Any]) -> bool:
+        have = {k: str(v).lower() for k, v in logsource.items()}
+        return all(have.get(k) == v for k, v in self.match.items())
+
+
+def load_bindings(doc: dict | None) -> tuple[Binding, ...]:
+    """The ``logsources:`` list of a backend mapping document (``mappings/<backend>.yml``)."""
+    out: list[Binding] = []
+    seen: set[str] = set()
+    for i, b in enumerate((doc or {}).get("logsources") or []):
+        where = f"logsources[{i}]"
+        if not isinstance(b, dict) or set(b) - {"name", "match", "parent", "fields"}:
+            raise BindingError(f"{where}: a mapping of name, match, parent and fields")
+        name = b.get("name")
+        if not isinstance(name, str) or not _NAME_RE.match(name) or name in seen:
+            raise BindingError(f"{where}: name must be a unique lower-case word")
+        seen.add(name)
+        match = b.get("match")
+        if (
+            not isinstance(match, dict)
+            or not match
+            or set(match) - set(LOGSOURCE_KEYS)
+            or not all(isinstance(v, str) and v for v in match.values())
+        ):
+            raise BindingError(f"{name}: match is a non-empty map of {', '.join(LOGSOURCE_KEYS)}")
+        parent = b.get("parent")
+        if not isinstance(parent, dict) or len(parent) != 1:
+            raise BindingError(f"{name}: parent names exactly one engine base")
+        fields = b.get("fields")
+        if (
+            not isinstance(fields, dict)
+            or not fields
+            or not all(isinstance(k, str) and isinstance(v, str) and v for k, v in fields.items())
+        ):
+            raise BindingError(f"{name}: fields is a non-empty map of Sigma field -> engine name")
+        out.append(
+            Binding(name, {k: v.lower() for k, v in match.items()}, dict(parent), dict(fields))
+        )
+    return tuple(out)
+
+
+def select_binding(bindings: tuple[Binding, ...], logsource: dict[str, Any]) -> Binding | None:
+    """The most specific binding (most matched keys, then file order) for ``logsource``."""
+    hits = [b for b in bindings if b.matches(logsource)]
+    return max(hits, key=lambda b: len(b.match)) if hits else None
+
+
 @dataclass(frozen=True)
 class Target:
     name: str
     field_mapping: dict[str, str] = field(default_factory=dict)
     det_map: dict[str, int] = field(default_factory=dict)  # det:<slug> -> engine number
     options: dict[str, str] = field(default_factory=dict)
+    #: per-logsource engine bindings; when any are given, a rule must match one to compile
+    logsources: tuple[Binding, ...] = ()
 
 
 @dataclass(frozen=True)

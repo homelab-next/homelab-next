@@ -1,0 +1,169 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: 'Keep N ephemeral CI job slots, each one throwaway VM per job from a pinned golden image.'
+    options: &opts
+      ci_runner_logical_id:
+        type: str
+        description: The instance id (the unit set and data root name), e.g. ci-runner.
+        required: true
+      ci_runner_base_image_url:
+        type: str
+        description: The cloud image the golden image is built from (https).
+        required: true
+      ci_runner_base_image_sha256:
+        type: str
+        description: The sha256 of that image; any other digest is refused.
+        required: true
+      ci_runner_agent_url:
+        type: str
+        description: The runner agent's release archive (https).
+        required: true
+      ci_runner_agent_sha256:
+        type: str
+        description: The sha256 of that archive.
+        required: true
+      ci_runner_feed_pubkey:
+        type: str
+        description: The feeder's SSH public key (one line); its only command is the slot script's feed.
+        required: true
+      ci_runner_resolvers:
+        type: list
+        description: The IPv4 addresses of the resolvers the host (and so the job VMs) use; the only private addresses the VMs may reach, on port 53.
+        required: true
+        elements: str
+      ci_runner_config_dir:
+        type: path
+        description: Where the slot configuration, the egress table and the build seed are written.
+        default: /etc/hnx/{{ ci_runner_logical_id }}
+      ci_runner_data_root:
+        type: path
+        description: 'The module''s data root: images/, spool/, slots/.'
+        default: /var/lib/hnx-modules/{{ ci_runner_logical_id }}
+      ci_runner_user:
+        type: str
+        description: The unprivileged account the slots and their VMs run as (in the kvm group); the egress table holds its traffic.
+        default: hnx-{{ ci_runner_logical_id }}
+      ci_runner_group:
+        type: str
+        description: The group of that account.
+        default: hnx-{{ ci_runner_logical_id }}
+      ci_runner_manage_accounts:
+        type: bool
+        description: 'Create the accounts (false: the site provides them).'
+        default: true
+      ci_runner_feed_ssh_group:
+        type: str
+        description: The group sshd admits (AllowGroups); the slots' account joins it, and the feeder's key is forced to the feed command.
+        default: hnx-ssh
+      ci_runner_slots:
+        type: int
+        description: How many job slots (concurrent job VMs) the host keeps.
+        default: 4
+      ci_runner_slot_vcpus:
+        type: int
+        description: vCPUs of each job VM.
+        default: 4
+      ci_runner_slot_memory_mb:
+        type: int
+        description: Memory of each job VM, in MB.
+        default: 8192
+      ci_runner_slot_disk_gb:
+        type: int
+        description: The virtual size of each job VM's copy-on-write disk over the golden image, in GB.
+        default: 80
+      ci_runner_job_timeout_s:
+        type: int
+        description: A job VM still running this many seconds after boot is killed.
+        default: 10800
+      ci_runner_claim_wait_s:
+        type: int
+        description: How long a slot waits for a registration before its run ends (systemd starts it again).
+        default: 60
+      ci_runner_console_keep_bytes:
+        type: int
+        description: 'The tail of each slot''s last VM console kept for a post-mortem, in bytes (0: none).'
+        default: 262144
+      ci_runner_build_vcpus:
+        type: int
+        description: vCPUs of the VM that builds the golden image.
+        default: 8
+      ci_runner_build_memory_mb:
+        type: int
+        description: Memory of the build VM, in MB.
+        default: 8192
+      ci_runner_build_disk_gb:
+        type: int
+        description: The virtual size of the golden image, in GB.
+        default: 40
+      ci_runner_build_timeout_s:
+        type: int
+        description: The golden image build is refused when it takes longer than this.
+        default: 3600
+      ci_runner_hosted_os_name:
+        type: str
+        description: The hosted image name the setup actions read (ImageOS) in the job VMs.
+        default: ubuntu24
+      ci_runner_extra_packages:
+        type: list
+        description: Distribution packages added to the golden image beyond the toolchain.
+        default: []
+        elements: str
+      ci_runner_go_url:
+        type: str
+        description: 'A Go release archive (https) put on the PATH of the golden image; empty: none.'
+        default: ''
+      ci_runner_go_sha256:
+        type: str
+        description: The sha256 of that archive (required with the URL).
+        default: ''
+      ci_runner_pipx_packages:
+        type: list
+        elements: str
+        description: Command-line tools (name==version) installed with pipx onto the golden image's PATH.
+        default: []
+      ci_runner_toolcache_pythons:
+        type: list
+        elements: dict
+        description: 'Python releases (each {url, sha256}: the setup action''s python-versions archive) put in the golden image''s tool cache, so jobs download none.'
+        default: []
+      ci_runner_egress_tcp_ports:
+        type: list
+        description: TCP ports the job VMs may reach on public addresses.
+        default:
+        - 80
+        - 443
+        elements: int
+      ci_runner_egress_udp_ports:
+        type: list
+        description: UDP ports the job VMs may reach on public addresses.
+        default:
+        - 123
+        - 443
+        elements: int
+      ci_runner_health_max_waiting_s:
+        type: int
+        description: 'Health fails when every slot has waited this long for a registration (the feeder is down); 0: do not judge.'
+        default: 900
+      ci_runner_restore_source:
+        type: str
+        description: 'Unused: the module keeps no data (the restore hook says so).'
+        default: ''
+  health:
+    short_description: 'Fail unless the slots run, the golden image is in place and the egress table is loaded.'
+    options: *opts
+  readiness:
+    short_description: 'Fail unless KVM, systemd and the inputs are there before anything is written.'
+    options: *opts
+  backup:
+    short_description: 'Nothing to back up: the module keeps no data.'
+    options: *opts
+  restore:
+    short_description: 'Nothing to restore: re-running main rebuilds everything.'
+    options: *opts
+  upgrade:
+    short_description: 'Validate a pinned image or agent bump (the next converge builds a new golden image).'
+    options: *opts
+  export:
+    short_description: 'Nothing to export: the module keeps no data.'
+    options: *opts

@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: Apache-2.0
+# watch-honeypot-lake: every hour at :15 (UTC) look up the watch-honeypot-lake row of
+# table:lab.checks and page when it is not ok.
+# Replaces the old lab's honeypot-lake-freshness-check timer, which the lab's checks register
+# already ports as criteria (N-22: the honeypot lake writer's and the daily report's last-run
+# records).  The row is the binding's: table:lab.checks is the invariants runner's results document
+# (format invariants-results), and the binding's `keys` name the criteria of this schedule id, so
+# the row is ok only when every one of them passed (docs/stackstorm.md, "Tables"). :15 reads the
+# document the hourly run at :07 wrote; a run every 30 minutes would read the same one twice.  A
+# table that cannot be read fails the run (never "no row"); a key the binding does not map pages as
+# missing.  Bound in shadow only (the site's binding): it records the page it would send, nothing
+# more.  Schedule: `15 * * * *`, schedule id watch-honeypot-lake.
+pack: watch-honeypot-lake
+version: 1
+description: Page when a lab check of the honeypot lake's freshness is not ok.
+trigger:
+  event: homelabnext.schedule.fired
+  where:
+    - {ref: $event.data.schedule, equals: watch-honeypot-lake}
+actor: profile:workflow-agents
+broker_manifest: workflows/broker.manifest.json
+steps:
+  - id: check
+    kind: enrich
+    op: lookup
+    table: table:lab.checks
+    key: $event.data.schedule
+  - id: page
+    kind: action
+    action: notify.page
+    target: svc:notify
+    when:
+      - {ref: $steps.check.found, equals: true}
+      - {ref: $steps.check.row.ok, equals: false}
+    params:
+      rota: lab-watch
+      alert_id: $event.data.schedule
+      title: $steps.check.row.summary
+  - id: page-missing
+    kind: action
+    action: notify.page
+    target: svc:notify
+    when:
+      - {ref: $steps.check.found, equals: false}
+    params:
+      rota: lab-watch
+      alert_id: $event.data.schedule
+      title: "watch-honeypot-lake: no row in table:lab.checks"
+fixtures:
+  - name: red-pages
+    event:
+      specversion: "1.0"
+      id: evt-watch-honeypot-lake-red-pages
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:15:00Z"
+      data: {schedule: watch-honeypot-lake, fired_at: "2026-01-01T12:15:00Z", cron: "15 * * * *"}
+    lookups:
+      table:lab.checks:
+        watch-honeypot-lake: {ok: false, criteria: {N-22: fail}, red: [N-22], summary: "watch-honeypot-lake: N-22 fail"}
+    expect:
+      calls:
+        - action: notify.page
+          target: svc:notify
+          params: {rota: lab-watch, alert_id: watch-honeypot-lake, title: "watch-honeypot-lake: N-22 fail"}
+          result: executed
+  - name: green-is-quiet
+    event:
+      specversion: "1.0"
+      id: evt-watch-honeypot-lake-green-is-quiet
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:15:00Z"
+      data: {schedule: watch-honeypot-lake, fired_at: "2026-01-01T12:15:00Z", cron: "15 * * * *"}
+    lookups:
+      table:lab.checks:
+        watch-honeypot-lake: {ok: true, criteria: {N-22: pass}, red: [], summary: "watch-honeypot-lake: N-22 pass"}
+    expect:
+      calls: []
+  - name: missing-row-pages
+    event:
+      specversion: "1.0"
+      id: evt-watch-honeypot-lake-missing-row-pages
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:15:00Z"
+      data: {schedule: watch-honeypot-lake, fired_at: "2026-01-01T12:15:00Z", cron: "15 * * * *"}
+    lookups:
+      table:lab.checks: {}
+    expect:
+      calls:
+        - action: notify.page
+          target: svc:notify
+          params: {rota: lab-watch, alert_id: watch-honeypot-lake, title: "watch-honeypot-lake: no row in table:lab.checks"}
+          result: executed
+  - name: another-schedule-ignored
+    event:
+      specversion: "1.0"
+      id: evt-watch-honeypot-lake-other
+      source: svc:automation
+      type: homelabnext.schedule.fired
+      time: "2026-01-01T12:15:00Z"
+      data: {schedule: not-watch-honeypot-lake, fired_at: "2026-01-01T12:15:00Z"}
+    expect:
+      triggered: false
+      calls: []

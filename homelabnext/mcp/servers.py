@@ -461,11 +461,16 @@ HNX_ENTRIES: dict[str, tuple[tuple[str, ...], frozenset[str]]] = {
     "broker-mcp": (("broker", "mcp"), frozenset({"--socket"})),
     # hnx codemode mcp: Code Mode's search and describe tools (homelabnext/codemode/cli.py)
     "codemode-mcp": (("codemode", "mcp"), frozenset({"--index", "--socket"})),
+    # hnx lake mcp: the read-only lake server, signed in as its own reader (homelabnext/lake/cli.py)
+    "lake-mcp": (("lake", "mcp"), frozenset({"--config"})),
 }
 #: the hnx entry flags that name a path the server reads (a checkout, a registry, the broker's
-#: socket, a Code Mode index): absolute, since a relative one resolves in the client's working
-#: directory, where the agent may write a checkout, registry, socket or index of its own
-HNX_PATH_FLAGS = frozenset({"--root", "--registry", "--socket", "--policy", "--lock", "--index"})
+#: socket, a Code Mode index, the lake server's settings): absolute, since a relative one resolves
+#: in the client's working directory, where the agent may write a checkout, registry, socket,
+#: index or settings file of its own
+HNX_PATH_FLAGS = frozenset(
+    {"--root", "--registry", "--socket", "--policy", "--lock", "--index", "--config"}
+)
 #: flags an entry's flag needs beside it: a profile scopes ``hnx mcp serve`` only when it is
 #: verified against the policy and the lock (the file's own ceiling proves only self-consistency)
 HNX_FLAGS_NEED = {"--scope-from-profile": frozenset({"--policy", "--lock"})}

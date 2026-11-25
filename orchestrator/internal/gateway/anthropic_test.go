@@ -216,3 +216,50 @@ func TestGatewayURLPartsAreRefusedOnLocalDeployments(t *testing.T) {
 		t.Fatalf("input_audio: %d %s", r.status, r.body)
 	}
 }
+
+func TestGatewayToolSchemaMayNameAURLParameter(t *testing.T) {
+	tool := func(params map[string]any) map[string]any {
+		return map[string]any{"type": "function", "function": map[string]any{"name": "fetch", "description": "d", "parameters": params}}
+	}
+	body := func(tools ...any) map[string]any {
+		return map[string]any{"model": "chat-b", "messages": []any{map[string]any{"role": "user", "content": "x"}}, "tools": tools}
+	}
+	str := map[string]any{"type": "string"}
+	f := newFixture(t)
+	ok := map[string]any{"type": "object", "required": []any{"url"}, "properties": map[string]any{
+		"url": str, "callback_url": str, "nested": map[string]any{"type": "object", "properties": map[string]any{"image_url": str}}}}
+	if r := f.do("POST", "/v1/chat/completions", agentKey, body(tool(ok))); r.status != 200 {
+		t.Fatalf("schema with a url parameter: %d %s", r.status, r.body)
+	}
+	legacy := map[string]any{"model": "chat-b", "messages": []any{map[string]any{"role": "user", "content": "x"}},
+		"functions": []any{map[string]any{"name": "fetch", "parameters": ok}}}
+	if r := f.do("POST", "/v1/chat/completions", agentKey, legacy); r.status != 200 {
+		t.Fatalf("legacy functions schema: %d %s", r.status, r.body)
+	}
+	hidden := func(kw string, val any) map[string]any {
+		return map[string]any{"type": "object", "properties": map[string]any{"url": map[string]any{"type": "object", kw: val}}}
+	}
+	u := map[string]any{"url": "http://192.0.2.10/"}
+	refused := map[string]map[string]any{
+		"tools default":   body(tool(hidden("default", u))),
+		"tools enum":      body(tool(hidden("enum", []any{u}))),
+		"tools examples":  body(tool(hidden("examples", []any{u}))),
+		"tools const":     body(tool(hidden("const", u))),
+		"url keyword":     body(tool(map[string]any{"type": "object", "url": "http://192.0.2.10/"})),
+		"url in tool":     body(map[string]any{"type": "function", "url": "http://192.0.2.10/", "function": map[string]any{"name": "x"}}),
+		"url in function": body(map[string]any{"type": "function", "function": map[string]any{"name": "x", "icon_url": "http://192.0.2.10/"}}),
+		"message url":     {"model": "chat-b", "messages": []any{map[string]any{"role": "user", "url": "http://192.0.2.10/"}}, "tools": []any{tool(ok)}},
+		"image_url":       {"model": "chat-b", "messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": "http://192.0.2.10/"}}}}}, "tools": []any{tool(ok)}},
+		"callback_url":    {"model": "chat-b", "messages": []any{map[string]any{"role": "user", "content": "x"}}, "callback_url": "http://192.0.2.10/", "tools": []any{tool(ok)}},
+		"response_format": {"model": "chat-b", "messages": []any{map[string]any{"role": "user", "content": "x"}},
+			"response_format": map[string]any{"type": "json_schema", "json_schema": map[string]any{"schema": ok}}},
+		"metadata":    {"model": "chat-b", "messages": []any{map[string]any{"role": "user", "content": "x"}}, "metadata": map[string]any{"url": "http://192.0.2.10/"}},
+		"tool_choice": {"model": "chat-b", "messages": []any{map[string]any{"role": "user", "content": "x"}}, "tool_choice": map[string]any{"type": "function", "function": map[string]any{"name": "x"}, "url": "http://192.0.2.10/"}},
+	}
+	for name, b := range refused {
+		r := f.do("POST", "/v1/chat/completions", agentKey, b)
+		if _, code := r.errCode(t); r.status != 400 || code != "unsupported_parameter" {
+			t.Errorf("%s: %d %s", name, r.status, r.body)
+		}
+	}
+}

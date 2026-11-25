@@ -15,3 +15,36 @@ restore_drill_run: true
 # The evaluation time (UTC, YYYY-MM-DDTHH:MM:SSZ); empty = now. Set it to replay a past day.
 restore_drill_now: ""
 restore_drill_state_file: /var/lib/homelabnext/restore-drill/drills.json
+
+# The rotating drill timer (tasks/timer.yml; ADR-0042 decision 3). Opt-in. One guest a day, the one
+# whose last verified drill is oldest, from the copy (primary or second) drilled the longest ago;
+# with N guests each is drilled about every N days, each copy about every 2N.
+restore_drill_timer: false
+restore_drill_timer_calendar: "*-*-* 13:00:00 UTC"
+restore_drill_config_file: /etc/hnx/restore-drill.json
+restore_drill_env_file: /etc/hnx/restore-drill.env
+# the backup server's API token id (user@realm!token) with the Datastore.Read role on each store's namespace
+# the backup server's client command (its `snapshot list`, `restore` and --repository conventions)
+restore_drill_client_cli: ""
+restore_drill_pbs_authid: ""
+restore_drill_pbs_host: localhost
+restore_drill_stores: []
+restore_drill_namespace: ""
+# guest id -> the backup server's vm id; every guest of restore_drill_guests needs one
+restore_drill_vmids: {}
+# guest ids whose image must carry a fresh application export (ADR-0008 decision 2)
+restore_drill_expect_export: []
+# supplied from the secrets capability at run time, no literal default:
+# {PBS_PASSWORD: <the token's secret>, PBS_FINGERPRINT: <the server certificate's fingerprint>, NOTIFY_TOKEN: <publisher token>}
+restore_drill_secret_env: {}
+restore_drill_scratch_dir: /var/lib/homelabnext/restore-drill/scratch
+restore_drill_min_free_gb: 0
+restore_drill_max_snapshot_age_h: 36
+restore_drill_max_export_age_h: 36
+restore_drill_notify_url: ""
+restore_drill_notify_topic: ""
+restore_drill_unit_dir: /etc/systemd/system
+restore_drill_systemctl_cli: systemctl
+restore_drill_last_run_dir: /var/lib/homelabnext/last-run
+restore_drill_last_run_group: root
+restore_drill_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

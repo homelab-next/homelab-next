@@ -1,0 +1,203 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Build the local image from the pinned base and packages, write one capture unit per interface, and start them.
+    options:
+      zeek_logical_id: &id001
+        type: str
+        description: The instance's registry id (the service row the site binds).
+        required: true
+      zeek_capture_interfaces: &id002
+        type: list
+        elements: dict
+        description: 'The captures, [{slug, interface}]: one process and one log directory each.'
+        required: true
+      zeek_base_image: &id003
+        type: str
+        description: The official image, repository:tag@sha256:digest.
+        default: docker.io/zeek/zeek:8.0.8@sha256:cc06c95fa3214786f576aff720e91455160864fbc4ad855a348fa831c63f1653
+      zeek_script_packages: &id004
+        type: list
+        description: Packages built into the local image, [{name, version}], each pinned to a release tag or commit.
+        default:
+        - name: zeek/corelight/hassh
+          version: v1.0.1
+        - name: zeek/foxio/ja4
+          version: v0.18.8
+        - name: zeek/salesforce/ja3
+          version: 502cc6395811c54743b0561419d61900a6df3ff7
+        - name: zeek/mitre-attack/bzar
+          version: 59bae4a0e7849a75fa5ea86a206f10f3ce8dbe22
+        elements: dict
+      zeek_local_repo: &id005
+        type: str
+        description: Repository name of the locally built image.
+        default: hnx-zeek
+      zeek_build_dir: &id006
+        type: path
+        description: Directory holding the build context.
+        default: /opt/hnx-zeek/build
+      zeek_log_root: &id007
+        type: path
+        description: Directory holding one log directory per capture.
+        default: /var/log/hnx-zeek
+      zeek_retired_units:
+        type: list
+        elements: str
+        description: The predecessor's systemd units (a watchdog timer first) to disable and stop once the module owns the captures.
+        default: []
+      zeek_retired_containers:
+        type: list
+        elements: str
+        description: The predecessor's containers to keep from restarting and stop once the module owns the captures.
+        default: []
+      zeek_retired_siem_markers:
+        type: list
+        elements: str
+        description: Blockinfile marker texts (no BEGIN/END) of the predecessor's SIEM agent localfile blocks to remove.
+        default: []
+      zeek_siem_agent_manage:
+        type: bool
+        description: Add a localfile block for each capture's event streams to the SIEM agent's configuration when it exists.
+        default: true
+      zeek_siem_agent_conf:
+        type: path
+        description: The SIEM agent's configuration file.
+        default: /var/ossec/etc/ossec.conf
+      zeek_siem_agent_unit:
+        type: str
+        description: 'The SIEM agent''s systemd unit, restarted when the block changed (empty: the site restarts it).'
+        default: ''
+      zeek_siem_streams:
+        type: list
+        elements: str
+        description: The event streams the agent reads (file names without .log).
+        default: [conn, dns, ssl, http, ssh, files, x509, notice, weird]
+      zeek_unit_dir: &id008
+        type: path
+        description: Where the capture units are written.
+        default: /etc/systemd/system
+      zeek_logrotate_dir: &id009
+        type: path
+        description: Where the rotation rule is written.
+        default: /etc/logrotate.d
+      zeek_logrotate_max_size: &id010
+        type: str
+        description: Rotate a log that outgrew this size at the daily check.
+        default: 2G
+      zeek_logrotate_keep: &id011
+        type: int
+        description: Rotated copies kept.
+        default: 3
+      zeek_container_memory: &id012
+        type: str
+        description: Memory limit of each capture container.
+        default: 2g
+      zeek_service_manage:
+        type: bool
+        description: Enable, start and restart the units (false in a dry build).
+        default: true
+      zeek_build_local:
+        type: bool
+        description: Build the local image (false where it is supplied another way).
+        default: true
+      zeek_docker_cli:
+        type: str
+        description: The container engine command.
+        default: docker
+      zeek_systemctl_cli: &id017
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      zeek_stats_interval: &id013
+        type: int
+        description: Seconds between stats heartbeats.
+        default: 60
+      zeek_stats_window: &id014
+        type: int
+        description: Heartbeat lines health reads.
+        default: 5
+      zeek_stats_max_age_seconds: &id015
+        type: int
+        description: 'Health: the longest the heartbeat may go unwritten.'
+        default: 300
+      zeek_max_drop_ratio: &id016
+        type: float
+        description: 'Health: the most packets dropped, as a fraction of those processed.'
+        default: 0.05
+      zeek_health_timeout: &id018
+        type: int
+        description: Seconds a health command may take.
+        default: 20
+  health:
+    short_description: Fail unless every capture runs, its heartbeat is fresh, packets were processed and drops are under the bound.
+    options:
+      zeek_logical_id: *id001
+      zeek_capture_interfaces: *id002
+      zeek_base_image: *id003
+      zeek_script_packages: *id004
+      zeek_local_repo: *id005
+      zeek_build_dir: *id006
+      zeek_log_root: *id007
+      zeek_unit_dir: *id008
+      zeek_logrotate_dir: *id009
+      zeek_logrotate_max_size: *id010
+      zeek_logrotate_keep: *id011
+      zeek_container_memory: *id012
+      zeek_stats_interval: *id013
+      zeek_stats_window: *id014
+      zeek_stats_max_age_seconds: *id015
+      zeek_max_drop_ratio: *id016
+      zeek_systemctl_cli: *id017
+      zeek_health_timeout: *id018
+  readiness:
+    short_description: Fail unless the inputs are valid, the engine is ready and no capture interface holds an IPv4 address.
+    options:
+      zeek_logical_id: *id001
+      zeek_capture_interfaces: *id002
+      zeek_base_image: *id003
+      zeek_script_packages: *id004
+      zeek_local_repo: *id005
+      zeek_build_dir: *id006
+      zeek_log_root: *id007
+      zeek_unit_dir: *id008
+      zeek_logrotate_dir: *id009
+      zeek_logrotate_max_size: *id010
+      zeek_logrotate_keep: *id011
+      zeek_container_memory: *id012
+      zeek_stats_interval: *id013
+      zeek_stats_window: *id014
+      zeek_stats_max_age_seconds: *id015
+      zeek_max_drop_ratio: *id016
+  upgrade:
+    short_description: Validate a base-image bump (zeek_target_image) before converging.
+    options:
+      zeek_logical_id: *id001
+      zeek_capture_interfaces: *id002
+      zeek_base_image: *id003
+      zeek_script_packages: *id004
+      zeek_local_repo: *id005
+      zeek_build_dir: *id006
+      zeek_log_root: *id007
+      zeek_unit_dir: *id008
+      zeek_logrotate_dir: *id009
+      zeek_logrotate_max_size: *id010
+      zeek_logrotate_keep: *id011
+      zeek_container_memory: *id012
+      zeek_stats_interval: *id013
+      zeek_stats_window: *id014
+      zeek_stats_max_age_seconds: *id015
+      zeek_max_drop_ratio: *id016
+      zeek_target_image:
+        type: str
+        description: The base image to move to, repository:tag@sha256:digest.
+        required: true
+  backup:
+    short_description: Nothing to back up; the monitor keeps no data of its own.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main renders it again.
+    options: {}
+  export:
+    short_description: Nothing to export; the monitor keeps no data of its own.
+    options: {}

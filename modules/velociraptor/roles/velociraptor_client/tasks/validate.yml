@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - velociraptor_client_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - velociraptor_client_config_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - velociraptor_client_config_file is string
+      - velociraptor_client_binary_src is string
+      - velociraptor_client_version is match('^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*\Z')
+      - velociraptor_client_version in velociraptor_client_checksums
+      - velociraptor_client_checksums[velociraptor_client_version] is match('^[0-9a-f]{64}\Z')
+      - velociraptor_client_release_repository is match('^https://[^\s?#@]+\Z')
+      - >-
+        [velociraptor_client_install_path, velociraptor_client_config_dir, velociraptor_client_controller_cache]
+        | reject('match', velociraptor_client_path_pattern) | list | length == 0
+      - velociraptor_client_config_file == '' or velociraptor_client_config_file is match(velociraptor_client_path_pattern)
+      - velociraptor_client_binary_src == '' or velociraptor_client_binary_src is match(velociraptor_client_path_pattern)
+      - velociraptor_client_writeback == '' or velociraptor_client_writeback is match(velociraptor_client_path_pattern)
+      - velociraptor_client_service is match('^[a-z][a-z0-9-]{0,60}\Z')
+      - velociraptor_client_ready_timeout | int >= 10 and velociraptor_client_ready_timeout | int <= 3600
+    fail_msg: >-
+      velociraptor client: a registry id, a secret: reference (or a controller-side file), a release with a
+      pinned sha256 ({{ velociraptor_client_checksums.keys() | list }}), an https release repository
+      and absolute canonical paths
+  tags: [health, readiness, upgrade]

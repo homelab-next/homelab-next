@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# One owner each: everything is root's (the run needs to read lane directories under an unprivileged
+# account's mode 0700 and is hardened instead); the credentials directory and the state are root-only.
+# With lab_checks_results_group (opt-in) the results directory, and only it, is that group's to read.
+- name: Create the results readers' group (opt-in)
+  ansible.builtin.group:
+    name: "{{ lab_checks_results_group }}"
+    system: true
+  when: lab_checks_results_group | length > 0
+  register: lab_checks_results_group_made
+  tags: [health, upgrade]
+
+# a check run before the group exists cannot name it (chgrp needs it): it shows the mode change alone
+- name: The results' group as this run can name it
+  ansible.builtin.set_fact:
+    lab_checks_results_read_group: >-
+      {{ lab_checks_results_group
+         if lab_checks_results_group and not (ansible_check_mode and lab_checks_results_group_made is changed)
+         else lab_checks_owner_group }}
+  tags: [health, upgrade]
+
+- name: Create the directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ lab_checks_owner }}"
+    group: "{{ item.group | default(lab_checks_owner_group) }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ lab_checks_bin_dir }}", mode: "0755"}
+    - {path: "{{ lab_checks_config_dir }}", mode: "0755"}
+    - {path: "{{ lab_checks_auth_dir }}", mode: "0700"}
+    - {path: "{{ lab_checks_data_root }}", mode: "0750"}
+    - path: "{{ lab_checks_results_dir }}"
+      group: "{{ lab_checks_results_read_group }}"
+      mode: "{{ '02750' if lab_checks_results_group else '0750' }}"
+    - {path: "{{ lab_checks_state_dir }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [health, upgrade]
+
+# the document an earlier run wrote keeps its mode (the runner rewrites it in place): set it here
+- name: Look for the results document
+  ansible.builtin.stat:
+    path: "{{ lab_checks_results_file }}"
+  register: lab_checks_results_stat
+  tags: [health, upgrade]
+
+- name: The results document is readable by exactly the opted-in group
+  ansible.builtin.file:
+    path: "{{ lab_checks_results_file }}"
+    state: file
+    owner: "{{ lab_checks_owner }}"
+    group: "{{ lab_checks_results_read_group }}"
+    mode: "{{ '0640' if lab_checks_results_group else '0600' }}"
+  when: lab_checks_results_stat.stat.exists | default(false)
+  tags: [health, upgrade]

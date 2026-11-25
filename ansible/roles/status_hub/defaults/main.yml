@@ -64,3 +64,42 @@ status_hub_systemd_dir: /etc/systemd/system
 status_hub_start: true
 status_hub_backup_dir: /var/backups/hnx-hub
 status_hub_export_dir: /var/backups/hnx-hub/export
+
+# --- collection (ADR-0013 stage 2: the hub collects what the registry's status_sources say) ---------
+# off by default: the serve-only hub of earlier stages is unchanged
+status_hub_collect: false
+# a calendar, one pass a minute; each source runs when its own interval_s is due (LL-041)
+status_hub_collect_oncalendar: "*-*-* *:*:00 UTC"
+status_hub_collect_timeout_s: 50
+# what poll-file sources are relative to: files delivered here by their producers (root writes, the hub reads)
+status_hub_root_dir: "{{ status_hub_state_dir }}/files"
+# file-form secrets (a name resolves to <dir>/<name>): login-issued tokens land here
+status_hub_issued_dir: "{{ status_hub_config_dir }}/issued"
+# secret references of certificates to trust besides the client CA (a product's own self-signed certificate)
+status_hub_extra_ca_refs: []
+# bearer tokens a product only issues for a login: [{name, service, path, username, password_ref}]
+status_hub_logins: []
+status_hub_logins_oncalendar: "*-*-* 00/4:15:00 UTC"
+# Pulled status files (ADR-0049 decision 7, "The results transport"): the hub dials each producer
+# host as a restricted account whose forced command prints one file (the producer's role installs it,
+# e.g. lab-checks' results reader) and files the answer at <status_hub_root_dir>/<dest>, the path a
+# poll-file source reads. Each entry: {name, host (a registry host), user, host_key ("<type> <base64>",
+# the producer's SSH host key, pinned), dest (a relative .json path)}. A root-run timer; the private
+# key is one secret: reference (status_hub_pull_key_ref), a file for the helper, never environment.
+status_hub_pulls: []
+status_hub_pull_key_ref: ""
+status_hub_pulls_oncalendar: "*-*-* *:00/5:30 UTC"
+# Each timer run's last-run record (role last_run, docs/role-interface.md section 8): the shared
+# per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
+status_hub_last_run_dir: /var/lib/homelabnext/last-run
+status_hub_last_run_group: root
+# page transitions through the registry's notify service (empty: no paging)
+status_hub_notify_topic: ""
+status_hub_notify_ceiling: red
+# a directory of register files (kanban.yml, lessons.yml, runbooks.yml, invariants.yml) served as pages
+status_hub_registers_dir: ""
+# the lab's own views (a file on the controller replacing the built-in two-entry menu)
+status_hub_views_file: ""
+# capability -> url of an endpoint the collector reaches by another name than the registry alias (the
+# alias is not in that product's certificate): HNX_ENDPOINT_<CAPABILITY> in the collector's environment
+status_hub_endpoints: {}

@@ -26,6 +26,7 @@ slots:
   detections:          {stage: 4, contract: detections.py, stateful: true, export_formats: [sigma], formats: {in: [sigma, ocsf], out: [ocsf]}}
   cases:               {stage: 6, contract: cases.py, stateful: true, export_formats: [jsonl, markdown-tree], formats: {in: [cloudevents], out: [cloudevents]}, egress: true}
   exposure-management: {stage: 8, contract: null, stateful: false, formats: {in: [], out: [sarif, ocsf]}}
+  network-sensor:      {stage: 1, contract: null, stateful: false, formats: {in: [], out: [ocsf]}}
   tunnel:              {stage: null, contract: null, stateful: false, formats: {in: [], out: []}}
   static-hosting:      {stage: 10, contract: null, stateful: false, formats: {in: [], out: []}, egress: true}
   secrets:             {stage: null, contract: secrets.py, stateful: true, export_formats: [json], required_in_core: true, privileged: true, authority: true}
@@ -44,7 +45,9 @@ slots:
   documents:           {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   enrichment:          {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   feed-reader:         {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
+  web-search:          {stage: null, contract: null, stateful: false}
   threat-intel:        {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
+  endpoint-forensics:  {stage: 1, contract: null, stateful: true, export_formats: [object-tree], formats: {in: [], out: [ocsf]}}
   graph-store:         {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   tts:                 {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   context:             {stage: null, contract: context.py, stateful: false}

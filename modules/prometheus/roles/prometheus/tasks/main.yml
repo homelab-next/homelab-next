@@ -52,7 +52,8 @@
   when: >-
     prometheus_start | bool and not ansible_check_mode and
     (prometheus_config_written is changed or prometheus_targets_written is changed
-     or prometheus_auths_written is changed or prometheus_auths_removed is changed)
+     or prometheus_auths_written is changed or prometheus_auths_removed is changed
+     or prometheus_probes_written is changed or prometheus_probes_removed is changed)
 
 - name: Reload the metrics service when its configuration or a credential changed
   ansible.builtin.command:
@@ -61,7 +62,30 @@
   when: >-
     prometheus_start | bool and not ansible_check_mode and
     (prometheus_config_written is changed or prometheus_targets_written is changed
-     or prometheus_auths_written is changed or prometheus_auths_removed is changed)
+     or prometheus_auths_written is changed or prometheus_auths_removed is changed
+     or prometheus_probes_written is changed or prometheus_probes_removed is changed)
+
+# the SNMP exporter reads its modules and the community at start or on SIGHUP
+- name: Reload the SNMP exporter when its module or the community changed
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ prometheus_dir }}/docker-compose.yml", kill, -s, HUP, "{{ prometheus_snmp_service }}"]
+  changed_when: true
+  when: >-
+    prometheus_start | bool and prometheus_snmp_enabled | bool and not ansible_check_mode and
+    (prometheus_snmp_auth_written is changed or
+     (prometheus_config_written.results | default([]) | selectattr('item.dest', 'equalto', 'snmp/snmp.yml')
+      | selectattr('changed') | list | length > 0))
+
+# the probe exporter reads its modules (and the trust bundle they name) at start or on SIGHUP
+- name: Reload the probe exporter when its modules or its trust bundle changed
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ prometheus_dir }}/docker-compose.yml", kill, -s, HUP, "{{ prometheus_blackbox_service }}"]
+  changed_when: true
+  when: >-
+    prometheus_start | bool and prometheus_probes_enabled | bool and not ansible_check_mode and
+    (prometheus_probe_ca_written is changed or prometheus_llm_key_written is changed or
+     (prometheus_config_written.results | default([]) | selectattr('item.dest', 'equalto', 'blackbox/blackbox.yml')
+      | selectattr('changed') | list | length > 0))
 
 - name: Install the alert forwarder and its timer
   ansible.builtin.include_tasks: alerts.yml

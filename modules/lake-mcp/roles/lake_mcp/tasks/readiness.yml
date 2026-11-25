@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless the host can run the server, before anything is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The runtime release's hnx command
+      ansible.builtin.stat:
+        path: "{{ lake_mcp_hnx_bin }}"
+      register: lake_mcp_hnx_stat
+    - name: It is installed
+      ansible.builtin.assert:
+        that: lake_mcp_hnx_stat.stat.exists and lake_mcp_hnx_stat.stat.executable | default(false)
+        fail_msg: >-
+          lake-mcp: {{ lake_mcp_hnx_bin }} is missing. The server is `hnx lake mcp`, from the homelab-next runtime
+          release with the mcp extra: apply the hnx_runtime role (hnx_runtime_extras including mcp) to this guest first
+    - name: The runtime has the server command
+      ansible.builtin.command:
+        argv: ["{{ lake_mcp_hnx_bin }}", lake, mcp, --help]
+      register: lake_mcp_hnx_help
+      changed_when: false
+      check_mode: false
+      failed_when: false
+    - name: It answers
+      ansible.builtin.assert:
+        that: lake_mcp_hnx_help.rc == 0
+        fail_msg: >-
+          lake-mcp: `{{ lake_mcp_hnx_bin }} lake mcp --help` failed (exit {{ lake_mcp_hnx_help.rc }}): the installed runtime
+          release does not carry the server; bump the hnx_runtime pin to a release that does
+    - name: Start the credential verdicts empty (this file runs again from every hook)
+      ansible.builtin.set_fact:
+        lake_mcp_cred_state: {}
+    - name: Read each credential's presence
+      ansible.builtin.set_fact:
+        lake_mcp_cred_state: "{{ lake_mcp_cred_state | combine({item: ((lookup('hnx_secret', item, errors='ignore') or '') | string | length > 0)}) }}"
+      loop: "{{ [lake_mcp_reader_cred] + ([lake_mcp_ca_ref] if lake_mcp_ca_ref != '' else []) }}"
+      no_log: true
+    - name: Every credential is set
+      ansible.builtin.assert:
+        that: lake_mcp_cred_state.values() | select | list | length == lake_mcp_cred_state | length
+        fail_msg: >-
+          lake-mcp: not set in the secret store: {{ lake_mcp_cred_state | dict2items | rejectattr('value') | map(attribute='key') | sort | join(', ') }}
+  tags: [readiness]

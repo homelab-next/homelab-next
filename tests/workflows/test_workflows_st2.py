@@ -38,6 +38,7 @@ from homelabnext.workflows import (
     triggered,
 )
 from homelabnext.workflows.st2 import render, render_repo
+from homelabnext.workflows.tables import TableError, read_table
 
 BINDING = ROOT / "workflows" / "stackstorm.yml"
 OUT = ROOT / "workflows" / "stackstorm"
@@ -76,6 +77,11 @@ def pinned_dir(tmp_path, b: dict | None = None, packs: dict | None = None):
 
 def calls_of(out: dict) -> list[dict]:
     return st2_runtime.decode(out["state"])["calls"]
+
+
+def event_of(got: dict) -> dict:
+    """The event an ``admit`` result hands on (encoded), decoded."""
+    return st2_runtime.decode(got["event"])
 
 
 #: what a reviewer filed as a proposal title: st2 would render it, unsandboxed, as Jinja
@@ -568,7 +574,7 @@ def test_a_scheduled_run_takes_its_schedule_from_the_pinned_pack(tmp_path):
         pack="nightly-digest", pinned_dir=pdir, fired_at="2026-01-15 06:05:00", kv=KV()
     )
     assert got["admitted"]
-    ev = st2_runtime.decode(got["event"])
+    ev = event_of(got)
     assert ev["data"] == {
         "schedule": "nightly-digest",
         "fired_at": "2026-01-15T06:05:00Z",
@@ -923,7 +929,7 @@ def test_hostile_event_text_never_reaches_an_action_parameter_unencoded(tmp_path
     )
     for text in (got["event"], out["state"]):  # what the workflow publishes and passes on
         assert isinstance(text, str) and not st2._TEMPLATE.search(text) and "%>" not in text
-    assert st2_runtime.decode(got["event"])["data"]["summary"] == HOSTILE
+    assert event_of(got)["data"]["summary"] == HOSTILE
     assert calls_of(out)[0]["result"] == "shadow"
     raw = st2_runtime.admit(pack="proposal-validate", pinned_dir=pdir, event=_hostile_proposal())
     assert raw["reason"] == "invalid-event"  # an object is refused: st2 would have rendered it
@@ -941,7 +947,7 @@ def test_stackstorm_jinja_sees_no_marker_in_any_parameter(tmp_path):
     got = st2_runtime.admit(
         pack="proposal-validate", pinned_dir=pinned_dir(tmp_path), event=rendered, kv=KV()
     )
-    assert st2_runtime.decode(got["event"]) == body
+    assert event_of(got) == body
 
 
 def test_the_tree_check_refuses_raw_trigger_data_and_raw_task_expressions():
@@ -1177,7 +1183,7 @@ def test_an_approved_request_st2_submitted_runs_exactly_once(tmp_path):
     )
     assert admitted["admitted"]
     client = ServiceAsClient(svc, "profile:triage")
-    rec = _run(pdir, kv, st2_runtime.decode(admitted["event"]), client)
+    rec = _run(pdir, kv, event_of(admitted), client)
     assert (rec["result"], rec["reason"], rec["pack"]) == ("executed", "approved", "restart-queue")
     assert svc.state.state_of(rid) == "done" and client.runs == 1
     # the same event again: admit drops it; a forged copy past admit runs nothing either
@@ -1714,3 +1720,175 @@ def test_the_state_file_holds_values_until_their_ttl_and_never_touches_the_datas
     res_files = go(binding()).files
     shim = res_files["homelabnext/actions/admit.py"]
     assert "action_service.get_value" not in shim and "self.action_service" not in shim
+
+
+# ---------------------------------------------------------------- lookup tables and the watchers
+# (the table reader itself, the watcher packs and the page handler: tests/workflows/test_workflows_tables.py)
+WATCHERS = {
+    "watch-cti-freshness": ["N-20", "N-21"],
+    "watch-llm-server": ["N-07", "N-08", "N-09", "N-10"],
+    "watch-honeypot-lake": ["N-22"],
+}
+
+
+def _watch_binding(table_path: str) -> dict:
+    """The committed binding plus the three watcher rules (W01-W03, shadow, hourly at :15) and
+    the table they read: what a site binds (the committed one names none of them)."""
+    b = binding()
+    decl = {"path": table_path, "format": "invariants-results", "max_age_s": 7800, "keys": WATCHERS}
+    b["tables"] = {"table:lab.checks": decl}
+    for n, name in enumerate(WATCHERS, start=1):
+        sched = {"id": name, "cron": "15 * * * *"}
+        b["rules"].append({"pack": name, "id": f"W{n:02d}", "mode": "shadow", "schedule": sched})
+    return b
+
+
+def _results(tmp_path, statuses: dict[str, str]):
+    path = tmp_path / "tables" / "lab-checks.hourly.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    res = {
+        cid: {"status": st, "evidence": "e", "checked_at": "2026-01-15"}
+        for cid, st in statuses.items()
+    }
+    path.write_text(json.dumps({"schema": "homelabnext.invariants.results/1", "results": res}))
+    return path
+
+
+def _all(status: str = "pass") -> dict[str, str]:
+    return {cid: status for ids in WATCHERS.values() for cid in ids}
+
+
+def _watch_step(pdir, name: str, sid: str, ev: dict, state: str = "") -> dict:
+    return st2_runtime.step(
+        {"broker_socket": "/nonexistent"},
+        pinned_dir=pdir,
+        broker_factory=lambda _s: NoBroker(),
+        pack=name,
+        step=sid,
+        event=st2_runtime.encode(ev),
+        state=state,
+    )
+
+
+def _watch_run(pdir, name: str) -> tuple[dict, list[dict]]:
+    """admit then every step of the watcher, as the rendered workflow runs them: the admitted
+    event and the calls recorded."""
+    got = st2_runtime.admit(pack=name, pinned_dir=pdir, fired_at="2026-01-15 10:15:00", kv=KV())
+    assert got["admitted"], got
+    ev, out = event_of(got), {"state": ""}
+    for sid in ("check", "page", "page-missing"):
+        out = _watch_step(pdir, name, sid, ev, out["state"])
+    return ev, calls_of(out)
+
+
+def test_the_committed_binding_binds_no_watcher_and_declares_no_table():
+    """The watchers are the site's rules (like C01-C23): a rendered rule adds files the
+    product-name baseline refuses, so the committed binding names none of them."""
+    b = binding()
+    assert "tables" not in b and not {r["pack"] for r in b["rules"]} & set(WATCHERS)
+
+
+def test_a_lookup_runs_only_against_a_declared_table_whose_declaration_is_pinned():
+    b = _watch_binding("/opt/hnx-tables/lab-checks/lab-checks.hourly.json")
+    res = go(b)
+    assert res.problems == [], [str(p) for p in res.problems]
+    for name in WATCHERS:
+        n = name.replace("-", "_")
+        pin = json.loads(res.files[f"homelabnext/pinned/{n}.json"])
+        # the run reads the declaration from the installed pack, never from a parameter
+        assert pin["tables"] == b["tables"] and pin["mode"] == "shadow"
+        rule = yaml.safe_load(res.files[f"homelabnext/rules/on_{n}.yaml"])
+        assert rule["trigger"]["parameters"] == {"timezone": "UTC", "minute": 15}
+    # a pack without a lookup pins no table
+    assert "tables" not in json.loads(res.files["homelabnext/pinned/proposal_validate.json"])
+    undeclared = copy.deepcopy(b)
+    del undeclared["tables"]
+
+    # (problem names are compared without their engine prefix: `step` is st2-step)
+    def kinds(problems, name):
+        return {c.split("-", 1)[1] for c, n in problems if n == name}
+
+    assert all(kinds(_problems(undeclared), name) == {"step"} for name in WATCHERS)
+    other = copy.deepcopy(b)
+    other["tables"] = {"table:other.rows": b["tables"]["table:lab.checks"]}
+    assert all("step" in kinds(_problems(other), name) for name in WATCHERS)
+    # the binding schema refuses a relative path, a dot part, and invariants-results without keys
+    for bad in (
+        {"path": "rel/x.json", "format": "json-map"},
+        {"path": "/opt/hnx-tables/../x.json", "format": "json-map"},
+        {"path": "/opt/hnx-tables/x.json", "format": "invariants-results"},
+        {"path": "/opt/hnx-tables/x.json", "format": "json-map", "keys": {"a": ["N-01"]}},
+        {"path": "/opt/hnx-tables/x.json", "format": "csv"},
+    ):
+        b["tables"] = {"table:lab.checks": bad}
+        assert {c.split("-", 1)[1] for c, _ in _problems(b)} == {"binding"}, bad
+
+
+def test_a_watcher_records_the_page_it_would_send_when_a_criterion_is_red(tmp_path):
+    path = _results(tmp_path, _all() | {"N-08": "fail", "N-10": "error"})
+    b = _watch_binding(str(path))
+    pdir = pinned_dir(tmp_path, b)
+    ev, [rec] = _watch_run(pdir, "watch-llm-server")
+    assert (rec["step"], rec["action"], rec["result"]) == ("page", "notify.page", "shadow")
+    assert rec["reason"].endswith("-shadow")  # recorded, nothing sent
+    assert rec["params"] == {
+        "rota": "lab-watch",
+        "alert_id": "watch-llm-server",
+        "title": "watch-llm-server: N-08 fail, N-10 error",
+    }
+    # the shadow record is the request the offline runner makes for the same row
+    rows = read_table(b["tables"]["table:lab.checks"], clock=lambda: path.stat().st_mtime)
+    fx = {"name": "x", "event": ev, "lookups": {"table:lab.checks": rows}, "expect": {}}
+    [offline] = run_fixture(pack("watch-llm-server"), fx, manifest=manifest()).calls
+    assert (rec["request_id"], rec["request_digest"]) == (
+        offline.request_id,
+        offline.request_digest,
+    )
+    # a green row is quiet, and so are the other watchers while this one is red
+    assert _watch_run(pdir, "watch-cti-freshness")[1] == []
+    assert _watch_run(pdir, "watch-honeypot-lake")[1] == []
+
+
+@pytest.mark.parametrize(
+    ("status", "title"),
+    [
+        ("skip", "watch-honeypot-lake: N-22 skip"),  # a deferred check is not a pass
+        ("bogus", "watch-honeypot-lake: N-22 unrecognised"),
+        (None, "watch-honeypot-lake: N-22 missing"),  # dropped from the register: page
+    ],
+)
+def test_anything_but_pass_pages_and_so_does_a_missing_criterion(tmp_path, status, title):
+    statuses = {k: v for k, v in _all().items() if k != "N-22"}
+    if status:
+        statuses["N-22"] = status
+    pdir = pinned_dir(tmp_path, _watch_binding(str(_results(tmp_path, statuses))))
+    [rec] = _watch_run(pdir, "watch-honeypot-lake")[1]
+    assert rec["step"] == "page" and rec["params"]["title"] == title
+
+
+def test_a_key_the_binding_does_not_map_pages_as_missing(tmp_path):
+    b = _watch_binding(str(_results(tmp_path, _all())))
+    del b["tables"]["table:lab.checks"]["keys"]["watch-cti-freshness"]
+    [rec] = _watch_run(pinned_dir(tmp_path, b), "watch-cti-freshness")[1]
+    assert rec["step"] == "page-missing" and rec["result"] == "shadow"
+    assert rec["params"]["title"] == "watch-cti-freshness: no row in table:lab.checks"
+
+
+def test_an_unreadable_table_fails_the_run_and_never_reads_as_no_row(tmp_path):
+    path = _results(tmp_path, _all())
+    pdir = pinned_dir(tmp_path, _watch_binding(str(path)))
+    ev, calls = _watch_run(pdir, "watch-honeypot-lake")
+    assert calls == []
+    path.write_text('{"schema": "homelabnext.invariants.results/1", "res')  # a run mid-write
+    with pytest.raises(TableError, match="not JSON"):
+        _watch_step(pdir, "watch-honeypot-lake", "check", ev)
+    path.unlink()
+    with pytest.raises(TableError, match="cannot be opened"):
+        _watch_step(pdir, "watch-honeypot-lake", "check", ev)
+    # a pinned document whose table declaration is gone is a defect, never a quiet miss
+    pin = pdir / "watch_honeypot_lake.json"
+    doc = json.loads(pin.read_text())
+    del doc["tables"]
+    pin.write_text(json.dumps(doc))
+    with pytest.raises(ValueError, match="does not declare"):
+        _watch_step(pdir, "watch-honeypot-lake", "check", ev)

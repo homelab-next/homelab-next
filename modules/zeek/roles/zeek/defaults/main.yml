@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# zeek, the network monitor (modules/zeek): one container per capture interface.
+# zeek_logical_id (required): the instance's registry id, e.g. sensor-monitor
+# zeek_capture_interfaces (required): [{slug, interface}], one Zeek process per interface (Zeek reads
+#   one interface per process); the slug names the unit and the log subdirectory
+zeek_base_image: "docker.io/zeek/zeek:8.0.8@sha256:cc06c95fa3214786f576aff720e91455160864fbc4ad855a348fa831c63f1653"
+# the packages built into the local image, each pinned to a release tag or a commit (zkg --version)
+zeek_script_packages:
+  - {name: zeek/corelight/hassh, version: v1.0.1}
+  - {name: zeek/foxio/ja4, version: v0.18.8}
+  - {name: zeek/salesforce/ja3, version: 502cc6395811c54743b0561419d61900a6df3ff7}
+  - {name: zeek/mitre-attack/bzar, version: 59bae4a0e7849a75fa5ea86a206f10f3ce8dbe22}
+zeek_local_repo: hnx-zeek
+zeek_build_dir: /opt/hnx-zeek/build
+zeek_log_root: /var/log/hnx-zeek
+zeek_unit_dir: /etc/systemd/system
+zeek_logrotate_dir: /etc/logrotate.d
+zeek_logrotate_max_size: 2G
+zeek_logrotate_keep: 3
+zeek_container_memory: 2g
+zeek_service_manage: true
+zeek_build_local: true
+zeek_docker_cli: docker
+zeek_systemctl_cli: systemctl
+# stats.log heartbeat: written every interval; health reads the newest lines
+zeek_stats_interval: 60
+zeek_stats_window: 5
+zeek_stats_max_age_seconds: 300
+zeek_max_drop_ratio: 0.05
+zeek_health_timeout: 20
+# The SIEM agent on this host (its own control) reads each capture's event streams: the localfile
+# block is added when its configuration exists; the unit is restarted when the block changed
+# (empty: the site restarts it). README "Shipping" names the streams; stats, loaded_scripts,
+# packet_filter and telemetry are not events.
+zeek_siem_agent_manage: true
+zeek_siem_agent_conf: /var/ossec/etc/ossec.conf
+zeek_siem_agent_unit: ""
+zeek_siem_streams: [conn, dns, ssl, http, ssh, files, x509, notice, weird]
+# The predecessor this module replaced on the host, retired once the module owns the captures
+# (zeek_service_manage): its units are disabled and stopped first (a watchdog timer would revive
+# its containers), then its containers are kept from restarting and stopped, and its SIEM agent
+# localfile blocks (blockinfile marker text, without BEGIN/END) are removed, so every event is read
+# once, from this module's log directory. Empty: nothing to retire.
+zeek_retired_units: []
+zeek_retired_containers: []
+zeek_retired_siem_markers: []

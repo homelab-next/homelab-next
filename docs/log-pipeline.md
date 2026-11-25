@@ -1,6 +1,6 @@
 ---
 summary: 'The log-pipeline contract: hnx_runtime from the guest model by the address the collector saw, hnx_tlp from the route''s declaration; never the event.'
-summary_of: outline:sha256:a49158449fd20cc4
+summary_of: outline:sha256:038f067c33711f19
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The log pipeline and its labels
@@ -201,3 +201,36 @@ The runtime label:
 - The example provider's adapter (`hnx_modules.example_log_pipeline.log_pipeline:make`) is part
   of the fictional product. The reference behaviour is the fake in
   `conformance/fakes/log_pipeline.py`, which applies the library rule.
+
+## Is it flowing? The source census and the burst clusterer
+
+A pipeline that stops delivering does not announce it. Two checks watch the end of it, both owned
+by the [`source-census`](../modules/source-census/README.md) module (ADR-0049 decisions 8 and 9):
+
+- **`source-census/sources-flowing`** groups the raw-archive table (`soc.raw_archive` by default:
+  a time column and the source columns `location` and `decoder_name`) by source and UTC hour over a window
+  (8 days), learns each source's own cadence from when it arrived, and flags a source silent past a
+  multiple of that cadence. A source with less history than the window is `learning`: it passes and
+  the criterion reads `warn`, but one that arrived three times and is then silent past 24 hours
+  fails, so the cutover period is not blind. `source-census/all-classes-dark` (no row in any
+  configured table in its window) never learns. Both run through `hnx lake source-census` and page
+  through the `notify` slot on a newly flagged set only.
+- **`hnx logbursts`** clusters error lines of a manager log in time into bursts, collapses each to
+  its distinct message shapes and says `ONGOING` (needs attention; also a shape that recurs on
+  three days) or `RECOVERED` (no action). A burst that stopped hours ago is not a fault to wake
+  anyone for; a reconnection storm (many agents, one shape, seconds apart) is one event.
+
+Both read counts and times only. The label machinery above is not involved: they do not move or
+copy an event, so they add no egress.
+
+## The vector provider
+
+`modules/vector` ([README](../modules/vector/README.md)) is the in-tree provider: a Vector aggregator
+beside a sidecar that runs this document's rules as the library's own files (copied verbatim to the
+guest, and proved byte-identical and complete by a test), not as a port. Its adapter,
+`hnx_modules.vector.log_pipeline:make`, drives the sidecar's labelling path, and
+`hnx conform run log-pipeline --target modules/vector/conformance/target.yml` (with
+`PYTHONPATH=modules/vector/roles/vector/files`) runs the suite through it. Where the contract says the collector
+supplies the observed address, the provider's per-route policy is: the peer of the connection, the
+address the SIEM manager recorded for an agent, or, from a trusted recorder only (the router), the client
+it recorded; never a field the event body wrote.

@@ -90,6 +90,7 @@ orchestration_job_units:
       cti-hourly: fresh
       cti-publish: publish
     lanes: [real, shadow]           # default: both
+    overlap: skip                   # default wait; skip coalesces a session into the run in progress
 ```
 
 | What | Where (defaults) | Owner, mode |
@@ -106,11 +107,16 @@ orchestration_job_units:
 
 **One session.** The runner gives the session `HNX_AGENT_KEY`, `HNX_LANE` and `HNX_RUN_ID`. The
 dispatcher looks the agent up in the table, takes the instance's lock (a second session of the same
-job and lane waits for it: same-name jobs run one after the other), refuses with exit 75 a unit it
+job and lane waits for it: same-name jobs run one after the other; a set declared `overlap: skip`
+instead answers `skipped` with exit 0 at once and starts or stops nothing, so a scheduled job's
+next firing coalesces into the run in progress rather than queueing behind it: a waiting session
+holds a controller slot and its attempt ceiling runs while it waits, so hourly firings of a
+multi-hour job piled up, starved the other agents of slots, and a waiter that finally got the lock
+was cut off by its ceiling mid-run, 2026-11-24), refuses with exit 75 a unit it
 finds already running (started by hand; classed `concurrency-limited`, a wait the controller asks
 again after, unless `orchestration_runner_exit_classes` names 75), writes the run file, notes where
 the unit's log ends, and runs `systemctl start --wait hnx-<set>@<job>-<lane>.service`. When the
-unit ends it removes the run file and answers one JSON object: `outcome` (`done`, `failed`, `busy`,
+unit ends it removes the run file and answers one JSON object: `outcome` (`done`, `skipped`, `failed`, `busy`,
 `refused` or `cancelled`), `unit`, `result` and `exec_main_status` (from `systemctl show`, which
 needs no polkit), and `log_tail`, the end (`orchestration_dispatch_tail_bytes`, 16 KiB) of what
 **this run** appended to the unit's log. Success is exit 0 and the answer on stdout; a failed unit

@@ -13,10 +13,10 @@ digest from a passing commit. Contract: `schemas/workflows/` (`pack`, `deploy`).
 deploy pins: `workflows/deploy.yml`.
 
 `workflows/broker.manifest.json` is a **decision table**: the actions, tiers, approvals and grants
-the packs are checked against. Only `agent.job.submit`'s handler is in the tree (pinned by its
-handler document); `case.open`, `notify.page`, `notify.post`, `dns.block-domains` and
+the packs are checked against. `agent.job.submit`'s and `notify.page`'s handlers are in the tree
+(each pinned by its handler document); `case.open`, `notify.post`, `dns.block-domains` and
 `host.isolate` act on the site's own systems, so their handlers are the site's and the table
-cannot be served as it is (`hnx broker validate` names exactly those five). The manifest the
+cannot be served as it is (`hnx broker validate` names exactly those four). The manifest the
 broker serves is the site's: it adds the handler documents (and the `callers` its peers need) and
 may leave out any action it does not serve, and
 `hnx broker validate SERVED --decision-table workflows/broker.manifest.json` refuses it where it is
@@ -64,7 +64,7 @@ fixtures: [...]
 | Step kind | What it is | Output |
 |---|---|---|
 | `enrich` `pick` | field values of the objects in a list that match `match` | `{values, first, count}` |
-| `enrich` `lookup` | one row of a `table:` by key (live: the table; offline: the fixture's `lookups`) | `{key, found, row}` |
+| `enrich` `lookup` | one row of a `table:` by key (live: the table, on StackStorm one the binding declares, [stackstorm.md](stackstorm.md#tables); offline: the fixture's `lookups`) | `{key, found, row}` |
 | `enrich` `extract-iocs` | URLs, their host names, IPv4 addresses, sha256 hashes in text; defanged forms refanged; nothing invented | `{urls, domains, ipv4, sha256, count}` |
 | `decide` | a decision spec (`homelabnext.decide`) tracked in git, by `id` | `{label, confidence}`; `label` is the cascade's verdict (`DecisionSpec.verdicts`): a label from the spec's decision table other than `escalate`, or `human` when every tier declined (`raise`/`hold`/`human` for a safety spec) |
 | `prompt` | a prompt template (`homelabnext.agent.template`), every required slot bound | the template's JSON reply |
@@ -127,7 +127,9 @@ in the tree, a pinned pack does not validate, or a pinned pack cannot run
 `equals` one logical id) and so would start for any service emitting that event type. The
 StackStorm render refuses the same two (`st2-handler`, `st2-source`), so "deployable" means one
 thing on every path. `case-opened-notify`, `new-critical-alert` and `phishing-report` are reference
-packs - their handlers are site code and their triggers pin no producer - and are not pinned. To
+packs - their handlers are site code and their triggers pin no producer - and are not pinned.
+`cti-watch-site` and `cti-watch-lake` are deployable but not pinned either: nothing writes their
+table yet. To
 change a deployed pack: edit it, run `hnx workflows digest workflows/packs`, update its pin in the
 same commit.
 

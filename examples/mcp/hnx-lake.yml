@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the paths name nothing real.
+# The first-party read-only lake server (ADR-0030: reads through a read-only MCP server, acting
+# through the broker). It signs in to the query engine as its OWN reader account, whose password
+# is an owner-only file on the host it runs on (modules/lake-mcp), never the agent's: the engine's
+# access rules are the control, the SELECT-only gate in front of them the second one. A draft
+# here: a lab activates its own record after its review (docs/mcp-catalog.md).
+id: hnx-lake
+description: 'Read-only SQL over the data lake (hnx lake mcp, modules/lake-mcp): list and describe the tables, and run one
+  SELECT with bound :name parameters under row and time limits, signed in to the query engine as its own reader.'
+owner: data-team
+status: draft
+origin:
+  kind: first-party
+  path: homelabnext/lake/mcp_tools.py
+transport:
+  type: stdio
+  bin: hnx
+  entry: lake-mcp
+  args: [--config, /etc/hnx-modules/lake-mcp/lake-mcp.yml]
+runtime: agent-local
+egress: ['svc:lake-query']
+data_tier: local-only
+capabilities: ['cap:lake-query']
+tools:
+- {name: describe_table, classes: [read], approval: false}
+- {name: list_tables, classes: [read], approval: false}
+- {name: query, classes: [read], approval: false}
+author: agent:claude

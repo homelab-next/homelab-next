@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the three containers run and are healthy; every manager daemon is a LIVE PROCESS (the
+# product's own status command reads pid files and reports a daemon that died hours ago as running,
+# so it is not asked); the enrolment service refuses a wrong password; the manager's API accepts its
+# account; the indexer refuses a caller with no account, answers its account and is not red; the
+# dashboard serves its sign-in page; and the installed rules are the site's (the digest of what is
+# loaded equals the digest of what the site wants). Read-only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: wazuh
+        compose_app_dir: "{{ wazuh_app.compose_app_dir }}"
+        compose_app_spec: "{{ wazuh_app.compose_app_spec }}"
+
+    - name: Every manager daemon is a live process
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ wazuh_dir }}/docker-compose.yml", exec, -T, manager,
+               pgrep, "{{ '-f' if item == 'wazuh_apid[.]py' else '-x' }}", "{{ item }}"]
+      loop: [wazuh-analysisd, wazuh-remoted, wazuh-authd, wazuh-db, wazuh-modulesd, wazuh-monitord, "wazuh_apid[.]py"]
+      changed_when: false
+      check_mode: false
+
+    - name: Ask the enrolment service with a wrong password
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ wazuh_dir }}/docker-compose.yml", exec, -T, manager, bash, -c,
+               "printf \"OSSEC PASS: hnx-health-wrong-password OSSEC A:'hnx-health-probe'\\n\" | timeout 10 openssl s_client -connect localhost:{{ wazuh_container_enrollment_port }} -quiet 2>&1"]
+      register: wazuh_enroll_probe
+      changed_when: false
+      failed_when: false
+      check_mode: false
+    - name: The enrolment service refuses it
+      ansible.builtin.assert:
+        that:
+          - (wazuh_enroll_probe.stdout ~ wazuh_enroll_probe.stderr) is search('Invalid password')
+        fail_msg: >-
+          siem: the enrolment service did not refuse a wrong password (exit {{ wazuh_enroll_probe.rc }});
+          it must answer 'Invalid password' (use_password and etc/authd.pass)
+
+    - name: Sign in to the manager's API
+      ansible.builtin.include_tasks: probe.yml
+      vars:
+        wazuh_probe_service: manager
+        wazuh_probe_url: "https://localhost:{{ wazuh_container_api_port }}/security/user/authenticate?raw=true"
+        wazuh_probe_method: POST
+        wazuh_probe_user: "{{ wazuh_api_login_ref }}"
+        wazuh_probe_user_name: "{{ wazuh_api_user }}"
+    - name: The manager's API accepts its account
+      ansible.builtin.assert:
+        that: wazuh_probe_code == '200'
+        fail_msg: "siem: the manager's API answered the sign-in with status {{ wazuh_probe_code }} (curl exit {{ wazuh_probe_curl_rc }})"
+
+    - name: Ask the indexer with no account
+      ansible.builtin.include_tasks: probe.yml
+      vars:
+        wazuh_probe_service: indexer
+        wazuh_probe_url: "https://localhost:{{ wazuh_container_indexer_port }}/_cluster/health"
+    - name: The indexer refuses a caller with no account
+      ansible.builtin.assert:
+        that: wazuh_probe_code == '401'
+        fail_msg: >-
+          siem: the indexer answered a call with no account with status {{ wazuh_probe_code }}
+          (curl exit {{ wazuh_probe_curl_rc }}); it must refuse it with 401 over a certificate that
+          verifies against the stack's CA
+
+    - name: Ask the indexer's cluster health with the administrator account
+      ansible.builtin.include_tasks: probe.yml
+      vars:
+        wazuh_probe_service: indexer
+        wazuh_probe_url: "https://localhost:{{ wazuh_container_indexer_port }}/_cluster/health"
+        wazuh_probe_user: "{{ wazuh_indexer_admin_ref }}"
+        wazuh_probe_user_name: "{{ wazuh_indexer_user }}"
+        wazuh_probe_quiet: false
+    - name: The indexer is not red
+      ansible.builtin.assert:
+        that:
+          - wazuh_probe_code == '200'
+          - (wazuh_probe_body | from_json).status in ['green', 'yellow']
+        fail_msg: >-
+          siem: the indexer's cluster health with {{ wazuh_indexer_admin_ref }} answered status
+          {{ wazuh_probe_code }}; it must be 200 and green or yellow
+
+    - name: Ask the dashboard for its sign-in page
+      ansible.builtin.include_tasks: probe.yml
+      vars:
+        wazuh_probe_service: dashboard
+        wazuh_probe_url: "http://localhost:{{ wazuh_container_dashboard_port }}/app/login"
+    - name: The dashboard serves it
+      ansible.builtin.assert:
+        that: wazuh_probe_code == '200'
+        fail_msg: "siem: the dashboard's sign-in page answered status {{ wazuh_probe_code }}"
+
+    - name: Digest what the manager has installed and what the site wants
+      ansible.builtin.command:
+        argv: [python3, -I, "{{ wazuh_data_root }}/config/hnx_wazuh_rules.py", digest, "{{ item }}", "{{ wazuh_data_root }}/{{ 'manager/etc' if item == '--etc' else 'config/native' }}"]
+      loop: ["--etc", "--stage"]
+      register: wazuh_digests
+      changed_when: false
+      check_mode: false
+    - name: The installed rules are the site's (wazuh/rule-drift)
+      ansible.builtin.assert:
+        that: (wazuh_digests.results[0].stdout | from_json).digest == (wazuh_digests.results[1].stdout | from_json).digest
+        fail_msg: >-
+          siem: the rules the manager has loaded differ from the site's
+          ({{ (wazuh_digests.results[0].stdout | from_json).digest[:12] }} against
+          {{ (wazuh_digests.results[1].stdout | from_json).digest[:12] }}); run the module's install
+  tags: [health]

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# The settings of the run (no secret in them). The schedule is the module's fleet unit
+# (units/fleet_units.yml: source-census-run), rendered by the fleet scheduler, or installed by this role
+# (tasks/units.yml) when source_census_install_unit is set.
+- name: The census settings
+  ansible.builtin.template:
+    src: census.yml.j2
+    dest: "{{ source_census_config_file }}"
+    owner: "{{ source_census_root_owner }}"
+    group: "{{ source_census_group }}"
+    mode: "0644"

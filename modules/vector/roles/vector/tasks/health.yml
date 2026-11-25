@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: both containers run and are healthy; the listeners answer on the guest's address
+# (the tcp ones by a connection, the udp one by the socket table); the sidecar's status is fresh,
+# reports no table in error, and the tables it has loaded are the very files deployed (a stale or
+# refused table would label by the older guests, silently: docs/log-pipeline.md); and the sidecar
+# is listening. Nothing is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: vector
+        compose_app_dir: "{{ vector_app.compose_app_dir }}"
+        compose_app_spec: "{{ vector_app.compose_app_spec }}"
+    - name: The tcp listeners answer (syslog over TLS, the sensors)
+      ansible.builtin.wait_for:
+        host: "{{ vector_bind }}"
+        port: "{{ item | int }}"
+        timeout: "{{ vector_health_timeout | int }}"
+      loop: ["{{ vector_syslog_tls_port }}", "{{ vector_sensor_port }}"]
+    - name: The udp listener is bound (the socket table)
+      ansible.builtin.command:
+        argv: [ss, -H, -l, -u, -n]
+      register: vector_udp_sockets
+      changed_when: false
+      failed_when: (vector_bind ~ ':' ~ (vector_syslog_udp_port | string)) not in vector_udp_sockets.stdout
+    - name: Read the sidecar's status
+      ansible.builtin.slurp:
+        src: "{{ vector_data_root }}/run/status.json"
+      register: vector_status_raw
+    - name: Read the deployed tables
+      ansible.builtin.stat:
+        path: "{{ vector_data_root }}/tables/{{ item }}"
+        checksum_algorithm: sha256
+      loop: [runtime-labels.json, tlp-sources.json, enrich.json]
+      register: vector_tables_stat
+    - name: The status is fresh, listening, error-free and names the deployed tables
+      ansible.builtin.assert:
+        that:
+          - (now().timestamp() | int) - (vector_status.time | int) <= vector_status_max_age | int
+          - vector_status.listening | bool
+          - vector_status.errors | length == 0
+          - >-
+            vector_tables_stat.results | rejectattr('stat.checksum', 'in', vector_status.tables.values() | list) | list | length == 0
+          - vector_status.tables | length == 3
+        fail_msg: >-
+          vector: the sidecar's status is stale, not listening, reports a table in error
+          ({{ vector_status.errors }}) or is running tables other than the deployed ones
+      vars:
+        vector_status: "{{ vector_status_raw.content | b64decode | from_json }}"
+  tags: [health]

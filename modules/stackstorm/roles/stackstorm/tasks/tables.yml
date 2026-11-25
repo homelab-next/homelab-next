@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+# The table mounts of the action runner (stackstorm_table_mounts): each directory read-only at
+# <stackstorm_c_tables>/<name>, and each host group by number (group_add), so the runner may read its
+# table and nothing else of the module that writes it. A group that does not exist on the guest fails
+# here, before compose: the module that writes the table creates it (lab-checks: lab_checks_results_group).
+- name: Resolve the table mounts' groups
+  ansible.builtin.getent:
+    database: group
+    key: "{{ item.group }}"
+    fail_key: false
+  loop: "{{ stackstorm_table_mounts }}"
+  loop_control:
+    label: "{{ item.name }}: {{ item.group }}"
+  register: stackstorm_table_groups
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: The groups by number
+  ansible.builtin.set_fact:
+    stackstorm_table_gid_of: >-
+      {%- set m = {} -%}
+      {%- for r in stackstorm_table_groups.results | default([]) -%}
+      {%-   set e = ((r.ansible_facts | default({})).getent_group | default({})).get(r.item.group) -%}
+      {%-   if e and (e[1] | string) is match('^[1-9][0-9]{0,9}\Z') -%}{%- set _ = m.update({r.item.group: e[1] | string}) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ m }}
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Every table group exists (and is not root's)
+  ansible.builtin.assert:
+    that: stackstorm_table_mounts | map(attribute='group') | reject('in', stackstorm_table_gid_of) | list | length == 0
+    fail_msg: >-
+      stackstorm: the table group(s) {{ stackstorm_table_mounts | map(attribute='group') | reject('in', stackstorm_table_gid_of) | list }}
+      do not exist on this guest (or are group 0): deploy the module that writes the table first (it creates its readers' group)
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: The runner's table volumes and groups
+  ansible.builtin.set_fact:
+    stackstorm_table_volumes: >-
+      {{ stackstorm_table_mounts | map(attribute='path')
+         | zip(stackstorm_table_mounts | map(attribute='name') | map('regex_replace', '^', stackstorm_c_tables ~ '/'))
+         | map('join', ':') | map('regex_replace', '$', ':ro') | list }}
+    stackstorm_table_binds: >-
+      {%- set out = [] -%}
+      {%- for m in stackstorm_table_mounts -%}
+      {%-   set _ = out.append({'path': m.path, 'reason': 'table ' ~ m.name ~ ' the pack lookup steps read, mounted read-only into the action runner'}) -%}
+      {%- endfor -%}
+      {{ out }}
+    stackstorm_table_gids: "{{ stackstorm_table_mounts | map(attribute='group') | map('extract', stackstorm_table_gid_of) | unique | list }}"
+  tags: [health, backup, restore, export, upgrade, readiness]

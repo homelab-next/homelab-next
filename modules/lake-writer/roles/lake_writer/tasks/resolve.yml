@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Names the three services' URLs from the registry (or the overrides) and refuses a clear-text lake.
+# Included by the install and by every hook that talks to them.
+- name: Resolve the lake query service's URL
+  ansible.builtin.set_fact:
+    lake_writer_effective_lake_query_url: "{{ lake_writer_lake_query_url if lake_writer_lake_query_url != '' else lookup('hnx_registry', lake_writer_lake_query_id, field='url') }}"
+    lake_writer_effective_lake_catalog_url: "{{ lake_writer_lake_catalog_url if lake_writer_lake_catalog_url != '' else lookup('hnx_registry', lake_writer_lake_catalog_id, field='url') }}"
+    lake_writer_effective_object_store_url: "{{ lake_writer_object_store_url if lake_writer_object_store_url != '' else lookup('hnx_registry', lake_writer_object_store_id, field='url') }}"
+  tags: [readiness, health, backup, export, restore, upgrade]
+
+- name: The lake is reached over https
+  ansible.builtin.assert:
+    that:
+      - lake_writer_effective_lake_query_url is match('^https://')
+      # the catalog is sent only its own token: without one (a network-only catalog) it may be plain http
+      - lake_writer_catalog_bearer_ref == '' or lake_writer_effective_lake_catalog_url is match('^https://')
+    fail_msg: "lake-writer: the lake query service's URL, or the catalog's when a catalog token goes to it, is not https (the logins would travel in clear)"
+  tags: [readiness, health, backup, export, restore, upgrade]

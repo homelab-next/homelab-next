@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: Apache-2.0
+# Tokens a product issues only for a login (form post of a user name and password) expire in hours:
+# a root-run timer refreshes them into <status_hub_issued_dir>/hub-login/<name>, where the collector reads
+# them in the store area hub-login (status_hub_login_area).
+- name: Create the helper's directory
+  ansible.builtin.file:
+    path: "{{ status_hub_libexec_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the helper
+  ansible.builtin.copy:
+    src: hnx-hub-login-token.py
+    dest: "{{ status_hub_libexec_dir }}/hnx-hub-login-token"
+    owner: root
+    group: root
+    mode: "0755"
+  register: status_hub_login_script
+
+- name: Write each login's password, root only
+  ansible.builtin.copy:
+    dest: "{{ status_hub_config_dir }}/login-{{ item.name }}.pw"
+    content: "{{ lookup('hnx_secret', item.password_ref) | trim }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ status_hub_logins }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  diff: false
+  register: status_hub_login_passwords
+
+- name: Build the helper's entries (urls by registry name, no secrets)
+  ansible.builtin.set_fact:
+    status_hub_login_entries: >-
+      {{ status_hub_login_entries | default([]) + [{
+           'name': item.name,
+           'url': lookup('hnx_registry', item.service, field='url') ~ item.path,
+           'username': item.username,
+           'password_file': status_hub_config_dir ~ '/login-' ~ item.name ~ '.pw',
+           'out': status_hub_login_dir ~ '/' ~ item.name}] }}
+  loop: "{{ status_hub_logins }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Write the helper's configuration
+  ansible.builtin.copy:
+    dest: "{{ status_hub_config_dir }}/login-tokens.json"
+    content: "{{ {'ca_file': status_hub_ca_bundle_path if status_hub_ca_bundle | bool else none, 'owner': status_hub_user, 'entries': status_hub_login_entries} | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  register: status_hub_login_config
+
+- name: Write the refresh service and timer
+  ansible.builtin.template:
+    src: "hnx-hub-login-token.{{ item }}.j2"
+    dest: "{{ status_hub_systemd_dir }}/hnx-hub-login-token.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+  register: status_hub_login_units
+
+- name: Look for each token file
+  ansible.builtin.stat:
+    path: "{{ status_hub_login_dir }}/{{ item.name }}"
+  loop: "{{ status_hub_logins }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: status_hub_login_files
+
+- name: Fetch the tokens now when the helper, its configuration or a password changed, or one is missing
+  ansible.builtin.systemd_service:
+    name: hnx-hub-login-token.service
+    state: started
+    daemon_reload: "{{ status_hub_login_units is changed }}"
+  when: >-
+    status_hub_start | bool and not ansible_check_mode and (status_hub_login_script is changed or status_hub_login_config is changed
+    or status_hub_login_passwords is changed or status_hub_login_units is changed
+    or (status_hub_login_files.results | rejectattr('stat.exists') | list | length > 0))
+
+- name: Enable the refresh timer
+  ansible.builtin.systemd_service:
+    name: hnx-hub-login-token.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ status_hub_login_units is changed }}"
+  when: status_hub_start | bool and not ansible_check_mode

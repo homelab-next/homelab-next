@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (object-tree): <data root>/export/<UTC stamp>/{etc,datastore,listing.jsonl}. The
+# server is stopped while its files are copied (they are a tree, not one consistent database) and
+# started again whatever happened. A new directory every run; nothing is overwritten or removed.
+- name: Name this export
+  ansible.builtin.command:
+    argv: [date, -u, +%Y%m%dT%H%M%SZ]
+  register: velociraptor_server_stamp
+  changed_when: false
+  check_mode: false
+  tags: [backup, export]
+
+- name: Copy the server state with the server stopped
+  tags: [backup, export]
+  block:
+    - name: Stop the server
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ velociraptor_server_dir }}/docker-compose.yml", stop]
+      changed_when: true
+      when: velociraptor_server_start | bool
+    - name: Copy the configuration (with its authority) and the datastore, and list them
+      ansible.builtin.command:
+        argv:
+          - "{{ velociraptor_server_script }}"
+          - export
+          - --etc
+          - "{{ velociraptor_server_data_root }}/etc"
+          - --datastore
+          - "{{ velociraptor_server_data_root }}/datastore"
+          - --dest
+          - "{{ velociraptor_server_data_root }}/export/{{ velociraptor_server_stamp.stdout | trim }}"
+      register: velociraptor_server_export
+      changed_when: true
+  always:
+    - name: Start the server again
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ velociraptor_server_dir }}/docker-compose.yml", up, -d]
+      changed_when: true
+      when: velociraptor_server_start | bool

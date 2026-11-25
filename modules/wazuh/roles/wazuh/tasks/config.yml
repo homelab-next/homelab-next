@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: Apache-2.0
+# The configuration the containers mount, rendered under <data root>/config. The indexer's account file
+# holds bcrypt hashes made by the indexer's own tool in a throwaway container (the password goes in the
+# container's environment, never in an argument); it is remade only when a password changed (a
+# fingerprint of the two passwords is kept beside it, never the passwords), so a re-run changes
+# nothing. A change to an account's password reaches an indexer that is already initialised through
+# securityadmin (security_apply.yml), which main runs after the start.
+- name: Fingerprint the two indexer account passwords
+  ansible.builtin.set_fact:
+    wazuh_users_fp: "{{ (lookup('hnx_secret', wazuh_indexer_admin_ref) ~ ':' ~ lookup('hnx_secret', wazuh_dashboard_login_ref)) | hash('sha256') }}"
+  no_log: true
+
+- name: Read the fingerprint the accounts file was made from
+  ansible.builtin.slurp:
+    src: "{{ wazuh_data_root }}/config/internal_users.sha256"
+  register: wazuh_users_fp_file
+  failed_when: false
+
+- name: Does the accounts file exist
+  ansible.builtin.stat:
+    path: "{{ wazuh_data_root }}/config/internal_users.yml"
+  register: wazuh_users_stat
+
+- name: Remember whether the stack was installed before this run
+  ansible.builtin.stat:
+    path: "{{ wazuh_dir }}/docker-compose.yml"
+  register: wazuh_installed
+
+- name: Decide whether the accounts file is made again
+  ansible.builtin.set_fact:
+    wazuh_users_remake: >-
+      {{ not wazuh_users_stat.stat.exists
+         or (wazuh_users_fp_file.content | default('') | b64decode | trim) != wazuh_users_fp }}
+  no_log: true
+
+- name: Hash the passwords with the indexer's own tool
+  ansible.builtin.command:
+    argv: [docker, run, --rm, --env, PW, --entrypoint, bash,
+           "{{ wazuh_indexer_image }}", -c,
+           "JAVA_HOME=/usr/share/wazuh-indexer/jdk /usr/share/wazuh-indexer/plugins/opensearch-security/tools/hash.sh -env PW"]
+  environment:
+    PW: "{{ lookup('hnx_secret', item) }}"
+  loop: ["{{ wazuh_indexer_admin_ref }}", "{{ wazuh_dashboard_login_ref }}"]
+  loop_control:
+    label: "{{ item }}"
+  register: wazuh_hashes
+  changed_when: false
+  check_mode: false
+  when: wazuh_users_remake | bool
+  no_log: true
+
+- name: Read the two hashes
+  ansible.builtin.set_fact:
+    wazuh_hash_admin: "{{ wazuh_hashes.results[0].stdout_lines | last }}"
+    wazuh_hash_dashboard: "{{ wazuh_hashes.results[1].stdout_lines | last }}"
+  when: wazuh_users_remake | bool
+  no_log: true
+
+- name: Refuse a hash that is not a bcrypt hash
+  ansible.builtin.assert:
+    that:
+      - wazuh_hash_admin is match('^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}\Z')
+      - wazuh_hash_dashboard is match('^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}\Z')
+    fail_msg: "siem: the indexer's hash tool did not return a bcrypt hash for an account"
+  when: wazuh_users_remake | bool
+  no_log: true
+
+- name: Write the accounts file
+  ansible.builtin.template:
+    src: internal_users.yml.j2
+    dest: "{{ wazuh_data_root }}/config/internal_users.yml"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_indexer_gid | int }}"
+    mode: "0640"
+  when: wazuh_users_remake | bool
+  register: wazuh_users_written
+  no_log: true
+
+- name: Record the fingerprint
+  ansible.builtin.copy:
+    content: "{{ wazuh_users_fp }}\n"
+    dest: "{{ wazuh_data_root }}/config/internal_users.sha256"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0600"
+  when: wazuh_users_remake | bool
+  no_log: true
+
+# The generic json decoder is excluded only once the site's replacement is installed (main.yml applies
+# the exclusion after rules.yml on a first install): on a fresh host the manager would otherwise start
+# with no json decoder at all and refuse to load its rules.
+- name: Is the site's replacement json decoder already in the manager
+  ansible.builtin.include_tasks: json_decoder.yml
+
+- name: Decide whether the generic json decoder is excluded in this render
+  ansible.builtin.set_fact:
+    wazuh_json_exclude_effective: "{{ wazuh_json_decoder_excluded | bool and wazuh_json_native_present | bool }}"
+
+- name: Write the indexer's, the dashboard's and the manager's configuration
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ wazuh_data_root }}/config/{{ item.dest }}"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ item.group }}"
+    mode: "0644"
+  loop:
+    - {src: indexer.yml.j2, dest: indexer.yml, group: "{{ wazuh_indexer_gid | int }}", svc: indexer}
+    - {src: dashboard.yml.j2, dest: dashboard.yml, group: "{{ wazuh_dashboard_gid | int }}", svc: dashboard}
+    - {src: ossec.conf.j2, dest: ossec.conf, group: "{{ wazuh_group }}", svc: manager}
+  loop_control:
+    label: "{{ item.dest }}"
+  register: wazuh_cfg_files
+  tags: [restore]
+
+- name: Write the enrolment password file (the manager refuses an enrolment without it)
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', wazuh_enrollment_ref) }}\n"
+    dest: "{{ wazuh_data_root }}/config/authd.pass"
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0600"
+  register: wazuh_authd_file
+  no_log: true
+  tags: [restore]
+
+- name: Name the services whose mounted configuration changed
+  ansible.builtin.set_fact:
+    wazuh_restart_services: >-
+      {{ (wazuh_cfg_files.results | selectattr('changed') | map(attribute='item.svc') | list
+          + (['manager'] if wazuh_authd_file is changed else [])) | unique | list }}

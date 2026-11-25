@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: the server is code in the runtime release, so this proves the installed release answers the
+# server command, records it, then converges the settings and keys.
+#   ansible-playbook -i <inventory> modules/lake-mcp/playbooks/upgrade.yml
+- name: Upgrade the lake MCP server
+  hosts: mod_lake_mcp_server
+  become: true
+  tasks:
+    - name: Prove the release and record it
+      ansible.builtin.include_role:
+        name: lake_mcp
+        tasks_from: upgrade
+    - name: Converge
+      ansible.builtin.include_role:
+        name: lake_mcp

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# The release binaries' sha256 (the linux amd64 build), by release; one entry per release the module
+# supports, bumped with the server image (modules/velociraptor/README.md, "Upgrade").
+velociraptor_client_checksums:
+  "0.77.1": 6636020f3ce03ea4eff5d5b96d635c400e51d2636c823a8f0bd458ddc7c4d28a
+velociraptor_client_binary_name: "velociraptor-v{{ velociraptor_client_version }}-linux-amd64"
+velociraptor_client_config_path: "{{ velociraptor_client_config_dir }}/client.config.yaml"
+velociraptor_client_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+# text that marks a configuration nobody filled in, or one that carries a private key (the
+# server's own configuration and the principal's API credential do; a client's never does)
+velociraptor_client_placeholders: [REPLACE, CHANGEME, CHANGE_ME, PLACEHOLDER, TODO, FIXME, "<", ">", "...", "xxxx"]
+velociraptor_client_default_writeback: /etc/velociraptor.writeback.yaml

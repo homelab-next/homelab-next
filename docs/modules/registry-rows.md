@@ -34,12 +34,14 @@ appear in the lab registry **identically, as the site binds it**
   registry: services.notify-eval: example-notify (instance notify-eval) contributes this row (its row notify), but the lab registry has no such row (copy it as the site binds it)
   ```
 
-- three fields are the lab's own facts about a row, which a generic module cannot know:
-  `standing` (ADR-0039: eval, retiring or legacy, with `until` and `why`), `backup_job` and
-  `scope` (which only narrows what agents file about the service). The registry may add them;
+- four fields are the lab's own facts about a row, which a generic module cannot know:
+  `standing` (ADR-0039: eval, retiring or legacy, with `until` and `why`), `backup_job`,
+  `scope` (which only narrows what agents file about the service) and `status_sources` (what the
+  site's status hub collects about the row: the site decides what it watches, and a module need
+  not know the hub; [status](../status.md)). The registry may add them;
   they are compared only when the module's row sets them. `clients` is **not** one of them: extra
   zones widen who may reach the service, so a registry that adds them differs from the module.
-  So the overlay's copy of a module's row is the bound row plus, at most, these three (an eval
+  So the overlay's copy of a module's row is the bound row plus, at most, these four (an eval
   instance beside the primary: the module's fields exactly, and `standing`);
 - two fields have a value that is the site's and a presence that is the module's:
   `public_hostname` and `edge_tls`. A module whose row is published at the edge (an IdP's
@@ -53,6 +55,17 @@ appear in the lab registry **identically, as the site binds it**
   registry: services.idp.public_hostname: keycloak (instance idp) declares one (its value is the site's), the lab registry has (absent)
   ```
 
+- single sign-on is the site's choice for a row whose module keeps its own accounts: the lab
+  registry may add `oidc` (the row's own callbacks, service schema 2.13) and, only together with
+  it, `auth: idp` where the module's row says `auth: own` (the realm renders a client for the row;
+  the module's local accounts stay). `auth: idp` without `oidc`, or over a module's `none` or
+  `mtls`, is still a difference, and an `oidc` the module declares itself is compared as any other
+  field;
+- a contributed `health.path` may name whole segments that are the site's, in the route
+  parameter form `:name` (an IdP's health is its realm's discovery document,
+  `/realms/:realm/.well-known/openid-configuration`, and the realm is the site's): the lab
+  registry's path must be the same path with each such segment filled by one segment of its own
+  (not left as the parameter); the rest of `health` is compared as any other field;
 - a provider's row never sets `version` (the loader refuses one that does), so the product's
   version is the only one there is;
 - a host role the site places on no host is a problem of its own (the registry's `host` cannot be

@@ -1,0 +1,124 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+<!-- Managed by homelabnext (role wazuh); local changes are overwritten at every start. -->
+<!-- The manager acts on no host: active response is off here and the agents' remote commands are
+     off (README, "The manager acts on no host"). The manager's own host-monitoring modules are off:
+     the guest has its own agent. -->
+<ossec_config>
+  <global>
+    <jsonout_output>yes</jsonout_output>
+    <alerts_log>yes</alerts_log>
+    <logall>no</logall>
+    <logall_json>yes</logall_json>
+    <email_notification>no</email_notification>
+    <agents_disconnection_time>10m</agents_disconnection_time>
+    <agents_disconnection_alert_time>0</agents_disconnection_alert_time>
+  </global>
+
+  <alerts>
+    <log_alert_level>3</log_alert_level>
+  </alerts>
+
+  <logging>
+    <log_format>plain</log_format>
+  </logging>
+
+  <remote>
+    <connection>secure</connection>
+    <port>{{ wazuh_container_agent_port }}</port>
+    <protocol>tcp</protocol>
+    <queue_size>131072</queue_size>
+  </remote>
+{% if wazuh_syslog_allowed_ips | length > 0 %}
+
+  <remote>
+    <connection>syslog</connection>
+    <port>{{ wazuh_syslog_container_port }}</port>
+    <protocol>udp</protocol>
+{% for ip in wazuh_syslog_allowed_ips %}
+    <allowed-ips>{{ ip }}</allowed-ips>
+{% endfor %}
+  </remote>
+{% endif %}
+
+  <rootcheck>
+    <disabled>yes</disabled>
+  </rootcheck>
+
+  <sca>
+    <enabled>no</enabled>
+  </sca>
+
+  <syscheck>
+    <disabled>yes</disabled>
+  </syscheck>
+
+  <vulnerability-detection>
+    <enabled>no</enabled>
+  </vulnerability-detection>
+
+  <indexer>
+    <enabled>yes</enabled>
+    <hosts>
+      <host>https://indexer:{{ wazuh_container_indexer_port }}</host>
+    </hosts>
+    <ssl>
+      <certificate_authorities>
+        <ca>/etc/ssl/root-ca.pem</ca>
+      </certificate_authorities>
+      <certificate>/etc/ssl/filebeat.pem</certificate>
+      <key>/etc/ssl/filebeat.key</key>
+    </ssl>
+  </indexer>
+
+  <active-response>
+    <disabled>yes</disabled>
+  </active-response>
+
+  <ruleset>
+    <decoder_dir>ruleset/decoders</decoder_dir>
+{% if wazuh_json_exclude_effective | bool %}
+    <decoder_exclude>ruleset/decoders/0006-json_decoders.xml</decoder_exclude>
+{% endif %}
+    <rule_dir>ruleset/rules</rule_dir>
+    <rule_exclude>0215-policy_rules.xml</rule_exclude>
+    <list>etc/lists/audit-keys</list>
+    <list>etc/lists/amazon/aws-eventnames</list>
+    <list>etc/lists/security-eventchannel</list>
+    <list>etc/lists/malicious-ioc/malicious-ip</list>
+    <list>etc/lists/malicious-ioc/malicious-domains</list>
+    <list>etc/lists/malicious-ioc/malware-hashes</list>
+    <decoder_dir>etc/decoders</decoder_dir>
+    <rule_dir>etc/rules</rule_dir>
+  </ruleset>
+
+  <rule_test>
+    <enabled>yes</enabled>
+    <threads>1</threads>
+    <max_sessions>64</max_sessions>
+    <session_timeout>15m</session_timeout>
+  </rule_test>
+
+  <!-- Enrolment: refused without the shared password (etc/authd.pass, from the secret) -->
+  <auth>
+    <disabled>no</disabled>
+    <port>{{ wazuh_container_enrollment_port }}</port>
+    <use_source_ip>no</use_source_ip>
+    <purge>yes</purge>
+    <use_password>yes</use_password>
+    <ciphers>HIGH:!ADH:!EXP:!MD5:!RC4:!3DES:!CAMELLIA:@STRENGTH</ciphers>
+    <ssl_verify_host>no</ssl_verify_host>
+    <ssl_manager_cert>etc/sslmanager.cert</ssl_manager_cert>
+    <ssl_manager_key>etc/sslmanager.key</ssl_manager_key>
+    <ssl_auto_negotiate>no</ssl_auto_negotiate>
+  </auth>
+{% if wazuh_alert_forward_url | length > 0 %}
+
+  <!-- The alert webhook (README): each alert at or above the level, posted as homelabnext.alert.created -->
+  <integration>
+    <name>custom-hnx-alert</name>
+    <hook_url>{{ wazuh_alert_forward_url }}</hook_url>
+    <level>{{ wazuh_alert_forward_level | int }}</level>
+    <alert_format>json</alert_format>
+  </integration>
+{% endif %}
+</ossec_config>

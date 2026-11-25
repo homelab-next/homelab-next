@@ -1,0 +1,26 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (module zeek); do not edit. One capture process per interface (Zeek reads one
+# interface per process), so a fault on one NIC blinds that capture only.
+[Unit]
+Description=Zeek capture on {{ item.interface }}
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Restart=always
+RestartSec=10
+ExecStartPre=-{{ zeek_docker_cli }} rm -f hnx-zeek-{{ item.slug }}
+# host network (a capture needs the real interface), only the two capabilities capture needs, a
+# read-only root filesystem, and the log directory as the only writable path. -C: mirrored traffic
+# commonly carries bad checksums (offload), which would otherwise be dropped.
+ExecStart={{ zeek_docker_cli }} run --rm --name hnx-zeek-{{ item.slug }} --network host \
+  --cap-drop ALL --cap-add NET_RAW --cap-add NET_ADMIN --security-opt no-new-privileges:true \
+  --read-only --tmpfs /tmp --memory {{ zeek_container_memory }} \
+  -v {{ zeek_log_root }}/{{ item.slug }}:{{ zeek_container_log_dir }} \
+  -v {{ zeek_build_dir }}/hnx-local.zeek:{{ zeek_container_site_dir }}/hnx-local.zeek:ro \
+  -w {{ zeek_container_log_dir }} {{ zeek_image }} \
+  zeek -i {{ item.interface }} -C {{ zeek_load_scripts | join(' ') }}
+ExecStop={{ zeek_docker_cli }} stop hnx-zeek-{{ item.slug }}
+
+[Install]
+WantedBy=multi-user.target

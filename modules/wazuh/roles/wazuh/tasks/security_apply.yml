@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# The security index is initialised from internal_users.yml only once, on an empty indexer; a changed
+# account password reaches an initialised one through securityadmin, with the administrator
+# certificate (never a password). The manager's connection (its environment) and the dashboard's
+# were re-created by compose with the new values already.
+- name: Load the accounts file into the security index
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ wazuh_dir }}/docker-compose.yml", exec, -T, indexer, bash, -c,
+           "JAVA_HOME=/usr/share/wazuh-indexer/jdk /usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh -cd /usr/share/wazuh-indexer/config/opensearch-security/ -icl -nhnv -cacert /usr/share/wazuh-indexer/config/certs/root-ca.pem -cert /usr/share/wazuh-indexer/config/certs/admin.pem -key /usr/share/wazuh-indexer/config/certs/admin-key.pem -h localhost -f /usr/share/wazuh-indexer/config/opensearch-security/internal_users.yml -t internalusers"]
+  changed_when: true

@@ -13,7 +13,7 @@ argument_specs:
         required: true
       status_hub_hnx_bin: &bin
         type: path
-        description: "The hnx command (role hnx_runtime's <prefix>/bin/hnx)."
+        description: "The hnx command (role hnx_runtime's <prefix>/bin/hnx); the collector's unit names the default path literally, so the script catalog can follow it."
         default: /opt/hnx/bin/hnx
       status_hub_runtime_release: &release
         type: str
@@ -53,6 +53,81 @@ argument_specs:
         elements: str
         description: "The registry hosts (names, or the addresses the registry gives them) the hub trusts for the identity headers (agents.yml private.trusted_proxies): replaces the hard-coded edge-proxy capability. At least one, no wildcard or range, each a host of status_hub_registry. Default: the hosts of the registry's edge-proxy rows."
         default: "{{ ((lookup('ansible.builtin.file', status_hub_registry) | from_yaml).services | default({}, true)).values() | selectattr('capability', 'defined') | selectattr('capability', 'equalto', 'edge-proxy') | map(attribute='host') | unique | sort }}"
+      status_hub_collect:
+        type: bool
+        description: "Run the collector: a timer that executes hnx status collect each minute (due sources only) so state.json exists and is fresh. Off: the hub only serves."
+        default: false
+      status_hub_last_run_dir:
+        type: path
+        description: "Where each timer run writes its last-run record (role last_run; the status hub's job-last-run mapping reads it)."
+        default: /var/lib/homelabnext/last-run
+      status_hub_last_run_group:
+        type: str
+        description: "The group that may read the last-run records (the account that ships them to the status hub)."
+        default: root
+      status_hub_collect_oncalendar:
+        type: str
+        description: "The collector timer's calendar (never a monotonic timer, LL-041)."
+        default: "*-*-* *:*:00 UTC"
+      status_hub_collect_timeout_s:
+        type: int
+        description: "The collection pass's hard time limit."
+        default: 50
+      status_hub_root_dir:
+        type: path
+        description: "What poll-file sources are relative to (hnx status collect --root): files their producers deliver, readable by the hub."
+        default: "{{ status_hub_state_dir }}/files"
+      status_hub_issued_dir:
+        type: path
+        description: "File-form secrets of the collector (hnx status collect --secrets-dir): login-issued tokens land here."
+        default: "{{ status_hub_config_dir }}/issued"
+      status_hub_extra_ca_refs:
+        type: list
+        elements: str
+        description: "secret: references of certificates the collector trusts besides the client CA (a product's own self-signed certificate). TLS only."
+        default: []
+      status_hub_logins:
+        type: list
+        elements: dict
+        description: "Bearer tokens a product issues only for a login: each {name, service (a registry row), path, username, password_ref}. A root-run timer posts the credentials to the row's url+path over verified https and writes the answer to <status_hub_issued_dir>/hub-login/<name>; a source's auth.secret reads it as the login's name in the store area hub-login (area hub-login, name the login's own). password_ref is a file for the helper, not in status_hub_secret_refs."
+        default: []
+      status_hub_logins_oncalendar:
+        type: str
+        description: "The refresh timer's calendar (tokens last hours)."
+        default: "*-*-* 00/4:15:00 UTC"
+      status_hub_pulls:
+        type: list
+        elements: dict
+        description: "Status files pulled from producer hosts (ADR-0049 decision 7): each {name, host (a registry host), user, host_key (the producer's pinned SSH host key, '<type> <base64>'), dest (a relative .json path under status_hub_root_dir)}. A root-run timer dials each host with status_hub_pull_key_ref; the account's forced command decides what is printed, and the hub files it at dest, never at a name the stream supplies. Needs status_hub_collect."
+        default: []
+      status_hub_pull_key_ref:
+        type: str
+        description: "secret: reference of the pull timer's SSH private key (OpenSSH form), written root-only; required with status_hub_pulls and not also in status_hub_secret_refs."
+        default: ""
+      status_hub_pulls_oncalendar:
+        type: str
+        description: "The pull timer's calendar (never a monotonic timer, LL-041)."
+        default: "*-*-* *:00/5:30 UTC"
+      status_hub_endpoints:
+        type: dict
+        description: "Capability -> scheme://host:port the collector uses instead of the registry alias (HNX_ENDPOINT_<CAPABILITY>), for a product whose certificate does not carry the alias name. The name must still verify against the CA bundle."
+        default: {}
+      status_hub_notify_topic:
+        type: str
+        description: "Page transitions of fail/stale through the registry's notify service on this topic (empty: no paging)."
+        default: ""
+      status_hub_notify_ceiling:
+        type: str
+        description: "The notify channel's TLP ceiling (ADR-0033), used with a topic."
+        default: red
+      status_hub_registers_dir:
+        type: path
+        description: "A directory of register files (kanban.yml, lessons.yml, runbooks.yml, invariants.yml) the hub serves as pages (hnx status serve --registers); empty: none."
+        default: ""
+      status_hub_views_file:
+        type: path
+        description: "The lab's own views file on the controller, replacing the built-in two-entry menu; checked with hnx status views check."
+        default: ""
       status_hub_tls_cert_ref: &tlscert
         type: str
         description: "secret:<name> of the hub's server certificate (PEM, the chain after the leaf). With status_hub_tls_key_ref and status_hub_client_ca_ref: serve TLS and require a client certificate."

@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the UPS answers, upsmon is running with a MONITOR line, and the checker wrote fresh metrics.
+- block:
+    - name: Validate the settings
+      ansible.builtin.include_tasks: validate.yml
+    - name: The UPS answers upsc
+      ansible.builtin.command:
+        argv: ["{{ nut_ups_upsc_cli }}", "{{ nut_ups_name }}@localhost", ups.status]
+      register: nut_ups_status
+      changed_when: false
+      check_mode: false
+    - name: The shutdown monitor is active
+      ansible.builtin.command:
+        argv: ["{{ nut_ups_systemctl_cli }}", is-active, nut-monitor.service]
+      register: nut_ups_mon
+      changed_when: false
+      check_mode: false
+    - name: The monitor's configuration has a MONITOR line for this UPS
+      ansible.builtin.command:
+        argv: [grep, -c, "^MONITOR {{ nut_ups_name }}@localhost ", "{{ nut_ups_conf_dir }}/upsmon.conf"]
+      register: nut_ups_monline
+      changed_when: false
+      check_mode: false
+    - name: The metrics file is fresh
+      ansible.builtin.stat:
+        path: "{{ nut_ups_textfile_dir }}/nut_ups.prom"
+      register: nut_ups_prom
+      check_mode: false
+    - name: Fail unless all of it holds
+      ansible.builtin.assert:
+        that:
+          - nut_ups_status.stdout | trim != ''
+          - nut_ups_mon.stdout | trim == 'active'
+          - nut_ups_monline.stdout | trim | int >= 1
+          - nut_ups_prom.stat.exists
+          - (now().timestamp() - nut_ups_prom.stat.mtime) < nut_ups_health_max_age_seconds | int
+        fail_msg: "nut_ups: the UPS does not answer, nut-monitor is not active, upsmon.conf has no MONITOR line, or the metrics are stale"
+  tags: [health]

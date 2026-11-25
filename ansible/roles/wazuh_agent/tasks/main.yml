@@ -2,7 +2,7 @@
 # Control siem-agent (ADR-0016 decision 7): the vendor's pinned agent from its signed apt
 # repository. The deployment variables (WAZUH_MANAGER, WAZUH_REGISTRATION_PASSWORD, ...) take effect
 # on the first install only: moving the agent to another manager later is a reinstall
-# (docs/compute-model.md, "Bound products").
+# (docs/compute-model.md, "Bound products"), unless the site opts into the agent_rehome role.
 - name: Validate the inputs
   ansible.builtin.include_tasks: validate.yml
 
@@ -48,6 +48,11 @@
   ansible.builtin.dpkg_selections:
     name: wazuh-agent
     selection: hold
+
+- name: Re-home an agent enrolled with another manager (opt-in, role agent_rehome)
+  ansible.builtin.include_role:
+    name: agent_rehome
+  when: agent_rehome_enabled | default(false) | bool
 
 # What the agent watches (file-integrity paths, the audit log, the remote-command switches) is the
 # siem_agent_watch role's, which names no product; it reports a change so the agent restarts below.

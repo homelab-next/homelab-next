@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+# the owner of what only root may write (a role test runs unprivileged and sets its own)
+source_census_root_owner: root
+source_census_root: /var/lib/hnx-modules/source-census
+source_census_state_dir: "{{ source_census_root }}/state"
+source_census_config_dir: /etc/hnx-modules/source-census
+source_census_cred_dir: "{{ source_census_config_dir }}/credentials"
+source_census_config_file: "{{ source_census_config_dir }}/census.yml"
+source_census_name_pattern: '^[a-z_][a-z0-9_-]{0,31}\Z'
+source_census_ident_pattern: '^[A-Za-z_][A-Za-z0-9_]*\Z'
+source_census_path_pattern: '^(/(?!\.{1,2}(/|\Z))[A-Za-z0-9._-]+)+\Z'
+source_census_ref_pattern: '^secret:[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)+\Z'
+source_census_topic_pattern: '^[A-Za-z0-9_-]{1,64}\Z'
+source_census_tlp_labels: [clear, green, amber, amber+strict, red]
+source_census_credentials:
+  - {name: reader-password, ref: "{{ source_census_reader_cred }}"}
+  - {name: notify-token, ref: "{{ source_census_notify_cred }}"}
+source_census_settings:
+  lake:
+    domain: "{{ source_census_lake_domain }}"
+    warehouse: "{{ source_census_lake_warehouse }}"
+    catalog: "{{ source_census_lake_catalog }}"
+    namespace: "{{ source_census_lake_namespace }}"
+    user: "{{ source_census_lake_user }}"
+    credential_file: "{{ source_census_cred_dir }}/reader-password"
+  census:
+    table: "{{ source_census_table }}"
+    source_columns: "{{ source_census_source_columns }}"
+    time_column: "{{ source_census_time_column }}"
+    window_days: "{{ source_census_window_days | int }}"
+    multiple: "{{ source_census_multiple | float }}"
+    min_silence_hours: "{{ source_census_min_silence_hours | float }}"
+    floor_hours: "{{ source_census_floor_hours | float }}"
+    learning_min_arrivals: "{{ source_census_learning_min_arrivals | int }}"
+    expected: "{{ source_census_expected }}"
+    acknowledged: "{{ source_census_acknowledged }}"
+  dark:
+    tables: "{{ source_census_dark_tables if source_census_dark_tables | length > 0 else [source_census_table] }}"
+    hours: "{{ source_census_dark_hours | float }}"
+  notify:
+    topic: "{{ source_census_notify_topic }}"
+    token_file: "{{ source_census_cred_dir }}/notify-token"
+    ceiling: "{{ source_census_notify_ceiling }}"
+  state: "{{ source_census_state_dir }}/state.json"
+# the unit's environment (no secret): the endpoints the run reaches, resolved from the registry at
+# deploy time, so the run needs neither SRV records nor a registry on the host
+source_census_env_file: "{{ source_census_config_dir }}/census.env"

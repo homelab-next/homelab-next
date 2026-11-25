@@ -12,9 +12,11 @@ The table here is the one source: ``python -m homelabnext.workflows.cti_schedule
 digest pins); ``--check`` fails on any drift (the tests run it).  ``--binding-out FILE`` writes the
 binding with rules C01-C23 for a site to render (``binding_text``).  ``--lane shadow|real`` is the lane every job is submitted on: ``shadow`` sends
 ``shadow: true`` (the controller's shadow lane: the job's unit writes only the shadow lake schema and
-never publishes), ``real`` sends nothing.  The default is ``shadow``: the plan runs 7 days in shadow
-before the switch, and the switch is ``--lane real`` plus re-pinned digests, reviewed like any
-promotion.  Every rule also starts in the engine's ``mode: shadow`` (the engine guide in docs): it logs the
+never publishes), ``real`` sends nothing.  The committed lane is :data:`LANE`, ``real`` since the
+pipeline's switch (its 7-day shadow window ended 2026-11-22 and the controller's shadow lane is
+retired), so a rule's shadow record is the request the live pipeline itself would be sent: the
+parity evidence a promotion is judged on.  ``--lane shadow`` still renders the other lane, for a
+site that runs one.  Every rule also starts in the engine's ``mode: shadow`` (the engine guide in docs): it logs the
 broker request it would make and sends nothing until promoted.
 
 Each entry is ``(id, cron UTC, agent_key, priority, coalesce window, the old timer it replaces)``.
@@ -59,6 +61,8 @@ BEGIN = (
 )
 END = "# cti-schedules:end"
 LANES = ("shadow", "real")
+#: the lane the committed packs and their deploy pins are rendered for (the CLI default)
+LANE = "real"
 
 
 def _rotation(n: int, cron: str) -> tuple:
@@ -142,7 +146,7 @@ def rule_id(index: int) -> str:
     return f"C{index + 1:02d}"
 
 
-def render_pack(timer: tuple, lane: str = "shadow") -> str:
+def render_pack(timer: tuple, lane: str = LANE) -> str:
     rid = rule_id(TIMERS.index(timer)).lower()
     tid, cron, agent, priority, _window, old = timer
     if lane not in LANES:
@@ -267,7 +271,7 @@ def expected(lane: str) -> dict[Path, str]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="cti_schedules", description=__doc__.splitlines()[0])
-    ap.add_argument("--lane", choices=LANES, default="shadow")
+    ap.add_argument("--lane", choices=LANES, default=LANE)
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")

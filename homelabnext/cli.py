@@ -199,6 +199,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "per-guest teardown audit: check|plan NAME (read-only, all planes)",
         lambda a: importlib.import_module("homelabnext.decommission.cli").main(a),
     ),
+    "cutover": (
+        "the cutover ledger (ADR-0043): check|render|gate LEDGER_DIR",
+        lambda a: importlib.import_module("homelabnext.cutover.cli").main(a),
+    ),
     "docs": (
         "generate/check docs: systems (one SOP page per service), capabilities (contract reference), index (docs/README.md descriptions from page summaries), facts (counts, tool classes, schema versions in the pages)",
         lambda a: importlib.import_module("homelabnext.sop.cli").main(a),
@@ -221,6 +225,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
             "|st2 (render the pinned packs as a StackStorm pack; run its event bridge)"
         ),
         lambda a: importlib.import_module("homelabnext.workflows.cli").main(a),
+    ),
+    "recovery": (
+        "what the restore drills prove: drills check (docs/adr/0042, checklist F-10, F-14, X-07)",
+        lambda a: importlib.import_module("homelabnext.recovery.cli").main(a),
     ),
     "scripts": (
         "script catalog: catalog [--check]|reality|runner-lint|list",
@@ -278,6 +286,17 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "SSH user certificates from the secrets store: check (the spec) | render (its configuration "
         "writes: policies, SSH roles, OIDC login roles)",
         lambda a: importlib.import_module("homelabnext.sshca").main(a),
+    ),
+    "lake": (
+        "commands over the lake: source-census (every source against its own cadence, and all "
+        "classes dark; pages a newly flagged set only; the source-census module's criteria) | mcp "
+        "(the read-only lake MCP server over stdio, signed in as its own reader)",
+        lambda a: importlib.import_module("homelabnext.lake.cli").main(a),
+    ),
+    "logbursts": (
+        "cluster a log's error lines in time into bursts, collapse them to distinct message shapes "
+        "and say ONGOING (exit 1) or RECOVERED (exit 0); --benign takes a reviewed list",
+        lambda a: importlib.import_module("homelabnext.logbursts").main(a),
     ),
     "novelty": (
         "behavioural novelty baselines (ADR-0036, docs/novelty.md): run (score a spec's profiles "

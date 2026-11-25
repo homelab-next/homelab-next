@@ -280,6 +280,79 @@ def test_events_bus_accepts_the_narrow_grants_a_bridge_needs(tmp_path):
     assert results == [(False, "")] * 3, results
 
 
+#: a forward login (events_bus_forward_logins): a client on another host reaches the loopback bus
+#: through ssh -L as this login; the key and the source are built, never a literal of either
+FWD_ED = "AAAAC3NzaC1lZDI1NTE5AAAAI" + "Q" * 43
+FWD_FROM = str(ipaddress.IPv4Address(HUB_ADDR) + 1)
+FWD = {"user": "hnx-events-fwd", "ed25519": FWD_ED, "from": [FWD_FROM]}
+
+
+def test_events_bus_refuses_a_forward_login_that_could_do_more_than_forward(tmp_path):
+    """A forward login lands in an authorized_keys line, a sshd Match block and an account: no
+    second key or option, no newline, no open source, no name that is already someone's."""
+    good = {**EVENTS, "events_bus_forward_logins": [FWD]}
+    _refusals(tmp_path, "events_bus", good, [
+        {"events_bus_forward_logins": [dict(FWD, ed25519=FWD_ED + "\nssh-ed25519 AAAA other")]},
+        {"events_bus_forward_logins": [dict(FWD, ed25519="AAAAB3NzaC1yc2E" + "Q" * 53)]},
+        {"events_bus_forward_logins": [dict(FWD, ed25519="ssh-ed25519 " + FWD_ED)]},
+        {"events_bus_forward_logins": [dict(FWD, ed25519=FWD_ED + ' x",permitopen="any')]},
+        {"events_bus_forward_logins": [{k: v for k, v in FWD.items() if k != "ed25519"}]},
+        {"events_bus_forward_logins": [{k: v for k, v in FWD.items() if k != "from"}]},
+        {"events_bus_forward_logins": [dict(FWD, **{"from": []})]},
+        {"events_bus_forward_logins": [dict(FWD, **{"from": FWD_FROM})]},  # a string, not a list
+        {"events_bus_forward_logins": [dict(FWD, **{"from": [str(ipaddress.IPv4Network((0, 0)))]})]},
+        {"events_bus_forward_logins": [dict(FWD, **{"from": [str(ipaddress.IPv4Address(0))]})]},  # any
+        {"events_bus_forward_logins": [dict(FWD, **{"from": [FWD_FROM + "/16"]})]},
+        {"events_bus_forward_logins": [dict(FWD, **{"from": [FWD_FROM + '",permitopen="any']})]},
+        {"events_bus_forward_logins": [dict(FWD, user="root")]},
+        {"events_bus_forward_logins": [dict(FWD, user="hnx-events")]},  # the bus's own account
+        {"events_bus_forward_logins": [dict(FWD, user="Bad\nMatch All")]},
+        {"events_bus_forward_logins": [dict(FWD, state="disabled")]},
+        {"events_bus_forward_logins": [dict(FWD, shell="/bin/sh")]},  # no other key
+        {"events_bus_forward_logins": [FWD, FWD]},
+        {"events_bus_forward_logins": FWD},
+        {"events_bus_forward_sshd_dropin": "/etc/ssh/sshd_config"},
+        {"events_bus_forward_home": "/var"},
+    ])  # fmt: skip
+    (tmp_path / "ok").mkdir()
+    results = run_cases(tmp_path / "ok", "events_bus", "validate", EVENTS, [
+        {"events_bus_forward_logins": [dict(FWD, **{"from": [FWD_FROM + "/24"]})]},
+        {"events_bus_forward_logins": [{"user": "hnx-events-fwd", "state": "absent"}]},
+    ])  # fmt: skip
+    assert results == [(False, "")] * 2, results
+
+
+def test_events_bus_forward_login_may_open_the_bus_alone(tmp_path):
+    """The rendered Match block holds each present login to a local forward to the bus's own
+    listen address and port (sshd -T reads these settings back before the drop-in goes live)."""
+    retired = {"user": "hnx-old-fwd", "state": "absent"}
+    files = _render(tmp_path, "events_bus", {**EVENTS, "events_bus_forward_logins": [FWD, retired],
+                                             "events_bus_rendered_users": _rendered_users(BUS_USERS),
+                                             "inventory_hostname": "bus-01.example.internal"})  # fmt: skip
+    conf = files["sshd-forward.conf"]
+    body = [line.strip() for line in conf.splitlines() if line.strip() and not line.startswith("#")]
+    assert body == [
+        "Match User hnx-events-fwd", "AllowTcpForwarding local", f"PermitOpen {LOOP}:4222",
+        "PermitListen none", "AllowStreamLocalForwarding no", "AllowAgentForwarding no",
+        "X11Forwarding no", "PermitTTY no", "PermitTunnel no", "GatewayPorts no",
+        "PermitUserRC no", "ForceCommand /bin/false",
+    ], conf  # fmt: skip
+    assert "hnx-old-fwd" not in conf
+    v6 = _render(tmp_path / "v6", "events_bus", {**EVENTS, "events_bus_forward_logins": [FWD],
+                                                 "events_bus_listen_address": "::1",
+                                                 "events_bus_rendered_users": _rendered_users(BUS_USERS),
+                                                 "inventory_hostname": "bus-01.example.internal"})  # fmt: skip
+    assert "PermitOpen [::1]:4222" in v6["sshd-forward.conf"]
+    # the key's line, as the forward-login tasks write it: one key, every restriction before it
+    task = next(t for t in yaml.safe_load((ROLES / "events_bus/tasks/forward_logins.yml").read_text())
+                if "authorized_keys" in str(t.get("ansible.builtin.copy", {}).get("dest", "")))  # fmt: skip
+    content = task["ansible.builtin.copy"]["content"]
+    assert content == (
+        'restrict,port-forwarding,permitopen="{{ events_bus_forward_target }}",'
+        "from=\"{{ item['from'] | join(',') }}\",command=\"/bin/false\" ssh-ed25519 {{ item.ed25519 }} {{ item.user }}\n"
+    )
+
+
 def _here_registry(tmp_path) -> str:
     """The example registry with the events bus on the host the tests run the role on
     (``localhost``): a loopback relay endpoint is accepted only when the bus is this host's."""
@@ -1062,8 +1135,16 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
 
         probe = socket.create_connection((LOOP, port), timeout=5)
         try:
-            raw = mon("/connz?auth=true")
-            assert [c for c in raw["connections"] if not c.get("authorized_user")], raw
+            # connect() returning only means the kernel completed the handshake: the server
+            # registers the connection when its accept loop gets to it. Poll /connz until the
+            # unauthenticated probe is listed (bounded), instead of reading it once
+            deadline = time.monotonic() + 10
+            while True:
+                raw = mon("/connz?auth=true")
+                if [c for c in raw["connections"] if not c.get("authorized_user")]:
+                    break
+                assert time.monotonic() < deadline, raw
+                time.sleep(0.05)
             assert hnx_bus.hnx_bus_account_problems(
                 mon("/accountz"), details, users, "hnx-events-admin", "HNX", "hnx-watch", raw,
                 API) == []  # fmt: skip
@@ -1647,3 +1728,85 @@ def test_status_hub_hooks_report_changed_0_even_with_the_probe_directory(tmp_pat
     assert r.returncode == 0, r.stdout + r.stderr
     assert len([line for line in log if " probe-tls " in line]) == 2, log  # the directory was made
     assert "changed=0" in r.stdout, r.stdout
+
+
+# ---------------------------------------------------------------- the collector (ADR-0013)
+_ROW = yaml.safe_load((ROOT / "examples/services.yml").read_text())["services"]["metrics"]
+#: an endpoint the collector reaches by a name the certificate carries (the port from the registry)
+BACKUP_URL = f"https://backup-01.example.internal:{_ROW['port']}"
+HUB_COLLECT = {
+    **HUB_TLS,
+    "status_hub_collect": True,
+    "status_hub_secret_refs": [*HUB["status_hub_secret_refs"], "secret:metrics/probe-reader"],
+    "status_hub_extra_ca_refs": ["secret:backup/tls-cert"],
+    "status_hub_logins": [{
+        "name": "flow-reader", "service": "dataflow", "path": "/api/access/token",
+        "username": "reader", "password_ref": "secret:flow/reader-password",
+    }],
+    "status_hub_registers_dir": "/var/lib/hnx-hub/registers",
+    "status_hub_endpoints": {"backup": BACKUP_URL},
+}  # fmt: skip
+
+
+def test_status_hub_collector_renders_a_calendar_timer_and_a_hardened_oneshot(tmp_path):
+    files = _render(tmp_path, "status_hub", HUB_COLLECT)
+    svc = _directives(files["hnx-hub-collect.service"])
+    argv = svc["ExecStart"][0].split()
+    assert argv[1:3] == ["status", "collect"]
+    state = argv[argv.index("--state") + 1]
+    hub_argv = _directives(files["hnx-hub.service"])["ExecStart"][0].split()
+    assert state == hub_argv[hub_argv.index("--state") + 1]  # the file the hub reads
+    assert argv[argv.index("--root") + 1] == "/var/lib/hnx-hub/files"
+    assert argv[argv.index("--secrets-dir") + 1] == "/etc/hnx-hub/issued"
+    assert svc["Type"] == ["oneshot"] and svc["User"] == ["hnx-hub"]
+    assert svc["ReadWritePaths"] == ["/var/lib/hnx-hub"] and svc["NoNewPrivileges"] == ["yes"]
+    timer = _directives(files["hnx-hub-collect.timer"])
+    assert timer["OnCalendar"] == ["*-*-* *:*:00 UTC"]
+    assert not {"OnBootSec", "OnUnitActiveSec"} & set(timer)  # LL-041
+    assert "--registers" in hub_argv  # the register pages are served from the delivered directory
+    assert "--notify-topic" not in argv  # no paging unless a topic is set
+    assert svc["Environment"] == [
+        f"HNX_ENDPOINT_BACKUP={BACKUP_URL}",
+        "SSL_CERT_FILE=/etc/hnx-hub/tls/ca-bundle.crt",
+    ]  # the alias a product's certificate does not carry is overridden by a name it does
+
+
+def test_status_hub_collector_pages_through_the_notify_channel_when_asked(tmp_path):
+    extra = {**HUB_COLLECT, "status_hub_notify_topic": "hub-alerts"}
+    argv = _directives(_render(tmp_path, "status_hub", extra)["hnx-hub-collect.service"])
+    argv = argv["ExecStart"][0].split()
+    assert argv[argv.index("--notify-topic") + 1] == "hub-alerts"
+    assert argv[argv.index("--notify-ceiling") + 1] == "red"
+
+
+def test_status_hub_login_refresh_runs_a_root_helper_on_a_calendar(tmp_path):
+    files = _render(tmp_path, "status_hub", HUB_COLLECT)
+    svc = _directives(files["hnx-hub-login-token.service"])
+    assert svc["ExecStart"][0].startswith("/usr/bin/python3 -I /usr/local/libexec/hnx-hub/")
+    assert "User" not in svc  # root: it reads the password files only root can
+    assert svc["ReadWritePaths"] == ["/etc/hnx-hub/issued"]
+    assert _directives(files["hnx-hub-login-token.timer"])["OnCalendar"] == ["*-*-* 00/4:15:00 UTC"]
+
+
+def test_status_hub_collector_inputs_are_checked(tmp_path):
+    _refusals(tmp_path, "status_hub", HUB_COLLECT, [
+        {"status_hub_root_dir": "relative/files"},
+        {"status_hub_collect_timeout_s": 0},
+        {"status_hub_collect_oncalendar": "*-*-* *:*:00\nExecStart=/bin/sh"},
+        {"status_hub_notify_ceiling": "orange"},
+        {"status_hub_extra_ca_refs": ["-----BEGIN CERTIFICATE-----"]},
+        {"status_hub_registers_dir": "../registers"},
+        {"status_hub_endpoints": {"backup": BACKUP_URL.rsplit(":", 1)[0]}},  # no explicit port
+        {"status_hub_endpoints": {"Backup Up": BACKUP_URL}},
+        {"status_hub_endpoints": ["backup"]},
+        # a login's password is a file for the root helper, never also an environment value
+        {"status_hub_secret_refs": [*HUB_COLLECT["status_hub_secret_refs"],
+                                    "secret:flow/reader-password"]},
+        {"status_hub_logins": [{**HUB_COLLECT["status_hub_logins"][0], "password_ref": "plain"}]},
+        {"status_hub_logins": [{**HUB_COLLECT["status_hub_logins"][0], "path": "api/token"}]},
+        {"status_hub_logins": [HUB_COLLECT["status_hub_logins"][0]] * 2},  # a name twice
+        # the form carries a password: verified https only, so TLS must be on
+        {**dict.fromkeys(("status_hub_tls_cert_ref", "status_hub_tls_key_ref",
+                          "status_hub_client_ca_ref"), ""),
+         "status_hub_client_names": [], "status_hub_extra_ca_refs": [], "status_hub_plain_http": True},
+    ])  # fmt: skip

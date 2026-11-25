@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole; the export first writes a listed copy of the server's
+# configuration (the certificate authority in it) and datastore into it, so a restore never depends
+# on the live tree being caught mid-write.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Copy the server state (the export)
+      ansible.builtin.include_tasks: copy_out.yml
+    - name: Delegate to compose_app (the backup manifest names the data root)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: backup
+      vars:
+        compose_app_name: velociraptor
+        compose_app_dir: "{{ velociraptor_server_app.compose_app_dir }}"
+        compose_app_data_dir: "{{ velociraptor_server_app.compose_app_data_dir }}"
+        compose_app_export_dir: "{{ velociraptor_server_app.compose_app_export_dir }}"
+        compose_app_owner: "{{ velociraptor_server_app.compose_app_owner }}"
+        compose_app_group: "{{ velociraptor_server_app.compose_app_group }}"
+        compose_app_spec: "{{ velociraptor_server_app.compose_app_spec }}"
+  tags: [backup]

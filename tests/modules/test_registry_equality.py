@@ -146,6 +146,46 @@ def test_the_lab_s_own_fields_are_not_the_module_s():
     assert problems(registry=reg) == []
 
 
+_SITE_SOURCE = {
+    "id": "samples-age",
+    "kind": "poll-http-json",
+    "target": {"path": "/v1/age"},
+    "interval_s": 300,
+    "timeout_s": 10,
+    "stale_after_s": 900,
+    "mapping": {"builtin": "table-snapshot-age", "module": "lake", "item": "samples"},
+    "what": "Age of the newest commit.",
+}
+
+
+def test_status_sources_the_site_adds_to_a_module_row_are_the_site_s():
+    """The site decides what its hub collects: its own status_sources on a module's row are not a difference."""
+    reg = lab_registry()
+    reg["services"]["samples"]["status_sources"] = [_SITE_SOURCE]
+    assert problems(registry=reg) == []
+
+
+def test_a_site_status_source_does_not_hide_another_difference():
+    reg = lab_registry()
+    reg["services"]["samples"]["status_sources"] = [_SITE_SOURCE]
+    reg["services"]["samples"]["clients"] = ["mgmt"]
+    assert problems(registry=reg) == [
+        f"services.samples.clients: {STORE} (instance samples) contributes (absent) (its row "
+        'object-store), the lab registry has ["mgmt"]'
+    ]
+
+
+def test_status_sources_a_module_contributes_are_compared():
+    """A module that declares its own status_sources is held to them, as any other field."""
+    rows = copy.deepcopy(ROWS)
+    rows[COLLECTOR]["external-collector-receiver"]["status_sources"] = [_SITE_SOURCE]
+    sel = mr.selected(SITE, TREE.mods)
+    got = rr.row_problems(SITE, sel, rows, lab_registry())
+    assert len(got) == 1 and got[0].startswith(
+        "services.external-collector-receiver.status_sources: external-collector contributes "
+    )
+
+
 def test_clients_the_registry_adds_is_a_difference():
     """Extra zones widen who may reach the service: never the lab's alone to add."""
     reg = lab_registry()
@@ -396,3 +436,93 @@ def test_a_malformed_site_value_for_a_declared_field_is_named(field, value):
     reg["services"]["samples"][field] = value
     got = rr.row_problems(SITE, mr.selected(SITE, TREE.mods), rows, reg)
     assert len(got) == 1 and f"services.samples.{field}:" in got[0] and "is not one" in got[0]
+
+
+# ------------------------------------------------------- a site segment of a health path (:name)
+
+SITE_SEGMENT_HEALTH = {"kind": "http", "path": "/realms/:realm/.well-known/openid-configuration"}
+
+
+def _segment_problems(path: str, **extra) -> list[str]:
+    rows = _with_public_store({"health": SITE_SEGMENT_HEALTH})
+    reg = lab_registry()
+    reg["services"]["samples"]["health"] = {"kind": "http", "path": path, **extra}
+    return rr.row_problems(SITE, mr.selected(SITE, TREE.mods), rows, reg)
+
+
+def test_a_site_segment_of_a_contributed_health_path_takes_the_sites_value():
+    """An IdP's health is its realm's discovery document; the realm's name is the site's."""
+    assert _segment_problems("/realms/lab/.well-known/openid-configuration") == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/realms/.well-known/openid-configuration",  # the segment left empty
+        "/realms/a/b/.well-known/openid-configuration",  # more than one segment
+        "/realms/lab/.well-known/other",  # the rest of the path differs
+        "/realms/:realm/.well-known/openid-configuration",  # the parameter itself, unfilled
+    ],
+)
+def test_only_the_named_segment_is_the_sites(path):
+    got = _segment_problems(path)
+    assert len(got) == 1 and got[0].startswith("services.samples.health:")
+
+
+def test_the_rest_of_a_site_segment_health_is_still_compared():
+    got = _segment_problems("/realms/lab/.well-known/openid-configuration", expect_status=204)
+    assert len(got) == 1 and got[0].startswith("services.samples.health:")
+
+
+# ------------------------------------------------- site sign-in (auth own -> idp with oidc)
+
+_CALLBACK = {"redirect_uris": ["https://data.lab.example/callback"]}
+
+
+def _own_rows():
+    rows = copy.deepcopy(ROWS)
+    rows[STORE]["object-store"]["auth"] = "own"
+    return rows
+
+
+def _sign_in_problems(**have) -> list[str]:
+    reg = lab_registry()
+    reg["services"]["samples"]["auth"] = "own"
+    reg["services"]["samples"].update(have)
+    sel = mr.selected(SITE, TREE.mods)
+    return rr.row_problems(SITE, sel, _own_rows(), reg)
+
+
+def test_a_site_may_sign_an_own_accounts_row_in_through_its_idp():
+    """oidc callbacks plus auth: idp over the module's auth: own are the site's choice."""
+    assert _sign_in_problems(auth="idp", oidc=_CALLBACK) == []
+
+
+def test_auth_idp_without_the_rows_own_callbacks_is_a_difference():
+    got = _sign_in_problems(auth="idp")
+    assert len(got) == 1 and got[0].startswith("services.samples.auth:")
+
+
+def test_the_sign_in_step_is_only_from_own():
+    """A module with no accounts (auth none) or a client-certificate row (mtls) cannot be made idp."""
+    reg = lab_registry()
+    reg["services"]["samples"].update(auth="idp", oidc=_CALLBACK)
+    got = problems(registry=reg)  # the example row's auth is absent: none
+    assert len(got) == 1 and got[0].startswith("services.samples.auth:")
+
+
+def test_the_sign_in_does_not_hide_another_difference():
+    got = _sign_in_problems(auth="idp", oidc=_CALLBACK, port=9443)
+    assert len(got) == 1 and got[0].startswith("services.samples.port:")
+
+
+def test_oidc_a_module_declares_is_compared():
+    rows = _own_rows()
+    rows[STORE]["object-store"]["oidc"] = _CALLBACK
+    reg = lab_registry()
+    reg["services"]["samples"].update(
+        auth="own", oidc={"redirect_uris": ["https://data.lab.example/other"]}
+    )
+    sel = mr.selected(SITE, TREE.mods)
+    got = rr.row_problems(SITE, sel, rows, reg)
+    assert len(got) == 1 and got[0].startswith("services.samples.oidc:")

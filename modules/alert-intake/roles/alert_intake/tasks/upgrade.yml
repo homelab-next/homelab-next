@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# The module pins no artefact or image: its script ships with the role, so an upgrade is the role's own
+# re-converge. This hook validates the inputs and the secrets, and refuses a live state that is not this
+# module's form (a new script must not meet a shape it cannot read); the converge is the install.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every secret resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Read the live state
+      ansible.builtin.slurp:
+        src: "{{ alert_intake_state_file }}"
+      register: alert_intake_upgrade_state
+      failed_when: false
+    - name: It is this module's form
+      ansible.builtin.include_tasks: state_check.yml
+      vars:
+        alert_intake_state_text: "{{ alert_intake_upgrade_state.content | b64decode }}"
+      when: alert_intake_upgrade_state.content is defined
+  tags: [upgrade]

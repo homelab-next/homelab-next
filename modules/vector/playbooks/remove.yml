@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the checkpoints first (export_first), stop and remove the containers, and delete
+# the env_file that holds the object store key pair and the listener's private key. The data root and
+# the export are kept for the operator to archive or delete; the staged batches stay in the object
+# store for the lake writer; the decommission audit (module.yml lifecycle.remove.audit) checks
+# nothing still names the service.
+- name: Remove the log pipeline
+  hosts: mod_vector_aggregator
+  become: true
+  tasks:
+    - name: Export the checkpoints first
+      ansible.builtin.include_role:
+        name: vector
+        tasks_from: export
+    - name: Stop and remove the containers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ vector_dir | default('/opt/compose/vector') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credentials the containers were given
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ vector_dir | default('/opt/compose/vector') }}/secrets/vector.env"
+        - "{{ vector_data_root | default('/var/lib/hnx-modules/vector') }}/tls/key.pem"

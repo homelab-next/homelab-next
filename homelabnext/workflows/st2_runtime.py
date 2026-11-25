@@ -52,8 +52,14 @@ may run the pack's actions at all is StackStorm RBAC's (``docs/stackstorm.md``).
 * a held request is recorded in the runner state file (:func:`submitted_name`) with its pack, step and
   fingerprint; the built-in approved-run pack's one ``broker-run`` step (:func:`run_approved`)
   runs such a request once a person approved it, and nothing else;
-* ``lookup``, ``decide`` and ``prompt`` steps are not run on StackStorm yet; the renderer refuses a
-  pack that has one (``st2-step``), so :class:`UnsupportedStep` here is a defect, not a path.
+* ``lookup`` reads one row of a table the binding declares (``tables``, pinned into
+  ``pinned/<pack>.json`` by the renderer): a file the action runner mounts read-only, read bounded
+  (:func:`read_table`).  A table that is missing, too large, too old, unparseable or not of its
+  declared format **raises** (the execution fails, which the engine's history shows), never
+  ``found: false``: only a table that was read and lacks the key is "not found";
+* ``decide`` and ``prompt`` steps, and a ``lookup`` on an undeclared table, are not run on
+  StackStorm; the renderer refuses a pack that has one (``st2-step``), so :class:`UnsupportedStep`
+  here is a defect, not a path.
 """
 
 from __future__ import annotations
@@ -87,6 +93,7 @@ from .runner import (
     resolve,
     triggered,
 )
+from .tables import TABLE_OPS, read_table
 
 SCHEDULE_SOURCE = "svc:automation"
 ST2_ENRICH_OPS = ("pick", "extract-iocs")
@@ -161,6 +168,7 @@ def load_pinned(pinned_dir: str | os.PathLike[str], pack: str) -> dict[str, Any]
         or doc["pack"].get("pack") != pack
         or doc.get("mode") not in MODES
         or not isinstance(doc.get("risky"), dict)
+        or not isinstance(doc.get("tables", {}), dict)
     ):
         raise PinError(f"{pack}: the pinned document is not this pack's")
     if digest_of(doc["pack"]) != doc.get("digest"):
@@ -401,11 +409,13 @@ def run_step(
     digest: str | None = None,
     broker: Broker | None = None,
     kv: KeyValue | None = None,
+    tables: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run ``step`` for ``event``; returns ``{steps, calls, skipped}`` with this step's output
     added to ``steps`` and, for an action, its call record appended to ``calls``.  A risky action
     the broker holds is recorded in the datastore (``kv``, :func:`submitted_name`) with its pack,
-    step and request fingerprint: the approved-run rule runs nothing else."""
+    step and request fingerprint: the approved-run rule runs nothing else.  A ``lookup`` reads
+    its table from ``tables`` (the pinned declarations, :func:`read_table`)."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
     outputs = dict(steps or {})
@@ -417,6 +427,14 @@ def run_step(
         return {"steps": outputs, "calls": made, "skipped": True}
     if kind == "enrich" and step.get("op") in ST2_ENRICH_OPS:
         outputs[sid] = _enrich(step, scope, {})
+        return {"steps": outputs, "calls": made, "skipped": False}
+    if kind == "enrich" and step.get("op") in TABLE_OPS:
+        decl = (tables or {}).get(step.get("table"))
+        if decl is None:
+            raise UnsupportedStep(
+                f"step {sid!r}: lookup on {step.get('table')!r}, a table the binding does not declare"
+            )
+        outputs[sid] = _enrich(step, scope, {step["table"]: read_table(decl)})
         return {"steps": outputs, "calls": made, "skipped": False}
     if kind != "action":
         raise UnsupportedStep(
@@ -655,6 +673,7 @@ def step(
         digest=pin["digest"],
         broker=broker,
         kv=kv,
+        tables=pin.get("tables"),
     )
     made = out["calls"][len(prior.get("calls") or ()) :]
     return {

@@ -22,6 +22,25 @@
     },
     {
       "exit": {
+        "0": "stopped on SIGTERM",
+        "2": "refused to start (an input is missing or malformed)"
+      },
+      "id": "alert-intake",
+      "inputs": "alert.created events posted to /v1/alerts (bearer token), the cases adapter named by the environment, the state file",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-alert-intake",
+      "kind": "service",
+      "language": "python",
+      "outputs": "alerts (and, by the promotion policy, cases) through the cases contract, notifications, the state file, and journal lines",
+      "owner": "operator",
+      "path": "modules/alert-intake/roles/alert_intake/files/hnx_alert_intake.py",
+      "purpose": "Receive the SIEM's alert events over an authenticated webhook, deduplicate them, record each as an alert in the case-management provider through the cases contract, and page for high severity.",
+      "status": "active",
+      "trigger": [
+        "role:alert_intake"
+      ]
+    },
+    {
+      "exit": {
         "0": "every list is at its count (and no count rose against the base without a human-tier code owner)",
         "1": "a list above or below its count, a counts file outside CODEOWNERS' human tier, or a count raised against the base with none",
         "100": "the check itself failed (could not measure)",
@@ -175,6 +194,44 @@
     },
     {
       "exit": {
+        "0": "plan found no problem, or every table is registered (register) or equals its source and every object its metadata names exists (verify)",
+        "1": "a table could not be registered, differs from the source, or a file its metadata names is not in the listing",
+        "2": "usage error, an unusable source file, an unknown schema, or zero tables (a vacuous run is an error)"
+      },
+      "id": "catalog-register",
+      "inputs": "a COPY of the source catalog's SQLite file (the lake-catalog export), the target catalog's URL and warehouse name, for verify the source catalog's URL and a listing of the object store's keys",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line per table (planned, registered, exists, ok, MISMATCH, MISSING, ERROR) and a summary, or the same as JSON",
+      "owner": "maintainers",
+      "path": "tools/migrate/catalog_register.py",
+      "purpose": "Register every table of one lake catalog (a copy of its SQLite file) into another Iceberg REST catalog at its current metadata file, without copying, rewriting or deleting any file, and verify the target against the source.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "folded (or nothing to fold), or --check found every fragment well formed",
+        "1": "a fragment is malformed or CHANGELOG.md has no [Unreleased] section; nothing was changed",
+        "2": "a path cannot be read or written"
+      },
+      "id": "changelog-compile",
+      "inputs": "the fragment files of the changelog.d directory, and CHANGELOG.md",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the updated CHANGELOG.md; the folded fragments are removed; one line per fragment on stdout",
+      "owner": "maintainers",
+      "path": "tools/changelog_compile.py",
+      "purpose": "Fold the per-PR fragments in changelog.d/ into the [Unreleased] section of CHANGELOG.md and delete them.",
+      "status": "active",
+      "trigger": [
+        "make:changelog-compile"
+      ]
+    },
+    {
+      "exit": {
         "0": "both sections present",
         "1": "a section is missing",
         "2": "the version or CHANGELOG.md cannot be read"
@@ -220,6 +277,46 @@
         "ci:ci/lint",
         "make:spdx",
         "pre-commit:spdx-header"
+      ]
+    },
+    {
+      "exit": {
+        "0": "stopped, or with --once one round done",
+        "1": "a round failed and --once was given",
+        "2": "usage error"
+      },
+      "id": "ci-runner-feeder",
+      "inputs": "--repo, --host, --ssh-key, --labels; the forge token from HNX_CI_FORGE_TOKEN, or the forge CLI's own stored login (--token-command)",
+      "kind": "service",
+      "language": "python",
+      "outputs": "registrations pushed over SSH to the host's forced command; deleted orphan registrations; the runner-selection variable",
+      "owner": "platform",
+      "path": "modules/ci-runner/roles/ci_runner/files/hnx_ci_feeder.py",
+      "purpose": "Keep the CI runner host's spool supplied with single-use runner registrations minted with a repository-admin credential that never leaves the trusted side, remove registrations that were orphaned, and turn the repository's pool switch on only while the pool answers.",
+      "status": "active",
+      "trigger": [
+        "manual",
+        "role:ci_runner"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the slot ran one VM to its end, or found no registration and waits for the next start",
+        "1": "the request was refused (a bad name, a bad registration, an unknown command)",
+        "2": "the configuration or the golden image is missing or invalid"
+      },
+      "id": "ci-runner-slot",
+      "inputs": "the JSON config named by HNX_CI_CONFIG (slot.json); the spool directory; SSH_ORIGINAL_COMMAND for the feed side",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-ci-slot",
+      "kind": "service",
+      "language": "python",
+      "outputs": "one VM run per slot run; the slot directory's contents (its state); the last console log per slot; spool files (feed side)",
+      "owner": "platform",
+      "path": "modules/ci-runner/roles/ci_runner/files/hnx_ci_slot.py",
+      "purpose": "Run one CI job slot - claim one single-use runner registration from the spool, boot a throwaway VM from the pinned golden image with it, wait for the VM to power off after its one job, then destroy every file of it; also the forced command the registration feeder reaches over SSH (put, status).",
+      "status": "active",
+      "trigger": [
+        "role:ci_runner"
       ]
     },
     {
@@ -278,6 +375,27 @@
       "trigger": [
         "ci:ci/lint",
         "make:component-tests"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every job dumped and verified (or the manifest lists no supported engine)",
+        "1": "at least one job failed; the last good dump of that service is untouched",
+        "2": "bad arguments or a refused path"
+      },
+      "id": "compose-app-export-run",
+      "inputs": "the manifest the role renders (--manifest)",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-export-run",
+      "kind": "job",
+      "language": "python",
+      "outputs": "<export dir>/<service>/<database>.dump or all-databases.sql, <export dir>/listing.sha256 and manifest.json (mode 0600, directories 0700); the previous dump of a service is kept once as <service>.prev",
+      "owner": "platform",
+      "path": "ansible/roles/compose_app/files/hnx-export-run.py",
+      "purpose": "Take the application-consistent dump of every database engine a compose application runs (ADR-0042 decision 2, ADR-0008 decision 1) into the application's export directory, where the guest's image backup picks it up.",
+      "status": "active",
+      "trigger": [
+        "role:compose_app",
+        "timer:compose_app/export"
       ]
     },
     {
@@ -707,6 +825,26 @@
     },
     {
       "exit": {
+        "0": "metrics written (a collector that failed says so in hw_collector_up, it does not fail the run)",
+        "2": "the configuration could not be read or the metrics could not be written"
+      },
+      "id": "hardware-metrics",
+      "inputs": "the role's JSON configuration (the collectors and the commands and paths each reads), and those commands' read-only output",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-hardware-metrics",
+      "kind": "job",
+      "language": "python",
+      "outputs": "hardware_metrics.prom in the textfile directory, written atomically",
+      "owner": "platform",
+      "path": "ansible/roles/hardware_metrics/files/hnx-hardware-metrics.py",
+      "purpose": "Write a host's hardware state (pool health and capacity, board sensors and event log, GPU temperature, power and load, guest run state) as node-exporter textfile metrics.",
+      "status": "active",
+      "trigger": [
+        "timer:hardware_metrics/hnx-hardware-metrics",
+        "role:hardware_metrics"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "findings"
       },
@@ -786,6 +924,48 @@
       "trigger": [
         "timer:honeypot/report",
         "role:honeypot"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every entry refreshed",
+        "1": "at least one entry failed (its previous token file is left as it was)",
+        "2": "usage or configuration error"
+      },
+      "id": "hub-login-token",
+      "inputs": "--config FILE: JSON {entries: [{name, url, username, password_file, out}], ca_file?: PATH}",
+      "installs_to": "/usr/local/libexec/hnx-hub/hnx-hub-login-token",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line per entry on stdout (name, ok or the error class); each token is written to its entry's out file (0600, owned by the configured owner, the collector's account) by rename; the token is never printed",
+      "owner": "platform",
+      "path": "ansible/roles/status_hub/files/hnx-hub-login-token.py",
+      "purpose": "Refresh the short-lived bearer tokens the status hub's collector sends to products that only issue them for a login (a form post of a user name and password), so no expired token leaves a source unreadable.",
+      "status": "active",
+      "trigger": [
+        "role:status_hub",
+        "timer:status_hub/hnx-hub-login-token"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every entry pulled",
+        "1": "at least one entry failed (its previous file is left as it was)",
+        "2": "usage or configuration error"
+      },
+      "id": "hub-pull",
+      "inputs": "--config FILE: JSON {key_file, known_hosts, root, group, ssh?: PATH, entries: [{name, address, user, dest}]}",
+      "installs_to": "/usr/local/libexec/hnx-hub/hnx-hub-pull",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line per entry on stdout (name, ok and the size, or the error class); each document is written to <root>/<dest> (0640, group the collector's) by rename; nothing is written for a document that is not a JSON object",
+      "owner": "platform",
+      "path": "ansible/roles/status_hub/files/hnx-hub-pull.py",
+      "purpose": "Pull each producer host's status file (for example the invariants runner's results document) over SSH to a restricted account whose forced command streams that one file read-only, and file it under the status root at the path the hub's own configuration names, so a poll-file source has something to read.",
+      "status": "active",
+      "trigger": [
+        "role:status_hub",
+        "timer:status_hub/hnx-hub-pull"
       ]
     },
     {
@@ -886,6 +1066,44 @@
       "trigger": [
         "script:lab-smoke",
         "compose:lab-in-a-box/status-hub"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the notify service accepted the message",
+        "1": "it did not (the runner then keeps the state and retries next run)",
+        "2": "bad arguments or configuration"
+      },
+      "id": "lab-checks-notify",
+      "inputs": "--config FILE TITLE BODY (the config is JSON: url, topic, token_file)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one POST to <url>/<topic>",
+      "owner": "platform",
+      "path": "modules/lab-checks/roles/lab_checks/files/hnx-lab-notify",
+      "purpose": "Publish one page (title, body) from the invariants runner to the notify service's topic, with the publish token read from an owner-only file.",
+      "status": "active",
+      "trigger": [
+        "role:lab_checks"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the probe held",
+        "1": "the thing probed is wrong or absent (a failed criterion)",
+        "100": "the probe could not measure (bad usage, an unreadable record, the metrics API unreachable)"
+      },
+      "id": "lab-checks-probe",
+      "inputs": "http URL [--status N,N] [--ca FILE] [--timeout S] | tcp HOST PORT [--timeout S] | dns RESOLVER NAME [--type A] [--expect ADDR] [--timeout S] [--port N] | prom BASE_URL QUERY (--min N | --max N | --eq N) [--empty fail|zero] | lastrun DIR JOB MAX_AGE_S [--now EPOCH]",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line of evidence on stdout (the reason on a failure)",
+      "owner": "platform",
+      "path": "modules/lab-checks/roles/lab_checks/files/hnx-lab-probe",
+      "purpose": "Small read-only probes a lab criterion's observable runs (an HTTP status, a TCP connect, a DNS answer, a metrics value, a last-run record); each exits by the invariants runner's semantics.",
+      "status": "active",
+      "trigger": [
+        "role:lab_checks"
       ]
     },
     {
@@ -1082,6 +1300,46 @@
     },
     {
       "exit": {
+        "0": "every table committed (or had nothing new), or the check passed",
+        "1": "a table failed (the lake or the store refused, a batch could not be read), or a run in which every row was refused, or status found a problem",
+        "2": "refused before anything was read or written (a namespace that is not soc, an unknown table, a missing setting)"
+      },
+      "id": "lake-writer",
+      "inputs": "commit [--table T] | ensure-tables | schema-check | status [--max-pending N] [--max-age-s S]; environment HNX_LW_*, the endpoints HNX_ENDPOINT_LAKE_QUERY, HNX_ENDPOINT_LAKE_CATALOG and HNX_ENDPOINT_OBJECT_STORE, the lake login and the object store key pair in the root-only credentials file; staged batches in the staging bucket; runs under the hnx runtime release python",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-lake-writer",
+      "kind": "job",
+      "language": "python",
+      "outputs": "rows committed through LakeClient.write_batch; per table a checkpoint and a last-run record under the state directory; staged objects deleted once committed; refused rows under <prefix><table>/_rejected/ in the staging bucket; one JSON line per table on stdout",
+      "owner": "platform",
+      "path": "modules/lake-writer/roles/lake_writer/files/hnx_lake_writer.py",
+      "purpose": "Commit the log pipeline's staged OCSF batches to the fresh tables of the soc lake namespace, one writer per table, commit then checkpoint, refusing any namespace but soc and any event without its pipeline TLP label.",
+      "status": "active",
+      "trigger": [
+        "timer:lake_writer/lake-writer",
+        "role:lake_writer"
+      ]
+    },
+    {
+      "exit": {
+        "0": "listed, checked or staged",
+        "1": "the export or the source is refused (the reason on stderr)",
+        "2": "usage error"
+      },
+      "id": "lakekeeper-backup",
+      "inputs": "listing EXPORT_DIR | check SOURCE DB_UID | stage SOURCE DEST DB_UID DB_GID",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the dump's key, size and sha256 as JSON on stdout; stage also writes DEST (0600, the database's user)",
+      "owner": "platform",
+      "path": "modules/lakekeeper/roles/lakekeeper/files/lakekeeper_backup.py",
+      "purpose": "List the lakekeeper role's export, and check an export (and stage its dump through the checked descriptor) before a restore.",
+      "status": "active",
+      "trigger": [
+        "role:lakekeeper"
+      ]
+    },
+    {
+      "exit": {
         "0": "the record was written",
         "1": "it could not be written (the units ignore it, with the - prefix)",
         "2": "bad arguments"
@@ -1101,10 +1359,14 @@
         "timer:aide/scan",
         "timer:caddy/acme-renew",
         "timer:clamav/scan",
+        "timer:compose_app/export",
         "timer:context/reindex",
+        "timer:hardware_metrics/hnx-hardware-metrics",
         "timer:honeypot/lake",
-        "timer:intel_ingest/intel-ingest",
         "timer:honeypot/report",
+        "timer:intel_ingest/intel-ingest",
+        "timer:lab_checks/lab-checks",
+        "timer:lake_writer/lake-writer",
         "timer:lynis/scan",
         "timer:media_automation/cleanup-downloads",
         "timer:media_automation/rename-cleanup",
@@ -1112,11 +1374,18 @@
         "timer:needrestart/check",
         "timer:needrestart/reboot",
         "timer:ntfy/deadman",
+        "timer:nut_ups/hnx-nut-ups-check",
         "timer:openbao/acme-renew",
         "timer:prometheus/alerts",
+        "timer:restore_drill/drill",
         "timer:rkhunter/scan",
+        "timer:source_census/source-census-run",
+        "timer:status_hub/hnx-hub-collect",
+        "timer:status_hub/hnx-hub-login-token",
+        "timer:status_hub/hnx-hub-pull",
         "timer:trino/lake-maintenance",
-        "timer:trivy/scan"
+        "timer:trivy/scan",
+        "timer:velociraptor_server/cycle"
       ]
     },
     {
@@ -1126,7 +1395,7 @@
         "2": "misconfiguration"
       },
       "id": "leak-scan",
-      "inputs": "paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file",
+      "inputs": "paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file, optional --exemptions FILE",
       "invariant": [
         "F-05",
         "F-18",
@@ -1527,6 +1796,25 @@
     },
     {
       "exit": {
+        "0": "checked and metrics written"
+      },
+      "id": "nut-ups-check",
+      "inputs": "upsc output for the UPS; systemctl is-active nut-monitor",
+      "installs_to": "/usr/local/libexec/homelabnext/nut-ups-check",
+      "kind": "job",
+      "language": "python",
+      "outputs": "nut_ups.prom in the textfile directory (atomic); on the charge floor, upsmon -c fsd",
+      "owner": "platform",
+      "path": "ansible/roles/nut_ups/templates/nut-ups-check.py.j2",
+      "purpose": "Write the UPS and shutdown-monitor state as node-exporter textfile metrics, and force a clean shutdown when on battery under the charge floor.",
+      "status": "active",
+      "trigger": [
+        "timer:nut_ups/hnx-nut-ups-check",
+        "role:nut_ups"
+      ]
+    },
+    {
+      "exit": {
         "0": "the installed certificate is valid (renewed and installed, or not yet due); with --check, it is valid",
         "1": "with --check, the installed certificate is missing, invalid or due",
         "100": "could not measure (openssl cannot be run); nothing was checked or installed",
@@ -1590,7 +1878,7 @@
     },
     {
       "exit": {
-        "0": "the unit ran and ended successfully",
+        "0": "the unit ran and ended successfully, or (a set declared overlap skip) a run of the same instance was already in progress and this session was coalesced into it",
         "1": "the unit failed, or was never started (systemctl refused or timed out)",
         "143": "cancelled (SIGTERM, SIGINT or SIGHUP), the unit was stopped",
         "2": "usage or configuration error (an untrusted or malformed table, an agent key with no job, a lane, run id or task refused)",
@@ -1803,6 +2091,27 @@
     },
     {
       "exit": {
+        "0": "the drill verified",
+        "1": "the drill failed or did not verify (recorded; the teardown still ran)",
+        "2": "bad arguments, an unreadable config or nothing to drill"
+      },
+      "id": "restore-drill",
+      "inputs": "the config the role renders (--config) and its env file (the backup server's API token secret, its certificate fingerprint, the notifier token)",
+      "installs_to": "/usr/local/sbin/hnx-restore-drill",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the records file (drills.json, with a guests and a services mapping), one notifier message per change of a guest's state",
+      "owner": "platform",
+      "path": "ansible/roles/restore_drill/files/hnx-restore-drill.py",
+      "purpose": "Restore the latest backup of one guest (rotating, alternating the primary and the second copy) to scratch space, check the image and the application exports inside it, destroy the scratch and record pass or fail (ADR-0042 decision 3, ADR-0008 decision 2).",
+      "status": "active",
+      "trigger": [
+        "role:restore_drill",
+        "timer:restore_drill/drill"
+      ]
+    },
+    {
+      "exit": {
         "0": "the run finished (the scanner's own status is in last-run)"
       },
       "id": "rkhunter-scan",
@@ -1995,6 +2304,191 @@
     },
     {
       "exit": {
+        "0": "imported"
+      },
+      "id": "vector-log-pipeline-adapter",
+      "inputs": "the suite's observed addresses and events",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the suite's verdict inputs",
+      "owner": "platform",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/log_pipeline.py",
+      "purpose": "Drive the sidecar's labelling path for the log-pipeline conformance suite.",
+      "status": "active",
+      "trigger": [
+        "role:vector"
+      ]
+    },
+    {
+      "exit": {
+        "0": "imported"
+      },
+      "id": "vector-ocsf",
+      "inputs": "a labelled event, its kind and a seed",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "rows per OCSF table",
+      "owner": "platform",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/ocsf.py",
+      "purpose": "Remap one labelled event into the rows of its OCSF classes for the sidecar.",
+      "status": "active",
+      "trigger": [
+        "role:vector"
+      ]
+    },
+    {
+      "exit": {
+        "0": "imported"
+      },
+      "id": "vector-package",
+      "inputs": "nothing (imported, never run)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "nothing",
+      "owner": "platform",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/__init__.py",
+      "purpose": "Mark the vector module's package, the directory the sidecar and its remap are imported from on the guest.",
+      "status": "active",
+      "trigger": [
+        "role:vector"
+      ]
+    },
+    {
+      "exit": {
+        "0": "stopped cleanly"
+      },
+      "id": "vector-sidecar",
+      "inputs": "the aggregator's events on a local socket and the rendered label tables",
+      "kind": "service",
+      "language": "python",
+      "outputs": "labelled OCSF rows on the forward socket and a status file",
+      "owner": "platform",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/sidecar.py",
+      "purpose": "Label and remap every event the Vector aggregator hands over, with the core library's own label rules, and forward the rows.",
+      "status": "active",
+      "trigger": [
+        "role:vector"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the property holds",
+        "1": "the property does not hold",
+        "100": "could not measure (no status file, an unknown schema, or one older than its own bound: the cycle that writes it has stopped)",
+        "2": "usage error (an unknown criterion)"
+      },
+      "id": "velociraptor-check",
+      "inputs": "the status file written by the module's hunt cycle (the criterion's name and, optionally, a path)",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-velociraptor-check",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line of evidence",
+      "owner": "platform",
+      "path": "modules/velociraptor/roles/velociraptor_server/files/hnx_velociraptor_check.py",
+      "purpose": "Decide whether the endpoint-forensics server is up, has clients enrolled and has heard from one recently, from the status file the hunt cycle writes.",
+      "status": "active",
+      "trigger": [
+        "role:velociraptor_server"
+      ]
+    },
+    {
+      "exit": {
+        "0": "done",
+        "1": "the server could not be reached or refused, a catalog or definition was refused, or a tree check failed (the reason on stderr and in the status file)",
+        "2": "usage error"
+      },
+      "id": "velociraptor-forensics",
+      "inputs": "the module's config file, the allow-list catalog, the forensics server's API (as the module's own hunt principal, through the server container) and the status and state directories",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-velociraptor",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the status file, the hunt state, one JSONL file per finished hunt under the results directory, and listed exports",
+      "owner": "platform",
+      "path": "modules/velociraptor/roles/velociraptor_server/files/hnx_velociraptor.py",
+      "purpose": "Run the endpoint-forensics module's baseline hunt cycle (start one hunt over the allow-listed artifacts, collect it once into JSONL for the log pipeline, record the fleet's state), check its allow-list and hunt principal, and export or import its server state.",
+      "status": "active",
+      "trigger": [
+        "timer:velociraptor_server/cycle",
+        "role:velociraptor_server"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the forwarder's own exit code",
+        "2": "usage error or an unreadable alert (from the forwarder)"
+      },
+      "id": "wazuh-alert-entry",
+      "inputs": "ALERT_FILE API_KEY HOOK_URL (the integration daemon's arguments)",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "nothing of its own; the forwarder's output",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/custom-hnx-alert",
+      "purpose": "The integration daemon's entry point for the alert webhook; hands the alert file, api key and hook url to the product's own Python running the forwarder.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh",
+        "script:wazuh-alert-forward"
+      ]
+    },
+    {
+      "exit": {
+        "0": "delivered, held for the next run, or refused as permanent (the reason on stderr)",
+        "2": "usage error or an unreadable alert"
+      },
+      "id": "wazuh-alert-forward",
+      "inputs": "ALERT_FILE API_KEY HOOK_URL (the integration daemon's arguments); hnx-alert.json (source, tlp, detections) and hnx-alert.auth (the Authorization header value) beside the script",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one CloudEvents JSON POST to HOOK_URL; undelivered events in the outbox directory; a line on stderr per outcome",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/custom-hnx-alert.py",
+      "purpose": "Post each SIEM alert at or above the integration's level to the events forwarder as a homelabnext.alert.created event, and keep what could not be delivered for the next run.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh"
+      ]
+    },
+    {
+      "exit": {
+        "0": "exported or restored",
+        "1": "the indexer refused a call, or the source is not what a restore needs (the reason on stderr)",
+        "2": "usage error or an unsafe path"
+      },
+      "id": "wazuh-index-export",
+      "inputs": "export|restore --url URL --ca FILE --dir DIR [--pattern P] [--user U]; the account's password in HNX_INDEXER_PASSWORD",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON line on stdout, {files: [{key, docs}]} (export) or {indices, docs} (restore); the files under DIR (0600)",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/hnx_wazuh_index.py",
+      "purpose": "Export the SIEM's hot index (the alerts indices) to one JSON-lines file per index, and load such files back, through the indexer's own API.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the set is in place and tested (changed or not)",
+        "1": "the new set was refused by the configuration test or the restart and the previous set is back",
+        "2": "usage error or an unsafe path"
+      },
+      "id": "wazuh-rules-sync",
+      "inputs": "sync --stage DIR --etc DIR --compose FILE --prev DIR [--force-restart]; digest --etc DIR | --stage DIR",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON line on stdout, {changed, digest, files}; the reason on stderr when refused",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/hnx_wazuh_rules.py",
+      "purpose": "Load the site's native rule and decoder files into the SIEM manager, test them with the manager's own configuration test before it restarts, and put the previous set back when the test or the restart fails.",
+      "status": "active",
+      "trigger": [
+        "role:wazuh"
+      ]
+    },
+    {
+      "exit": {
         "0": "queued, already queued (an idempotent replay), already retried, skipped on back-pressure (429), or refused for good (logged on stderr)",
         "1": "no idempotency key or token, the controller could not be reached, refused the token (401, 403), or failed (400, 5xx)"
       },
@@ -2006,6 +2500,24 @@
       "owner": "broker",
       "path": "workflows/handlers/agent-job-submit.sh",
       "purpose": "Broker handler for agent.job.submit; puts one job on the orchestration controller's queue.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the notify service accepted the page",
+        "1": "no alert_id or token, the service could not be reached, refused the token (401, 403), or failed (anything else)"
+      },
+      "id": "workflow-broker-notify-page",
+      "inputs": "the validated params as JSON on stdin; the NOTIFY_PAGE_URL secret (the page topic's publish URL); the NOTIFY_PAGE_TOKEN secret (a publish-only token for that topic)",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the notify service's answer on stdout",
+      "owner": "broker",
+      "path": "workflows/handlers/notify-page.sh",
+      "purpose": "Broker handler for notify.page; publishes one page to the notify service's page topic.",
       "status": "active",
       "trigger": [
         "manual"

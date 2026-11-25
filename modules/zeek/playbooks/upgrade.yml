@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate a pinned base-image bump (zeek_target_image, tag and digest), then converge with
+# the new pin (set zeek_base_image to the target in the overlay): the local image is rebuilt and each
+# capture unit restarts on it. Capture is off for the seconds a unit restarts.
+#   ansible-playbook -i <inventory> modules/zeek/playbooks/upgrade.yml -e zeek_target_image=<ref>
+- name: Upgrade the network monitor
+  hosts: mod_zeek_sensor
+  become: true
+  tasks:
+    - name: Validate the bump
+      ansible.builtin.include_role:
+        name: zeek
+        tasks_from: upgrade
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: zeek
+      vars:
+        zeek_base_image: "{{ zeek_target_image }}"

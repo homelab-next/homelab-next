@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: Apache-2.0
+# The hunt principal: an API account that holds exactly the allow-list catalog's permissions
+# (collect, read results, start a hunt) and nothing else. It is made once, after the server has
+# generated its configuration; the server reads its accounts at start, so a new account or a
+# changed policy is followed by one restart, which the start guard (LL-087) makes safe, and the
+# certificate authority is compared before and after.
+- name: Name the server command
+  ansible.builtin.set_fact:
+    velociraptor_server_exec: >-
+      {{ ['docker', 'compose', '-f', velociraptor_server_dir ~ '/docker-compose.yml', 'exec', '-T', 'velociraptor',
+          '/bin/velociraptor', '--config', velociraptor_server_config_path] }}
+    velociraptor_server_policy: >-
+      {{ dict(velociraptor_server_catalog.principal.permissions | map('lower') | list | zip_longest([], fillvalue=true)) }}
+  tags: [health]
+
+- name: Look for the principal's API configuration
+  ansible.builtin.stat:
+    path: "{{ velociraptor_server_data_root }}/etc/{{ velociraptor_server_api_config_name }}"
+  register: velociraptor_server_api_file
+
+- name: Create the hunt principal's API configuration (first run only)
+  ansible.builtin.command:
+    argv: >-
+      {{ velociraptor_server_exec + ['config', 'api_client', '--name', velociraptor_server_hunt_principal,
+         '--role', 'reader', velociraptor_server_api_config_path] }}
+  when: not velociraptor_server_api_file.stat.exists
+  register: velociraptor_server_principal_made
+  changed_when: true
+
+- name: Read the principal's policy
+  ansible.builtin.command:
+    argv: "{{ velociraptor_server_exec + ['acl', 'show', velociraptor_server_hunt_principal] }}"
+  register: velociraptor_server_acl
+  changed_when: false
+  check_mode: false
+
+- name: Compare it with the catalog's
+  ansible.builtin.set_fact:
+    velociraptor_server_policy_ok: >-
+      {{ (velociraptor_server_acl.stdout_lines | select('match', '^\{') | list | last | default('{}')) | from_json
+         == velociraptor_server_policy }}
+
+- name: Grant the principal exactly the catalog's permissions (replacing whatever it held)
+  ansible.builtin.command:
+    argv: >-
+      {{ velociraptor_server_exec + ['acl', 'grant', velociraptor_server_hunt_principal,
+         velociraptor_server_policy | to_json(sort_keys=True)] }}
+  when: not velociraptor_server_policy_ok | bool
+  register: velociraptor_server_principal_granted
+  changed_when: true
+
+- name: Restart the server so it reads the account (safe, the start guard keeps the configuration)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ velociraptor_server_dir }}/docker-compose.yml", restart, velociraptor]
+  when: velociraptor_server_principal_made is changed or velociraptor_server_principal_granted is changed
+  changed_when: true
+
+- name: Wait for the server to answer after the restart
+  ansible.builtin.command:
+    argv: "{{ ['docker', 'compose', '-f', velociraptor_server_dir ~ '/docker-compose.yml', 'exec', '-T', 'velociraptor', 'nc', '-z', 'localhost', '8000'] }}"
+  register: velociraptor_server_back
+  until: velociraptor_server_back.rc == 0
+  retries: "{{ ((velociraptor_server_ready_timeout | int) / 5) | int }}"
+  delay: 5
+  changed_when: false
+  when: velociraptor_server_principal_made is changed or velociraptor_server_principal_granted is changed
+
+- name: The restart did not change the certificate authority
+  ansible.builtin.include_tasks: ca.yml
+  vars:
+    velociraptor_server_record_ca: false
+  when: velociraptor_server_principal_made is changed or velociraptor_server_principal_granted is changed

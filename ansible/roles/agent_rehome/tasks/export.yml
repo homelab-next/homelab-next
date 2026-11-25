@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing for agent_rehome to do in the export hook (main moves the agent; the agent role owns the rest)
+  ansible.builtin.debug:
+    msg: agent_rehome has nothing to export
+  tags: [export]
