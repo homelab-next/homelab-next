@@ -103,6 +103,9 @@ class SourceSpec:
     auth: Mapping[str, Any] | None = None
     #: a source generated from the site model (:mod:`.power`): ``{ups, model, feeds, guests}``
     power: Mapping[str, Any] | None = None
+    #: the TLP label of what this source reads (service schema 2.16, ADR-0033): a canonical label,
+    #: ``red`` when the registry declares none (the lab's own data, decision 2)
+    tlp: str = "red"
 
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
@@ -140,6 +143,7 @@ class SourceSpec:
             on_error=entry.get("on_error", "unknown"),
             mapping=dict(entry.get("mapping") or {}),
             auth=dict(entry["auth"]) if entry.get("auth") else None,
+            tlp=entry.get("tlp", "red"),
         )
 
     def mapping_text(self) -> str:
@@ -179,6 +183,7 @@ class SourceSpec:
             "on_error": self.on_error,
             "mapping": self.mapping_text(),
             "reserved": self.kind in RESERVED_KINDS,
+            "tlp": self.tlp,
             "what": self.what,
         }
         if self.power is not None:

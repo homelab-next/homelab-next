@@ -4,6 +4,7 @@ id: table:soc.process_activity
 owner: lake-writer
 schema: roles/lake_writer/files/schemas/process_activity.v1.json
 retention_days: 365
+tlp: red
 maintenance:
   compact: true
   expire_snapshots_days: 7

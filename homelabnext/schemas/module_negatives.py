@@ -846,4 +846,10 @@ def render(root: Path) -> dict[str, str]:
     out["schemas/platform/negative/lake_table.without-freshness.yml"] = _dump(
         bad, "A lake table states its freshness expectation."
     )
+    bad = dict(lake)
+    bad["tlp"] = "amber-strict"
+    out["schemas/platform/negative/lake_table.tlp-unknown-label.yml"] = _dump(
+        bad,
+        "A lake table's tlp is one of the five canonical labels (amber+strict, not amber-strict).",
+    )
     return out
