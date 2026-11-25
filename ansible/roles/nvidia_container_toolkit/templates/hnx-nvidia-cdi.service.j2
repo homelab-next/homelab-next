@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Managed by the nvidia_container_toolkit role (do not edit): regenerates the CDI spec on every boot.
+# The spec records each device node's major number and nvidia-uvm's is assigned when its module
+# loads, so a spec written before a reboot can name a major the node no longer has: the container
+# then gets the wrong /dev/nvidia-uvm, cuInit fails (CUDA error 999) and a model silently runs on
+# the CPU. This unit rewrites the spec, from the nodes as they are this boot, before docker runs.
+# It loads no kernel module: it waits for the driver's own nodes and never starts one.
+[Unit]
+Description=Regenerate the NVIDIA CDI spec for this boot
+After=systemd-modules-load.service systemd-udev-settle.service nvidia-persistenced.service
+Before=docker.service containerd.service
+ConditionPathExists={{ nvidia_container_toolkit_proc_root }}/modules
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=180
+# the driver's nodes must be there (at most 90 s): generating earlier would record a spec without them
+ExecStartPre=/bin/sh -c 'i=0; while [ "$i" -lt 90 ]; do [ -e {{ nvidia_container_toolkit_dev_root }}/nvidiactl ] && [ -e {{ nvidia_container_toolkit_dev_root }}/nvidia-uvm ] && exit 0; i=$((i+1)); sleep 1; done; echo "the NVIDIA device nodes did not appear" >&2; exit 1'
+# generated outside the CDI directory, then renamed within it: a reader sees the old spec or the new
+# one, never half of one; the temporary name ends in neither .yaml nor .json, so it is never loaded
+ExecStart={{ nvidia_container_toolkit_ctk_path }} cdi generate --output={{ nvidia_container_toolkit_staged_spec }}
+ExecStart=/usr/bin/install -m 0644 {{ nvidia_container_toolkit_staged_spec }} {{ nvidia_container_toolkit_cdi_spec | dirname }}/.{{ nvidia_container_toolkit_cdi_spec | basename }}.hnx-new
+ExecStart=/bin/mv -f {{ nvidia_container_toolkit_cdi_spec | dirname }}/.{{ nvidia_container_toolkit_cdi_spec | basename }}.hnx-new {{ nvidia_container_toolkit_cdi_spec }}
+ExecStart=/bin/rm -f {{ nvidia_container_toolkit_staged_spec }}
+
+[Install]
+WantedBy=multi-user.target

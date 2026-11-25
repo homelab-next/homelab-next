@@ -129,12 +129,14 @@ llamacpp_command: >-
      + (['--yarn-orig-ctx', llamacpp_extra_args.yarn_orig_ctx | string] if llamacpp_extra_args.yarn_orig_ctx is defined else []) }}
 # the most -t / -tb may be (the manifest schema's most vCPUs a footprint may have)
 llamacpp_threads_max: 256
+# the CDI spec the cuda container's devices come from (the precheck compares its device majors with the live nodes)
+llamacpp_cdi_spec: /etc/cdi/nvidia.yaml
 # the precheck's arguments: the power rule alone (the health hook), and with the weights (the unit)
 llamacpp_precheck_power: >-
   {{ ['--backend', llamacpp_backend, '--max-watts', llamacpp_power_cap_max_watts | string]
      + (['--render-node', llamacpp_render_node, '--attrs', llamacpp_power_cap_attrs | join(','), '--sysfs-root', llamacpp_sysfs_root]
         if llamacpp_backend in llamacpp_render_backends else [])
-     + (['--gpu-index', llamacpp_cuda_gpus, '--proc-root', llamacpp_proc_root, '--dev-root', llamacpp_dev_root]
+     + (['--gpu-index', llamacpp_cuda_gpus, '--proc-root', llamacpp_proc_root, '--dev-root', llamacpp_dev_root, '--cdi-spec', llamacpp_cdi_spec]
         if llamacpp_backend == 'cuda' else []) }}
 llamacpp_precheck_full: >-
   {{ llamacpp_precheck_power + ['--model-file', llamacpp_model_file, '--listing', llamacpp_listing, '--digest', llamacpp_model_digest, '--model-dir', llamacpp_model_dir] }}

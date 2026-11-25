@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Healthy: the four packages installed at the pin and held (dpkg state hi), the spec on disk, the
-# runtime resolving nvidia.com/gpu=all and the expected GPUs, and, unless auto_refresh is on, the
-# refresh units masked.
+# runtime resolving nvidia.com/gpu=all and the expected GPUs, no stray second spec, and, unless
+# auto_refresh is on, the vendor refresh units masked and the role's boot-time unit enabled.
 - block:
     - name: Read the toolkit packages' versions and selections
       ansible.builtin.command:
@@ -54,5 +54,22 @@
           nvidia_container_toolkit: {{ nvidia_container_toolkit_refresh_units | join(' and ') }} are
           not both masked (is-enabled: {{ nvidia_container_toolkit_unit_health.stdout_lines | join(', ') or 'no answer' }});
           they would load kernel modules and rewrite the spec on a driver event (auto_refresh is false)
+      when: not nvidia_container_toolkit_auto_refresh
+    - name: Read whether the boot-time CDI unit is enabled
+      ansible.builtin.command:
+        argv: [ "{{ nvidia_container_toolkit_systemctl_cli }}", is-enabled, "{{ nvidia_container_toolkit_boot_unit }}" ]
+      register: nvidia_container_toolkit_boot_health
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: not nvidia_container_toolkit_auto_refresh
+    - name: Fail unless the boot-time CDI unit is enabled
+      ansible.builtin.assert:
+        that: nvidia_container_toolkit_boot_health.stdout_lines | select('equalto', 'enabled') | list | length == 1
+        fail_msg: >-
+          nvidia_container_toolkit: {{ nvidia_container_toolkit_boot_unit }} is not enabled
+          (is-enabled: {{ nvidia_container_toolkit_boot_health.stdout_lines | join(', ') or 'no answer' }});
+          after a reboot the CDI spec would keep the old device major numbers and a container would
+          silently lose its GPU
       when: not nvidia_container_toolkit_auto_refresh
   tags: [health]
