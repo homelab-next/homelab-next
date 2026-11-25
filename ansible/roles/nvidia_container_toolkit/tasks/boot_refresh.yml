@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# The role's own boot-time spec refresh (see templates/hnx-nvidia-cdi.service.j2). The vendor's
+# refresh units stay masked (they load kernel modules); this one loads none. The unit is enabled,
+# never started here (cdi.yml has just written the spec for this boot), and nothing is restarted.
+- name: Install the boot-time CDI spec unit
+  ansible.builtin.template:
+    src: hnx-nvidia-cdi.service.j2
+    dest: "{{ nvidia_container_toolkit_unit_dir }}/{{ nvidia_container_toolkit_boot_unit }}"
+    mode: "0644"
+
+- name: Read whether the boot-time unit is enabled
+  ansible.builtin.command:
+    argv: [ "{{ nvidia_container_toolkit_systemctl_cli }}", is-enabled, "{{ nvidia_container_toolkit_boot_unit }}" ]
+  register: nvidia_container_toolkit_boot_state
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Enable the boot-time unit
+  ansible.builtin.command:
+    argv: [ "{{ nvidia_container_toolkit_systemctl_cli }}", enable, "{{ nvidia_container_toolkit_boot_unit }}" ]
+  when: nvidia_container_toolkit_boot_state.stdout_lines | select('equalto', 'enabled') | list | length == 0

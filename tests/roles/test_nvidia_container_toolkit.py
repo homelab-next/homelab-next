@@ -34,6 +34,7 @@ PKGS = [
 ]
 PIN = "1.20.1-1"
 UNITS = ["nvidia-cdi-refresh.path", "nvidia-cdi-refresh.service"]
+BOOT = "hnx-nvidia-cdi.service"
 
 # A guest with a hand-installed, held driver stack, a kernel, a library and another held package.
 DRIVER = [
@@ -112,9 +113,14 @@ elif NAME == "systemctl":
     if ARGS[0] == "mask":
         for u in units:
             open(D + "/masked/" + u, "w").write("")
+    elif ARGS[0] == "enable":
+        os.makedirs(D + "/enabled", exist_ok=True)
+        for u in units:
+            open(D + "/enabled/" + u, "w").write("")
     elif ARGS[0] == "is-enabled":
         for u in units:
-            print("masked" if os.path.exists(D + "/masked/" + u) else "disabled")
+            print("masked" if os.path.exists(D + "/masked/" + u)
+                  else "enabled" if os.path.exists(D + "/enabled/" + u) else "disabled")
         sys.exit(1)
 elif NAME == "dpkg":
     sys.stdout.write(read("audit.txt", ""))
@@ -137,7 +143,27 @@ FAKES = {
 }
 
 
-def world(tmp, dpkg=None, masked=(), spec="cdiVersion: 0.5.0\n", listing=None, live=None, **kw):
+def _render(src, ctx):
+    """The unit template as Ansible renders it (dirname and basename are Ansible's filters)."""
+    import os.path
+
+    from jinja2 import Environment
+
+    env = Environment(keep_trailing_newline=True)
+    env.filters.update(dirname=os.path.dirname, basename=os.path.basename)
+    return env.from_string(src).render(**ctx)
+
+
+def world(
+    tmp,
+    dpkg=None,
+    masked=(),
+    enabled=("hnx-nvidia-cdi.service",),
+    spec="cdiVersion: 0.5.0\n",
+    listing=None,
+    live=None,
+    **kw,
+):
     """The fake commands and the paths of one run under ``tmp``; returns the role's variables."""
     tmp.mkdir(parents=True, exist_ok=True)
     (tmp / "dpkg.txt").write_text("".join(f"{x}\n" for x in (DRIVER if dpkg is None else dpkg)))
@@ -147,6 +173,10 @@ def world(tmp, dpkg=None, masked=(), spec="cdiVersion: 0.5.0\n", listing=None, l
     (tmp / "masked").mkdir(exist_ok=True)
     for u in masked:
         (tmp / "masked" / u).write_text("")
+    (tmp / "enabled").mkdir(exist_ok=True)
+    for u in enabled:
+        (tmp / "enabled" / u).write_text("")
+    (tmp / "units").mkdir(exist_ok=True)
     (tmp / "run" / "cdi").mkdir(parents=True, exist_ok=True)
     (tmp / "state").mkdir(exist_ok=True)  # made by an earlier run on a converged host
     (tmp / "dev").mkdir(exist_ok=True)
@@ -164,12 +194,23 @@ def world(tmp, dpkg=None, masked=(), spec="cdiVersion: 0.5.0\n", listing=None, l
         f"{P}state_dir": str(tmp / "state"),
         f"{P}cdi_spec": str(tmp / "etc" / "cdi" / "nvidia.yaml"),
         f"{P}refresh_spec": str(tmp / "run" / "cdi" / "nvidia.yaml"),
+        f"{P}unit_dir": str(tmp / "units"),
         f"{P}dev_root": str(tmp / "dev"),
         f"{P}proc_root": str(tmp / "proc"),
     }
     for cmd, var in FAKES.items():
         v[f"{P}{var}"] = fake(tmp / cmd, f"{WORLD.format(tmp=str(tmp), name=cmd)}")
-    return {**v, **kw}
+    v = {**v, **kw}
+    if (
+        enabled
+    ):  # a host the role already converged has its boot unit on disk, as the template renders it
+        ctx = {f"{P}{k}": FIXED[f"{P}{k}"] for k in ("ctk_path",)}
+        ctx |= {f"{P}proc_root": v[f"{P}proc_root"], f"{P}dev_root": v[f"{P}dev_root"],
+                f"{P}cdi_spec": v[f"{P}cdi_spec"],
+                f"{P}staged_spec": f"{v[f'{P}state_dir']}/cdi-staged.yaml"}  # fmt: skip
+        src = (ROLE_DIR / "templates" / "hnx-nvidia-cdi.service.j2").read_text()
+        (tmp / "units" / "hnx-nvidia-cdi.service").write_text(_render(src, ctx))
+    return v
 
 
 def pkg_calls(tmp):
@@ -335,6 +376,7 @@ def test_a_fresh_install_masks_then_updates_simulates_installs_and_holds_in_that
         " ".join(SIM),
         " ".join(REAL),
         "apt-mark hold " + " ".join(PKGS),
+        f"systemctl is-enabled {BOOT}",
     ]
     every = " ".join(calls(tmp))
     assert "--allow-change-held-packages" not in every and "--allow-downgrades" not in every
@@ -344,7 +386,7 @@ def test_a_fresh_install_masks_then_updates_simulates_installs_and_holds_in_that
     assert [s for s in state if s in DRIVER] == DRIVER  # nothing else moved
     spec = first.setup["v"][f"{P}cdi_spec"]
     assert Path(spec).read_text() == "cdiVersion: 0.5.0\n"
-    assert calls(tmp)[-2:] == [
+    assert calls(tmp)[-3:-1] == [  # then the boot unit, already enabled here
         f"nvidia-ctk cdi generate --output={first.setup['v'][P + 'state_dir']}/cdi-staged.yaml",
         "nvidia-ctk cdi list",
     ]
@@ -372,7 +414,10 @@ def test_a_converged_host_makes_no_apt_calls_and_changes_nothing(first):
     r, tmp = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert CHANGED_0.search(r.stdout), r.stdout
-    assert pkg_calls(tmp) == ["systemctl is-enabled " + " ".join(UNITS)]
+    assert pkg_calls(tmp) == [
+        "systemctl is-enabled " + " ".join(UNITS),
+        f"systemctl is-enabled {BOOT}",
+    ]
     assert [c.split()[1] for c in calls(tmp) if c.startswith("nvidia-ctk")] == ["cdi", "cdi"]
 
 
@@ -414,6 +459,7 @@ def test_only_the_held_toolkit_packages_are_released_for_a_bump(first):
         " ".join(SIM),
         " ".join(REAL),
         "apt-mark hold " + " ".join(PKGS),
+        f"systemctl is-enabled {BOOT}",
     ]
     assert "docker-ce 5:29.9.2-1 hi" in dpkg(tmp)  # another held package is never released
     assert all(f"{p} {PIN} hi" in dpkg(tmp) for p in PKGS)
@@ -596,7 +642,7 @@ def test_an_empty_generated_spec_never_replaces_the_live_one(first):
 
 # ---------------------------------------------------------------- the refresh units
 def _auto(tmp):
-    c = main_case(tmp, **{f"{P}auto_refresh": True})
+    c = main_case(tmp, enabled=(), **{f"{P}auto_refresh": True})
     (tmp / "run" / "cdi" / "nvidia.yaml").write_text("the refresh service's spec\n")
     c["setup"]["leftover"] = tmp / "run" / "cdi" / "nvidia.yaml"
     return c
@@ -618,9 +664,13 @@ def test_a_half_masked_pair_is_masked_again_and_a_masked_pair_is_not(first):
 
 
 # ---------------------------------------------------------------- health
-def health_vars(tmp, dpkg=None, masked=UNITS, listing=None, spec=True, **kw):
+def health_vars(
+    tmp, dpkg=None, masked=UNITS, enabled=(BOOT,), listing=None, spec=True, stray=None, **kw
+):
     v = world(tmp, dpkg=[*DRIVER, *INSTALLED] if dpkg is None else dpkg, masked=masked,
-              listing=listing, live="cdiVersion: 0.5.0\n" if spec else None, **kw)  # fmt: skip
+              enabled=enabled, listing=listing, live="cdiVersion: 0.5.0\n" if spec else None, **kw)  # fmt: skip
+    if stray:
+        (tmp / "etc" / "cdi" / stray).write_text("cdiVersion: 0.5.0\n")
     return {k: v[k] for k in v if k not in (f"{P}repository", f"{P}state_dir", f"{P}refresh_spec")}
 
 
@@ -641,6 +691,9 @@ HEALTH = {
     "no all device": ({"listing": LISTS["no all device"]}, "nvidia-ctk cdi list names"),
     "too few GPUs": ({"listing": LISTS["one GPU too few"]}, "exactly the indices 0 to 3"),
     "too many GPUs": ({"listing": LISTS["one GPU too many"]}, "exactly the indices 0 to 3"),
+    "boot unit not enabled": ({"enabled": []}, "hnx-nvidia-cdi.service is not enabled"),
+    "healthy with auto refresh and no boot unit": ({"masked": [], "enabled": [], f"{P}auto_refresh": True}, None),
+    "a stray second spec": ({"stray": "nvidia.yaml.new.yaml"}, "sit beside"),
     "units not masked": ({"masked": []}, "are not both masked"),
     "one unit not masked": ({"masked": [UNITS[1]]}, "are not both masked"),
 }  # fmt: skip
@@ -973,3 +1026,68 @@ def test_the_source_never_installs_a_package():
     modules = {k for t in tasks for k in t if "." in k}
     assert not {"ansible.builtin.apt", "ansible.builtin.package"} & modules
     assert {"ansible.builtin.include_tasks": "gpg_check.yml"}.items() <= tasks[0].items()
+
+
+# ---------------------------------------------------------------- the boot-time spec refresh
+def _unit_not_enabled(tmp):
+    return main_case(
+        tmp, dpkg=[*DRIVER, *INSTALLED], masked=UNITS, enabled=[], live="the old spec\n"
+    )
+
+
+@first_run(_unit_not_enabled)
+def test_the_boot_unit_is_installed_enabled_once_and_never_started(first):
+    r, tmp = first
+    v = first.setup["v"]
+    unit = tmp / "units" / BOOT
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = unit.read_text()
+    assert f"systemctl enable {BOOT}" in calls(tmp)
+    assert not [
+        c
+        for c in calls(tmp)
+        if c.startswith("systemctl") and c.split()[1] in ("start", "restart", "daemon-reload")
+    ]
+    assert (
+        "Before=docker.service" in text
+        and "After=" in text
+        and "WantedBy=multi-user.target" in text
+    )
+    assert "--load-kernel-modules" not in text and "modprobe" not in text
+    # generated outside the CDI directory, renamed inside it: atomic, and the temporary name is never a spec
+    cdi = tmp / "etc" / "cdi"
+    assert f"--output={tmp}/state/cdi-staged.yaml" in text
+    tmpname = f"{cdi}/.nvidia.yaml.hnx-new"
+    assert f"install -m 0644 {tmp}/state/cdi-staged.yaml {tmpname}" in text
+    assert f"/bin/mv -f {tmpname} {cdi}/nvidia.yaml" in text
+    assert not tmpname.endswith((".yaml", ".json"))
+    again = run_role(tmp, ROLE, "main", v)
+    assert again.returncode == 0 and CHANGED_0.search(again.stdout), again.stdout
+    assert [c for c in calls(tmp) if c.startswith("systemctl enable")] == [
+        f"systemctl enable {BOOT}"
+    ]
+
+
+@first_run(_auto)
+def test_with_auto_refresh_no_boot_unit_is_installed(first):
+    r, tmp = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (tmp / "units" / BOOT).exists()
+
+
+def _stray(tmp):
+    c = main_case(tmp, live="cdiVersion: 0.5.0\n")
+    (tmp / "etc" / "cdi" / "nvidia.yaml.new.yaml").write_text("cdiVersion: 0.5.0\n")
+    return c
+
+
+@first_run(_stray)
+def test_a_second_spec_in_the_cdi_directory_fails_the_run(first):
+    r, _ = first
+    assert r.returncode != 0 and "sit beside" in r.stdout + r.stderr
+
+
+def test_the_boot_unit_waits_for_the_nodes_instead_of_loading_modules():
+    text = (ROLE_DIR / "templates" / "hnx-nvidia-cdi.service.j2").read_text()
+    assert "nvidia-uvm" in text and "nvidiactl" in text and "sleep 1" in text
+    assert "docker.service" in text.split("[Service]")[0]
