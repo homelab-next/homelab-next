@@ -5,7 +5,7 @@
 - name: Install the boot-time CDI spec unit
   ansible.builtin.template:
     src: hnx-nvidia-cdi.service.j2
-    dest: "{{ nvidia_container_toolkit_unit_dir }}/{{ nvidia_container_toolkit_boot_unit }}"
+    dest: "{{ nvidia_container_toolkit_unit_dir }}/hnx-nvidia-cdi.service"
     mode: "0644"
 
 - name: Read whether the boot-time unit is enabled
