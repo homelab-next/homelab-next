@@ -25,7 +25,7 @@ tabs, CR and LF ignored; `white` is `clear`. A `Label` compares only with anothe
 source; datasets declare theirs under [`data:`](data.md#data-and-lifecycle-safety). The lake stores the
 label per row: every core OCSF table has a `tlp` column from 1.1, a write without a canonical label
 is refused, and `homelabnext.lake.tables.row_label` reads a stored row's label (`red` unless it
-is one of the canonical spellings). The log pipeline tags each event from its source's declaration
+is one of the canonical spellings). A lake table's own declaration (`platform/lake_table`, `tlp:`) is the most restrictive label a row may carry, `red` when absent: metadata for the reader of the table, since each row still carries its writer's label, and a dataset of the owner that names the table (`kind: lake-table`) is refused when it is labelled above it. A status source declares the label of what it reads into the hub the same way (`tlp:` on a `status_sources` entry, service schema 2.16, `red` when absent), and `hnx status views check` refuses a released view or export whose release transform takes a looser input than a source it can show. The log pipeline tags each event from its source's declaration
 (`homelabnext.logpipeline.tlp_labels`, the `hnx_tlp` label), and `hnx modules tlp-backfill`
 (`homelabnext.lake.backfill`) writes the statements that label rows stored before the column;
 running them, and loading the generated `lake-access.json` into the query engine, are the

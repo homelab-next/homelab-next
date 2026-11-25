@@ -4,6 +4,7 @@ id: table:soc.raw_archive
 owner: lake-writer
 schema: roles/lake_writer/files/schemas/raw_archive.v1.json
 retention_days: 90
+tlp: red
 maintenance:
   compact: true
   expire_snapshots_days: 7

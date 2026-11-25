@@ -243,7 +243,50 @@ def views_problems(
             out += _unregistered(f"view {v['id']}: external", v["external"], registry)
     if doc["shell"].get("act_via"):
         out += _unregistered("shell.act_via", doc["shell"]["act_via"], registry)
-    return out + ceiling_problems(doc, releases)
+    problems = ceiling_problems(doc, releases)
+    if specs is not None:
+        problems += source_label_problems(doc, specs, releases)
+    return out + problems
+
+
+def source_label_problems(
+    doc: Mapping[str, Any],
+    specs: Sequence[SourceSpec],
+    releases: release.Releases | None = None,
+) -> list[str]:
+    """ADR-0033 decisions 3 and 7 for the sources: a release transform names the label of the
+    data it takes in (``input``), so a released view or export that can show a source labelled
+    above that input is refused (a source's ``tlp`` is its registry declaration, ``red`` when
+    absent).  A view reaches the sources it selects (all of them with no ``select``); the exports
+    reach them all."""
+    if releases is None:
+        try:
+            releases = release.registry()
+        except release.ReleaseError as exc:
+            return [str(exc)]
+    out: list[str] = []
+
+    def check(where: str, name: str, reached: Sequence[SourceSpec]) -> None:
+        for t in releases.serving(name):
+            out.extend(
+                f"{where}: release transform {t.id} takes input {t.input}, below source "
+                f"{s.id}'s TLP label {tlp.parse(s.tlp)}"
+                for s in reached
+                if not tlp.allows(t.input, tlp.parse(s.tlp))
+            )
+
+    for v in doc["menu"]:
+        panel = v.get("panel")
+        if v.get("group") == PRIVATE_GROUP or panel not in release.VIEWS:
+            continue
+        sel = v.get("select") or {}
+        names, mods = set(sel.get("sources", ())), set(sel.get("modules", ()))
+        reached = [s for s in specs if (s.id in names or s.module in mods)] if sel else list(specs)
+        check(f"view {v['id']}", panel, reached)
+    for name in release.EXPORTS:
+        if name in (doc.get("exports") or {}):
+            check(f"exports.{name}", name, list(specs))
+    return out
 
 
 def ceiling_problems(doc: Mapping[str, Any], releases: release.Releases | None = None) -> list[str]:

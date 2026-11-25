@@ -4,6 +4,7 @@ id: table:external_collector.sessions
 owner: external-collector
 schema_id: https://schemas.example.internal/homelabnext/ocsf/network_activity/1.0
 retention_days: 180
+tlp: red
 maintenance:
   compact: true
   expire_snapshots_days: 7
