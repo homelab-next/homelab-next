@@ -65,6 +65,13 @@ egress:
   - host: worker
     to: [internet]
     purpose: collection fetches the articles a feed links and the public vulnerability and social sources; the jobs never publish (the publishing module owns that egress)
+  # a per-site OPTION (docs/modules/egress.md, `optional: true`): the collect stage's web search through the lab's metasearch service
+  # (the app's SEARXNG_URL); a site that selects one opts in with `grants.egress.cti-pipeline.worker: [..., svc:web-search]`, a site
+  # that grants nothing keeps the app's own internet search
+  - host: worker
+    to: [svc:web-search]
+    optional: true
+    purpose: the collect stage's web search through the lab's metasearch service (the app's SEARXNG_URL), when the site selects one and grants it
 contributes:
   roles:
     - file: roles/cti_pipeline
