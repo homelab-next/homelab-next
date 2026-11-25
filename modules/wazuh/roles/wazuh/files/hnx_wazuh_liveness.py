@@ -29,7 +29,14 @@ import tempfile
 import time
 from pathlib import Path
 
-DAEMONS = ("wazuh-analysisd", "wazuh-remoted", "wazuh-authd", "wazuh-db", "wazuh-modulesd", "wazuh-monitord")
+DAEMONS = (
+    "wazuh-analysisd",
+    "wazuh-remoted",
+    "wazuh-authd",
+    "wazuh-db",
+    "wazuh-modulesd",
+    "wazuh-monitord",
+)
 API_DAEMON = "wazuh_apid[.]py"  # a python process, matched on its command line
 ABSENT_AGE = 315360000  # a missing stream is ten years old, so one threshold covers it
 
@@ -74,7 +81,9 @@ def daemon_up(compose_file: str, name: str, full: bool, timeout: int = 20) -> bo
     flag = "-f" if full else "-x"
     argv = ["docker", "compose", "-f", compose_file, "exec", "-T", "manager", "pgrep", flag, name]
     try:
-        return subprocess.run(argv, capture_output=True, timeout=timeout, check=False).returncode == 0
+        return (
+            subprocess.run(argv, capture_output=True, timeout=timeout, check=False).returncode == 0
+        )
     except (OSError, subprocess.SubprocessError):
         return False
 
