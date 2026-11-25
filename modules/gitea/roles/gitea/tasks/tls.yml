@@ -37,9 +37,9 @@
 
 - name: Write the trust bundle (the host's public roots, then the lab CA)
   ansible.builtin.copy:
-    content: >-
-      {{ (gitea_system_ca.content | b64decode | trim) ~ '\n'
-         ~ (lookup('hnx_secret', gitea_ca_ref) | trim) ~ '\n' }}
+    # double-quoted, as the other certificate files: YAML turns each \n into a real line break (a
+    # folded scalar would leave a literal backslash-n and fuse the two certificates' PEM lines)
+    content: "{{ (gitea_system_ca.content | b64decode | trim) ~ '\n' ~ (lookup('hnx_secret', gitea_ca_ref) | trim) ~ '\n' }}"
     dest: "{{ gitea_dir }}/tls/ca-bundle.pem"
     owner: "{{ gitea_owner }}"
     group: "{{ gitea_gid | int }}"
