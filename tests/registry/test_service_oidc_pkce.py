@@ -37,7 +37,10 @@ def _clients(doc) -> dict:
 
 def test_the_exempt_client_requires_no_code_challenge_and_keeps_its_exact_redirects():
     forge = _clients(EXAMPLE)["forge"]
-    assert "pkce.code.challenge.method" not in forge["attributes"]
+    # an EMPTY method, not an absent key: the IdP merges a client's attributes on update and keeps a
+    # key the update leaves out, so on a client that already required S256 only "" turns it off
+    # (and an absent key would show as a live extra on every converge: never idempotent)
+    assert forge["attributes"]["pkce.code.challenge.method"] == ""
     assert forge["publicClient"] is False and forge["clientAuthenticatorType"] == "client-secret"
     assert forge["redirectUris"] == [CALLBACK]
 

@@ -1123,7 +1123,9 @@ def _client(
     thing that binds the code to the browser that asked for it."""
     env = secret_env_name(client_secret_ref(name))
     out = {
-        "attributes": {"pkce.code.challenge.method": "S256"} if pkce else {},
+        # an exempt client gets an EMPTY method, never an absent key: the IdP merges attributes on
+        # update, so leaving the key out would keep a previous S256 on a client that had it
+        "attributes": {"pkce.code.challenge.method": "S256" if pkce else ""},
         "clientAuthenticatorType": "client-secret",
         "clientId": name,
         "defaultClientScopes": list(DEFAULT_CLIENT_SCOPES),
