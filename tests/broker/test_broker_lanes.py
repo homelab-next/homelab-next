@@ -494,6 +494,7 @@ def test_lane_usage_shows_each_actors_share_of_a_shared_lane(tmp_path):
     assert row["actors"] == {ACTOR: {"files": 1, "bytes": 1, "used": 0.5, "warn": False}}
 
 
+@pytest.mark.static
 def test_the_broker_matches_profiles_with_the_schemas_profile_id():
     """The profile pattern was written out twice in the broker (and once more in the schema);
     the one copy left must stay the schema's ``profile_id``."""

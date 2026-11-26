@@ -249,6 +249,7 @@ def test_provider_for_says_an_incumbent_slot_is_served_outside_modules(tree):
         provider_for(fixture(), tree.mods, "cap:cases")
 
 
+@pytest.mark.static
 def test_hnx_modules_providers_lists_the_incumbents(capsys):
     argv = ["providers", "--root", str(ROOT), "--examples", "--site", str(FIXTURE)]
     assert mcli.main([*argv, "--json"]) == 0
@@ -433,6 +434,7 @@ def test_a_pass_through_next_to_an_incumbent_says_its_formats_are_undeclared(tre
 # ----------------------------------------------------------------------------- swaps and notes
 
 
+@pytest.mark.static
 def test_a_swap_s_incoming_module_may_require_an_incumbent_slot():
     """other-object-store requires cap:secrets; on a site where secrets is an incumbent the swap
     check counts it as selected, as the site rules do."""

@@ -492,6 +492,7 @@ def test_stale_temp_files_of_a_crashed_compaction_are_swept(tmp_path):
     assert not stale.exists()
 
 
+@pytest.mark.perf
 def test_parking_costs_one_record_not_a_rewrite_of_the_queue(tmp_path):
     import time
 

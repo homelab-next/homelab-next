@@ -199,6 +199,7 @@ def test_a_live_entry_may_not_reuse_a_retired_id(tmp_path):
 CHECKLIST_ROW = re.compile(r"^\| ([A-Z]-\d{2}) \| ", re.M)
 
 
+@pytest.mark.static
 def test_every_checklist_row_id_is_free_for_its_own_criterion():
     """ADR-0019: a criterion's id IS its checklist row's id, so no live checklist row may sit
     under a `retired:` tombstone (that would make automating the row a duplicate)."""

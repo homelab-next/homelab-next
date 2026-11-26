@@ -103,6 +103,7 @@ def _reason(fn):
 # -- the conformance suite ------------------------------------------------------------------------
 
 
+@pytest.mark.static
 def test_reference_service_passes_the_token_suite():
     run = run_capability("broker-tokens", "broker-reference", ROOT)
     assert run.error is None and run.too_few is None
@@ -111,6 +112,7 @@ def test_reference_service_passes_the_token_suite():
     ]
 
 
+@pytest.mark.static
 def test_the_token_suite_catches_every_mutant():
     runs = mutation_runs("broker-tokens", ROOT)
     assert len(runs) == 14 and all(m.detected for m in runs), [m.name for m in runs]

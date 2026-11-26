@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 from novelty_support import AS_OF, SITE, SPEC, net, rows
 
 from homelabnext.lake import FakeLake, load_schemas
@@ -62,6 +63,7 @@ def test_an_entity_noisy_in_both_windows_is_high_cardinality_once_and_not_a_sign
     assert corroborate(as_rows) == []
 
 
+@pytest.mark.static
 def test_the_documented_signal_set_is_corroborate_signals():
     text = (REPO / "docs" / "novelty.md").read_text(encoding="utf-8")
     section = text.split("## Corroboration", 1)[1].split("\n## ", 1)[0]

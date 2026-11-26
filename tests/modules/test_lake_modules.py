@@ -148,6 +148,7 @@ def test_the_trino_retention_values_are_the_lakes():
     assert "boot" not in t["trino_maintenance_schedule"].lower()
 
 
+@pytest.mark.static
 def test_the_timer_is_a_scheduler_job_of_the_role_that_installs_it():
     m = manifest("trino")
     assert m["contributes"]["scheduler_jobs"] == [{"timer": "timer:trino/lake-maintenance"}]
@@ -167,6 +168,7 @@ def test_the_timer_is_a_scheduler_job_of_the_role_that_installs_it():
     ]
 
 
+@pytest.mark.static
 def test_nothing_in_the_modules_names_the_operators_workstation():
     for mid in MODULES:
         for f in (ROOT / "modules" / mid).rglob("*"):
@@ -253,6 +255,7 @@ def _args(ov: Path) -> list[str]:
             "--mcp-catalog", str(ROOT / "examples" / "mcp")]  # fmt: skip
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out

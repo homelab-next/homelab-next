@@ -137,6 +137,7 @@ def _args(ov: Path) -> list[str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == [ROLE]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -159,6 +160,7 @@ def test_the_rows_are_internal_with_the_products_own_accounts_and_no_public_rout
     assert "public_hostname" not in row and "version" not in row and "roles" not in row
 
 
+@pytest.mark.static
 def test_the_secrets_are_the_five_the_role_reads_and_nothing_else():
     manifest = ld.load_yaml(MODULE / "module.yml")
     declared = sorted(c["secret"] for c in manifest["credentials"])
@@ -174,6 +176,7 @@ def test_the_secrets_are_the_five_the_role_reads_and_nothing_else():
     assert sorted(set(re.findall(r"secret:[a-z0-9/_.-]+", text))) == declared
 
 
+@pytest.mark.static
 def test_the_images_are_pinned_and_are_one_release_the_products_version():
     d = defaults()
     version = ld.load_yaml(MODULE / "module.yml")["product"]["version"]
@@ -186,6 +189,7 @@ def test_the_images_are_pinned_and_are_one_release_the_products_version():
     assert agent[f"{ROLE}_agent_version"] == version
 
 
+@pytest.mark.static
 def test_the_slots_are_registered_provisional_and_classified():
     slots = ld.load_yaml(ROOT / "examples" / "modules" / "slots.yml")["slots"]
     for slot in SLOTS:
@@ -193,6 +197,7 @@ def test_the_slots_are_registered_provisional_and_classified():
     assert slots["hot-index"]["export_formats"] == ["jsonl"]
 
 
+@pytest.mark.static
 def test_pin_freshness_watches_the_three_images():
     sys.path.insert(0, str(ROOT / "tools"))
     try:
@@ -369,6 +374,7 @@ def test_the_indexer_heap_is_half_its_container_limit_by_default():
     assert gib(d[P + "indexer_heap"]) * 2 == gib(d[P + "indexer_mem_limit"])
 
 
+@pytest.mark.static
 def test_the_sigma_lane_is_proved_and_compiled_on_the_controller_and_loads_after_the_native_files():
     """docs/detections.md, "The Sigma lane on the engine": each root is linted, its fixtures run
     (reference and compiled), its det map checked, then compiled; a bundle that cannot be built fails

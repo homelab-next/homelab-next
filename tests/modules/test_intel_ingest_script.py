@@ -271,6 +271,7 @@ def test_storm_quote_escapes_double_quotes_and_backslashes():
     assert mod.storm_quote(r'a\b"c') == r'"a\\b\"c"'
 
 
+@pytest.mark.static
 def test_attribute_to_storm_line_v4_vs_v6_vs_cidr():
     """ip-src and ip-dst values from the platform's feeds are a mixed bag: bare v4, bare v6 and CIDR
     ranges all show up. The v4 form rejects anything non-dotted-quad, and a reject inside a chained

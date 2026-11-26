@@ -85,9 +85,11 @@ def test_make_test_leaves_the_floor_to_the_coverage_target():
     args = make_pytest_args()
     assert "tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor" in args
     # the tests of tools/experimental.yml run in `make experimental`, never here
-    assert args[args.index("-m") + 1] == "not live and not experimental"
+    # and the static rules (precheck) and the wall-clock perf tests (nightly) run elsewhere
+    assert args[args.index("-m") + 1] == "not live and not experimental and not static and not perf"
 
 
+@pytest.mark.static
 def test_make_check_runs_the_coverage_floor_like_ci():
     text = (ROOT / "Makefile").read_text()
     prereqs = {w for m in re.finditer(r"^check:(.*)$", text, re.M) for w in m[1].split()}
@@ -154,10 +156,11 @@ def _as_make_runs_it(cmd: str) -> str:
     return re.sub(r' --(?:base|shard|shard-report|dist) (?:"[^"]*"|\S+)', "", cmd)
 
 
-def _ci_commands(ci) -> set[str]:
+def _ci_commands(ci, text: str | None = None) -> set[str]:
     """Every ``python ...`` command a required CI job runs, and those of each ``make <target>``
-    it calls (the `experimental` job blocks nothing and is left out)."""
-    text = (ROOT / "Makefile").read_text()
+    it calls, as ``text`` (default: the Makefile) defines it (the `experimental` job blocks nothing
+    and is left out)."""
+    text = (ROOT / "Makefile").read_text() if text is None else text
     out: set[str] = set()
     for name, job in ci["jobs"].items():
         if name == "experimental":
@@ -168,13 +171,17 @@ def _ci_commands(ci) -> set[str]:
             run = re.sub(r"^(\s*)hnx ", r"\1python -m homelabnext.cli ", run, flags=re.M)
             out |= {_as_make_runs_it(c) for c in _commands(run.splitlines())}
             for target in re.findall(r"^\s*make ([a-z][\w-]*)", run, re.M):
-                rules = make_target_lines(text, target).values()
+                rules = list(make_target_lines(text, target).values())
+                # tools/precheck.sh runs `make precheck-run` (in parallel): its targets are what
+                # `make precheck` runs
+                if any("tools/precheck.sh" in line for lines in rules for line in lines):
+                    rules += make_target_lines(text, "precheck-run").values()
                 out |= _commands(line for lines in rules for line in lines)
     return out
 
 
 def check_parity_problems(make_text: str, ci: dict) -> list[str]:
-    ci_cmds = _ci_commands(ci)
+    ci_cmds = _ci_commands(ci, make_text)
     out = []
     for target, lines in sorted(make_target_lines(make_text, "check").items()):
         for cmd in sorted(_commands(lines)):
@@ -183,24 +190,35 @@ def check_parity_problems(make_text: str, ci: dict) -> list[str]:
     return out
 
 
+@pytest.mark.static
 def test_every_command_make_check_runs_also_runs_in_a_required_ci_job():
     ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     assert check_parity_problems((ROOT / "Makefile").read_text(), ci) == []
 
 
+@pytest.mark.static
 def test_a_gate_only_make_check_runs_is_caught():
     text = (ROOT / "Makefile").read_text()
     ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    added = text.replace(
-        "\t$(PY) -m homelabnext.cli graph check\n",
-        "\t$(PY) -m homelabnext.cli graph check\n\t$(PY) -m homelabnext.cli graph check --strict\n",
+    # a gate of `check` that precheck (CI's precheck job: `make precheck`) does not run
+    added = (
+        text + "\ncheck: extra-gate\nextra-gate:\n\t$(PY) -m homelabnext.cli graph check --strict\n"
     )
-    assert added != text
     assert check_parity_problems(added, ci) == [
-        "make gates: CI never runs `python -m homelabnext.cli graph check --strict`"
+        "make extra-gate: CI never runs `python -m homelabnext.cli graph check --strict`"
     ]
-    for step in ci["jobs"]["schemas"]["steps"]:
-        if "graph check" in str(step.get("run", "")):
+    # a gate taken out of precheck-run
+    dropped = text.replace(
+        "precheck-run: lint component-tests hermetic-lint schemas gates ",
+        "precheck-run: lint component-tests hermetic-lint schemas ",
+    )
+    assert dropped != text
+    assert "make gates: CI never runs `python -m homelabnext.cli graph check`" in (
+        check_parity_problems(dropped, ci)
+    )
+    # and a CI that no longer runs make precheck
+    for step in ci["jobs"]["precheck"]["steps"]:
+        if "make precheck" in str(step.get("run", "")):
             step["run"] = "true"
     assert "make gates: CI never runs `python -m homelabnext.cli graph check`" in (
         check_parity_problems(text, ci)

@@ -66,5 +66,6 @@ def test_a_capability_name_outside_the_grammar_is_refused(tmp_path):
         declared_capabilities(tmp_path)
 
 
+@pytest.mark.static
 def test_the_tree_s_capabilities_file_validates():
     assert "secrets" in declared_capabilities(ROOT)

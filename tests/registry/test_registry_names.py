@@ -31,6 +31,7 @@ def test_orchestration_rows_are_the_orchestrator_contract_only(path):
     assert wrong == {}, f"{path}: orchestration is the agent-orchestrator contract; use automation"
 
 
+@pytest.mark.static
 def test_the_lab_topology_soar_is_an_automation_row():
     doc = yaml.safe_load((ROOT / "examples/lab-topology/services.yml").read_text(encoding="utf-8"))
     row = doc["services"]["automation"]
@@ -42,6 +43,7 @@ def test_the_lab_topology_soar_is_an_automation_row():
     assert guest["capability"] == "cap:automation"
 
 
+@pytest.mark.static
 def test_the_vocabulary_names_the_automation_slot_s_product_and_no_orchestration_product():
     doc = yaml.safe_load((ROOT / "tools/product_names.yml").read_text(encoding="utf-8"))
     whys = [str(e.get("why", "")) for e in doc["products"] if isinstance(e, dict)]

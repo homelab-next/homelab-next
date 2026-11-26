@@ -11,6 +11,7 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.lake import cli as lake_cli
@@ -45,11 +46,13 @@ def test_the_module_is_a_feature_that_requires_slots_and_provides_none():
     assert DOC["egress"] == "none"
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean_with_it(capsys):
     assert mcli.main(["check", "--root", str(ROOT)]) == 0
     assert " 0 problem(s)" in capsys.readouterr().out
 
 
+@pytest.mark.static
 def test_the_forced_command_is_the_catalog_records_launch():
     v = _vars()
     command = shlex.split(_expand(v["lake_mcp_command"], v))
@@ -71,6 +74,7 @@ def test_the_role_reads_the_modules_declared_secret():
     assert refs["reader_password"].startswith("secret:" + DOC["id"] + "/")
 
 
+@pytest.mark.static
 def test_the_readme_names_the_layers_and_the_placement():
     text = (MODULE / "README.md").read_text()
     for needle in ("restrict,command=", "select_only", "read-only", "--check", "mcp` extra"):

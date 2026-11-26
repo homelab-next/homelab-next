@@ -268,6 +268,7 @@ def test_peer_names_prefer_the_sans_over_the_cn():
     assert peer_names(None) == frozenset()
 
 
+@pytest.mark.static
 def test_the_cli_refuses_a_partial_tls_set_and_a_remote_plain_bind(capsys):
     from homelabnext.status.cli import main
 

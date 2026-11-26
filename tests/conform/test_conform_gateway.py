@@ -249,6 +249,7 @@ def test_adapter_configuration_errors(monkeypatch, tmp_path):
         llm_gateway.make(roles=str(tmp_path / "missing.json"))
 
 
+@pytest.mark.static
 def test_target_files_name_no_url_and_no_literal_secret():
     for path in TARGETS.glob("inference-gateway*.yml"):
         text = path.read_text()
@@ -426,6 +427,7 @@ def test_the_tlp_admit_and_turn_records_features_need_their_configuration(monkey
         srv.stop()
 
 
+@pytest.mark.static
 def test_the_own_gateway_target_agrees_with_the_conformance_gateway_config():
     """The own gateway's target names keys and roles of the rendered conformance config, each of
     the kind its check needs: the plain client's roles stay in the lab (it sends no X-HNX-TLP)."""
@@ -600,6 +602,7 @@ def _documented_fake_models() -> list[str]:
 DOCUMENTED_FAKE_MODELS = _documented_fake_models()
 
 
+@pytest.mark.static
 def test_the_documented_fake_serves_every_conformance_deployment_but_the_dead_one():
     doc = json.loads((CONFORMANCE / "gateway" / "gateway.json").read_text())
     want = {

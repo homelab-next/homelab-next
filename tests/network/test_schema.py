@@ -46,6 +46,7 @@ def test_example_site_validates(site_path):
     assert schema_problems(load_site(site_path)) == []
 
 
+@pytest.mark.static
 def test_every_negative_has_an_expectation():
     on_disk = {p.name[len("site.") : -len(".yml")] for p in NEG.glob("site.*.yml")}
     assert on_disk == set(EXPECT)

@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when a tracked source, config or template file has no SPDX-License-Identifier in its first five lines.
 #   owner: maintainers
-#   trigger: [ci:ci/lint, make:spdx, pre-commit:spdx-header]
+#   trigger: [make:spdx, pre-commit:spdx-header]
 #   invariant: [Q-09]
 #   inputs: the tracked tree (git ls-files), or the files named on the command line
 #   outputs: one line per file without the header

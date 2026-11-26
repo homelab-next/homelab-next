@@ -23,6 +23,7 @@ def test_version_is_1_10_and_frozen():
     assert sc.is_additive(FROZEN_19, CURRENT) == []
 
 
+@pytest.mark.static
 def test_a_1_10_document_validates_against_1_10_only():
     doc = yaml.safe_load(FIXTURE.read_text())
     assert sc.errors_for(CURRENT, doc, REG) == []

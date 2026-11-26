@@ -96,6 +96,7 @@ def role_vars() -> dict:
 # ----------------------------------------------------------------------------- the manifest
 
 
+@pytest.mark.static
 def test_the_module_fills_the_dataflow_slot_with_the_shared_probe():
     m = manifest()
     assert m["kind"] == "provider"
@@ -122,6 +123,7 @@ def test_the_module_fills_the_dataflow_slot_with_the_shared_probe():
     assert m["lifecycle"]["remove"]["export_first"] is True
 
 
+@pytest.mark.static
 def test_the_row_is_https_on_its_own_port_and_its_liveness_is_a_refusal():
     row = ld.load_yaml(MODULE / "registry" / "services.yml")["services"][SLOT]
     assert row["capability"] == SLOT and row["impl"] == manifest()["product"]["name"]
@@ -167,6 +169,7 @@ def test_every_secret_is_in_the_modules_own_namespace_and_the_role_reads_exactly
             assert re.fullmatch(r"secret:[a-z0-9][a-z0-9/_.-]*", v), k
 
 
+@pytest.mark.static
 def test_the_data_root_holds_every_directory_the_service_writes():
     text = (ROLE / "tasks" / "app.yml").read_text()
     for part in ("conf", "state", "flowfile_repository", "content_repository",
@@ -177,6 +180,7 @@ def test_the_data_root_holds_every_directory_the_service_writes():
     assert set(mounts) == {"{{ " + P + "_dir }}", "{{ " + P + "_data_root }}"}
 
 
+@pytest.mark.static
 def test_nothing_in_the_module_names_the_operators_workstation():
     for f in MODULE.rglob("*"):
         if f.is_file():
@@ -203,6 +207,7 @@ def _driver_fetch_problems(text: str) -> list[str]:
     return out
 
 
+@pytest.mark.static
 def test_the_driver_download_is_verified_by_the_pinned_sha256():
     text = (ROLE / "tasks" / "drivers.yml").read_text()
     assert _driver_fetch_problems(text) == []
@@ -218,6 +223,7 @@ def test_the_driver_download_is_verified_by_the_pinned_sha256():
     )
 
 
+@pytest.mark.static
 def test_the_smoke_flow_is_a_clean_export_with_no_instance_identity_and_no_secret():
     flow = json.loads((ROLE / "files" / "hnx-smoke.json").read_text())
     assert flow["flowContents"]["name"] == "hnx-smoke"
@@ -313,6 +319,7 @@ def _args(ov: Path) -> list[str]:
             "--mcp-catalog", str(ROOT / "examples" / "mcp")]  # fmt: skip
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -513,6 +520,7 @@ def test_the_probe_never_sends_a_header_a_newline_could_split(monkeypatch):
 # ----------------------------------------------------------------------------- the events contract
 
 
+@pytest.mark.static
 def test_the_documented_event_envelope_is_the_repositorys_own():
     readme = (MODULE / "README.md").read_text()
     types = [f"{MID}.flow.completed", f"{MID}.flow.failed", "cti.feed.batch"]

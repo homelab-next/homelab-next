@@ -135,6 +135,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 
 
 # ----------------------------------------------------------------------------- the public tree
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -143,6 +144,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role_and_the_code_tree_only_its_package():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["vector"]
     assert not (MODULE / "python").exists()  # the code ships in the role, where its caller is found
@@ -187,6 +189,7 @@ def test_the_aggregator_image_is_the_product_version():
     assert image.split("@")[0].rsplit(":", 1)[1].startswith(str(manifest()["product"]["version"]))
 
 
+@pytest.mark.static
 def test_pin_freshness_watches_both_images():
     sys.path.insert(0, str(ROOT / "tools"))
     try:
@@ -247,6 +250,7 @@ def test_the_slot_cannot_be_both_the_module_and_an_incumbent(tmp_path, capsys):
 
 
 # ----------------------------------------------------------------------------- conformance
+@pytest.mark.static
 def test_the_target_binds_the_modules_adapter_and_the_suite_passes_through_it():
     target = load_target(str(MODULE / "conformance" / "target.yml"), root=ROOT)
     binding = target.binding("log-pipeline")

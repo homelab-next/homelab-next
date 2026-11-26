@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.generators import generate
@@ -17,6 +18,7 @@ EXAMPLE = ROOT / "examples" / "services.yml"
 REG = load(EXAMPLE)
 
 
+@pytest.mark.static
 def test_scheme_and_basic_auth_render_file_paths_never_values():
     out = generate(REG, ["prometheus"])
     prom = yaml.safe_load(out["prometheus"]["prometheus/scrape_configs.yml"])
@@ -43,6 +45,7 @@ def test_scheme_and_basic_auth_render_file_paths_never_values():
     ]
 
 
+@pytest.mark.static
 def test_prometheus_bearer_auth_uses_a_credentials_file():
     doc = yaml.safe_load(EXAMPLE.read_text())
     doc["services"]["lake-query"]["metrics"]["auth"] = {

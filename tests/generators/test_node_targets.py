@@ -30,6 +30,7 @@ def test_no_option_renders_no_target_list():
     assert TARGETS not in generate(REG, ["prometheus"])["prometheus"]
 
 
+@pytest.mark.static
 def test_every_registry_host_is_a_target_on_the_port():
     entries = yaml.safe_load(_render({"port": 9100})[TARGETS])
     assert [e["labels"]["host"] for e in entries] == sorted(REG.hosts)
@@ -39,6 +40,7 @@ def test_every_registry_host_is_a_target_on_the_port():
         assert e["labels"] == {"host": e["labels"]["host"], "role": host.role, "zone": host.zone}
 
 
+@pytest.mark.static
 def test_an_excluded_host_is_left_out_and_the_rest_unchanged():
     gone = sorted(REG.hosts)[0]
     entries = yaml.safe_load(_render({"port": 9100, "exclude": [gone]})[TARGETS])

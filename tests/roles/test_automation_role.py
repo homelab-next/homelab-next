@@ -538,6 +538,7 @@ def test_a_datastore_key_that_is_not_the_generated_json_is_refused(first):
     assert r.returncode != 0 and not (tmp_path / "data" / "keys").exists()
 
 
+@pytest.mark.static
 def test_the_memory_budget_fits_the_footprint_the_manifest_declares():
     limits = DEFAULTS[v("mem_limit")]
     assert sorted(limits) == sorted(SERVICES)
@@ -605,6 +606,7 @@ def _render(template: str, **vars_) -> str:
     return env.from_string((ROLE_DIR / "templates" / template).read_text()).render(**vars_)
 
 
+@pytest.mark.static
 def test_the_broker_forward_pins_the_host_key_and_binds_a_group_owned_socket():
     fixed = yaml.safe_load((ROLE_DIR / "vars" / "main.yml").read_text())
     unit = _render(
@@ -972,6 +974,7 @@ def test_role_lint_passes_the_role():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+@pytest.mark.static
 def test_the_runner_compat_lock_pins_every_package_by_hash():
     lines = (ROLE_DIR / "files" / "runtime-compat.txt").read_text().splitlines()
     pins = [ln for ln in lines if ln and not ln.startswith(("#", " "))]
@@ -983,6 +986,7 @@ def test_the_runner_compat_lock_pins_every_package_by_hash():
     assert "orjson" in "".join(pins)  # the one the python runner's wrapper dies without
 
 
+@pytest.mark.static
 def test_the_arg_specs_cover_every_default():
     spec = yaml.safe_load((ROLE_DIR / "meta" / "argument_specs.yml").read_text())["argument_specs"]
     for hook in ("main", "health", "readiness", "backup", "export", "restore", "upgrade"):

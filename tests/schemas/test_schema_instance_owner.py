@@ -6,11 +6,13 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
 import schema_check as sc
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.static
 def test_a_label_with_a_dot_belongs_to_its_schema():
     assert sc.instance_owner("customization.full.maintained.json", ["customization"]) == (
         "customization"
@@ -26,6 +28,7 @@ def test_the_longest_stem_owns_a_file_when_stems_nest():
     assert sc.instance_owner("agent.job.json", stems) is None  # no label
 
 
+@pytest.mark.static
 def test_no_file_in_the_repository_is_owned_by_no_schema():
     assert sc.orphan_instances(ROOT) == []
 
@@ -58,6 +61,7 @@ def test_a_file_no_schema_owns_is_an_error(tmp_path):
 # ----- a draft's reason may not claim nothing reads it while runtime code does -----
 
 
+@pytest.mark.static
 def test_the_drafts_runtime_code_reads_say_so():
     assert sc.draft_claims(ROOT) == []
 

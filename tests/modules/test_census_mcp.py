@@ -381,6 +381,7 @@ def test_the_census_accepts_every_name_an_mcp_instance_can_expand_to(tmp_path):
     jsonschema.Draft202012Validator(schema).validate(inv)
 
 
+@pytest.mark.static
 def test_the_mcp_name_shape_is_the_manifest_instance_pattern():
     """Every name the manifest's instance pattern admits (placeholders filled) passes the census
     shape and length, so the two cannot drift apart again."""

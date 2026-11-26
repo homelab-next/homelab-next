@@ -38,6 +38,7 @@ def doc(**extra):
     return {**base, **extra}
 
 
+@pytest.mark.static
 def test_version_2_1_is_frozen_and_the_current_one_additive_over_it_and_2_0():
     # 2.2 added `summary` (ADR-0032), 2.3 `match`; 2.1's rule on `lessons` stands unchanged
     assert CURRENT["$id"].endswith("/registers/runbook/2.3")
@@ -74,6 +75,7 @@ def test_a_2_0_document_stays_readable():
     assert sc.errors_for(FROZEN_20, doc(lessons=[LESSON]), REG) != []
 
 
+@pytest.mark.static
 def test_the_shipped_example_links_its_lessons_by_uid():
     ex = json.loads((ROOT / "schemas/registers/examples/runbook.valid.json").read_text())
     assert ex["lessons"] and all(is_uid(x) for x in ex["lessons"])

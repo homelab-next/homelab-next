@@ -141,6 +141,7 @@ def test_the_template_header_renders_nothing(monkeypatch):
     assert seen >= 2 * 31
 
 
+@pytest.mark.static
 def test_the_pre_commit_hook_checks_the_same_suffixes():
     config = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text())
     hooks = [h for repo in config["repos"] for h in repo["hooks"] if h["id"] == "spdx-header"]

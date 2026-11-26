@@ -72,10 +72,12 @@ def test_each_negative_is_refused_for_its_reason(name):
     ]
 
 
+@pytest.mark.static
 def test_every_negative_has_its_reason():
     assert {p.name.removesuffix(".json") for p in (DIR / "negative").glob("*.json")} == set(WHY)
 
 
+@pytest.mark.static
 def test_the_drafts_name_their_adr():
     for schema in SCHEMAS:
         assert "ADR-0051" in json.loads(schema.read_text())["x-draft"], schema.name
@@ -94,6 +96,7 @@ def test_the_launcher_refuses_a_call_record_that_is_neither_sized_nor_unsized(na
     assert records == [] and "not a usage record" in why, (records, why)
 
 
+@pytest.mark.static
 def test_the_grants_env_deny_list_is_the_catalogs():
     """A stdio server's env in the grants file refuses exactly what the MCP catalog refuses."""
     from homelabnext.mcp.servers import DENIED_ENV

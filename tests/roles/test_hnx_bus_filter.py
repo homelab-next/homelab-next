@@ -403,6 +403,7 @@ def test_a_push_consumer_in_jsz_is_reported():
     assert bus.hnx_bus_push_consumers({}) == [] and bus.hnx_bus_push_consumers(None) == []
 
 
+@pytest.mark.static
 def test_the_labs_grants_are_within_the_ceiling():
     """The lab's NATS users (compose/lab-in-a-box/config/nats/nats.conf, the grants docs/broker.md
     quotes) pass the role's check: the role refuses nothing the lab needs."""
@@ -427,6 +428,7 @@ def test_the_labs_grants_are_within_the_ceiling():
         assert got == [], (name, got)
 
 
+@pytest.mark.static
 def test_the_labs_accounts_are_what_the_role_renders():
     """The lab's bus (config/nats/nats.conf) is the role's account split, account for account:
     the role's filter, given the lab's users, renders exactly the lab's HNX and client accounts

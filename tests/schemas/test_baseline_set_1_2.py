@@ -32,6 +32,7 @@ def test_1_2_documents_validate_against_1_2_only(path):
     assert sc.errors_for(FROZEN_11, doc, REG) != []
 
 
+@pytest.mark.static
 def test_a_1_1_document_is_still_a_1_2_document():
     for p in sorted((Path(__file__).parent / "fixtures").glob("baseline_set.1_1.*.yml")):
         assert sc.errors_for(CURRENT, yaml.safe_load(p.read_text()), REG) == [], p.name

@@ -7,16 +7,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from homelabnext.schemas import __main__ as gen
 from homelabnext.schemas import module_negatives
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.static
 def test_committed_files_match_the_generators():
     assert gen.stale(ROOT) == []
 
 
+@pytest.mark.static
 def test_no_committed_negative_or_example_is_left_without_a_generator():
     assert gen.orphans(ROOT) == []
 
@@ -40,6 +44,7 @@ def test_a_wrong_root_is_a_usage_error(tmp_path):
     assert gen.main(["--root", str(tmp_path), "--check"]) == 2
 
 
+@pytest.mark.static
 def test_every_negative_breaks_exactly_the_example_it_names():
     out = module_negatives.render(ROOT)
     for name in module_negatives.NEGATIVES:

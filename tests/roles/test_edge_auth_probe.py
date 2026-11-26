@@ -36,6 +36,7 @@ PROTECTED_SITES = (
 )
 
 
+@pytest.mark.static
 def test_health_signs_in_through_the_front_door_not_straight_to_the_proxy():
     tasks = yaml.safe_load(HEALTH)[0]["block"]
     text = json.dumps(tasks)

@@ -223,6 +223,7 @@ def test_from_lessons_must_name_a_lesson(ll, rb):
         links(ll, rb)
 
 
+@pytest.mark.static
 def test_from_lessons_round_trips_as_wiki_links():
     text = (EX / "runbooks" / f("RB-002")).read_text()
     assert f"   - from_lessons: [[{U['LL-004']}]]" in text
@@ -294,6 +295,7 @@ def test_active_only_skips_graduated_and_replaced_records(tmp_path):
     assert len(load_register(d)["runbooks"]) == 3
 
 
+@pytest.mark.static
 def test_archived_records_say_so_in_their_links_block():
     assert (
         "- Archive: retired on 2026-10-19 by `M-17`" in (EX / "lessons" / f("LL-002")).read_text()

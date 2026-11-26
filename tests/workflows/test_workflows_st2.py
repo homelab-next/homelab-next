@@ -240,6 +240,7 @@ def workflow_steps(name: str, b: dict | None = None) -> list[dict]:
 
 
 # ---------------------------------------------------------------- the committed tree
+@pytest.mark.static
 def test_committed_tree_is_the_rendered_one():
     res, _b = render_repo(ROOT)
     assert res.problems == [], [str(p) for p in res.problems]
@@ -264,6 +265,7 @@ def test_drift_is_reported_file_by_file(tmp_path):
     assert st2.drift(res.files, tmp_path, "x") == []
 
 
+@pytest.mark.static
 def test_rendered_documents_have_the_fields_stackstorm_requires():
     res = go(binding())
     kinds = {}
@@ -287,6 +289,7 @@ def test_rendered_documents_have_the_fields_stackstorm_requires():
         assert st2.shape_errors("pack", thin)
 
 
+@pytest.mark.static
 def test_the_pack_has_an_email_and_every_criterion_a_pattern_as_a_real_server_registers_them():
     """Found by registering the rendered tree on a real 3.9.0: the pack loader reads ``email``
     (a pack without one is "'PackAPI' object has no attribute 'email'") and the rule validator
@@ -304,6 +307,7 @@ def test_the_pack_has_an_email_and_every_criterion_a_pattern_as_a_real_server_re
     assert seen_exists  # the bound-retry rule uses nexists: the case the real registration refused
 
 
+@pytest.mark.static
 def test_the_tree_check_catches_a_task_that_is_not_a_shim():
     res = go(binding())
     path = "homelabnext/actions/workflows/agent_job_retry.yaml"
@@ -448,6 +452,7 @@ def test_steps_actor_pins_and_templates():
     assert ("st2-duplicate", "proposal-validate") in _problems(b)
 
 
+@pytest.mark.static
 def test_secrets_are_datastore_references_never_values():
     b = binding()
     b["config"] = {"notify_token": {"value": "fake-token-value"}}
@@ -504,6 +509,7 @@ def _sched(cron: str = "5 6 * * 1-5", sid: str = "nightly-digest"):
     return b, all_packs() | {"nightly-digest": copy.deepcopy(SCHED_PACK)}
 
 
+@pytest.mark.static
 def test_a_scheduled_pack_becomes_a_crontimer_rule():
     b, packs = _sched()
     res = go(b, packs)
@@ -950,6 +956,7 @@ def test_stackstorm_jinja_sees_no_marker_in_any_parameter(tmp_path):
     assert event_of(got) == body
 
 
+@pytest.mark.static
 def test_the_tree_check_refuses_raw_trigger_data_and_raw_task_expressions():
     res = go(binding())
     path = "homelabnext/rules/on_proposal_validate.yaml"
@@ -1343,6 +1350,7 @@ def test_the_state_names_are_keyed_so_a_writer_cannot_forge_or_pre_seed_them(tmp
     assert _run(pdir, kv, _returned(rid), client)["result"] == "executed"
 
 
+@pytest.mark.static
 def test_the_rendered_config_carries_the_kv_key_as_a_datastore_secret():
     res = go(binding())
     schema = yaml.safe_load(res.files["homelabnext/config.schema.yaml"])
@@ -1405,6 +1413,7 @@ def test_a_broker_run_step_runs_only_as_the_built_in_pack(tmp_path):
         )
 
 
+@pytest.mark.static
 def test_the_tree_check_refuses_a_rule_that_lost_its_producer_or_its_accept():
     res = go(binding())
     assert st2.tree_problems(res.files, "homelabnext") == []
@@ -1545,6 +1554,7 @@ def test_a_rendered_rule_pins_its_producer_by_equals_or_an_overlap_list(source, 
     assert len(got) == (0 if pinned else 1), got
 
 
+@pytest.mark.static
 def test_every_fixture_request_is_one_the_handler_schema_accepts():
     from homelabnext.broker.validation import inline_errors
 
@@ -1788,6 +1798,7 @@ def test_the_committed_binding_binds_no_watcher_and_declares_no_table():
     assert "tables" not in b and not {r["pack"] for r in b["rules"]} & set(WATCHERS)
 
 
+@pytest.mark.static
 def test_a_lookup_runs_only_against_a_declared_table_whose_declaration_is_pinned():
     b = _watch_binding("/opt/hnx-tables/lab-checks/lab-checks.hourly.json")
     res = go(b)

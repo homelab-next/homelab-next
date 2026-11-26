@@ -234,6 +234,7 @@ def test_a_refusal_never_carries_content(tmp_path):
     assert "hunter2" not in str(exc.value)
 
 
+@pytest.mark.static
 def test_the_schema_negatives_are_refused_by_the_library_too():
     for f in sc.instances_for(ROOT / "schemas/platform/export_manifest.schema.json", "negative"):
         assert ic.check_manifest(json.loads(f.read_text())), f.name
@@ -417,6 +418,7 @@ def test_a_file_that_grows_after_the_check_is_refused(tmp_path, monkeypatch):
         ic.read_tree(tmp_path, m)
 
 
+@pytest.mark.static
 def test_the_schema_example_is_a_manifest_the_library_accepts():
     for f in sc.instances_for(ROOT / "schemas/platform/export_manifest.schema.json", "examples"):
         assert ic.check_manifest(json.loads(f.read_text())) == [], f.name

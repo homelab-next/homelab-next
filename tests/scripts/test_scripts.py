@@ -514,6 +514,7 @@ def test_cli_usage_error():
     assert main(["bogus"]) == 2
 
 
+@pytest.mark.static
 def test_the_repository_catalog_is_current_and_matches_reality():
     files = tracked_files(REPO)
     cat = build(REPO, files)
@@ -533,6 +534,7 @@ def test_the_repository_catalog_is_current_and_matches_reality():
         assert f"role:{path.split('/')[3]}" in real.callers[path], path
 
 
+@pytest.mark.static
 def test_the_register_runs_m01_m02_m04_on_the_repository():
     reg = yaml.safe_load((REPO / "examples/registers/invariants.yml").read_text())
     res = run_criteria(reg["criteria"], Context(REPO), only={"M-01", "M-02", "M-04"})["results"]
@@ -556,6 +558,7 @@ def test_only_the_generated_prelude_is_excluded_under_examples_codemode(tmp_path
     ]
 
 
+@pytest.mark.static
 def test_block_list_trigger_header_parses_and_last_run_lists_one_per_line() -> None:
     """A header may spell `trigger` as a block list (one caller per line, so concurrent PRs merge)."""
     text = "# hnx-script:\n#   id: x\n#   trigger:\n#     - role:a\n#     - timer:a/b\n"

@@ -13,6 +13,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 ADR = REPO / "docs" / "adr" / "0009-bus-only-at-the-reaction-seam.md"
 EVENTS_DOC = REPO / "docs" / "events.md"
@@ -50,6 +52,7 @@ def test_scan_finds_the_known_bus_publishers():
     assert "homelabnext/broker/relay.py" in _bus_publishers()
 
 
+@pytest.mark.static
 def test_every_bus_publisher_is_sanctioned_by_adr_0009():
     decision = _section(ADR.read_text(encoding="utf-8"), "Decision")
     named = set(re.findall(r"`(homelabnext/[\w/]+\.py)`", decision))
@@ -59,6 +62,7 @@ def test_every_bus_publisher_is_sanctioned_by_adr_0009():
     )
 
 
+@pytest.mark.static
 def test_events_doc_names_the_relay_exception():
     head = EVENTS_DOC.read_text(encoding="utf-8").split("\n## ", 1)[0]
     assert "Publishers never speak the bus" not in head
@@ -75,6 +79,7 @@ def _classes_table() -> dict[str, str]:
     return table
 
 
+@pytest.mark.static
 def test_every_event_type_has_a_bus_class():
     types = {
         "homelabnext." + p.name.removesuffix(".schema.json")
@@ -87,12 +92,14 @@ def test_every_event_type_has_a_bus_class():
     assert set(table.values()) <= CLASSES, set(table.values()) - CLASSES
 
 
+@pytest.mark.static
 def test_adr_0009_names_the_three_classes():
     decision = _section(ADR.read_text(encoding="utf-8"), "Decision")
     for phrase in ("reaction triggers", "per-item business records", "decision events"):
         assert phrase in decision
 
 
+@pytest.mark.static
 def test_checklist_t01_is_scoped_to_the_bus_classes():
     text = (REPO / "docs" / "checklist.md").read_text(encoding="utf-8")
     row = next(line for line in text.splitlines() if line.startswith("| T-01 |"))
@@ -100,6 +107,7 @@ def test_checklist_t01_is_scoped_to_the_bus_classes():
     assert "docs/events.md" in row
 
 
+@pytest.mark.static
 def test_adr_0033_states_where_labels_stop():
     adr = REPO / "docs" / "adr" / "0033-data-carries-tlp-every-reader-has-a-ceiling.md"
     consequences = _section(adr.read_text(encoding="utf-8"), "Consequences")

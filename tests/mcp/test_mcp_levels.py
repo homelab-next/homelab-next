@@ -427,6 +427,7 @@ def test_outline_reports_a_parse_cut(monkeypatch):
     levels.clear_memo()
 
 
+@pytest.mark.static
 def test_section_content_is_the_raw_text_and_says_so():
     """Content is the document, byte for byte what its digest covers; only names and summaries
     are cleaned, and the tool description and docs say so instead of implying otherwise."""

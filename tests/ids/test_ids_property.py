@@ -7,6 +7,7 @@ import re
 import string
 from pathlib import Path
 
+import pytest
 from jsonschema import Draft202012Validator
 
 from homelabnext.ids import KINDS, format_id, grammar, is_valid, lint_id, parse
@@ -95,6 +96,7 @@ def test_python_grammar_and_json_schema_agree_on_random_strings():
         assert is_valid(s) == VALIDATOR.is_valid(s), repr(s)
 
 
+@pytest.mark.static
 def test_a_trailing_newline_is_refused_by_every_id_and_common_pattern():
     """The schema agrees with :func:`parse` on ``cap:dns\\n`` (refused), and so does every
     per-kind definition and every anchored ``ids/common`` definition other contracts ``$ref``."""

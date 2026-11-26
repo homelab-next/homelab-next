@@ -62,7 +62,7 @@ DEPLOY_LABEL = "hnx-deploy"
 #: the one other self-hosted runs-on (operator-approved 2026-11-22 22:41): homelab-next's own ci.yml may send a job to the
 #: lab's ephemeral CI pool (modules/ci-runner, label hnx-ci: one throwaway VM per job, public egress only), word for word
 #: this expression: a push (to main) or a pull request whose head is a branch of this repository, only while the
-#: repository variable is `on`, and only on the jobs POOL_JOBS names (the test shards only through POOL_SHARD_RUNS_ON, for the 3.11 leg; never go or the lab); a fork's pull request always gets the hosted runner. Nothing else in the job may name a
+#: repository variable is `on`, and only on the jobs POOL_JOBS names (the test shards only through POOL_SHARD_RUNS_ON, for a leg whose matrix says pool: true; never go or the lab); a fork's pull request always gets the hosted runner. Nothing else in the job may name a
 #: self-hosted runner, no other workflow may use it, and the overlay templates may not.
 POOL_LABEL = "hnx-ci"
 POOL_RUNS_ON = (
@@ -71,15 +71,14 @@ POOL_RUNS_ON = (
     ' && fromJSON(\'["self-hosted","linux","x64","hnx-ci"]\')'
     " || 'ubuntu-latest' }}"
 )
-#: the test shards' variant: the same expression behind a matrix flag, so one leg (3.11) takes the pool and the other stays hosted
+#: the test shards' variant: the same expression behind a matrix flag, so a leg can take the pool while another stays hosted
 POOL_SHARD_RUNS_ON = POOL_RUNS_ON.replace("${{ (", "${{ matrix.python.pool && (", 1)
 POOL_SHARD_JOB = "test"
 POOL_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 #: the ci.yml jobs that run on the pool: none of them carries a suite time budget set on hosted runners' speed
 POOL_JOBS = frozenset({
-    "dco", "external-tools", "gateway-conformance", "go-modules", "hygiene", "invariants", "lab-gateway",
-    "lab-paths", "leak-scan", "lint", "markdown-links", "orchestration-conformance", "packaging", "pip-audit",
-    "real-tools", "register-ids", "regression-tests", "schemas", "secret-scan", "trusted-gates",
+    "external-tools", "gateway-conformance", "go-modules", "lab-gateway", "lab-paths", "leak-scan", "orchestration-conformance",
+    "packaging", "pip-audit", "precheck", "real-tools", "regression-tests", "secret-scan",
 })  # fmt: skip
 HOOK = SKELETON / "runner" / "job-started.sh"
 
@@ -193,7 +192,7 @@ def test_ci_yml_may_send_a_job_to_the_pool_with_the_exact_expression_only(tmp_pa
     exact expression in any other workflow, and anything else in the job naming a self-hosted runner."""
     ci = tmp_path / "ci.yml"
     monkeypatch.setattr(sys.modules[__name__], "POOL_WORKFLOW", ci)
-    ci.write_text(_pool_job(POOL_RUNS_ON).replace("  test:", "  lint:"))
+    ci.write_text(_pool_job(POOL_RUNS_ON).replace("  test:", "  precheck:"))
     assert lint_workflow(ci) == []
     # the exact expression on a job the list does not name (the suite-budgeted shards) fails
     ci.write_text(_pool_job(POOL_RUNS_ON))
@@ -214,17 +213,17 @@ def test_ci_yml_may_send_a_job_to_the_pool_with_the_exact_expression_only(tmp_pa
     ]
     for v in variants:
         assert v != POOL_RUNS_ON
-        ci.write_text(_pool_job(v).replace("  test:", "  lint:"))
+        ci.write_text(_pool_job(v).replace("  test:", "  precheck:"))
         assert any("only deploy.yml may" in p for p in lint_workflow(ci)), v
     # the exact expression, but something else in the job names a self-hosted runner
     ci.write_text(
-        _pool_job(POOL_RUNS_ON, "    env: {R: self-hosted}\n").replace("  test:", "  lint:")
+        _pool_job(POOL_RUNS_ON, "    env: {R: self-hosted}\n").replace("  test:", "  precheck:")
     )
     assert any("only deploy.yml may" in p for p in lint_workflow(ci))
     # the exact expression in any other workflow, the overlay templates' included
     for other in ("checks.yml", "nightly.yml", "codeql.yml"):
         f = tmp_path / other
-        f.write_text(_pool_job(POOL_RUNS_ON).replace("  test:", "  lint:"))
+        f.write_text(_pool_job(POOL_RUNS_ON).replace("  test:", "  precheck:"))
         assert any("only deploy.yml may" in p for p in lint_workflow(f)), other
 
 
@@ -243,10 +242,11 @@ def test_the_shard_job_may_use_only_its_flagged_variant_of_the_expression(tmp_pa
         ci.write_text(_pool_job(v))
         assert any("only deploy.yml may" in p for p in lint_workflow(ci)), v
     # the flagged variant on any other job than the shards fails
-    ci.write_text(_pool_job(POOL_SHARD_RUNS_ON).replace("  test:", "  lint:"))
+    ci.write_text(_pool_job(POOL_SHARD_RUNS_ON).replace("  test:", "  precheck:"))
     assert any("only deploy.yml may" in p for p in lint_workflow(ci))
 
 
+@pytest.mark.static
 def test_the_real_ci_yml_pools_exactly_the_listed_jobs_and_keeps_the_rest_hosted():
     jobs = yaml.safe_load(POOL_WORKFLOW.read_text())["jobs"]
     pooled = {n for n, j in jobs.items() if j.get("runs-on") == POOL_RUNS_ON}
@@ -257,7 +257,7 @@ def test_the_real_ci_yml_pools_exactly_the_listed_jobs_and_keeps_the_rest_hosted
     legs = {
         m["version"]: m.get("pool") for m in jobs[POOL_SHARD_JOB]["strategy"]["matrix"]["python"]
     }
-    assert legs == {"3.11": False, "3.12": False}
+    assert legs == {"3.13": False}
     for name in (
         "test-ok",
         "go",
@@ -342,6 +342,7 @@ def test_deploy_offers_both_paths(deploy):
     assert "oauth-secret" not in ts[0]["with"] and "authkey" not in ts[0]["with"]
 
 
+@pytest.mark.static
 def test_tailscale_action_is_pinned_not_left_as_a_placeholder():
     """The pin was verified against the action's repository (v4.2.0); a `<pin-me>` placeholder
     would be allowed only while docs/private-overlay.md says so."""
@@ -428,6 +429,7 @@ def test_the_loader_runs_before_the_deploy_and_checks_what_runs_after_it(deploy)
     assert "--deploy --running" in after["run"]
 
 
+@pytest.mark.static
 def test_the_loader_also_runs_on_every_pull_request():
     """checks.yml runs the same check as deploy.yml before it changes a host, with the pinned hnx
     and no secret, so a problem shows on the pull request."""
@@ -453,6 +455,7 @@ def test_the_loader_also_runs_on_every_pull_request():
                for s in job["steps"] if "actions/checkout" in s.get("uses", ""))  # fmt: skip
 
 
+@pytest.mark.static
 def test_the_site_review_tier_runs_on_every_pull_request():
     """checks.yml rates each change to what the lab claims, with the pinned hnx, the base read
     through git (a full-history checkout) and no secret."""
@@ -771,6 +774,7 @@ def test_a_shallow_checkout_is_refused(tmp_path, upstream):
     assert code == 1 and "shallow" in said, said
 
 
+@pytest.mark.static
 def test_the_docs_give_one_home_for_hnx_ref():
     """ADR-0021, ADR-0028, docs/private-overlay.md, the operator's to-do list and the first-deploy
     runbook agree: HNX_REF is the tracked file locks/hnx-ref, moved by a reviewed pull request,
@@ -933,6 +937,7 @@ def test_the_hook_refuses_every_other_job(change, why):
     assert "refusing this job" in r.stderr and why in r.stderr
 
 
+@pytest.mark.static
 def test_the_hook_is_executable_and_documented():
     assert os.access(HOOK, os.X_OK)
     doc = (ROOT / "docs" / "private-overlay.md").read_text()
@@ -940,6 +945,7 @@ def test_the_hook_is_executable_and_documented():
     assert "generate-jitconfig" in doc  # ephemeral, just-in-time registration is the setup
 
 
+@pytest.mark.static
 def test_codeowners_guards_the_workflows_and_the_deploy_tools():
     owners = (SKELETON / ".github" / "CODEOWNERS").read_text()
     rules = {
@@ -972,6 +978,7 @@ def test_codeowners_guards_the_workflows_and_the_deploy_tools():
         assert rules.get(path), path
 
 
+@pytest.mark.static
 def test_codeowners_owns_every_path_by_default():
     """Deny by default: the first rule is ``*``, no later rule names no owner (GitHub applies the
     last match, so an empty one would un-own a path), and every file the skeleton ships has a
@@ -1012,6 +1019,7 @@ def test_one_checks_job_needs_every_other_job():
         assert r.returncode == rc, (results, r.stdout)
 
 
+@pytest.mark.static
 def test_the_swap_gate_runs_on_every_pull_request():
     """checks.yml runs the swap gate over the lab's own evidence (lab/), with the pinned hnx, the
     base read through git (a full-history checkout), the same refusals as the other hnx jobs
@@ -1252,6 +1260,7 @@ def test_ansible_cfg_uses_the_client():
     assert cp.get("diff", "always") == "False"
 
 
+@pytest.mark.static
 def test_sops_config_recipients_are_marked_fake():
     text = (SKELETON / ".sops.yaml").read_text()
     doc = yaml.safe_load(text)

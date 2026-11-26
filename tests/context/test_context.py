@@ -34,12 +34,14 @@ def _q(allowed, **kw):
 # -- the suite ------------------------------------------------------------------------------------
 
 
+@pytest.mark.static
 def test_reference_store_passes_the_suite():
     run = run_capability("context", "context-reference", ROOT)
     assert run.error is None and run.too_few is None
     assert not run.failed_must and not run.failed_should, [r.evidence for r in run.results]
 
 
+@pytest.mark.static
 def test_every_context_mutant_is_caught():
     runs = mutation_runs("context", ROOT)
     assert {m.name for m in runs} >= {
@@ -236,6 +238,7 @@ def test_documents_from_graph_skips_oversized_files(tmp_path, monkeypatch):
     assert doc.content.startswith("Big\n")
 
 
+@pytest.mark.static
 def test_role_reowns_the_checkout_tree_recursively():
     """A foreign-owned file inside the checkouts breaks the service's own rmtree of the old
     checkout (PermissionError on every reindex); the role must own the whole tree."""

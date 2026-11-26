@@ -414,6 +414,7 @@ def test_a_line_longer_than_one_read_is_skipped_once(tmp_path, clock, monkeypatc
     assert sum(o for o, _ in got) == 1 and len(store.events()) == 1
 
 
+@pytest.mark.perf
 def test_a_large_trail_drains_in_one_batch(tmp_path, clock):
     """Regression: one store.add (two connections, a commit, a purge) per event; 2,000 events
     must drain in one quick pass and advance the offset to the end."""

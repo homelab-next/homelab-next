@@ -293,12 +293,14 @@ def test_dirty_says_whether_the_checkout_matches_its_sha(tmp_path):
     assert runner.git_dirty(tmp_path) is True
 
 
+@pytest.mark.static
 def test_a_run_records_the_tree_digest_and_dirty_flag():
     meta = run_capability("notify", "fake").meta
     assert meta["tree_sha256"] == runner.tree_digest(ROOT)
     assert "dirty" in meta and meta["adapter"] == "builtin:fake"
 
 
+@pytest.mark.static
 def test_an_adapter_binding_records_its_file_hash():
     b = Binding("notify", adapter="homelabnext.conform.adapters._env:resolve")
     meta = runner.provenance("notify", b, ROOT)

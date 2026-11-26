@@ -201,5 +201,6 @@ def test_stale_entry_and_missing_reason(tmp_path, capsys):
     assert lint.main([str(root), "--allowlist", str(allow)]) == 2
 
 
+@pytest.mark.static
 def test_the_repository_has_no_private_helpers():
     assert lint.main([str(REPO)]) == 0

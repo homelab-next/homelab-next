@@ -32,6 +32,7 @@ def _root(tmp_path: Path, version: str = "1.2", draft: bool = False) -> Path:
     return tmp_path
 
 
+@pytest.mark.static
 def test_the_repository_pages_are_current():
     pages = facts.files_with_facts(ROOT)
     names = {p.relative_to(ROOT).as_posix() for p in pages}
@@ -44,6 +45,7 @@ def test_the_repository_pages_are_current():
     assert [line for p in pages for line in facts.check(p, ROOT, ROOT)] == []
 
 
+@pytest.mark.static
 def test_every_tool_class_is_named_on_the_catalog_page():
     import yaml
 

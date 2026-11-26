@@ -38,6 +38,7 @@ def test_every_registered_read_only_command_runs_in_check_mode(path):
     assert not bad, f"{path.relative_to(ROLES)}: add `check_mode: false` to {bad}"
 
 
+@pytest.mark.static
 def test_the_docker_engine_readiness_probes_are_found():
     names = [
         n

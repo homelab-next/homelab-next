@@ -392,6 +392,7 @@ def test_check_signs_in_lists_and_reports_without_serving(tmp_path, monkeypatch,
 
 
 # ---------------------------------------------------------------- the catalog record
+@pytest.mark.static
 def test_the_catalog_record_is_the_first_party_entry_with_read_tools_only():
     from homelabnext.mcp import servers
 

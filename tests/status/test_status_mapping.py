@@ -92,6 +92,7 @@ def test_unsafe_item_and_summary_text_is_cleaned():
     assert d.item == "a-b-c" and d.summary == "line1 line2"
 
 
+@pytest.mark.static
 def test_invariants_results_builtin_on_the_example_register():
     doc = json.loads((ROOT / "examples/registers/invariants.results.json").read_text())
     doc["results"]["X-99"] = {"status": "fail", "evidence": "[exit 1] broken\nmore"}
@@ -104,6 +105,7 @@ def test_invariants_results_builtin_on_the_example_register():
         _map({"results": {}}, {"builtin": "invariants-results"})
 
 
+@pytest.mark.static
 def test_records_lanes_builtin_reads_the_example_lanes():
     s = spec("proposals", kind="poll-file", file="examples/status/records", path=None,
              mapping={"builtin": "records-lanes", "warn_after_s": 7 * 86400})  # fmt: skip
@@ -115,6 +117,7 @@ def test_records_lanes_builtin_reads_the_example_lanes():
     assert late.value == 1 and late.state == "warn" and "oldest 8d 0h" in late.summary
 
 
+@pytest.mark.static
 def test_broker_pending_from_a_file_and_from_a_store():
     s = spec("approvals", kind="poll-file", file="examples/status/broker-pending.json", path=None,
              mapping={"builtin": "broker-pending", "warn_after_s": 3600})  # fmt: skip

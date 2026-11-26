@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.modules import cli as mcli
@@ -36,6 +37,7 @@ MANIFEST = ld.load_yaml(MODULE / "module.yml")
 # ----------------------------------------------------------------------------- the manifest
 
 
+@pytest.mark.static
 def test_the_manifest_is_a_feature_with_its_own_secrets_and_internet_egress_only():
     m = MANIFEST
     assert m["kind"] == "feature" and m["bundle"] == {"id": "soc", "group": "threat-intel"}

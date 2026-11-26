@@ -127,6 +127,7 @@ def test_the_template_unit_is_the_dispatchers_interface_and_hardened(site):
     assert "[Install]" not in unit and not any(x.startswith("ReadWritePaths=") for x in lines)
 
 
+@pytest.mark.static
 def test_the_job_unit_keeps_the_sandbox_that_refuses_a_setgid_chmod():
     # read as plain text (no jinja needed): the handoff sets no setgid bit because this stays on
     text = (ROLE / "templates" / "job.service.j2").read_text()
@@ -213,6 +214,7 @@ def test_the_real_schema_token_the_role_refuses_in_a_shadow_job(site, text, hit)
     assert bool(re.search(ctx["cti_pipeline_real_schema_token"].strip(), text)) is hit
 
 
+@pytest.mark.static
 def test_the_run_file_group_fits_its_32_characters_only_with_a_short_enough_id():
     ok = role_vars({**LANES_SITE, "cti_pipeline_logical_id": "a" * 15})
     assert ok["cti_pipeline_dispatch_group"] == "hnx-orchestrator_" + "a" * 15
@@ -263,6 +265,7 @@ def test_synapse_ca_placeholder_is_only_named_when_the_ref_is_set(site):
     assert "lake_ca" not in on["placeholders"]  # independent of the lake CA ref
 
 
+@pytest.mark.static
 def test_the_wrapper_accepts_the_synapse_ca_placeholder():
     text = (ROLE / "files" / "hnx-cti-run").read_text()
     assert '"lake_ca", "synapse_ca")' in text

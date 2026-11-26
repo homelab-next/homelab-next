@@ -351,6 +351,7 @@ def test_check_and_write_on_an_empty_directory(tmp_path):
     assert write(tmp_path / "out", files)[1] == list(files)
 
 
+@pytest.mark.static
 def test_the_committed_goldens_are_current():
     args = [
         "gen",
@@ -426,6 +427,7 @@ def test_hnx_codemode_is_registered():
 
 
 # ------------------------------------------------------- describe, synchronous
+@pytest.mark.static
 def test_the_index_carries_what_codemode_describe_needs():
     files = render(EXAMPLE / "manifest.yml")
     index = {a["name"]: a for a in json.loads(files["triage/search.json"])["actions"]}

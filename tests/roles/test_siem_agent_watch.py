@@ -143,6 +143,7 @@ def test_health_fails_on_a_missing_block_and_on_a_switch_turned_on(tmp_path):
     assert run_role(tmp_path, ROLE, "health", v).returncode != 0
 
 
+@pytest.mark.static
 def test_the_agent_role_includes_the_watch_role_and_restarts_only_on_a_change():
     """Exactly one role (the siem-agent control's) includes the watch role."""
     includers = []

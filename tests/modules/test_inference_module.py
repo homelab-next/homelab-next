@@ -153,6 +153,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -161,6 +162,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == [MID]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -200,6 +202,7 @@ def test_the_image_pin_is_the_product_version_a_digest_and_old_enough():
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
 
 
+@pytest.mark.static
 def test_the_readme_lists_each_backends_pinned_image_of_the_same_build():
     defaults = ld.load_yaml(ROLE / "defaults" / "main.yml")
     build = defaults[f"{MID}_image"].split("@")[0].rsplit("-b", 1)[1]

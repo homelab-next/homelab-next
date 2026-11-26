@@ -26,6 +26,7 @@ def test_the_core_list_is_the_harness_s_own_not_a_copy():
     assert KNOWN_CAPABILITIES is CAPABILITIES
 
 
+@pytest.mark.static
 def test_every_conformance_capability_and_module_slot_is_a_guest_capability():
     slots = yaml.safe_load((ROOT / "examples" / "modules" / "slots.yml").read_text())["slots"]
     named = {*CAPABILITIES, *EXTENDED, *slots}
@@ -82,6 +83,7 @@ def test_example_hypervisors_declare_the_hypervisor_capability(lab):
     assert {g["id"]: g["capability"] for g in hosts} == {g["id"]: "cap:hypervisor" for g in hosts}
 
 
+@pytest.mark.static
 def test_the_example_proxy_is_registered_as_the_edge_proxy_not_the_identity_provider():
     lab = ROOT / "examples" / "four-box-lab"
     zones, domain = open_site(lab / "site.yml")

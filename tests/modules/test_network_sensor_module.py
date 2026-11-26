@@ -20,6 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.conform.adapters.network_sensor import make
@@ -98,6 +99,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -106,6 +108,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_the_module_contributes_one_role_one_row_and_no_credential():
     manifest = ld.load_yaml(MODULE / "module.yml")
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == [MID]

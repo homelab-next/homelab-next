@@ -278,6 +278,7 @@ def test_upgrade_refuses_a_target_that_is_not_a_package_version(tmp_path):
     assert ok.returncode == 0, ok.stdout + ok.stderr
 
 
+@pytest.mark.static
 def test_the_module_has_no_secret_and_renders_no_credential():
     files = [p for p in Path(ROLE).rglob("*") if p.is_file()]
     assert not any("hnx_secret" in p.read_text() for p in files)

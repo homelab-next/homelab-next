@@ -162,6 +162,7 @@ NOT_SHIPPED_PREFIXES = ("roles/", "playbooks/")
 
 
 # ------------------------------------------------------------------ the schema itself
+@pytest.mark.static
 def test_a_draft_1_0_with_its_own_version_field():
     assert SCHEMA["$id"].endswith("/platform/module/1.0")
     assert sc.is_draft(SCHEMA) and "ADR-0027" in SCHEMA["x-draft"]
@@ -265,6 +266,7 @@ def test_the_code_mode_sandbox_is_never_shared():
     assert "cap:codemode-executor" in NEVER_SHARED
 
 
+@pytest.mark.static
 def test_every_negative_file_is_listed():
     files = {p.stem.split(".", 1)[1] for p in (ROOT / "schemas/platform/negative").glob("module.*")}
     assert files == set(NEGATIVES)
@@ -906,6 +908,7 @@ def test_origin_and_kind_core_are_bound_to_where_the_module_lives(tmp_path):
     assert mr.module_problems(fetched, tmp_path / "external-collector", SLOTS, load) == []
 
 
+@pytest.mark.static
 def test_the_examples_are_not_in_tree_by_default():
     """Negative: with the default public root (modules/ only) the fictional examples are not
     in-tree, and core-staff is not a core module a site could select."""
@@ -1249,6 +1252,7 @@ def test_the_selection_schema_scope_is_generated_from_the_parts():
     assert SELECTION["$defs"]["scope_entry"]["pattern"] == ms.ENTRY_PATTERN
 
 
+@pytest.mark.static
 def test_every_selection_negative_file_is_listed():
     found = (ROOT / "schemas/platform/negative").glob("module_selection.*")
     assert {p.stem.split(".", 1)[1] for p in found} == set(SELECTION_NEGATIVES)
@@ -2098,6 +2102,7 @@ def test_a_swap_reports_core_and_feature_dependants():
     assert {"external-collector", "example-sandbox", "publishing", "example-lake"} <= set(deps)
 
 
+@pytest.mark.static
 def test_feature_and_core_modules_and_sites_carry_no_product_names():
     """The product-name lint's rule, on the examples: no provider's product name or alias occurs
     in a feature or core module's directory or in a site profile (comments included)."""
@@ -2135,6 +2140,7 @@ def pytest_generate_tests(metafunc):
 
 
 # ------------------------------------------------------- egress slots are on the list (ADR-0033)
+@pytest.mark.static
 def test_the_registry_flags_exactly_the_listed_egress_slots():
     """The example registry flags as egress exactly the slots the egress list names, and each of
     them appears in docs/modules/egress.md's "Egress points" table."""

@@ -94,6 +94,7 @@ def test_the_host_line_sits_inside_the_proxy_block_beside_the_front_door_header(
     ]
 
 
+@pytest.mark.static
 def test_a_plain_http_upstream_is_left_to_caddys_own_host_handling():
     out = generate(load(ROOT / "examples" / "services.yml"), ["caddy"])["caddy"][
         "caddy/sites.caddy"
@@ -122,6 +123,7 @@ def test_no_certificate_or_key_material_is_ever_in_the_caddyfile():
         assert f["path"] in text and f["path"] == b.edge_tls_path(f["secret"])
 
 
+@pytest.mark.static
 def test_without_edge_tls_no_manifest_is_rendered():
     out = generate(load(ROOT / "examples" / "services.yml"), ["caddy"])["caddy"]
     assert sorted(out) == ["caddy/sites.caddy"]

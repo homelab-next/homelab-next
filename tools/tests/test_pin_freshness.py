@@ -176,6 +176,7 @@ def test_a_public_module_s_role_pins_are_read_like_a_core_role_s(tmp_path):
     assert set(pins) == set(SOURCES) | {"role:chat/chat_image"}  # nothing else in the module
 
 
+@pytest.mark.static
 def test_every_pin_in_this_tree_has_an_upstream():
     """A new pin dependabot cannot see must name where its releases are, or nothing watches it."""
     assert pf.check_inventory(pf.inventory(ROOT)) == []
@@ -480,6 +481,7 @@ def test_an_unreadable_tree_or_out_file_is_exit_2(tmp_path):
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 
+@pytest.mark.static
 def test_the_workflow_is_scheduled_least_privileged_and_never_on_a_pull_request():
     wf = yaml.safe_load((WORKFLOWS / "pin-freshness.yml").read_text())
     on = wf[True] if True in wf else wf["on"]  # YAML 1.1 reads a bare `on` as true
@@ -492,6 +494,7 @@ def test_the_workflow_is_scheduled_least_privileged_and_never_on_a_pull_request(
     assert f'startswith("{pf.MARKER}")' in text  # the issue is found by the report's marker
 
 
+@pytest.mark.static
 def test_no_other_workflow_runs_the_network_report():
     others = [p.name for p in WORKFLOWS.glob("*.yml") if p.name != "pin-freshness.yml"]
     assert others and not [

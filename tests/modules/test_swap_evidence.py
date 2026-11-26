@@ -120,6 +120,7 @@ def _swap(report: dict) -> dict:
     return swap
 
 
+@pytest.mark.static
 def test_the_suites_are_the_golden_defaults():
     assert [Path(r).name for r in se.SUITES] == [p.name for p in gp.DEFAULT_SUITES]
     for rel, p in zip(se.SUITES, gp.DEFAULT_SUITES, strict=True):
@@ -746,6 +747,7 @@ def test_overlay_must_be_a_directory(tmp_path, capsys):
     assert rc == 2 and "not a directory" in capsys.readouterr().err
 
 
+@pytest.mark.static
 def test_repository_mode_paths_are_unchanged():
     assert (se.ROLES, se.STORE, se.REPORTS, se.EVALS, se.SWAPS) == (
         "examples/model_roles.json",

@@ -11,6 +11,8 @@ import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from homelabnext import cli as hnx
 from homelabnext.compute import load_fleet, open_site
 from homelabnext.compute.gen import registry_hosts
@@ -40,6 +42,7 @@ def _set_capability(lab: Path, guest: str, cap: str) -> None:
     _edit(path, old, f"capability: {cap}")
 
 
+@pytest.mark.static
 def test_addresses_are_compared_as_addresses_not_text():
     """A registry host whose IPv6 address is written uncompressed is the same address as a
     guest's compressed one: the alias check used to compare the text and miss it."""

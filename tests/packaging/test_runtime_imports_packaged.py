@@ -17,6 +17,7 @@ import ast
 import tomllib
 from pathlib import Path
 
+import pytest
 from setuptools.discovery import PackageFinder, PEP420PackageFinder
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -91,6 +92,7 @@ def test_collector_sees_guarded_and_unguarded_imports():
     assert got == ["conformance.protocols.broker", "conformance.protocols", "conformance.fakes.y"]
 
 
+@pytest.mark.static
 def test_every_unguarded_conformance_import_is_packaged():
     packaged = _discovered()
     imports = [

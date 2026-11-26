@@ -227,6 +227,7 @@ def test_an_edited_profile_cannot_seed_from_an_ungranted_thing():
         select_knowledge(stale, fake_graph(), ".")
 
 
+@pytest.mark.static
 def test_a_reader_gains_no_grant_through_include():
     """include adds knowledge, never a grant: a reader stays a reader."""
     plain = verified(compile_profile(spec(), library()))

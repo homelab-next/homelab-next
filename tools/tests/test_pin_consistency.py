@@ -91,6 +91,7 @@ def image_pins(text: str) -> list[tuple[str, str, str | None]]:
     ]
 
 
+@pytest.mark.static
 def test_the_ci_nats_server_is_the_lab_image_version():
     (tag,) = {t for r, t, _ in image_pins(COMPOSE.read_text()) if r == "nats"}
     ci = job_env("external-tools", "NATS_SERVER_VERSION")
@@ -100,6 +101,7 @@ def test_the_ci_nats_server_is_the_lab_image_version():
     )
 
 
+@pytest.mark.static
 def test_the_server_mode_secret_store_role_installs_the_lab_image_version():
     """The secrets role installs the release the lab-in-a-box secrets image runs, and pins its
     checksums in its defaults and its argument spec alike (ansible/roles/openbao)."""
@@ -124,6 +126,7 @@ def test_the_server_mode_secret_store_role_installs_the_lab_image_version():
     assert all(re.fullmatch(r"[0-9a-f]{64}", v) for v in defaults["openbao_checksums"].values())
 
 
+@pytest.mark.static
 def test_the_edge_module_runs_the_caddy_ci_checks_with_and_the_secrets_roles_acme_client():
     """modules/caddy: its product version (and image tag) is the Caddy CI adapts every Caddyfile
     and runs the edge suite with, and its ACME client is the pin role openbao's ACME mode uses
@@ -132,7 +135,7 @@ def test_the_edge_module_runs_the_caddy_ci_checks_with_and_the_secrets_roles_acm
     manifest = yaml.safe_load((module / "module.yml").read_text())
     caddy = yaml.safe_load((module / "roles" / "caddy" / "defaults" / "main.yml").read_text())
     bao = yaml.safe_load((ROOT / "ansible/roles/openbao/defaults/main.yml").read_text())
-    ci = job_env("schemas", "CADDY_VERSION")
+    ci = job_env("precheck", "CADDY_VERSION")
     assert manifest["product"]["version"] == ci
     assert caddy["caddy_image"].split("@")[0].endswith(f":{ci}-alpine")
     for key in ("lego_version", "lego_checksums", "lego_checksums_release"):
@@ -150,6 +153,7 @@ def _image_sources() -> list[Path]:
     ]
 
 
+@pytest.mark.static
 def test_an_image_repository_is_pinned_to_one_tag_and_digest_everywhere():
     seen: dict[str, set[tuple[str | None, str | None]]] = defaultdict(set)
     where: dict[str, set[str]] = defaultdict(set)
@@ -185,6 +189,7 @@ def test_the_image_parser_reads_compose_dockerfiles_and_role_defaults():
     ]
 
 
+@pytest.mark.static
 def test_the_lake_query_rehearsal_flips_to_the_trino_the_lab_runs():
     (tag,) = {t for r, t, _ in image_pins(COMPOSE.read_text()) if r == "trinodb/trino"}
     rehearsal = re.search(
@@ -205,6 +210,7 @@ def test_the_lake_query_rehearsal_flips_to_the_trino_the_lab_runs():
     )
 
 
+@pytest.mark.static
 def test_the_open_webui_docs_name_the_role_default():
     defaults = yaml.safe_load(read("ansible/roles/open_webui/defaults/main.yml"))
     specs = yaml.safe_load(read("ansible/roles/open_webui/meta/argument_specs.yml"))
@@ -235,8 +241,9 @@ def _caddy_versions(doc) -> list[str]:
     return out
 
 
+@pytest.mark.static
 def test_the_example_registries_run_the_caddy_ci_checks_with():
-    ci = job_env("schemas", "CADDY_VERSION")
+    ci = job_env("precheck", "CADDY_VERSION")
     found: dict[str, list[str]] = {}
     for path in sorted((ROOT / "examples").rglob("services.yml")):
         versions = _caddy_versions(yaml.safe_load(path.read_text()))
@@ -351,6 +358,7 @@ def test_no_two_listeners_share_a_host_and_port():
     assert found == [], "\n".join(["one host port, several listeners:", *found])
 
 
+@pytest.mark.static
 def test_the_lab_runs_the_metrics_facts_versions_on_their_default_ports():
     compose = COMPOSE.read_text()
     where = COMPOSE.relative_to(ROOT).as_posix()
@@ -517,6 +525,7 @@ def _workflow_files() -> list[Path]:
     return sorted(out)
 
 
+@pytest.mark.static
 def test_every_action_is_one_full_sha_with_one_version_comment_everywhere():
     pins: dict[str, set[tuple[str, str | None]]] = defaultdict(set)
     bad = []

@@ -86,6 +86,7 @@ def test_an_entry_needs_its_why_and_nothing_else(entry):
     assert sc.errors_for(CURRENT, _with(entry), REG) != []
 
 
+@pytest.mark.static
 def test_at_most_sixteen():
     doc = yaml.safe_load(FIXTURES[0].read_text())
     doc["network"]["extra_addresses"] = [

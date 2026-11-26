@@ -99,7 +99,7 @@ its gates and deselect its tests (`-m "not live and not experimental"`; the mark
 list, `tests/experimental_marker.py`), and `make invariants` (CI's invariants job) skips the
 criteria it owns.
 `tools/tests/test_experimental.py` holds the Makefile, CI and the invariants register to the list.
-The list only shrinks: CI's `trusted-gates` job runs the base's `tools/experimental.py ratchet`,
+The list only shrinks: CI's `precheck` job (`make precheck`) runs `tools/experimental.py ratchet`,
 and a change that adds a component, a test or code path, a gate, an invariant or a conformance
 capability fails unless the operator applied the `experimental-growth` label
 ([CONTRIBUTING.md](../CONTRIBUTING.md), "Experimental and frozen components").

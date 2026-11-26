@@ -66,6 +66,7 @@ def test_the_scan_finds_a_private_mapping(src):
     assert mapping_sites(src)
 
 
+@pytest.mark.static
 def test_no_module_but_model_tlp_maps_a_data_tier_to_a_label():
     found = []
     for path in sorted((REPO / "homelabnext").rglob("*.py")):

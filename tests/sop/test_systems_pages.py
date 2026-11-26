@@ -99,10 +99,12 @@ def test_missing_directory_means_every_row_missing(reg, tmp_path):
     assert len(check_pages(reg, tmp_path / "nope").missing) == len(reg.services)
 
 
+@pytest.mark.static
 def test_committed_template_is_the_rendered_template():
     assert (ROOT / "docs" / "systems" / "_TEMPLATE.md").read_text() == render_template()
 
 
+@pytest.mark.static
 def test_committed_example_pages_match_the_example_registry():
     rep = check_pages(load(REGISTRY), ROOT / "docs" / "systems", catalog=CATALOG)
     assert rep.ok(), rep.lines()

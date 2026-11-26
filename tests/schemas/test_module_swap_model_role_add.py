@@ -243,6 +243,7 @@ def test_the_added_role_is_evaluated_by_its_kind(reports):
     assert rep["canary"]["fast-classifier"]["bindings"][0]["kind"] == "decision"
 
 
+@pytest.mark.static
 def test_an_add_next_to_an_unchanged_role_holds():
     """A table that already has a role gains a second one: only the new one needs a leg."""
     before_doc = json.loads(paths.example_file("model_roles.json").read_text(encoding="utf-8"))
@@ -342,6 +343,7 @@ def test_an_unknown_change_is_refused(reports):
     assert len(p) == 2  # and the added role is uncovered
 
 
+@pytest.mark.static
 def test_the_schema_takes_each_change_and_no_other():
     import jsonschema
     from schema_check import build_registry

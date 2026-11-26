@@ -160,6 +160,7 @@ def test_cli_refuses_a_version_without_a_section(tmp_path, capsys):
     assert "no '## [3.0.0]' section" in capsys.readouterr().err
 
 
+@pytest.mark.static
 def test_repo_changelog_yields_an_event_for_the_current_version(capsys):
     from homelabnext import __version__
 
@@ -170,6 +171,7 @@ def test_repo_changelog_yields_an_event_for_the_current_version(capsys):
     validate_event(json.loads(capsys.readouterr().out))
 
 
+@pytest.mark.static
 def test_the_release_workflow_emits_the_event():
     """The deploy path of the package is the release workflow: it must build the event."""
     wf = yaml.safe_load((REPO / ".github" / "workflows" / "release.yml").read_text())
