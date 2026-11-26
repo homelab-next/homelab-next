@@ -58,6 +58,7 @@ def test_a_value_the_schema_refuses_is_an_error_not_ignored(tmp_path, mutate, wh
     assert any(where in p for p in exc.value.problems), exc.value.problems
 
 
+@pytest.mark.static
 def test_every_shipped_table_and_example_satisfies_the_schema():
     tables = [*REPO.glob("examples/**/model_roles.json"), *SCHEMAS.glob("examples/model_roles.*")]
     assert tables
@@ -65,6 +66,7 @@ def test_every_shipped_table_and_example_satisfies_the_schema():
         RoleTable.load(p)
 
 
+@pytest.mark.static
 def test_every_negative_is_refused_by_load():
     negatives = sorted(SCHEMAS.glob("negative/model_roles.*.json"))
     assert negatives

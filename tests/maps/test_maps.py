@@ -426,6 +426,7 @@ def test_dataflow_escapes_hostile_names():
     assert html.count("&lt;script&gt;") > 5
 
 
+@pytest.mark.static
 def test_dataflow_of_the_repository():
     vm = dataflow.build(dataflow.gather(ROOT, load(REGISTRY)))
     edges = {(f["transport"], f["from"]["id"], f["label"], f["to"]["id"]) for f in vm["flows"]}
@@ -500,6 +501,7 @@ def test_architecture_escapes_hostile_names():
     assert "&lt;script&gt;" in html
 
 
+@pytest.mark.static
 def test_architecture_of_the_repository():
     vm = architecture.build(
         architecture.graph_for(ROOT), architecture.gather_control(ROOT, load(REGISTRY))
@@ -586,6 +588,7 @@ def test_roadmap_results_files(tmp_path):
     assert vm["problems"][0].startswith("cannot read the invariants results")
 
 
+@pytest.mark.static
 def test_every_checklist_row_belongs_to_a_build_phase():
     """docs/build-order.md names every docs/checklist.md row and only real ones (the check
     fails on the synthetic pair above: an unknown token and an unphased row)."""
@@ -611,6 +614,7 @@ def test_the_maps_are_a_menu_group_available_only_when_configured():
         assert menu[panel]["available"] is (panel == "roadmap")
 
 
+@pytest.mark.static
 def test_the_site_serves_only_its_configured_maps():
     site = MapSite(guests=GUESTS, guests_site=SITE)
     assert site.available() == {"topology"}
@@ -680,6 +684,7 @@ def test_serve_routes_the_maps():
         srv.server_close()
 
 
+@pytest.mark.static
 def test_the_script_is_served_only_with_an_interactive_map():
     assert MapSite(root=ROOT).handle(assets.SCRIPT_ROUTE, "", _doc()) is None  # roadmap only
     site = MapSite(guests=GUESTS, guests_site=SITE)

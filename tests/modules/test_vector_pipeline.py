@@ -171,6 +171,7 @@ def _role_vars() -> dict:
     return yaml.safe_load((MODULE / "roles" / "vector" / "vars" / "main.yml").read_text())
 
 
+@pytest.mark.static
 def test_the_role_copies_exactly_the_closure_of_the_label_rules():
     copied = set(_role_vars()["vector_lib_files"])
     assert copied == _closure() - {"__init__.py"}, (
@@ -182,6 +183,7 @@ def test_the_role_copies_exactly_the_closure_of_the_label_rules():
         )
 
 
+@pytest.mark.static
 def test_the_sidecar_and_the_remap_need_only_the_standard_library_and_the_rules():
     for name in _code_files():
         assert _stdlib_only(CODE / name) == [], name
@@ -702,6 +704,7 @@ def _golden_run():
     return json.loads(json.dumps(out))
 
 
+@pytest.mark.static
 def test_the_goldens():
     """Regenerate with ``HNX_UPDATE_GOLDEN=1`` and read the diff: it is the pipeline's whole output."""
     got = _golden_run()
@@ -719,6 +722,7 @@ def rows_of(group, idx, table):
     ]
 
 
+@pytest.mark.static
 def test_every_event_keeps_a_labelled_raw_row_and_each_class_one_row():
     exp = json.loads((GOLDEN / "expected.json").read_text())
     for group in exp.values():
@@ -867,6 +871,7 @@ def test_the_unpinned_classes_carry_the_common_ocsf_columns(table):
         )
 
 
+@pytest.mark.static
 def test_all_nine_classes_and_the_raw_archive_are_produced():
     exp = json.loads((GOLDEN / "expected.json").read_text())
     tbls = {r["table"] for g in exp.values() for ev in g for r in ev}

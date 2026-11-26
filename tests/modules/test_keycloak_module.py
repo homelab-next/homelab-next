@@ -134,6 +134,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["keycloak"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -167,6 +168,7 @@ def test_the_images_are_pinned_and_the_idps_tag_is_the_product_version():
     assert defaults["keycloak_postgres_image"].startswith("docker.io/library/postgres:17.")
 
 
+@pytest.mark.static
 def test_pin_freshness_watches_both_images():
     sys.path.insert(0, str(ROOT / "tools"))
     try:

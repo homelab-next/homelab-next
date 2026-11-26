@@ -118,6 +118,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -126,6 +127,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == [MID]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -166,6 +168,7 @@ def test_the_image_pin_is_the_product_version_and_a_digest():
     assert image.split("@")[0].endswith(":" + version)
 
 
+@pytest.mark.static
 def test_the_defaults_are_sqlite_the_schedule_in_the_container_and_a_private_reader():
     d = ld.load_yaml(MODULE / "roles" / MID / "defaults" / "main.yml")
     assert d[P + "cron_minutes"] == "7,37" and d[P + "port"] == 8084

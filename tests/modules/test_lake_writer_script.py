@@ -254,6 +254,7 @@ def test_open_lake_refuses_another_namespace_before_building_a_client(schemas, t
         lw.open_lake(cfg, schemas, ensure=True)
 
 
+@pytest.mark.static
 def test_no_other_namespace_is_named_outside_the_refusal_list():
     text = (FILES / "hnx_lake_writer.py").read_text()
     code = re.sub(r"PROTECTED = \(.*?\)\n", "", text, flags=re.S)

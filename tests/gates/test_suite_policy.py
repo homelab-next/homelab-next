@@ -208,6 +208,7 @@ def test_a_required_modules_importorskip_is_a_failure_end_to_end(tmp_path):
     assert _pytest(tmp_path).returncode == 0  # without the variable both are ordinary skips
 
 
+@pytest.mark.static
 def test_no_test_skips_through_its_own_shutil_which():
     """A ``skipif(shutil.which(...))`` decides the skip itself, so HNX_REQUIRE_TOOLS can never
     turn it into a failure: every tool check goes through require_tool or the marker."""
@@ -222,6 +223,7 @@ def test_no_test_skips_through_its_own_shutil_which():
     assert offenders == []
 
 
+@pytest.mark.static
 def test_the_job_with_the_extras_requires_them():
     """CI's test job on the Python that installs the lake, mcp and ansible extras makes their
     imports and ansible-playbook required, so they fail there instead of skipping."""
@@ -229,10 +231,10 @@ def test_the_job_with_the_extras_requires_them():
 
     ci = yaml.safe_load((Path(ROOT) / ".github" / "workflows" / "ci.yml").read_text())
     job = ci["jobs"]["test"]
-    (py312,) = [p for p in job["strategy"]["matrix"]["python"] if p["version"] == "3.12"]
-    assert {"lake", "mcp", "ansible"} <= set(py312["extras"].split(","))
-    assert set(py312["require-modules"].split(",")) >= {"duckdb", "pyiceberg", "mcp", "ansible"}
-    assert "ansible-playbook" in py312["require-tools"].split(",")
+    (py313,) = [p for p in job["strategy"]["matrix"]["python"] if p["version"] == "3.13"]
+    assert {"lake", "mcp", "ansible"} <= set(py313["extras"].split(","))
+    assert set(py313["require-modules"].split(",")) >= {"duckdb", "pyiceberg", "mcp", "ansible"}
+    assert "ansible-playbook" in py313["require-tools"].split(",")
     (run,) = [s for s in job["steps"] if "pytest" in s.get("run", "")]
     assert run["env"]["HNX_REQUIRE_MODULES"] == "${{ matrix.python.require-modules }}"
     assert run["env"]["HNX_REQUIRE_TOOLS"] == "${{ matrix.python.require-tools }}"
@@ -243,6 +245,7 @@ CI_REQUIRED = (
 )  # fmt: skip
 
 
+@pytest.mark.static
 def test_the_tools_ci_requires_are_only_skipped_through_the_helper():
     """A skip that names one of these tools in its own words is outside the HNX_REQUIRE_TOOLS
     contract (CI could not turn it into a failure): it must go through require_tool."""
@@ -433,6 +436,7 @@ def test_the_policy_catches_a_local_probe_and_a_root_skip():
         assert root_skips(ast.parse(src)), src
 
 
+@pytest.mark.static
 def test_the_real_tool_checks_go_through_the_required_tools():
     """The nft -c, dnsmasq --test and setpriv tests ask for their tools through the helpers (so
     HNX_REQUIRE_TOOLS makes a missing one a failure), and the CI job that installs the tools
@@ -635,6 +639,7 @@ def test_suite_over_budget_fails_the_session(tmp_path):
     assert ok.returncode == 0, ok.stdout
 
 
+@pytest.mark.static
 def test_this_suite_is_configured():
     import tomllib
 
@@ -646,6 +651,7 @@ def test_this_suite_is_configured():
     assert (Path(ROOT) / "conftest.py").read_text().count("tests.suite_policy") == 1
 
 
+@pytest.mark.static
 def test_the_budgets_absorb_runner_noise_and_still_catch_a_runaway_suite():
     """The budgets are a tripwire (operator 2026-11-23): the figures seen on green and red runs of
     main (roles 8112-10543 s) and a pool runner's ~27% slower cores pass, a suite that doubles
@@ -899,6 +905,7 @@ def test_a_suite_can_have_its_own_shared_setup_budget(tmp_path):
     assert proc.returncode == 1 and "heavy (shared fixture setup):" in proc.stdout, proc.stdout
 
 
+@pytest.mark.static
 def test_this_repos_shared_setup_budgets_are_per_suite():
     default, per = shard_report.load_shared_limits(Path(ROOT) / "pyproject.toml")
     assert (
@@ -1037,6 +1044,7 @@ def test_a_worker_that_collected_other_tests_fails_the_run():
     assert st["collected_disagree"] is True
 
 
+@pytest.mark.static
 def test_this_repos_budgets_are_scaled_only_for_runs_on_xdist_workers():
     import tomllib
 

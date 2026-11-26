@@ -39,6 +39,7 @@ def defaults() -> dict:
     return ld.load_yaml(ROOT / "modules" / MID / "roles" / ROLE / "defaults" / "main.yml")
 
 
+@pytest.mark.static
 def test_the_module_fills_the_lake_catalog_slot_with_the_shared_adapter():
     m = manifest()
     assert m["kind"] == "provider" and m["egress"] == "none"
@@ -82,6 +83,7 @@ def test_both_images_are_pinned_by_digest_and_the_catalog_is_the_product_version
     )
 
 
+@pytest.mark.static
 def test_the_warehouse_names_agree_with_the_object_store_and_its_base_is_the_bucket_root():
     g, d = base.defaults("garage"), defaults()
     assert d["lakekeeper_bucket"] == g["garage_bucket"] == "iceberg-warehouse"
@@ -92,6 +94,7 @@ def test_the_warehouse_names_agree_with_the_object_store_and_its_base_is_the_buc
     assert "key-prefix" not in text.split("Create the warehouse")[1].split("when:")[0]
 
 
+@pytest.mark.static
 def test_the_container_ids_clash_with_no_other_module():
     d = defaults()
     mine = {
@@ -112,6 +115,7 @@ def test_the_container_ids_clash_with_no_other_module():
     assert not mine & taken, mine & taken
 
 
+@pytest.mark.static
 def test_the_target_speaks_the_catalog_api_under_the_catalog_path():
     target = load_target(str(ROOT / "modules" / MID / "conformance" / "target.yml"), root=ROOT)
     binding = target.binding("lake-catalog")
@@ -136,6 +140,7 @@ def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+@pytest.mark.static
 def test_nothing_in_the_module_names_the_operators_workstation():
     for f in (ROOT / "modules" / MID).rglob("*"):
         if f.is_file():

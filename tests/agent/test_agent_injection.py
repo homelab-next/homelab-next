@@ -92,6 +92,7 @@ def test_corpus_rules_fail_on_bad_cases(corpus):
     assert "no case covers category 'encoded'" in p
 
 
+@pytest.mark.static
 def test_parse_corpus_rejects_schema_and_rule_violations():
     doc = yaml.safe_load(CORPUS.read_text())
     bad = copy.deepcopy(doc)

@@ -114,6 +114,7 @@ def test_a_publisher_set_assetid_names_the_asset_the_rest_comes_from(inventory):
     assert "assetowner" not in unknown and "assetcriticality" not in unknown
 
 
+@pytest.mark.static
 def test_overrides_and_tag_table():
     assert criticality_for(["ops", "ui"]) == "low"
     assert criticality_for(["data", "secrets"]) == "critical"

@@ -9,6 +9,7 @@ import copy
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 import homelabnext.modules.authority as authority
@@ -28,6 +29,7 @@ def test_the_schema_generator_and_the_rules_read_the_one_list():
     assert {"cap:" + s for s in authority.SHARED_CONFIG_GRANTS} == mr.PRIVILEGED_SHARED_CONFIG
 
 
+@pytest.mark.static
 def test_the_generated_selection_schema_grants_exactly_the_derived_sets():
     sel = json.loads((ROOT / "schemas/platform/module_selection.schema.json").read_text())
     grants = sel["properties"]["grants"]["properties"]

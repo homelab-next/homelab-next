@@ -136,6 +136,7 @@ def test_no_go_is_a_no_op_and_untracked_go_is_not_a_module(tmp_path, capsys):
     assert go_modules.main(["--repo", str(tmp_path / "nowhere")]) == 2
 
 
+@pytest.mark.static
 @git_missing
 def test_this_repository_has_no_go_outside_a_module():
     files, links = go_modules.tracked(ROOT)

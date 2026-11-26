@@ -144,6 +144,7 @@ def test_the_list_is_valid_and_names_the_operator_s_cuts():
     assert components["code-mode"].status == "frozen"
 
 
+@pytest.mark.static
 def test_every_listed_page_says_so():
     for c in ex.load():
         for page in c.docs:
@@ -207,11 +208,13 @@ def test_path_matching_is_by_whole_path_segments():
 # --- out of the blocking set, still running --------------------------------------------------
 
 
+@pytest.mark.static
 def test_no_listed_gate_blocks_a_merge():
     ci = yaml.safe_load(CI.read_text(encoding="utf-8"))
     assert blocking_problems(ex.load(), MAKEFILE.read_text(encoding="utf-8"), ci) == []
 
 
+@pytest.mark.static
 def test_a_gate_put_back_into_make_check_or_a_required_job_is_caught():
     components = ex.load()
     make = MAKEFILE.read_text(encoding="utf-8")
@@ -223,10 +226,13 @@ def test_a_gate_put_back_into_make_check_or_a_required_job_is_caught():
         "\t$(PY) -m homelabnext.cli workflows validate\n\t$(PY) " + gate.split(" ", 1)[1] + "\n",
     )
     assert put_back != make and blocking_problems(components, put_back, ci)
-    ci["jobs"]["schemas"]["steps"].append({"run": "python -m homelabnext.cli codemode gen --check"})
+    ci["jobs"]["precheck"]["steps"].append(
+        {"run": "python -m homelabnext.cli codemode gen --check"}
+    )
     assert blocking_problems(components, make, ci)
 
 
+@pytest.mark.static
 def test_ci_runs_the_listed_components_in_a_job_that_blocks_nothing():
     ci = yaml.safe_load(CI.read_text(encoding="utf-8"))
     assert job_problems(ci) == []
@@ -241,16 +247,21 @@ def test_ci_runs_the_listed_components_in_a_job_that_blocks_nothing():
     assert job_problems(gone)
 
 
+@pytest.mark.static
 def test_make_experimental_runs_the_list():
     text = MAKEFILE.read_text(encoding="utf-8")
     m = re.search(r"^experimental:\n((?:\t.*\n)+)", text, re.M)
     assert m and m[1].strip() == "$(PY) tools/experimental.py run"
 
 
+@pytest.mark.static
 def test_the_blocking_runs_deselect_exactly_the_marker():
     assert ex.BLOCKING_SELECT == "not live and not experimental"
     assert ex.SELECT == "experimental and not live"
-    assert f'-m "{ex.BLOCKING_SELECT}"' in MAKEFILE.read_text(encoding="utf-8")
+    # `make test` also leaves the static rules to precheck and the perf tests to the nightly
+    assert f'-m "{ex.BLOCKING_SELECT} and not static and not perf"' in MAKEFILE.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_the_conformance_harness_leaves_out_exactly_the_listed_capabilities():
@@ -269,6 +280,7 @@ def test_the_conformance_harness_leaves_out_exactly_the_listed_capabilities():
     assert "projects" not in listed
 
 
+@pytest.mark.static
 def test_make_invariants_skips_exactly_the_listed_criteria():
     text = MAKEFILE.read_text(encoding="utf-8")
     m = re.search(r"^EXPERIMENTAL_INVARIANTS := (.*)$", text, re.M)
@@ -283,6 +295,7 @@ def test_make_invariants_skips_exactly_the_listed_criteria():
     assert set(listed) <= ids
 
 
+@pytest.mark.static
 def test_no_test_is_marked_experimental_by_hand():
     hand = re.compile(r"mark\.experimental\b")
     offenders = [
@@ -313,7 +326,8 @@ def blocking_selection_problems(ci_doc: dict, paths) -> list[str]:
         if words[:3] != ["python", "-m", "pytest"]:
             continue
         # the marker option, not the "-m pytest" before it
-        if "-m" in words[3:] and words[words.index("-m", 3) + 1] == ex.BLOCKING_SELECT:
+        # (the test shards narrow it further: `... and not static and not perf`)
+        if "-m" in words[3:] and words[words.index("-m", 3) + 1].startswith(ex.BLOCKING_SELECT):
             continue
         named = [w for w in words[3:] if w.startswith(("tests/", "tools/tests/", "conformance/"))]
         inside = [p for w in named for p in paths if p.startswith(w.rstrip("/") + "/")]
@@ -322,11 +336,12 @@ def blocking_selection_problems(ci_doc: dict, paths) -> list[str]:
     return out
 
 
+@pytest.mark.static
 def test_no_blocking_job_selects_an_experimental_test():
     ci = yaml.safe_load(CI.read_text(encoding="utf-8"))
     paths = ex.marked_paths(ex.load())
     assert blocking_selection_problems(ci, paths) == []
-    ci["jobs"]["schemas"]["steps"].append({"run": "python -m pytest -q tests/workflows"})
+    ci["jobs"]["precheck"]["steps"].append({"run": "python -m pytest -q tests/workflows"})
     assert blocking_selection_problems(ci, paths)
 
 
@@ -592,19 +607,22 @@ def test_the_ratchet_runs_from_the_command_line(repo, capsys):
     assert ex.main(["ratchet", "--base", base, str(root)]) == 0
 
 
-def test_ci_passes_the_operator_s_label_to_both_copies_of_the_ratchet():
+@pytest.mark.static
+def test_ci_passes_the_operator_s_label_to_the_ratchet():
     ci = yaml.safe_load(CI.read_text(encoding="utf-8"))
     on = ci.get("on") or ci.get(True)
     # the label is read from the event, which a re-run does not refresh: labelling runs CI again
     assert {"labeled", "unlabeled", "synchronize"} <= set(on["pull_request"]["types"])
+    # the ratchet runs in `make precheck` (the ratchets target, against the base precheck picks)
+    _, recipes = make_rules(MAKEFILE.read_text(encoding="utf-8"))
+    assert any("tools/experimental.py ratchet --base" in line for line in recipes["ratchets"])
     steps = [
         s
         for job in ci["jobs"].values()
         for s in job.get("steps") or []
-        if 'tools/experimental.py" ratchet' in s.get("run", "")
-        or "tools/experimental.py ratchet" in s.get("run", "")
+        if s.get("run", "").strip() == "make precheck PY=python"
     ]
-    assert len(steps) == 2
+    assert len(steps) == 1
     # growth passes only on the run that applying the label triggered: the label approves that
     # head, and a later push (a synchronize event still carrying the label) checks without it
     want = (

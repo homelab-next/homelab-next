@@ -209,8 +209,9 @@ and `meaning_changes` is recorded, never checked.
   **What runs the gate.** The `--ci-base` rule is the package's (`homelabnext.gitbase.ci_base`;
   `tools/schema_check.py` re-exports it), so no CLI loads a file from the checkout to find its
   base. The package itself is still whatever is installed, and in a pull request's CI run that is
-  the pull request's; so CI's `trusted-gates` job runs `review-tier` and `swap-gate` with **the
-  base commit's own code**: a detached worktree of the base, imported with `python -P` (the
+  the pull request's. CI's `precheck` job runs `review-tier` and `swap-gate` (`make precheck`, the
+  ratchets target) with the change's own code since 2026-11-25, when the `trusted-gates` job was
+  dropped for speed; until then that job ran them with **the base commit's own code**: a detached worktree of the base, imported with `python -P` (the
   checkout's own package never on the path, which the job asserts), reading the change only as data
   (`--root`). The ratchets that hold a change to the base run there too, the base's
   `tools/schema_check.py`, `product_name_lint.py`, `dup_check.py` and `register_ids.py check-lost`

@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when a private notify, state, lake-query, schema-registry, broker-tier or records-inbox helper is re-implemented outside the shared libraries (reviewed allowlist).
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:helpers-lint]
+#   trigger: [make:helpers-lint]
 #   invariant: [M-03]
 #   inputs: the tracked tree and tools/shared_helpers.allow.yml
 #   outputs: one line per private helper or stale allowlist entry

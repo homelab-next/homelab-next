@@ -79,6 +79,7 @@ def test_kept_keys_are_never_legacy_codes(keys):
     assert [k for k in found if LEGACY_CODE_RE.search(k)] == []
 
 
+@pytest.mark.static
 def test_results_are_keyed_by_criterion_ids():
     spec = SPECS["invariants"]
     results = json.loads(RESULTS.read_text(encoding="utf-8"))["results"]

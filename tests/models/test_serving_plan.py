@@ -227,6 +227,7 @@ def test_allowed_args_render_typed_and_false_booleans_are_omitted(tmp_path):
     assert not set(sv.ALLOWED_ARGS) & sv.OWNED_FLAGS
 
 
+@pytest.mark.static
 def test_the_schema_and_the_role_share_the_plans_allowlist():
     schema = json.loads((ROOT / "schemas/platform/model_serving.schema.json").read_text())
     args = schema["properties"]["backends"]["additionalProperties"]["properties"]["args"]
@@ -251,6 +252,7 @@ def test_a_plan_with_bad_inputs_says_which(tmp_path):
 
 
 # ---------------------------------------------------------------- the gateway reads the plan
+@pytest.mark.static
 def test_the_gateway_declares_its_local_backends_from_the_plan():
     spec_ = gw.load_spec(EXAMPLE / "gateway.yml")
     assert {n: (b.locality, b.host, b.port) for n, b in spec_.backends.items()} == {
@@ -309,6 +311,7 @@ def test_the_gateway_refuses_a_plan_on_another_role_table(tmp_path):
     assert any("another role table" in x for x in exc.value.problems)
 
 
+@pytest.mark.static
 def test_a_gateway_spec_without_serving_is_unchanged():
     """The lab's gateway (no serving: key) still renders exactly what is committed."""
     lab = ROOT / "compose" / "lab-in-a-box" / "config" / "llm-gateway"

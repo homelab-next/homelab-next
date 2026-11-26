@@ -17,6 +17,7 @@ ALL = [*CAPABILITIES, *EXTENDED]
 MIN_CHECKS, MAX_CHECKS = 6, 24
 
 
+@pytest.mark.static
 def test_the_documented_bound_is_the_one_tested():
     text = (ROOT / "docs" / "conformance.md").read_text(encoding="utf-8")
     # whitespace, not a space: a reflow that wraps "6 to\n24 checks" must not hide one
@@ -24,6 +25,7 @@ def test_the_documented_bound_is_the_one_tested():
     assert bounds == [(str(MIN_CHECKS), str(MAX_CHECKS))] * 2, bounds
 
 
+@pytest.mark.static
 def test_capability_list_is_the_one_in_interfaces_md():
     text = (ROOT / "docs" / "interfaces.md").read_text(encoding="utf-8")
     para = re.search(r"^- Capability names.*?(?=^- )", text, re.S | re.M).group(0)
@@ -31,6 +33,7 @@ def test_capability_list_is_the_one_in_interfaces_md():
     assert names == CAPABILITIES and len(names) == 18
 
 
+@pytest.mark.static
 def test_capabilities_yml_matches_the_core_list():
     import yaml
 

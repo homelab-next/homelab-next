@@ -13,6 +13,7 @@ REPO = Path(__file__).resolve().parents[2]
 MANIFEST = json.loads((REPO / "schemas/broker/examples/manifest.example.json").read_text())
 
 
+@pytest.mark.static
 def test_the_tiers_are_the_broker_schemas_in_rank_order():
     schema = json.loads((REPO / "schemas/broker/manifest.schema.json").read_text())
     enums = []

@@ -174,6 +174,7 @@ def _login_vars() -> dict:
     return yaml.safe_load((ROLE / "vars/main.yml").read_text())
 
 
+@pytest.mark.static
 def test_login_tokens_live_in_one_store_area_under_the_issued_directory():
     v = _login_vars()
     assert v["status_hub_login_area"] == "hub-login"

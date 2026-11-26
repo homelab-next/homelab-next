@@ -440,6 +440,7 @@ def test_health_reports_not_started_by_design_instead_of_failing(first):
     assert not log.exists()  # no container or endpoint was asked
 
 
+@pytest.mark.static
 def test_the_sysctl_drop_in_sorts_first():
     defaults = yaml.safe_load((Path(ROLE) / "defaults" / "main.yml").read_text())
     assert Path(defaults["tunnel_sysctl_file"]).name.startswith("00-")

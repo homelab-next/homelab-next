@@ -778,6 +778,7 @@ def test_a_go_fix_with_a_dependency_is_proved_on_a_cold_module_cache(tmp_path, m
     assert gate.prove(c, cwd=r) is None
 
 
+@pytest.mark.static
 def test_the_regression_tests_job_has_a_go_toolchain_once_a_module_exists():
     import yaml
 
@@ -791,7 +792,7 @@ def test_the_regression_tests_job_has_a_go_toolchain_once_a_module_exists():
     ]
     assert go["uses"] == pinned["uses"]  # the same pinned commit as the go job
     # any discovered module, not one named directory; the workflow's pinned Go version
-    assert jobs["regression-tests"]["needs"] == "go-modules"
+    assert jobs["regression-tests"]["needs"] == ["precheck", "go-modules"]
     assert go["if"] == "needs.go-modules.outputs.present == 'true'"
     assert go["with"]["go-version"] == "${{ env.GO_VERSION }}"
     assert re.fullmatch(r"\d+\.\d+\.\d+", ci["env"]["GO_VERSION"])

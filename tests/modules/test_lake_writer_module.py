@@ -19,6 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.modules import cli as mcli
@@ -46,6 +47,7 @@ TABLES = {
 }
 
 
+@pytest.mark.static
 def test_the_manifest_is_a_soc_feature_with_its_own_secrets_and_no_egress():
     m = MANIFEST
     assert m["kind"] == "feature" and m["id"] == "lake-writer" and m["bundle"]["id"] == "soc"
@@ -97,6 +99,7 @@ def test_every_table_is_one_record_in_soc_owned_by_the_module_and_declared_once(
     assert set(DEFAULTS["lake_writer_tables"]) == TABLES == set(VARS["lake_writer_known_tables"])
 
 
+@pytest.mark.static
 def test_the_namespace_is_derived_and_never_an_input_of_the_role():
     assert VARS["lake_writer_namespace"] == "soc"
     assert "lake_writer_namespace" not in DEFAULTS
@@ -106,6 +109,7 @@ def test_the_namespace_is_derived_and_never_an_input_of_the_role():
     assert "lake_writer_namespace == 'soc'" in validate
 
 
+@pytest.mark.static
 def test_the_defaults_hold_no_address_no_lab_name_and_every_secret_is_a_reference():
     text = (ROLE / "defaults" / "main.yml").read_text()
     code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
@@ -123,6 +127,7 @@ def test_the_defaults_hold_no_address_no_lab_name_and_every_secret_is_a_referenc
         assert spec[f"lake_writer_{k}"]["required"] is True
 
 
+@pytest.mark.static
 def test_one_template_unit_and_one_timer_per_table_on_the_calendar_never_an_interval():
     assert re.search(r"\*:0/\d+", DEFAULTS["lake_writer_oncalendar"])
     timer = (ROLE / "templates" / "lake-writer.timer.j2").read_text().splitlines()

@@ -7,12 +7,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 (TASKS,) = ROOT.glob("modules/*/roles/*_client/tasks/binary.yml")
 
 
+@pytest.mark.static
 def test_the_download_directory_is_created_before_the_fetch_under_the_same_condition():
     tasks = yaml.safe_load(TASKS.read_text())
     mkdir = next(i for i, t in enumerate(tasks) if "ansible.builtin.file" in t)

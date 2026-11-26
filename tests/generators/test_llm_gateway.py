@@ -457,6 +457,7 @@ def test_a_spec_domain_that_differs_from_the_registry_is_refused(tmp_path):
         gw.render_file(make_spec(tmp_path, registry=reg, domain="elsewhere.example"))
 
 
+@pytest.mark.static
 def test_audit_refuses_a_self_declared_local_backend():
     spec, files = lab_files()
     bad = dataclasses.replace(spec.backends["inference-small"], host="api.example.com", port=443)
@@ -561,6 +562,7 @@ def test_a_secret_serves_exactly_one_credential(tmp_path, over, words):
     assert words in str(ei.value)
 
 
+@pytest.mark.static
 def test_an_agent_profile_key_may_not_be_reused_by_a_spec_key():
     doc = yaml.safe_load(LAB_SPEC.read_text())
     doc["keys"].append(
@@ -667,6 +669,7 @@ def test_audit_passes_the_rendered_lab_config():
     assert gw.audit(files, spec) == []
 
 
+@pytest.mark.static
 def test_audit_catches_a_hand_added_cloud_fallback_in_litellm():
     spec, files = lab_files()
     doc = yaml.safe_load(files["litellm/config.yaml"])
@@ -687,6 +690,7 @@ def test_audit_catches_a_hand_added_cloud_fallback_in_litellm():
     ), problems
 
 
+@pytest.mark.static
 def test_audit_catches_a_cloud_deployment_and_a_default_fallback_in_litellm():
     spec, files = lab_files()
     doc = yaml.safe_load(files[PROXY_CONFIG])
@@ -919,6 +923,7 @@ def test_provision_deletes_the_keys_of_profiles_removed_from_the_spec(monkeypatc
         api.httpd.shutdown()
 
 
+@pytest.mark.static
 def test_one_gateway_never_prunes_another_gateways_keys_and_an_empty_file_prunes_nothing():
     """Two gateway specs on one proxy: each prunes only keys tagged with its own name.  A keys
     file that declares nothing, or has no managed_by, deletes nothing; one that does not parse is
@@ -1461,6 +1466,7 @@ def test_an_openai_cloud_backend_uses_the_openai_api(tmp_path):
     assert (dep["protocol"], dep["base_url"]) == ("openai", "https://api.openai.com")
 
 
+@pytest.mark.static
 def test_every_committed_rendered_config_is_schema_valid_and_marked():
     examples = LAB.parents[3] / "examples"
     for out in (
@@ -1830,6 +1836,7 @@ FAKE_URL = "http://fake.svc.example.internal:8000"  # no-raw-endpoint: allow ren
 OUTSIDE_URL = "http://fake.example.com:8000"  # no-raw-endpoint: allow a URL the render refuses
 
 
+@pytest.mark.static
 def test_the_conformance_spec_and_its_committed_output_pass_only_with_the_flag(capsys):
     spec = str(CONFORMANCE / "gateway.yml")
     assert (
@@ -2026,6 +2033,7 @@ def test_the_spec_s_role_table_stays_inside_the_checkout(tmp_path):
         gw.render_file(spec)
 
 
+@pytest.mark.static
 def test_a_role_table_path_with_dotdot_inside_the_checkout_is_read():
     # the lab-in-a-box spec names ../../../../schemas/...: inside the repository, so allowed
     assert ".." in yaml.safe_load(LAB_SPEC.read_text())["roles"]

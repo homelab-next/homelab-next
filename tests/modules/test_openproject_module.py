@@ -23,6 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.modules import cli as mcli
@@ -120,6 +121,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["openproject"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -141,6 +143,7 @@ def test_the_row_is_public_through_the_edge_on_the_apps_own_accounts():
     assert "version" not in row and "clients" not in row and "roles" not in row
 
 
+@pytest.mark.static
 def test_the_secrets_are_the_three_the_role_reads_and_nothing_else():
     manifest = ld.load_yaml(MODULE / "module.yml")
     declared = sorted(c["secret"] for c in manifest["credentials"])
@@ -164,6 +167,7 @@ def test_the_images_are_pinned_and_the_apps_tag_carries_the_product_version():
     assert defaults["openproject_postgres_image"].startswith("docker.io/library/postgres:17.")
 
 
+@pytest.mark.static
 def test_pin_freshness_watches_the_three_images():
     sys.path.insert(0, str(ROOT / "tools"))
     try:
@@ -222,6 +226,7 @@ def test_the_public_row_needs_a_public_routes_grant(tmp_path, capsys):
 # ----------------------------------------------------------------------------- conformance, lint
 
 
+@pytest.mark.static
 def test_the_conformance_target_binds_the_slots_shared_adapter():
     from homelabnext.conform.target import load_target
 

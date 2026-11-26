@@ -93,6 +93,7 @@ def test_expected_schema_set_is_present():
     assert set(IDS) == EXPECTED
 
 
+@pytest.mark.static
 def test_readme_per_schema_dir():
     for d in OWNED_DIRS:
         assert (ROOT / "schemas" / d / "README.md").is_file(), d
@@ -127,6 +128,7 @@ def test_id_convention(path):
     assert minor >= 0
 
 
+@pytest.mark.static
 def test_event_schemas_cover_reaction_seam_types():
     types = {
         json.loads(p.read_text())["allOf"][1]["properties"]["type"]["const"]
@@ -156,10 +158,12 @@ def test_event_schemas_cover_reaction_seam_types():
     }
 
 
+@pytest.mark.static
 def test_event_examples_use_documentation_ips_only():
     assert [p for p in sc.check_repo(ROOT, ["events"], strict=True) if "lint" in p.message] == []
 
 
+@pytest.mark.static
 def test_envelope_example_of_each_type_is_accepted_by_envelope_too():
     env = json.loads((ROOT / "schemas/events/envelope.schema.json").read_text())
     for f in (ROOT / "schemas/events/examples").glob("*.valid.json"):

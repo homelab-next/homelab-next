@@ -4,15 +4,13 @@
 One rule for every check that takes ``--ci-base`` (``tools/schema_check.py``,
 ``tools/product_name_lint.py``, ``hnx modules review-tier`` and ``swap-check``), kept in the
 package so a CLI never loads a file from the checkout to find it.  It is still the code of
-whatever is installed: in a pull request's own CI run that is the pull request's, which is why the
-gates that must not trust the change run from a checkout of the base (``.github/workflows/ci.yml``,
-job ``trusted-gates``; docs/modules.md, "Swap record 1.2").
+whatever is installed: in a pull request's own CI run that is the pull request's (the base-code
+``trusted-gates`` job was dropped on 2026-11-25; docs/modules.md, "Swap record 1.2").
 
 It is also the one copy of the rule for CI's shell steps: ``python -m homelabnext.gitbase`` prints
 the base commit (the reason goes to stderr), and the jobs that compare with a base call it rather
-than writing the rule out again (``register-ids`` and ``regression-tests``, with
-``--allow-root``; ``trusted-gates`` reads this file from the commit it trusts and calls
-:func:`ci_base_from_env`, refusing a root commit)."""
+than writing the rule out again (``tools/precheck.sh``, CI's precheck job, and
+``regression-tests``, with ``--allow-root``)."""
 
 from __future__ import annotations
 

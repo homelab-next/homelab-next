@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -59,6 +60,7 @@ def test_the_model_store_cli_install_has_packaging_before_pip():
     assert pkg_at < pip_at
 
 
+@pytest.mark.static
 def test_the_automation_front_reaches_its_services_by_absolute_names():
     found = 0
     for path in ROOT.glob("modules/*/roles/*/vars/main.yml"):
@@ -72,6 +74,7 @@ def test_the_automation_front_reaches_its_services_by_absolute_names():
     assert found == 1
 
 
+@pytest.mark.static
 def test_the_tts_build_recipe_tags_the_pinned_repository():
     pinned = "localhost/hnx-tts"
     for rel in ("modules/tts/README.md", "modules/tts/image/Dockerfile"):

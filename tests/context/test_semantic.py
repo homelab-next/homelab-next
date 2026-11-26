@@ -350,6 +350,7 @@ def test_evaluate_metrics_on_a_tiny_corpus():
         )
 
 
+@pytest.mark.static
 def test_public_fixture_questions_point_at_real_docs():
     docs, _ = evalrun.load_corpus(docs=str(ROOT / "docs"))
     qs = evalrun.load_questions(QUESTIONS)
@@ -629,6 +630,7 @@ def _semantic(**kw):
     return SemanticContextStore(model, **kw)
 
 
+@pytest.mark.static
 def test_semantic_passes_the_conformance_suite():
     _semantic()
     from homelabnext.conform.runner import run_capability

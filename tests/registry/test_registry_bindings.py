@@ -136,6 +136,7 @@ def test_the_current_examples_pass(site, capsys):
     assert "3 gateway spec(s)" in out
 
 
+@pytest.mark.static
 def test_make_check_runs_the_bindings_check_over_the_examples():
     make = (ROOT / "Makefile").read_text(encoding="utf-8")
     assert re.search(r"^check:.*\bbindings-check\b", make, re.M)
@@ -152,6 +153,7 @@ def test_make_check_runs_the_bindings_check_over_the_examples():
         assert arg in recipe, arg
 
 
+@pytest.mark.static
 def test_the_overlay_template_runs_the_bindings_check_over_lab():
     path = ROOT / "examples/private-overlay/.github/workflows/checks.yml"
     wf = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -166,6 +168,7 @@ def test_the_overlay_template_runs_the_bindings_check_over_lab():
     assert "--reference-examples" not in run  # a lab's check never gets the leniency
 
 
+@pytest.mark.static
 def test_make_check_names_every_example_gateway_spec_and_checks_every_pack():
     make = (ROOT / "Makefile").read_text(encoding="utf-8")
     line = next(x for x in make.splitlines() if x.startswith("BINDINGS_GATEWAYS :="))
@@ -368,6 +371,7 @@ def test_the_overlap_source_passes_as_a_source_and_fails_as_a_target(tmp_path, c
     assert "svc:llm-orchestrator is a declared platform source, an event source only" in err
 
 
+@pytest.mark.static
 def test_the_controller_packs_target_its_row(capsys):
     """The packs' broker target is svc:orchestrator, the example controller row, with no
     leniency: the unplaced entry for orchestration is gone."""
@@ -442,6 +446,7 @@ def test_a_malformed_svc_id_is_refused(tmp_path, capsys, bad):
     assert rc == 1 and "malformed svc: id" in err
 
 
+@pytest.mark.static
 def test_every_unplaced_entry_is_a_platform_capability_scoped_to_existing_packs():
     from homelabnext.capability_names import platform_capabilities
 
@@ -708,6 +713,7 @@ def _allow_eval_uses(tree: ast.AST) -> list[tuple[str, int]]:
     return out
 
 
+@pytest.mark.static
 def test_only_the_egress_canary_runner_passes_allow_eval():
     found = []
     for p in sorted((ROOT / "homelabnext").rglob("*.py")):
@@ -819,6 +825,7 @@ DECISION_16_CONSUMERS = (
 )
 
 
+@pytest.mark.static
 def test_the_consumer_check_lists_every_consumer_of_the_old_source(capsys):
     """ADR-0026 decision 16: the old source goes at cutover+1 only once this check finds none;
     today it finds every consumer the decision names, and reads the conformance fakes, where none

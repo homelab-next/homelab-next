@@ -523,6 +523,7 @@ def public_tree(tmp_path: Path) -> Path:
     return root
 
 
+@pytest.mark.static
 def test_this_repository_passes_public_mode():
     assert plc.check_public(ROOT) == []
     r = run("public", str(ROOT))
@@ -981,6 +982,7 @@ def test_a_short_form_that_is_no_version_is_judged_strictly(text):
     assert "scope-address" in rules(plc.scope_findings("x.yml", text))
 
 
+@pytest.mark.static
 def test_every_allowlist_entry_names_files_that_exist():
     for glob in plc.SCOPE_BLOCK_PATHS:
         assert list(ROOT.glob(glob)), glob
@@ -1171,6 +1173,7 @@ def test_the_one_exemption_is_one_exact_location_in_one_file(tmp_path):
     assert rules(plc.check_public(root)) == {"scope-address"}
 
 
+@pytest.mark.static
 def test_the_example_sites_carry_a_scope_block_the_check_reads():
     """The check is not vacuous on this tree: every example site has a scope block it parses
     strictly, and a planted non-documentation address fails it."""

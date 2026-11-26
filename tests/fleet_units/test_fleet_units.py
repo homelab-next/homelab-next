@@ -18,6 +18,7 @@ def entry(**kw):
     return e
 
 
+@pytest.mark.static
 def test_goldens_are_byte_identical():
     files = fu.render_file(SPEC)
     assert sorted(files) == sorted(p.name for p in GOLDEN.iterdir())
@@ -25,6 +26,7 @@ def test_goldens_are_byte_identical():
         assert content.encode() == (GOLDEN / name).read_bytes(), name
 
 
+@pytest.mark.static
 def test_render_is_deterministic_and_order_independent():
     spec = yaml.safe_load(SPEC.read_text())
     assert fu.render(spec) == fu.render(list(reversed(spec)))
@@ -46,6 +48,7 @@ def test_cli_refusal_exit_code(tmp_path, capsys):
     assert fu.main([str(tmp_path / "missing.yml"), str(tmp_path / "out")]) == 2
 
 
+@pytest.mark.static
 def test_pages_directly_and_retired_semantics():
     files = fu.render(yaml.safe_load(SPEC.read_text()))
     assert "OnFailure=hnx-page@%n.service" in files["hnx-notify-digest.service"]
@@ -54,6 +57,7 @@ def test_pages_directly_and_retired_semantics():
     assert "retired hnx-legacy-sweep.timer" in files["fleet-units.manifest"]
 
 
+@pytest.mark.static
 def test_timers_are_oncalendar_only():
     for name, content in fu.render(yaml.safe_load(SPEC.read_text())).items():
         if name.endswith(".timer"):
@@ -186,6 +190,7 @@ def test_read_write_paths_open_protect_system_strict():
     assert "ReadWritePaths=/var/lib/job /srv/out" in text
 
 
+@pytest.mark.static
 def test_every_line_is_one_directive():
     """No value can contribute a second directive: one '=' per Service line, known keys only."""
     files = fu.render(yaml.safe_load(SPEC.read_text()))

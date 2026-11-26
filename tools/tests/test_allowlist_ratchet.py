@@ -310,6 +310,7 @@ def test_a_list_the_bases_counts_lack_rises_from_zero_for_review(tmp_path, owner
     assert "its entries changed" not in out  # the rise already says it
 
 
+@pytest.mark.static
 def test_each_gate_allow_file_is_a_list_named_after_the_file():
     assert ar._list_name("tools/credential_headers.allow.yml") == "credential-headers-allow"
     on_disk = {f"tools/{p.name}" for p in (REPO / "tools").glob("*.allow.yml")}
@@ -357,33 +358,21 @@ def test_an_unusable_base_is_an_error(tmp_path):
 # ----------------------------------------------------------------------------- this repository
 
 
+@pytest.mark.static
 def test_this_repository_is_at_its_counts():
     rc, out, _ = _run(REPO)
     assert rc == 0, out
 
 
+@pytest.mark.static
 def test_the_ratchet_runs_in_make_gates_and_ci():
+    from tests.ci_runs import ci_text
+
     make = (REPO / "Makefile").read_text()
     gates = make[make.index("\ngates:\n") :].split("\n\n", 1)[0]
     assert "$(PY) tools/allowlist_ratchet.py ." in gates
-    ci = (REPO / ".github/workflows/ci.yml").read_text()
-    assert "run: python tools/allowlist_ratchet.py --ci-base ." in ci
-
-
-def test_the_trusted_gates_copy_is_added_or_its_follow_up_is_still_tracked():
-    """The schemas job's copy is the change's own, which the change can edit; the base's copy in
-    trusted-gates waits for the tool to be on main, and the open follow-up says so until then."""
-    import yaml
-
-    ci = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text())
-    trusted = "\n".join(str(s.get("run", "")) for s in ci["jobs"]["trusted-gates"]["steps"])
-    # whitespace-insensitive: a rewrap of the CONTRIBUTING paragraph must not flip the check
-    contributing = " ".join((REPO / "CONTRIBUTING.md").read_text().split())
-    follow_up = "**Follow-up, open:** add the base's copy to CI's `trusted-gates` job"
-    if '"$RUNNER_TEMP/base/tools/allowlist_ratchet.py" --base "$BASE"' in trusted:
-        assert follow_up not in contributing
-    else:
-        assert follow_up in contributing
+    # CI's precheck job: make precheck runs the ratchets target against the event's base
+    assert "python tools/allowlist_ratchet.py --base " in ci_text()
 
 
 def test_every_allowlist_and_baseline_file_is_ratcheted_or_excluded_with_a_reason():

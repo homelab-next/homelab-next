@@ -20,6 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.modules import cli as mcli
@@ -108,6 +109,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -116,6 +118,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_the_module_contributes_one_role_one_row_and_one_credential():
     manifest = ld.load_yaml(MODULE / "module.yml")
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["tunnel"]
@@ -148,6 +151,7 @@ def test_the_image_pin_is_the_product_version_and_a_digest():
     assert image.split("@")[1].startswith("sha256:") and len(image.split("@")[1]) == 71
 
 
+@pytest.mark.static
 def test_no_ingress_configuration_ships_with_the_module():
     files = [p for p in MODULE.rglob("*") if p.is_file() and "roles" in p.parts]
     assert not [p for p in files if p.suffix == ".j2" or p.name.startswith("config")]

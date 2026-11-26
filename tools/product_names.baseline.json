@@ -1,7 +1,7 @@
 {
  "counts": {
   ".github/workflows/ci.yml": {
-   "caddy": 16
+   "caddy": 13
   },
   "Makefile": {
    "caddy": 5

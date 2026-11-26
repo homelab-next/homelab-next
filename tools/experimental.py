@@ -5,7 +5,7 @@
 #   kind: tool
 #   purpose: Run the gates and tests of the experimental and frozen components listed in tools/experimental.yml, outside the blocking set.
 #   owner: maintainers
-#   trigger: [make:experimental, ci:ci/schemas, ci:ci/trusted-gates]
+#   trigger: [make:experimental, make:ratchets]
 #   inputs: tools/experimental.yml (or --file); the base commit's list (ratchet --base, --ci-base)
 #   outputs: one line per gate and the pytest run of the components' tests; `list` prints the components; `ratchet` one line per growth
 #   exit:
@@ -27,8 +27,8 @@ to the list.
 ``ratchet`` holds the list to a base commit's (:func:`growth`): it may shrink freely, but a
 component, test or code path, gate, invariant or conformance capability that the base's list does
 not already take out of the blocking set is growth, and fails (exit 1) unless the operator allowed
-it.  CI's ``trusted-gates`` job runs the base's copy of this file, so a change cannot argue its way
-past a red test by listing it.  The operator allows growth with the pull-request label
+it.  CI's ``precheck`` job runs it against the base (``make precheck``, the ratchets target), so a
+change cannot quietly list its way past a red test.  The operator allows growth with the pull-request label
 ``experimental-growth`` (:data:`GROWTH_LABEL`), which the workflow passes in
 ``HNX_EXPERIMENTAL_GROWTH`` (:data:`GROWTH_ENV`) as ``label`` only on the run that applying the
 label triggered, so it approves that head and no later push; a push to ``main`` passes ``push``,

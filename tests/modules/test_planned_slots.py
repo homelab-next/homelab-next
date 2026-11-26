@@ -88,6 +88,7 @@ def test_each_planned_slot_is_a_warning_with_its_why_and_review_by(tree):
     ]
 
 
+@pytest.mark.static
 def test_the_cli_prints_the_warnings_and_exits_zero(capsys):
     argv = ["check", "--root", str(ROOT), "--examples", "--site", str(FIXTURE)]
     assert mcli.main(argv) == 0
@@ -253,6 +254,7 @@ def test_provider_for_says_a_planned_slot_is_not_served(tree):
         provider_for(fixture(), tree.mods, "cap:idp")
 
 
+@pytest.mark.static
 def test_hnx_modules_providers_lists_the_planned_slots(capsys):
     argv = ["providers", "--root", str(ROOT), "--examples", "--site", str(FIXTURE)]
     assert mcli.main([*argv, "--json"]) == 0
@@ -455,6 +457,7 @@ def test_a_pass_through_next_to_a_planned_slot_says_it_is_not_served(tree, ins):
     assert "cap:log-pipeline: pass-through with no upstream stage selected" not in got
 
 
+@pytest.mark.static
 def test_a_swap_s_incoming_module_may_not_require_a_planned_slot():
     from homelabnext.modules import swap as msw
 

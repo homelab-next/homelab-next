@@ -18,7 +18,7 @@ help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-canary agent-lint prompts-lint memory-replay injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check licence-check clean"
 	@echo "experimental and frozen components (tools/experimental.yml; never in check): experimental"
 	@echo "Code Mode golden suites (CM-6; frozen, run by experimental): codemode-golden-report"
-	@echo "hygiene: helpers-lint dup-check tls-lint caddy-lint workstation-lint run-output-lint keyring-check keyring"
+	@echo "hygiene: helpers-lint dup-check tls-lint (and the F-23 edge lint) workstation-lint run-output-lint keyring-check keyring"
 	@echo "knowledge graph (local docs/graph/, integrity checked in gates): graph"
 	@echo "strategy to task (examples/strategy, docs/strategy.md; frozen, run by experimental): strategy"
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
@@ -44,9 +44,57 @@ fmt:
 # test_this_repo_meets_the_floor runs tools/coverage_floor.py, the whole suite again under
 # coverage, which no suite time budget allows for; `coverage` below runs it on its own, as CI's
 # coverage job does.
-PYTEST_ARGS := -q -m "not live and not experimental" --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
+# The `static` tests (repository-consistency rules: they read the tree, run no product) run in
+# `precheck` (static-tests below), and the `perf` tests (wall-clock bounds, flaky on a loaded
+# runner) run in the nightly workflow only, so neither is part of this selection.
+PYTEST_ARGS := -q -m "not live and not experimental and not static and not perf" --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
 test:
 	$(PY) -m pytest $(PYTEST_ARGS)
+
+# The pytest rules that only read the repository (marker `static`, written on the test: the files
+# that carry it are the selection), in one run on every CPU: the precheck's share of the suite.
+.PHONY: static-tests
+check: static-tests
+static-tests:
+	$(PY) -m pytest -q -p no:cacheprovider -n auto -m "static and not live and not experimental" $$(git grep -l -e "mark\.static" -- "tests/*.py" "tools/tests/*.py" "conformance/*.py")
+
+# `make precheck`: every static gate of `check` (all but the suite and the coverage floor), the
+# hygiene checks, the invariants' fast criteria, the ratchets against BASE and the static tests, in
+# one parallel make run (tools/precheck.sh picks BASE and the job count, and prints what failed).
+# CI's first job runs it; run it before every push (tools/install-prepush-hook.sh installs a hook).
+.PHONY: precheck precheck-run ratchets hygiene
+precheck:
+	PY="$(PY)" tools/precheck.sh
+precheck-run: lint component-tests hermetic-lint schemas gates decide-lint decide-safety models-check
+precheck-run: agent-lint prompts-lint injection-check workflows scripts-check detections registers
+precheck-run: ids-check conform-check spdx leak-scan changelog-check gateway-check bindings-check
+precheck-run: mcp-check contracts private-overlay-check licence-check helpers-lint dup-check tls-lint
+precheck-run: caddy-lint workstation-lint keyring-check run-output-lint invariants hygiene ratchets
+precheck-run: static-tests
+
+# once per clone or worktree: `make precheck` as the git pre-push hook (git push --no-verify skips it)
+.PHONY: prepush-hook
+prepush-hook:
+	tools/install-prepush-hook.sh
+
+# merge markers, files over 512 KB, private keys, YAML/JSON syntax and symlinks over every tracked
+# file (the pre-commit hooks that need no environment of their own)
+check: hygiene
+hygiene:
+	$(PY) tools/hygiene.py
+
+# The ratchets that hold a change to its base (BASE=<rev>; tools/precheck.sh sets it from CI's
+# event or the merge base with origin/main): the product-name and copy-paste baselines and the
+# allowlist counts never grow, tools/experimental.yml only shrinks (HNX_EXPERIMENTAL_GROWTH), each
+# changed module path's review tier and code owner, and a role-table change's swap record.  With
+# no BASE every line is empty and the target does nothing.
+ratchets:
+	$(if $(BASE),$(PY) tools/product_name_lint.py --base $(BASE) .)
+	$(if $(BASE),$(PY) tools/allowlist_ratchet.py --base $(BASE) .)
+	$(if $(BASE),$(PY) tools/dup_check.py --base $(BASE) .)
+	$(if $(BASE),$(PY) tools/experimental.py ratchet --base $(BASE) .)
+	$(if $(BASE),$(PY) -m homelabnext.cli modules review-tier --base $(BASE))
+	$(if $(BASE),$(PY) -m homelabnext.cli modules swap-gate --base $(BASE))
 
 # Q-07: each security-critical unit (broker, scope guard, records lifecycle, decide cascade, the
 # agent grant ceiling and the others listed in tools/coverage_floor.py) keeps >= 80% line
@@ -111,8 +159,8 @@ modules-check:
 
 # each module path the working tree changes against BASE (default origin/main): its review tier,
 # and a valid CODEOWNERS owner (as of BASE) for every human-approve one (ADR-0027 follow-up 4);
-# not part of gates, which has no base to compare with (CI runs it in job trusted-gates, with the
-# base's own code)
+# not part of gates, which has no base to compare with (CI runs it in the ratchets target of
+# `make precheck`, against the event's base)
 .PHONY: modules-review-tier
 # BASE itself stays empty unless given (make variables are global, and schemas and ids-check treat
 # a set BASE as an opt-in comparison), so the targets that need a base default it here instead
@@ -132,7 +180,7 @@ swap-check:
 
 # the role table against BASE (default origin/main): a change must be covered by a swap record
 # under examples/swaps/ whose legs hold against BASE's evidence. Not part of gates, which has no
-# base to compare with (CI runs it in job trusted-gates, with the base's own code)
+# base to compare with (CI runs it in the ratchets target of `make precheck`)
 .PHONY: swap-gate
 swap-gate:
 	$(PY) -m homelabnext.cli modules swap-gate --base "$(REVIEW_BASE)"

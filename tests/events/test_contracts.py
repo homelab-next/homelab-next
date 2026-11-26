@@ -208,6 +208,7 @@ def test_a_body_over_max_event_bytes_is_refused_before_it_is_parsed(monkeypatch)
     assert "MAX_EVENT_BYTES" in exc.value.problems[0]
 
 
+@pytest.mark.perf
 def test_a_wide_body_at_the_size_limit_is_checked_in_bounded_time():
     """The worst shape for the one-pass depth/surrogate walk: ~1 MiB of tiny containers and
     strings, flat and at the depth limit.  Each is decoded (and refused, it is no event) quickly."""
