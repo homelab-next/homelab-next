@@ -1311,7 +1311,7 @@ def lake_table_schema() -> dict[str, Any]:
         "$id": BASE + "platform/lake_table/1.0",
         "x-draft": "ADR-0027 (proposed): promoted from the module manifest's inline lake tables; not frozen",
         "title": "Lake table declaration",
-        "description": "One lake table's operational declaration (docs/modules.md): owner, schema, retention, maintenance and freshness. A module contributes its own tables (namespace = its id, - as _); the core declares its OCSF tables the same way, so lake maintenance enumerates records instead of keeping a list. Columns are never here: they come from the table schema (x-lake).",
+        "description": "One lake table's operational declaration (docs/modules.md): owner, schema, retention, its TLP label (tlp), maintenance and freshness. A module contributes its own tables (namespace = its id, - as _); the core declares its OCSF tables the same way, so lake maintenance enumerates records instead of keeping a list. Columns are never here: they come from the table schema (x-lake).",
         "type": "object",
         "additionalProperties": False,
         "required": ["id", "owner", "retention_days", "freshness"],
@@ -1325,6 +1325,10 @@ def lake_table_schema() -> dict[str, Any]:
                 256,
             ),
             "retention_days": retention,
+            "tlp": {
+                "enum": list(LABELS),
+                "description": "The most restrictive TLP label a row of this table may carry (ADR-0033 decision 5): what a reader's ceiling must reach to read every row. Metadata: each row still carries its own label, set by its writer, and readers filter on that. Absent, the table is red (decision 2). A dataset of the owner that names this table (kind lake-table) must not be labelled above it.",
+            },
             "maintenance": {
                 "type": "object",
                 "additionalProperties": False,

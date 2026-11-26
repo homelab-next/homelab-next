@@ -55,7 +55,7 @@ from typing import Any
 
 import yaml
 
-from homelabnext import paths
+from homelabnext import paths, tlp
 from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.modules import guest_hosts as gh
@@ -856,6 +856,7 @@ def _record_problems(doc: Doc, mod_dir: Path, load) -> list[str]:
     for e, rec in each([x["file"] for x in c.get("lake_tables", [])], table, "lake table"):
         if isinstance(rec, dict) and rec.get("owner") != mid:
             out.append(f"{e}: a lake table's owner is the module")
+        out += _table_label_problems(e, rec, doc)
     for e in [x["file"] for x in c.get("detections", [])]:
         if read(e) is _UNREAD:
             continue
@@ -1132,6 +1133,29 @@ def core_units(
                 else:
                     names.add(m["name"])
     return frozenset(names), frozenset(families), out
+
+
+def _table_label_problems(where: str, rec: Any, doc: Doc) -> list[str]:
+    """ADR-0033 decision 5: a lake table's ``tlp`` is the most restrictive label a row may carry,
+    so a dataset of the module that names the table (kind ``lake-table``) cannot be labelled
+    above it (a table with no ``tlp`` is red, which holds every label)."""
+    if not (isinstance(rec, dict) and "tlp" in rec):
+        return []
+    try:
+        ceiling = tlp.parse(rec["tlp"])
+    except ValueError:
+        return []  # the record's schema has already refused a label that is not canonical
+    out = []
+    for ds in doc.get("data", []):
+        if ds.get("table") != rec.get("id"):
+            continue
+        label, _ = mr.dataset_label(ds)
+        if label > ceiling:
+            out.append(
+                f"{where}: dataset {ds.get('id')} is labelled {label}, above its table's tlp "
+                f"{ceiling}"
+            )
+    return out
 
 
 def _module_tables(m: Doc, d: Path, load) -> set[str]:

@@ -40,6 +40,7 @@ Agent sessions pushed to the ingest listener (cloud sessions, orchestrators); st
 - Declared by: [`svc:status-hub`](../systems/status-hub.md) ([[systems/status-hub|status-hub]]), capability `cap:status-hub`
 - Kind: `agent-activity`; target: pushed (`homelabnext.status.observed`)
 - Mapping: builtin agent-push
+- TLP label: `red`
 - Module: `agents`; graph node `status:agent-push`
 - Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
 
@@ -50,6 +51,7 @@ Agent sessions from the local hook spool (Claude Code hooks and other CLIs); stu
 - Declared by: [`svc:status-hub`](../systems/status-hub.md) ([[systems/status-hub|status-hub]]), capability `cap:status-hub`
 - Kind: `agent-activity`; target: file `build/status/agent-spool`
 - Mapping: builtin agent-spool
+- TLP label: `red`
 - Module: `agents`; graph node `status:agent-spool`
 - Every 30 s, timeout 10 s; stale after 90 s without a reading; a failed poll reads as `unknown`
 
@@ -60,6 +62,7 @@ Whether the agent dashboard's audit trail is being written (warn when off, empty
 - Declared by: [`svc:agentmetry`](../systems/agentmetry.md) ([[systems/agentmetry|agentmetry]]), capability `cap:agent-audit`
 - Kind: `poll-http-json`; target: `agentmetry` `/api/v1/audit/status`
 - Mapping: builtin agentmetry-audit
+- TLP label: `red`
 - Credential: from the secret store (this source's `auth.secret`), sent as `X-API-Key`
 - Module: `agents`; graph node `status:agentmetry-audit`
 - Every 5 min, timeout 10 s; stale after 15 min without a reading; a failed poll reads as `unknown`
@@ -71,6 +74,7 @@ Agent sessions read from an Agentmetry canonical JSONL trail (optional external 
 - Declared by: [`svc:status-hub`](../systems/status-hub.md) ([[systems/status-hub|status-hub]]), capability `cap:status-hub`
 - Kind: `agent-activity`; target: file `build/status/agentmetry/audit-forward.jsonl`
 - Mapping: builtin agentmetry-jsonl
+- TLP label: `red`
 - Module: `agents`; graph node `status:agentmetry-trail`
 - Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
 
@@ -81,6 +85,7 @@ Broker requests waiting for an approval, with the oldest age (optional - only wi
 - Declared by: [`svc:records-db`](../systems/records-db.md) ([[systems/records-db|records-db]]), capability `cap:records-db`
 - Kind: `poll-file`; target: file `examples/status/broker-pending.json`
 - Mapping: builtin broker-pending
+- TLP label: `red`
 - Module: `records-db`; graph node `status:approvals`
 - Every 5 min, timeout 10 s; stale after 15 min without a reading; a failed poll reads as `unknown`
 
@@ -91,6 +96,7 @@ Actions with failed or timed-out executions in the last hour (fail) and the runn
 - Declared by: [`svc:automation`](../systems/automation.md) ([[systems/automation|automation]]), capability `cap:automation`
 - Kind: `poll-stackstorm`; target: `automation` `/api/v1/executions`
 - Mapping: built in (poll-stackstorm)
+- TLP label: `red`
 - Credential: from the secret store (this source's `auth.secret`), sent as `St2-Api-Key`
 - Module: `automation`; graph node `status:automation-executions`
 - Every 2 min, timeout 15 s; stale after 6 min without a reading; a failed poll reads as `unknown`
@@ -102,6 +108,7 @@ Queued flowfiles, invalid and stopped components, and error or warning bulletins
 - Declared by: [`svc:dataflow`](../systems/dataflow.md) ([[systems/dataflow|dataflow]]), capability `cap:dataflow`
 - Kind: `poll-nifi`; target: `dataflow` `/nifi-api/flow/status`
 - Mapping: built in (poll-nifi)
+- TLP label: `red`
 - Credential: from the secret store (this source's `auth.secret`), sent as `Authorization: Bearer`
 - Module: `dataflow`; graph node `status:dataflow-status`
 - Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
@@ -113,6 +120,7 @@ The last invariants run, one item per criterion (pass is ok, fail is fail, error
 - Declared by: [`svc:metrics`](../systems/metrics.md) ([[systems/metrics|metrics]]), capability `cap:metrics`
 - Kind: `poll-file`; target: file `examples/registers/invariants.results.json`
 - Mapping: builtin invariants-results
+- TLP label: `red`
 - Module: `invariants`; graph node `status:invariants`
 - Every 1 h, timeout 10 s; stale after 3 h without a reading; a failed poll reads as `unknown`
 
@@ -123,6 +131,7 @@ The last run of each role timer on each host whose last-run records reach the hu
 - Declared by: [`svc:status-hub`](../systems/status-hub.md) ([[systems/status-hub|status-hub]]), capability `cap:status-hub`
 - Kind: `poll-file`; target: file `examples/status/last-run`
 - Mapping: builtin job-last-run
+- TLP label: `red`
 - Module: `jobs`; graph node `status:job-runs`
 - Every 5 min, timeout 10 s; stale after 15 min without a reading; a failed poll reads as `unknown`
 
@@ -133,6 +142,7 @@ Every firing alert of the metrics service, fail or warn by its severity label; r
 - Declared by: [`svc:metrics`](../systems/metrics.md) ([[systems/metrics|metrics]]), capability `cap:metrics`
 - Kind: `poll-prometheus`; target: `metrics` `/api/v1/alerts`
 - Mapping: builtin prometheus-alerts
+- TLP label: `red`
 - Module: `metrics`; graph node `status:metrics-alerts`
 - Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
 
@@ -143,6 +153,7 @@ Whether each scrape job's targets answer (up is 1); a job whose target is down i
 - Declared by: [`svc:metrics`](../systems/metrics.md) ([[systems/metrics|metrics]]), capability `cap:metrics`
 - Kind: `poll-prometheus`; target: `metrics` `/api/v1/query`
 - Mapping: instant query `up`
+- TLP label: `red`
 - Module: `metrics`; graph node `status:metrics-targets`
 - Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
 
@@ -153,6 +164,7 @@ Whether the notification service answers its own health endpoint.
 - Declared by: [`svc:notify`](../systems/notify.md) ([[systems/notify|notify]]), capability `cap:notify`
 - Kind: `poll-http-json`; target: `notify` `/v1/health`
 - Mapping: selectors
+- TLP label: `red`
 - Module: `notify`; graph node `status:notify-health`
 - Every 1 min, timeout 5 s; stale after 3 min without a reading; a failed poll reads as `fail`
 
@@ -163,6 +175,7 @@ Queued and running orchestrator jobs; the oldest queued job waiting over an hour
 - Declared by: [`svc:orchestrator`](../systems/orchestrator.md) ([[systems/orchestrator|orchestrator]]), capability `cap:orchestration`
 - Kind: `poll-http-json`; target: `orchestrator` `/admin/queue-summary`
 - Mapping: builtin orchestrator-queue
+- TLP label: `red`
 - Credential: from the secret store (this source's `auth.secret`), sent as `Authorization: Bearer`
 - Module: `orchestrator`; graph node `status:orchestrator-queues`
 - Every 1 min, timeout 5 s; stale after 3 min without a reading; a failed poll reads as `fail`
@@ -174,6 +187,7 @@ Run outcomes the orchestrator publishes itself as status.observed events.
 - Declared by: [`svc:orchestrator`](../systems/orchestrator.md) ([[systems/orchestrator|orchestrator]]), capability `cap:orchestration`
 - Kind: `push-event`; target: pushed (`homelabnext.status.observed`)
 - Mapping: event (observation as published)
+- TLP label: `red`
 - Module: `orchestrator`; graph node `status:orchestrator-runs`
 - Every 5 min, timeout 10 s; stale after 15 min without a reading; a failed poll reads as `unknown`
 
@@ -184,6 +198,7 @@ The proposal lanes - notes in the inbox and approved but not completed, with the
 - Declared by: [`svc:records-db`](../systems/records-db.md) ([[systems/records-db|records-db]]), capability `cap:records-db`
 - Kind: `poll-file`; target: file `examples/status/records`
 - Mapping: builtin records-lanes
+- TLP label: `red`
 - Module: `records-db`; graph node `status:proposals`
 - Every 5 min, timeout 10 s; stale after 15 min without a reading; a failed poll reads as `unknown`
 
@@ -194,6 +209,7 @@ Every monitor on the uptime service's public status page (no login); down is fai
 - Declared by: [`svc:uptime`](../systems/uptime.md) ([[systems/uptime|uptime]]), capability `cap:uptime`
 - Kind: `poll-uptime-kuma`; target: `uptime` `/api/status-page/lab`
 - Mapping: built in (poll-uptime-kuma)
+- TLP label: `red`
 - Module: `uptime`; graph node `status:uptime-monitors`
 - Every 1 min, timeout 10 s; stale after 3 min without a reading; a failed poll reads as `unknown`
 
@@ -212,6 +228,7 @@ UPS ups-a (Example 1500VA) through NUT: on battery is warn, low battery or repla
 - Declared by: `svc:ups-monitor` of `examples/lab-topology/services.yml`, capability `cap:ups-monitor`
 - Kind: `poll-nut`; target: `ups-monitor` (upsd, NUT protocol)
 - Mapping: built in (poll-nut: UPS ups-a)
+- TLP label: `red`
 - Credential: NUT `USERNAME hub-monitor`, `PASSWORD` from the secret store (this source's `auth.secret`), over STARTTLS
 - Site UPS `ups-a`; feeds `edge:cable-modem`, `router:harbor-gw`, `switch:core-sw`; guests on it: `cases-1`, `hv-1`, `idp-1`, `sensor-1`, `siem-1`, `soar-1`
 - Module: `ups-monitor`; graph node `status:power-ups-a`
