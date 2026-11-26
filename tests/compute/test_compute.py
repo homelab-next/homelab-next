@@ -478,6 +478,32 @@ def test_backup_jobs_exclude_opt_outs(good):
     assert "guest:bus-core" not in members and "guest:secrets-core" in members
 
 
+def test_backup_jobs_host_only_renders_kind_not_vmid(tmp_path):
+    """A host-only guest (a physical sensor, a DNS Pi, the hypervisor's own config) that
+    declares a backup policy has no vmid: the render says so explicitly with
+    ``kind: host-only`` in place of vmid, so a job dispatcher can tell a file-level backup from
+    a vzdump without reading the absence of a field (ADR-0042). VM members are unchanged."""
+    d = tmp_path / "fleet"
+    shutil.copytree(FLEET, d)
+    # The example fleet's hv-a is the hypervisor (kind: host, provisioning: host-only); giving it
+    # a named backup policy is enough to exercise the host-only path through backup_jobs render.
+    p = d / "hv-a.yml"
+    doc = yaml.safe_load(p.read_text())
+    doc["backup"] = {"policy": "daily", "retain": {"daily": 7}}
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    fleet = load_fleet(d, STUB, keys_path=KEYS)
+    jobs = yaml.safe_load(render(fleet, "backup-jobs")["backup-jobs.yml"])["jobs"]
+    daily = next(j for j in jobs if j["policy"] == "daily")
+    hv = next(m for m in daily["members"] if m["guest"] == "guest:hv-a")
+    assert hv["kind"] == "host-only"
+    assert "vmid" not in hv
+    # the VM members in the same job still carry their vmid, unchanged
+    for m in daily["members"]:
+        if m["guest"] != "guest:hv-a":
+            assert "vmid" in m and isinstance(m["vmid"], int)
+            assert "kind" not in m
+
+
 def test_unknown_target(good):
     with pytest.raises(ComputeError, match="unknown target"):
         render(good, "nope")
