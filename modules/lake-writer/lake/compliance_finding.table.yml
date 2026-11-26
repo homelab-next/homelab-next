@@ -4,6 +4,7 @@ id: table:soc.compliance_finding
 owner: lake-writer
 schema: roles/lake_writer/files/schemas/compliance_finding.v1.json
 retention_days: 365
+tlp: red
 maintenance:
   compact: true
   expire_snapshots_days: 7

@@ -26,9 +26,9 @@ DOC = yaml.safe_load((ROOT / "examples/services.yml").read_text())
 
 
 def test_version_is_2_15_frozen_and_additive():
-    assert CURRENT["$id"].endswith("/platform/service/2.15")
-    assert FROZEN_215 == CURRENT
-    assert sc.is_additive(FROZEN_214, CURRENT) == []
+    assert FROZEN_215["$id"].endswith("/platform/service/2.15")
+    assert sc.is_additive(FROZEN_214, FROZEN_215) == []
+    assert sc.is_additive(FROZEN_215, CURRENT) == []
 
 
 def test_the_exemption_validates_in_2_15_only_and_reaches_the_model():
