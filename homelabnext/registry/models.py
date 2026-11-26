@@ -190,11 +190,7 @@ class RoleTable:
                 if isinstance(prio, bool) or not isinstance(prio, int):
                     problems.append(f"role {name}: bindings[{i}].priority must be an integer")
                     continue
-                if prio < 0:
-                    problems.append(
-                        f"role {name}: bindings[{i}].priority must be 0 (unset) or >= 1"
-                    )
-                    continue
+                # a negative priority is the schema's to refuse (minimum 0), with its path
                 m = SVC_RE.match(str(b.get("backend", "")))
                 if not m:
                     problems.append(f"role {name}: bindings[{i}].backend must be a svc: id")
