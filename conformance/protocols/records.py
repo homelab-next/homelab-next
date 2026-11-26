@@ -19,6 +19,12 @@ decision (check, copy, unlink); it cannot find a race that needs both decisions 
 file taken by check-then-create), one inside the server behind a remote adapter, or one in code
 it does not trace.  This clause is the contract either way.  Subject = :class:`RecordsTarget`, which the fake builds from ``homelabnext.records`` over a
 temporary directory.
+
+**ADR-0040 decision 6 (leave-the-product export).** Adopted additively through
+:class:`conformance.fakes.portable.PortableRecordsTarget`, which exposes the
+:class:`~conformance.protocols.migration.Migratable` shape with the ``markdown-tree`` format
+(a byte-for-byte copy of the lane layout).  The migration suite's round-trip MUST runs against
+that adapter.
 """
 
 from __future__ import annotations

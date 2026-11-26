@@ -20,6 +20,12 @@ Adding a product: write an adapter whose factory returns an object with these me
 library's :class:`homelabnext.projects.ProjectStore` over a new backend is the short way: the
 rules come with it), name it in a target file and run ``hnx conform run projects --target
 FILE``.  ``close()`` with no arguments releases the subject (the harness's teardown).
+
+**ADR-0040 decision 6 (leave-the-product export).** Adopted additively through
+:class:`conformance.fakes.portable.PortableProjectStore`, which exposes the
+:class:`~conformance.protocols.migration.Migratable` shape with the ``object-tree`` format
+(items as ``items/<uid>.json`` + ``meta.json``).  The migration suite's round-trip MUST runs
+against that adapter.
 """
 
 from __future__ import annotations
