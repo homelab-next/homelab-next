@@ -50,6 +50,11 @@ and for data freshness (``poll-http-json``, an age judged against ``warn_after_s
   newest snapshot, one item (``mapping.item``).
 * ``backup-snapshot-age`` -- a Proxmox Backup Server datastore's snapshot list: one item per backup
   group, the age of its newest snapshot; a failed verification is ``fail``.
+* ``drill-records`` -- the role ``restore_drill`` records file (``drills.json``; ADR-0042): one
+  item per guest and per exported application, the age of the last verified drill against two
+  age limits (overdue warn, stale fail); a record whose ``last_failure`` is newer than its
+  ``last_verified`` is ``fail``, and a record that was never verified and carries no failure is
+  ``unknown`` (the drill has not touched it yet), so an empty file does not read green.
 
 A payload the mapping cannot read raises :class:`MappingError`; the scheduler turns that into the
 source's error, exactly like a timeout, so one malformed source never touches another.
@@ -495,6 +500,84 @@ def table_snapshot_age(payload: Any, mapping: Mapping[str, Any], now: float) -> 
     return [Draft(item, state, clean_summary(summary), value=max(0, int(age)))]
 
 
+def drill_records(payload: Any, mapping: Mapping[str, Any], now: float) -> list[Draft]:
+    """Restore-drill records (``/var/lib/homelabnext/restore-drill/drills.json``, written by role
+    ``restore_drill`` on the backup host; ADR-0042 decision 3's record shape).
+
+    The file has two mappings, each keyed by an id and holding its last pass and last failure:
+
+    * ``guests``: one entry per guest, ``{name, last_verified?, snapshot?, last_failure?, failure?}``
+    * ``services``: one entry per application export the drill restored (X-07), same time fields
+
+    One item per entry (``<guest id>`` / ``export:<app>``), with the age of ``last_verified``
+    against two limits from the mapping, ``warn_after_s`` (overdue: a drill due for its next run)
+    and ``fail_after_s`` (stale: a drill older than the retention target, ADR-0042 "90 days");
+    the mapper's defaults are those two (30 and 90 days).  A guest whose ``last_failure`` is newer
+    than its ``last_verified``, or that has never verified (and is flagged as a drill target by
+    a ``failure``), is ``fail``.  An entry that was never verified and has no failure is
+    ``unknown`` (the drill has not touched it yet), so an empty record file does not read green.
+
+    ``value`` is the age in seconds of the last verified drill, so the hub dates the item.
+    No dumped content is ever carried, as the records do not carry any; the summary names the
+    drill's snapshot and the age against the chosen limits only."""
+    if not isinstance(payload, Mapping):
+        raise MappingError("drill records: expected a mapping document")
+    guests = payload.get("guests")
+    services = payload.get("services")
+    if not isinstance(guests, Mapping) and not isinstance(services, Mapping):
+        raise MappingError(
+            "drill records: neither 'guests' nor 'services' is a mapping; is this a drills.json?"
+        )
+    warn_after = mapping.get("warn_after_s")
+    fail_after = mapping.get("fail_after_s")
+    limits = {
+        "warn_after_s": 30 * 86400 if warn_after is None else warn_after,
+        "fail_after_s": 90 * 86400 if fail_after is None else fail_after,
+    }
+    out: list[Draft] = []
+    for prefix, group in (("", guests), ("export:", services)):
+        if not isinstance(group, Mapping):
+            continue
+        for key in sorted(group):
+            row = group[key] if isinstance(group[key], Mapping) else {}
+            item = clean_item(f"{prefix}{key}", "drill")
+            verified = row.get("last_verified")
+            failed = row.get("last_failure")
+            fail_t = parse_iso(str(failed)) if isinstance(failed, str) else None
+            if not isinstance(verified, str):
+                if fail_t is not None and row.get("failure"):
+                    summary = f"never verified; last failure {age_text(now - fail_t)} ago: {str(row['failure'])[:160]}"
+                    out.append(Draft(item, "fail", clean_summary(summary)))
+                else:
+                    out.append(
+                        Draft(
+                            item, "unknown", clean_summary("not drilled yet (no record of a pass)")
+                        )
+                    )
+                continue
+            try:
+                ok_t = parse_iso(verified)
+            except ValueError as exc:
+                raise MappingError(
+                    f"drill records: {key}: unreadable last_verified ({exc})"
+                ) from None
+            age = max(0.0, now - ok_t)
+            if fail_t is not None and fail_t >= ok_t:
+                summary = (
+                    f"the last drill FAILED {age_text(now - fail_t)} ago"
+                    f" (last pass was {age_text(age)} ago): {str(row.get('failure', ''))[:120]}"
+                )
+                out.append(Draft(item, "fail", clean_summary(summary), value=max(0, int(age))))
+                continue
+            state, over = _age_state(age, limits)
+            snap = row.get("snapshot") if isinstance(row.get("snapshot"), str) else ""
+            summary = f"last verified {age_text(age)} ago{over}"
+            if snap:
+                summary += f"; snapshot {snap}"
+            out.append(Draft(item, state, clean_summary(summary), value=max(0, int(age))))
+    return out
+
+
 def backup_snapshot_age(payload: Any, mapping: Mapping[str, Any], now: float) -> list[Draft]:
     """``GET /api2/json/admin/datastore/<store>/snapshots`` of a Proxmox Backup Server
     (``{"data": [{"backup-type", "backup-id", "backup-time", "verification"?}]}``): one item per
@@ -543,6 +626,7 @@ BUILTINS: dict[str, Builtin] = {
     "job-last-run": job_last_run,
     "table-snapshot-age": table_snapshot_age,
     "backup-snapshot-age": backup_snapshot_age,
+    "drill-records": drill_records,
 }
 
 

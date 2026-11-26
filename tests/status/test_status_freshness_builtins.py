@@ -101,3 +101,107 @@ def test_an_empty_datastore_is_a_fail_and_a_wrong_payload_an_error():
         _run({"data": [{"backup-id": "1"}, "junk"]}, builtin="backup-snapshot-age")[0].state
         == "fail"
     )
+
+
+# -------------------------------------------------- drill records (ADR-0042 decision 3)
+D = 86400
+
+
+def _drill_iso(age_s: float) -> str:
+    import datetime
+
+    tz = datetime.timezone.utc  # noqa: UP017
+    t = datetime.datetime.fromtimestamp(NOW - age_s, tz)
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_drill_records_judge_each_guest_by_the_last_verified_against_the_limits():
+    payload = {
+        "guests": {
+            "guest:a": {
+                "name": "a",
+                "last_verified": _drill_iso(5 * D),
+                "snapshot": "vm/130/x",
+            },
+            "guest:b": {"name": "b", "last_verified": _drill_iso(40 * D), "snapshot": "vm/131/y"},
+            "guest:c": {"name": "c", "last_verified": _drill_iso(120 * D), "snapshot": "vm/132/z"},
+            "guest:d": {"name": "d"},
+        },
+        "services": {"idp-main": {"last_verified": _drill_iso(5 * D), "verified": True}},
+    }
+    got = {
+        d.item: d
+        for d in _run(payload, builtin="drill-records", warn_after_s=30 * D, fail_after_s=90 * D)
+    }
+    assert set(got) == {"guest:a", "guest:b", "guest:c", "guest:d", "export:idp-main"}
+    assert got["guest:a"].state == "ok" and "5d" in got["guest:a"].summary
+    assert got["guest:a"].value == 5 * D
+    assert "vm/130/x" in got["guest:a"].summary
+    assert got["guest:b"].state == "warn" and "over the 30d" in got["guest:b"].summary
+    assert got["guest:c"].state == "fail"
+    assert got["guest:d"].state == "unknown" and "not drilled yet" in got["guest:d"].summary
+    assert got["export:idp-main"].state == "ok"
+
+
+def test_drill_records_a_last_failure_newer_than_the_last_verified_fails():
+    payload = {
+        "guests": {
+            "guest:cases": {
+                "name": "cases",
+                "last_verified": _drill_iso(14 * D),
+                "last_failure": _drill_iso(2 * D),
+                "failure": "no partition of the restored image is a root filesystem",
+                "snapshot": "vm/139/old",
+            }
+        }
+    }
+    (d,) = _run(payload, builtin="drill-records")
+    assert d.state == "fail" and "FAILED" in d.summary
+    assert "no partition" in d.summary and "14d" in d.summary
+
+
+def test_drill_records_a_never_verified_record_with_a_failure_is_fail_not_unknown():
+    payload = {
+        "guests": {
+            "guest:never": {
+                "name": "never",
+                "last_failure": _drill_iso(4 * D),
+                "failure": "the guest should carry an application export and has none",
+            }
+        }
+    }
+    (d,) = _run(payload, builtin="drill-records")
+    assert d.state == "fail" and "never verified" in d.summary
+
+
+def test_drill_records_default_limits_are_30_and_90_days():
+    payload = {
+        "guests": {
+            "guest:a": {"name": "a", "last_verified": _drill_iso(29 * D)},
+            "guest:b": {"name": "b", "last_verified": _drill_iso(31 * D)},
+            "guest:c": {"name": "c", "last_verified": _drill_iso(91 * D)},
+        }
+    }
+    got = {d.item: d.state for d in _run(payload, builtin="drill-records")}
+    assert got == {"guest:a": "ok", "guest:b": "warn", "guest:c": "fail"}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, [], "x", {"guests": "x", "services": "x"}, {"other": 1}],
+)
+def test_drill_records_payload_that_is_not_a_drills_file_is_an_error(payload):
+    with pytest.raises(MappingError):
+        _run(payload, builtin="drill-records")
+
+
+def test_drill_records_payload_with_only_services_still_reads():
+    payload = {"services": {"idp-realm": {"last_verified": _drill_iso(3 * D)}}}
+    (d,) = _run(payload, builtin="drill-records")
+    assert d.item == "export:idp-realm" and d.state == "ok"
+
+
+def test_drill_records_an_unreadable_last_verified_is_a_source_error():
+    payload = {"guests": {"guest:a": {"last_verified": "not-a-date"}}}
+    with pytest.raises(MappingError):
+        _run(payload, builtin="drill-records")
