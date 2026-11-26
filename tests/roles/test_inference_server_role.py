@@ -245,7 +245,7 @@ def test_main_hands_a_cuda_container_its_card_by_cdi_name_and_a_cpu_one_nothing(
     assert svc["devices"] == ["nvidia.com/gpu=1"] and svc["group_add"] == [str(MODELS_GID)]
     unit = next((tmp_path / "units").glob("*.service")).read_text()
     assert "--backend cuda --max-watts 200 --gpu-index 1 --proc-root /proc --dev-root " in unit
-    assert f"--dev-root {tmp_path / 'dev'} --model-file" in unit
+    assert f"--dev-root {tmp_path / 'dev'} --cdi-spec /etc/cdi/nvidia.yaml --model-file" in unit
     cpu = tmp_path / "cpu"
     cpu.mkdir()
     store(cpu)
@@ -682,6 +682,59 @@ def test_precheck_never_runs_nvidia_smi_unless_the_driver_is_already_loaded(tmp_
     r = precheck("--backend", "cuda", "--max-watts", "200", "--gpu-index", "all", "--power-only",
                  *driver_up(ok), env=env)  # fmt: skip
     assert r.returncode == 0 and log.read_text() == "ran", r.stderr
+
+
+def _cdi_world(tmp_path: Path, spec_majors: dict[str, int], live_majors: dict[str, int | None]):
+    """A CDI spec recording device majors and a dev root whose nodes are fake files; the precheck
+    reads a node's major with ``stat``, so a fake ``stat`` answers from a table."""
+    spec = tmp_path / "nvidia.yaml"
+    spec.write_text("devices:\n- name: all\n  containerEdits:\n    deviceNodes:\n" + "".join(
+        f"    - path: /dev/{n}\n      major: {m}\n      fileMode: 438\n" for n, m in spec_majors.items()
+    ) + "    - path: /dev/nvidia0\n      fileMode: 438\n")  # fmt: skip
+    args = driver_up(tmp_path)
+    dev = Path(args[3])
+    table = {}
+    for n, m in live_majors.items():
+        if m is not None:
+            (dev / n).write_text("")
+            table[str(dev / n)] = f"{m:x}"
+    env = _smi(tmp_path, _rows(("180.00", "180.00")))
+    fake(tmp_path / "smi" / "stat", f"import sys\nprint({table!r}[sys.argv[-1]])\n")
+    return [*args, "--cdi-spec", str(spec)], env
+
+
+CDI_BASE = ("--backend", "cuda", "--max-watts", "200", "--gpu-index", "all", "--power-only")
+
+
+@pytest.mark.parametrize(
+    "spec, live, ok, msg",
+    [({"nvidia-uvm": 235, "nvidia-uvm-tools": 235}, {"nvidia-uvm": 235, "nvidia-uvm-tools": 235}, True, ""),
+     ({"nvidia-uvm": 234, "nvidia-uvm-tools": 234}, {"nvidia-uvm": 235, "nvidia-uvm-tools": 235}, False, "nvidia-uvm is major 235 here, the spec says 234"),
+     ({"nvidia-uvm": 235}, {"nvidia-uvm": None}, False, "nvidia-uvm is not on this host")],
+)  # fmt: skip
+def test_precheck_refuses_a_cdi_spec_whose_device_majors_differ_from_the_live_nodes(
+    tmp_path, spec, live, ok, msg
+):
+    """nvidia-uvm's major is assigned at module load: a spec from before a reboot hands the container
+    the wrong node, cuInit fails (CUDA error 999) and the model silently runs on the CPU."""
+    args, env = _cdi_world(tmp_path, spec, live)
+    r = precheck(*CDI_BASE, *args, env=env)
+    assert (r.returncode == 0) is ok, r.stderr
+    assert ok or ("is stale" in r.stderr and msg in r.stderr), r.stderr
+
+
+def test_precheck_refuses_a_missing_cdi_spec_and_ignores_it_without_the_flag(tmp_path):
+    args, env = _cdi_world(tmp_path, {"nvidia-uvm": 235}, {"nvidia-uvm": 235})
+    args[-1] = str(tmp_path / "absent.yaml")
+    r = precheck(*CDI_BASE, *args, env=env)
+    assert r.returncode == 1 and "is missing or empty" in r.stderr
+    assert precheck(*CDI_BASE, *args[:-2], env=env).returncode == 0
+
+
+def test_the_unit_gives_the_precheck_the_cdi_spec_on_cuda():
+    fixed = yaml.safe_load((MODULE / "roles" / MID / "vars" / "main.yml").read_text())
+    assert fixed[f"{MID}_cdi_spec"] == "/etc/cdi/nvidia.yaml" and f"{MID}_cdi_spec" not in DEFAULTS
+    assert "--cdi-spec" in fixed[f"{MID}_precheck_power"]
 
 
 def test_the_unit_passes_the_driver_seams_as_fixed_paths():

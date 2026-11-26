@@ -1,0 +1,4 @@
+---
+group: Fixed
+---
+role `nvidia_container_toolkit`: the CDI spec is now rewritten at every boot, before docker starts a GPU container. It records device-node major numbers and `/dev/nvidia-uvm`'s is assigned at module load, so after a reboot a spec written earlier gave containers the wrong node (`cuInit` error 999, `nvidia-smi` still fine, the model silently on the CPU). The role installs and enables its own oneshot `hnx-nvidia-cdi.service` (loads no kernel module; the vendor's refresh units stay masked), which generates outside `/etc/cdi` and renames inside it; the role and `health` fail on a stray second spec in the CDI directory (two specs make every device "conflicting"), and `health` on the unit not being enabled. Module `llamacpp`: the pre-start check compares the spec's device majors with the live nodes and refuses to start on a mismatch.
