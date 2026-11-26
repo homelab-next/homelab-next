@@ -55,7 +55,7 @@ argument_specs:
       prowler_oncalendar:
         type: str
         description: The scan's systemd calendar (weekly; never an interval).
-        default: "Tue *-*-* 03:00:00"
+        default: "Tue *-*-* 03:00:00 UTC"
       prowler_timeout_s:
         type: int
         description: The exporter's limit on one scan, in seconds.

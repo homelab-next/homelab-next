@@ -31,7 +31,7 @@ prowler_regions: []
 # Tuesday, early: a weekly scan that avoids the vulnerability scanner's own heavy day (a full run of
 # that can still be going hours after it starts). Calendar, never an interval (a timer built from
 # OnBootSec and OnUnitActiveSec can stop firing for good after one reboot at the wrong moment).
-prowler_oncalendar: "Tue *-*-* 03:00:00"
+prowler_oncalendar: "Tue *-*-* 03:00:00 UTC"
 prowler_timeout_s: 3600
 
 # --- the findings -----------------------------------------------------------------------------------

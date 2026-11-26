@@ -68,7 +68,7 @@ def test_every_secret_default_is_a_reference_and_none_is_a_value():
 
 
 def test_the_scan_is_weekly_on_the_calendar_never_an_interval():
-    assert re.fullmatch(r"Tue .*03:00(:00)?", DEFAULTS["prowler_oncalendar"])
+    assert re.fullmatch(r"Tue .*03:00(:00)? UTC", DEFAULTS["prowler_oncalendar"])
     lines = (ROLE / "templates" / "scan.timer.j2").read_text().splitlines()
     assert any(ln.startswith("OnCalendar=") for ln in lines)
     assert not any(ln.startswith(("OnUnitActiveSec=", "OnBootSec=")) for ln in lines)

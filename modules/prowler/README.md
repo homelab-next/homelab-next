@@ -13,7 +13,7 @@ runs on are the overlay's; the module holds none of them.
 ```
  secret store --(deploy time)--> root-only credential file (0600)
                                           |
- timer (weekly, Tue 03:00) --> scan unit: hnx-prowler-export --> prowler aws (read-only API calls, every region)
+ timer (weekly, Tue 03:00 UTC) --> scan unit: hnx-prowler-export --> prowler aws (read-only API calls, every region)
                                           |                         |  json-ocsf report (output/, replaced each run)
                                           v                         v
                           /var/log/prowler-findings.json  <-- summary line + one flat line per FAILING check
