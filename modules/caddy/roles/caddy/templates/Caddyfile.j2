@@ -23,32 +23,23 @@
 		output stderr
 		format filter {
 			wrap json
-			fields {
-				request>uri query {
-					replace api_key REDACTED
-					replace apikey REDACTED
-					replace ApiKey REDACTED
-					replace Api_Key REDACTED
-					replace api-key REDACTED
-					replace token REDACTED
-					replace Token REDACTED
-					replace access_token REDACTED
-					replace AccessToken REDACTED
-					replace X-Emby-Token REDACTED
-					replace X-MediaBrowser-Token REDACTED
-					replace x-emby-token REDACTED
-					replace x-mediabrowser-token REDACTED
-				}
-				request>headers>Authorization replace REDACTED
-				request>headers>X-Emby-Authorization replace REDACTED
-				request>headers>X-Emby-Token replace REDACTED
-				request>headers>X-Mediabrowser-Token replace REDACTED
-				request>headers>X-MediaBrowser-Token replace REDACTED
-				request>headers>Cookie replace REDACTED
-				request>headers>Proxy-Authorization replace REDACTED
-				resp_headers>Set-Cookie replace REDACTED
-			}
+{{ caddy_access_log_redact_fields }}		}
+	}
+	# the edge's access log: one JSON line per request, to a file the SIEM agent on this host reads
+	# (tasks/siem.yml) and the log pipeline turns into http_activity rows. The generated sites name
+	# this logger (`log hnx_access`), so the default logger above no longer carries their access
+	# lines. Same redaction as the default logger.
+	log hnx_access {
+		output file {{ caddy_container_log_dir }}/{{ caddy_access_log_name }} {
+			mode 0640
+			roll_size {{ caddy_access_log_roll_size }}
+			roll_keep {{ caddy_access_log_roll_keep }}
+			roll_keep_for {{ caddy_access_log_roll_keep_for }}
 		}
+		format filter {
+			wrap json
+{{ caddy_access_log_redact_fields }}		}
+		include http.log.access.hnx_access
 	}
 }
 
@@ -59,6 +50,7 @@ http://127.0.0.1:{{ caddy_container_health_port }} {  # no-raw-endpoint: allow t
 
 https:// {
 	tls {{ caddy_container_certs_dir }}/edge.crt {{ caddy_container_certs_dir }}/edge.key
+	log hnx_access
 	respond "no such site" 404
 }
 
