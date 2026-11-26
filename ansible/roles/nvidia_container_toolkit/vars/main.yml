@@ -25,6 +25,11 @@ nvidia_container_toolkit_refresh_units:
   - nvidia-cdi-refresh.service
 # What the refresh service writes; with the role's own spec in /etc/cdi this one must not exist.
 nvidia_container_toolkit_refresh_spec: /var/run/cdi/nvidia.yaml
+# the role's own boot-time unit (it regenerates the spec each boot; the vendor's refresh units stay masked)
+nvidia_container_toolkit_boot_unit: hnx-nvidia-cdi.service
+nvidia_container_toolkit_unit_dir: /etc/systemd/system
+# an absolute path: a systemd unit cannot search PATH
+nvidia_container_toolkit_ctk_path: /usr/bin/nvidia-ctk
 nvidia_container_toolkit_staged_spec: "{{ nvidia_container_toolkit_state_dir }}/cdi-staged.yaml"
 # where the driver's control device is and where the loaded modules are listed (seams for tests,
 # as for the other GPU role: role vars, so no inventory value can point the gate elsewhere)

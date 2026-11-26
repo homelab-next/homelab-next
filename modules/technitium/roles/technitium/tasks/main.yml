@@ -31,6 +31,7 @@
     compose_app_dir: "{{ technitium_app.compose_app_dir }}"
     compose_app_data_dir: "{{ technitium_app.compose_app_data_dir }}"
     compose_app_export_dir: "{{ technitium_app.compose_app_export_dir }}"
+    compose_app_export_files: "{{ technitium_app.compose_app_export_files }}"
     compose_app_owner: "{{ technitium_app.compose_app_owner }}"
     compose_app_group: "{{ technitium_app.compose_app_group }}"
     compose_app_start: "{{ technitium_app.compose_app_start }}"
