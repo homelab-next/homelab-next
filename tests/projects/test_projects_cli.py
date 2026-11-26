@@ -203,6 +203,7 @@ def test_a_read_needs_an_existing_directory(tmp_path, capsys):
     assert "0 problem(s) in 1 item(s) of" in capsys.readouterr().err
 
 
+@pytest.mark.static
 def test_the_p08_invariant_needs_a_non_empty_board():
     import re
 

@@ -31,10 +31,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 #: the one deselection CI makes: the floor test re-runs the suite under coverage (the coverage job)
 FLOOR_TEST = "tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor"
-#: the jobs that carry Q-01: tests, lint and the two secret scans
-GUARDED_JOBS = ("test", "lint", "leak-scan", "secret-scan")
+#: the jobs that carry Q-01: tests, lint (in precheck, `make precheck`) and the two secret scans
+GUARDED_JOBS = ("test", "precheck", "leak-scan", "secret-scan")
 #: what a guarded step runs; such a step must not be conditional
-GUARDED_COMMANDS = ("pytest", "ruff check", "tools/leak_scan.py", "gitleaks")
+GUARDED_COMMANDS = ("pytest", "ruff check", "tools/leak_scan.py", "gitleaks", "make precheck")
 #: trigger keys that run the workflow on only some changes
 NARROWING = ("paths", "paths-ignore", "branches-ignore", "types")
 #: GitHub's default pull_request activity types: a `types:` list holding all of them narrows nothing
@@ -43,8 +43,10 @@ PR_DEFAULT_TYPES = {"opened", "synchronize", "reopened"}
 #: components (tools/experimental.yml) run in the non-blocking experimental job instead
 #: (tools/tests/test_experimental.py holds that job and the marker to the list)
 #: and the xdist workers the shard runs on (how many, and which tests a worker takes together)
+#: (the `static` rules run in precheck and the `perf` tests in the nightly workflow)
+SELECT = "not live and not experimental and not static and not perf"
 PAIRS = {
-    ("-m", "not live and not experimental"),
+    ("-m", SELECT),
     ("--deselect", FLOOR_TEST),
     ("-n", "auto"),
     ("--dist", "loadfile"),
@@ -98,8 +100,7 @@ def trigger_problems(doc) -> list[str]:
 
 
 def pytest_problems(run: str) -> list[str]:
-    """The test job's pytest is ``python -m pytest -q -m "not live and not experimental"
-    --deselect FLOOR_TEST``,
+    """The test job's pytest is ``python -m pytest -q -m SELECT --deselect FLOOR_TEST``,
     in any order, with optionally ``--shard "$SHARD/N" --shard-report FILE`` (checked against
     the job by :func:`shard_problems`): an allowlist, so any other flag, value or word
     (``--ignore``, ``-k``, ``-p no:...``, a path, ``|| true``) is a problem."""
@@ -122,7 +123,7 @@ def pytest_problems(run: str) -> list[str]:
             out.append(f"pytest argument {w!r} is not part of CI's selection")
             i += 1
     if rest.count("-m") != 1:
-        out.append('pytest must select exactly -m "not live and not experimental"')
+        out.append(f'pytest must select exactly -m "{SELECT}"')
     if rest.count("--shard") > 1 or rest.count("--shard-report") != rest.count("--shard"):
         out.append("pytest takes --shard and --shard-report once each, or neither")
     return out
@@ -237,6 +238,7 @@ def test_ci_starts_on_every_push_to_main_and_every_pull_request():
     assert trigger_problems(_ci()) == []
 
 
+@pytest.mark.static
 def test_the_test_job_runs_every_suite_with_no_selection_but_ci_s_own():
     assert selection_problems(_ci()) == []
     with (ROOT / "pyproject.toml").open("rb") as f:
@@ -264,15 +266,23 @@ def test_no_guarded_job_is_conditional_or_carries_pytest_addopts():
 
 def test_lint_and_both_secret_scans_run():
     jobs = _ci()["jobs"]
-    lint = [s.get("run", "") for s in jobs["lint"]["steps"]]
-    assert "python -m ruff check ." in lint
+    precheck = [s.get("run", "") for s in jobs["precheck"]["steps"]]
+    assert "make precheck PY=python" in precheck
+    # make precheck runs make lint: ruff check and ruff format --check
+    from test_experimental import make_target_lines
+
+    lines = make_target_lines((ROOT / "Makefile").read_text(), "precheck-run")
+    assert [line.split(" -m ", 1)[1] for line in lines["lint"]] == [
+        "ruff check .",
+        "ruff format --check .",
+    ]
     scans = " ".join(s.get("run", "") for j in GUARDED_JOBS for s in jobs[j].get("steps", []))
     assert "tools/leak_scan.py" in scans and "gitleaks git" in scans
 
 
 # --- negative self-tests: each edit that narrows what CI runs is caught --------------------------
 
-BASE_RUN = f'python -m pytest -q -m "not live and not experimental" --deselect {FLOOR_TEST}'
+BASE_RUN = f'python -m pytest -q -m "{SELECT}" --deselect {FLOOR_TEST}'
 
 
 @pytest.mark.parametrize(
@@ -292,7 +302,8 @@ BASE_RUN = f'python -m pytest -q -m "not live and not experimental" --deselect {
         "python -m pytest -q",
         BASE_RUN + ' -m "not live"',
         BASE_RUN.replace("not live and not experimental", "not experimental"),
-        f'python -m pytest -q -m="not live and not experimental" --deselect {FLOOR_TEST}',
+        BASE_RUN.replace(" and not static and not perf", ""),
+        f'python -m pytest -q -m="{SELECT}" --deselect {FLOOR_TEST}',
         BASE_RUN.replace("python -m pytest", "pytest"),
         BASE_RUN + ' --shard "1/4" --shard-report r.json',  # a fixed shard, not the job's own
         BASE_RUN + ' --shard "$SHARD/4"',  # no report: nothing can count it
@@ -304,7 +315,7 @@ def test_a_narrowed_pytest_line_is_caught(run):
 
 
 def test_ci_s_own_line_passes_in_any_order():
-    line = f'python -m pytest --deselect {FLOOR_TEST} -m "not live and not experimental" -q'
+    line = f'python -m pytest --deselect {FLOOR_TEST} -m "{SELECT}" -q'
     assert pytest_problems(line) == []
 
 
@@ -407,7 +418,7 @@ def _sharded_step(doc):
         lambda d: d["jobs"]["test"]["strategy"]["matrix"].pop("shard"),
         lambda d: _sharded_step(d)["env"].update(SHARD="1"),
         lambda d: d["jobs"].pop("test-ok"),
-        lambda d: d["jobs"]["test-ok"].update(needs=["lint"]),
+        lambda d: d["jobs"]["test-ok"].update(needs=["precheck"]),
         lambda d: d["jobs"]["test-ok"].pop("if"),
         lambda d: d["jobs"]["test-ok"].update({"continue-on-error": True}),
         lambda d: d["jobs"]["test-ok"]["steps"][-1].update(run="echo ok"),
@@ -422,10 +433,10 @@ def _sharded_step(doc):
             run="set +e\n" + d["jobs"]["test-ok"]["steps"][-1]["run"]
         ),
         lambda d: d["jobs"]["test-ok"]["steps"][-1].update(
-            run=d["jobs"]["test-ok"]["steps"][-1]["run"].replace("--groups 3.11,3.12", "")
+            run=d["jobs"]["test-ok"]["steps"][-1]["run"].replace("--groups 3.13", "")
         ),
         lambda d: d["jobs"]["test-ok"]["steps"][-1].update(
-            run=d["jobs"]["test-ok"]["steps"][-1]["run"].replace("3.11,3.12", "3.12")
+            run=d["jobs"]["test-ok"]["steps"][-1]["run"].replace("3.13", "3.12")
         ),
         lambda d: d["jobs"]["test-ok"]["steps"][-1].update(
             run=d["jobs"]["test-ok"]["steps"][-1]["run"] + "echo $(false) || true\n"

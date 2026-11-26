@@ -155,6 +155,7 @@ def test_without_a_checkout_it_fails_clearly(tmp_path, monkeypatch, capsys):
         caps.resolve_root()
 
 
+@pytest.mark.static
 def test_vault_links_resolve():
     """Every wiki-link and relative .md link of the generated pages and the home page resolves."""
     docs = ROOT / "docs"

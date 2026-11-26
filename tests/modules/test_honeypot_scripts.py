@@ -541,6 +541,7 @@ def test_only_dated_copies_older_than_the_limit_are_pruned(report, tmp_path):
     assert report.prune_old(str(tmp_path), 0) == []
 
 
+@pytest.mark.static
 def test_no_script_turns_certificate_verification_off_or_carries_a_lab_value():
     for f in sorted(FILES.glob("*.py")):
         text = f.read_text()

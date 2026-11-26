@@ -130,6 +130,7 @@ def test_a_change_after_the_freeze_bumps_the_id(path):
     assert not (same and rel in UNBUMPED), f"{rel} is no longer drifted: drop it from UNBUMPED"
 
 
+@pytest.mark.static
 def test_the_agent_job_failed_1_1_negative_is_what_1_1_added():
     """The new negative (auto_retry_scheduled false) is refused by 1.1 and, as the open 1.0 data
     shows, was accepted by 1.0: it tests the 1.1 field, not something 1.0 already refused."""
@@ -257,6 +258,7 @@ def test_the_newline_guard_rejects_what_python_alone_accepted():
 
 
 # ----- draft schemas (x-draft): not frozen until their ADR is accepted -----
+@pytest.mark.static
 def test_the_draft_schemas_are_exactly_the_listed_ones():
     found = {
         p.relative_to(ROOT / "schemas").as_posix()
@@ -807,6 +809,7 @@ def test_a_missing_minor_baseline_is_a_warning_and_an_error_when_strict(tmp_path
     assert [x.severity for x in hit(err)] == ["error"]
 
 
+@pytest.mark.static
 def test_every_non_draft_schema_has_a_baseline_at_its_own_minor():
     for p in sc.schema_files(ROOT):
         s = json.loads(p.read_text())

@@ -78,6 +78,7 @@ def test_aws_signing_test_suite(name):
     assert out["x-amz-date"] == "20150830T123600Z"
 
 
+@pytest.mark.static
 def test_a_wrong_signer_fails_the_vectors():
     """The vectors bite: a signer that forgets to sort the query gets a different signature."""
     _ctx, method, path, pairs, headers, _body, _when, d = _load("get-vanilla-query-order-key-case")

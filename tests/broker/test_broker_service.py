@@ -64,12 +64,14 @@ def _audit_ok(svc):
 # -- the conformance suite ------------------------------------------------------------------------
 
 
+@pytest.mark.static
 def test_reference_service_passes_the_suite():
     run = run_capability("broker", "broker-reference", ROOT)
     assert run.error is None and run.too_few is None
     assert not run.failed_must and not run.failed_should, [r.evidence for r in run.results]
 
 
+@pytest.mark.static
 def test_the_suite_still_catches_every_broker_mutant():
     runs = mutation_runs("broker", ROOT)
     assert runs and all(m.detected for m in runs), [m.name for m in runs if not m.detected]

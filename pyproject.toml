@@ -18,6 +18,7 @@ keywords = ["homelab", "soc", "conformance", "ocsf", "sigma"]
 classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Intended Audience :: Information Technology",
 ]
 # The core is standard library only, so `hnx --help` works on a bare interpreter.  Each library
@@ -122,6 +123,8 @@ addopts = "-ra --strict-markers"
 markers = [
   "live: needs a real server or container; never runs in the default CI job",
   "slow: takes more than a few seconds",
+  "static: a repository-consistency rule (reads the tree, runs no product); runs in `make precheck`, not the test shards",
+  "perf: asserts a wall-clock bound; runs in the nightly workflow only, never on a pull request",
 ]
 # Q-02 (tests/suite_policy.py): per-suite time budgets in seconds (a suite = a test file's first two
 # directories; HNX_SUITE_BUDGET_SCALE multiplies them), and the only legitimate skip reasons --

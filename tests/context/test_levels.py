@@ -379,6 +379,7 @@ def test_find_section_is_exact_by_slug_or_full_path():
 # -- bounds and time --------------------------------------------------------------------------
 
 
+@pytest.mark.perf
 def test_a_pathological_heading_line_parses_in_linear_time():
     """The old pattern's overlapping optional groups took 15 s on a 40,000-space line."""
     line = "# a" + " " * 200_000 + "x\n"
@@ -393,6 +394,7 @@ def test_a_pathological_heading_line_parses_in_linear_time():
     assert time.perf_counter() - t < 1.0
 
 
+@pytest.mark.perf
 def test_fifty_thousand_headings_parse_in_linear_time():
     """About 0.5 s on a laptop; the counter search this replaced was quadratic in the repeats
     (minutes here), so 2 s leaves a loaded CI runner room without hiding a regression."""
@@ -533,6 +535,7 @@ def test_generated_summary_lines_refuse_an_invalid_summary():
             generated_summary_lines(bad)
 
 
+@pytest.mark.static
 def test_generator_written_docs_pages_carry_a_generated_summary():
     from pathlib import Path
 

@@ -368,6 +368,7 @@ def test_every_export_line_validates_against_the_export_schema(synced):
     assert turn["gateway_tag"]["pattern"] == f"^{TAG.pattern}$(?!\\n)"
 
 
+@pytest.mark.static
 def test_the_export_schemas_inlined_id_patterns_are_the_ids_patterns_plus_the_newline_guard():
     """The export schema inlines ids/logical-id's svc_id and ids/common's timestamp (a $ref
     could not add the trailing-newline guard); if ids/ changes, the copy must follow it."""

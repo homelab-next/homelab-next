@@ -152,6 +152,7 @@ def test_health_fails_when_nothing_listens(first):
     assert first_result.returncode != 0
 
 
+@pytest.mark.static
 def test_the_package_is_installed_without_recommends():
     """Debian's recommends pull ipmitool and openipmi onto every guest, and openipmi fails each boot without IPMI."""
     import pathlib

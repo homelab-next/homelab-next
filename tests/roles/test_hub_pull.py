@@ -137,6 +137,7 @@ def test_a_symlinked_dest_directory_that_leaves_the_root_is_refused(tmp_path):
     assert list(outside.iterdir()) == []
 
 
+@pytest.mark.static
 def test_the_role_wires_the_timer_as_a_calendar_and_keeps_the_key_out_of_the_environment():
     defaults = yaml.safe_load((ROLE / "defaults/main.yml").read_text())
     assert defaults["status_hub_pulls"] == [] and defaults["status_hub_pull_key_ref"] == ""

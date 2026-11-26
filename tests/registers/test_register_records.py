@@ -228,6 +228,7 @@ def test_related_uids_must_resolve(src, tmp_path):
         build_all(src, tmp_path / "bad", policy_path=False)
 
 
+@pytest.mark.static
 def test_a_top_level_retired_block_is_refused_in_a_records_register():
     """A uid is never reused, so a lessons register has nothing to tombstone."""
     from homelabnext.registers.schema import validate_lessons
@@ -240,6 +241,7 @@ def test_a_top_level_retired_block_is_refused_in_a_records_register():
 # --- the generated links block ---------------------------------------------------------------
 
 
+@pytest.mark.static
 def test_links_blocks_of_the_repository_are_current():
     dirs = [str(REPO / "examples/registers" / k) for k in KINDS]
     assert registers_main(["links", "--check", *dirs]) == 0
@@ -301,6 +303,7 @@ def test_check_uids_flags_a_record_without_its_uid(repo):
     assert r.returncode == 0 and "uid" not in r.stderr, r.stderr
 
 
+@pytest.mark.static
 def test_check_uids_runs_as_a_pre_commit_hook():
     """idcli's docstring says check-uids runs in pre-commit: the hook exists and runs it."""
     import yaml

@@ -142,6 +142,7 @@ def test_a_rule_the_backend_cannot_express_is_uncounted_for_it_only(det, capsys)
     assert "det:planted-or" not in [u["rule"] for u in rep["uncounted"]]
 
 
+@pytest.mark.static
 def test_the_committed_coverage_report_counts_the_compiled_backend():
     rep = json.loads((DET / "attack_coverage.json").read_text(encoding="utf-8"))
     compiled = rep["backends"][STUB]

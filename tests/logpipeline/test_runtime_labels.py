@@ -208,6 +208,7 @@ def _example_fleet():
     return load_fleet(MINIMAL / "guests", zones, domain=domain or "example.internal")
 
 
+@pytest.mark.static
 def test_committed_example_table_matches_the_example_guests():
     (text,) = render(_example_fleet(), "runtime-labels").values()
     assert EXAMPLE.read_text(encoding="utf-8") == text, (

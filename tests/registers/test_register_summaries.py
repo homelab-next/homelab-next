@@ -41,6 +41,7 @@ def _summary_line(path) -> str:
     return next(ln for ln in path.read_text().splitlines() if ln.startswith("summary: "))
 
 
+@pytest.mark.static
 def test_every_example_record_carries_a_valid_summary():
     rep = lint_summaries([REPO / "examples/registers"], REPO)
     assert rep.ok and rep.records == 8 and rep.missing_records == []
@@ -49,6 +50,7 @@ def test_every_example_record_carries_a_valid_summary():
             assert e["summary"] and len(e["summary"]) <= 160
 
 
+@pytest.mark.static
 def test_the_repository_lint_passes(capsys):
     assert main(["summaries", str(REPO / "examples/registers"), str(REPO / "docs")]) == 0
     line = capsys.readouterr().out.strip().splitlines()[-1]

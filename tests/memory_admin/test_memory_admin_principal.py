@@ -151,6 +151,7 @@ def test_the_import_check_sees_every_spelling(spelling):
     assert not _hits(ROOT / "homelabnext/agent/_probe.py", "from .memory import fold")
 
 
+@pytest.mark.static
 def test_no_runtime_module_imports_the_memory_admin():
     found, seen = [], 0
     for base in _RUNTIME:
@@ -172,6 +173,7 @@ def test_importing_the_runtime_leaves_the_memory_admin_out_of_sys_modules():
     assert out.stdout.strip() == "[]", out.stdout
 
 
+@pytest.mark.static
 def test_no_broker_handler_names_the_memory_admin():
     handlers = [p for p in (ROOT / "examples").rglob("handlers/*") if p.is_file()]
     assert handlers and all(b"memory_admin" not in p.read_bytes() for p in handlers)

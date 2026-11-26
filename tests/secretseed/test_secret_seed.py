@@ -103,6 +103,7 @@ def test_the_template_classifies_the_repository_s_names():
     assert not spec.to_vaultwarden("status/ingest/agent-fleet-token")
 
 
+@pytest.mark.static
 def test_every_name_the_roles_use_is_classified():
     """A role's default secret name gets a deliberate rule: the template covers them all."""
     spec = load_spec(TEMPLATE)

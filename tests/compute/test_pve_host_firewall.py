@@ -69,6 +69,7 @@ def test_no_node_declaring_it_renders_only_a_readme(tmp_path):
     assert "No node declares `host_firewall`" in out["nodes/README.md"]
 
 
+@pytest.mark.static
 def test_goldens():
     out = render(fleet_from(DATA / "_nodes.yml"), TARGET)
     if os.environ.get("HNX_UPDATE_GOLDEN") == "1":

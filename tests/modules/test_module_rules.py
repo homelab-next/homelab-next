@@ -31,6 +31,7 @@ def test_lane_writes_are_bound_to_their_lane():
     assert not mr._own_write_prefix("findings/", "m")
 
 
+@pytest.mark.static
 def test_the_default_in_tree_root_is_the_checkouts_public_modules_tree_only():
     assert mr.public_module_roots() == (ROOT / "modules",)
     assert not hasattr(mr, "EXAMPLE_ROOTS"), "the examples' root is the tests' fixture"
@@ -79,6 +80,7 @@ def _write(path, doc):
     Path(path).write_text(yaml.safe_dump(doc, sort_keys=False))
 
 
+@pytest.mark.static
 def test_the_example_modules_act_only_through_the_broker():
     for manifest in sorted((ROOT / "examples/modules").glob("*/module.yml")):
         assert mr.broker_rule_problems(_load(manifest), manifest.parent, _load) == [], manifest

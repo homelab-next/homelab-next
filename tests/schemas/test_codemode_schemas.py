@@ -72,6 +72,7 @@ def _schema(name: str) -> dict:
     return json.loads((DIR / f"{name}.schema.json").read_text())
 
 
+@pytest.mark.static
 def test_the_four_drafts_are_present_and_drafts():
     names = {p.name.removesuffix(".schema.json") for p in SCHEMAS}
     assert names == {"execution_request", "execution_result", "token", "journal_step"}
@@ -79,6 +80,7 @@ def test_the_four_drafts_are_present_and_drafts():
         assert "ADR-0031" in json.loads(p.read_text())["x-draft"], p.name
 
 
+@pytest.mark.static
 def test_every_negative_has_a_stated_reason():
     negs = {p.name.rsplit(".", 1)[0] for p in (DIR / "negative").iterdir()}
     assert negs == set(WHY)
@@ -100,12 +102,14 @@ def test_examples_validate(path):
     assert sc.check_schema(ROOT, path, REGISTRY, strict=True) == []
 
 
+@pytest.mark.static
 def test_a_paused_result_needs_at_least_one_pending_request():
     doc = json.loads((DIR / "examples" / "execution_result.paused.json").read_text())
     doc["pending"] = []
     assert sc.errors_for(_schema("execution_result"), doc, REGISTRY)
 
 
+@pytest.mark.static
 def test_only_a_paused_result_lists_pending_requests():
     doc = json.loads((DIR / "examples" / "execution_result.ok.json").read_text())
     call = doc["calls"][0]
@@ -114,18 +118,21 @@ def test_only_a_paused_result_lists_pending_requests():
     assert any("should not be valid under {'required': ['pending']}" in e for e in errors), errors
 
 
+@pytest.mark.static
 def test_a_call_refused_before_the_broker_has_no_request_id():
     doc = json.loads((DIR / "examples" / "execution_result.denied-handled.json").read_text())
     doc["calls"][1] |= {"request_id": "req-0099", "request_digest": "sha256:" + "e" * 64}
     assert sc.errors_for(_schema("execution_result"), doc, REGISTRY)
 
 
+@pytest.mark.static
 def test_a_replayed_denial_keeps_its_reason():
     doc = json.loads((DIR / "examples" / "execution_result.denied-handled.json").read_text())
     doc["calls"][0]["replayed"] = True
     assert sc.errors_for(_schema("execution_result"), doc, REGISTRY) == []
 
 
+@pytest.mark.static
 def test_an_ok_call_carries_no_reason():
     doc = json.loads((DIR / "examples" / "execution_result.ok.json").read_text())
     doc["calls"][0]["reason"] = "not-granted"
@@ -147,6 +154,7 @@ def test_a_broker_refusal_reason_is_recorded_as_given(reason):
     assert sc.errors_for(_schema("execution_result"), doc, REGISTRY) == []
 
 
+@pytest.mark.static
 def test_the_success_reasons_excluded_are_the_brokers_own():
     decision = json.loads((ROOT / "schemas/broker/decision.schema.json").read_text())
     vocab = set(decision["properties"]["reason"]["enum"])
@@ -154,6 +162,7 @@ def test_the_success_reasons_excluded_are_the_brokers_own():
     assert set(reason["not"]["enum"]) == {"allowed", "approved", "approval-required"} <= vocab
 
 
+@pytest.mark.static
 def test_a_rate_limited_call_has_no_request_id():
     doc = json.loads((DIR / "examples" / "execution_result.lane-quota.json").read_text())
     doc["calls"][0]["reason"] = "rate-limited"

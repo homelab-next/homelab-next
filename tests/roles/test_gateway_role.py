@@ -741,6 +741,7 @@ def test_health_warns_but_does_not_fail_on_skipped_usage_lines(tmp_path):
     assert "WARNING gateway" in r.stdout and "2" in r.stdout
 
 
+@pytest.mark.static
 def test_the_module_target_has_no_embeddings_feature_until_a_backend_exists():
     target = yaml.safe_load((ROOT / "modules/gateway/conformance/target.yml").read_text())
     cap = target["capabilities"]["inference"]

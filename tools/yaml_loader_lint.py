@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when package code parses YAML with yaml.safe_load or SafeLoader instead of the budgeted loaders of homelabnext/_yaml.py, beyond the counts in tools/yaml_loader.allow.yml.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:gates]
+#   trigger: [make:gates]
 #   inputs: homelabnext/**/*.py; tools/yaml_loader.allow.yml
 #   outputs: one line per file above or below its reviewed count
 #   exit:

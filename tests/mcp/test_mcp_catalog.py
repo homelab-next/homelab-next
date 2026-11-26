@@ -205,6 +205,7 @@ def test_duplicate_ids_are_refused(tmp_catalog):
 
 
 # ---------------------------------------------------------------------------------- grants
+@pytest.mark.static
 def test_grants_must_name_active_catalog_servers():
     table = default_classes()
     assert grant_problems({"mcp": ["lake", "hnx-broker"]}, table) == []
@@ -264,6 +265,7 @@ def test_the_table_comes_from_the_catalog_directory_given(tmp_catalog):
         ToolClasses.load(catalog=tmp_catalog / "missing")
 
 
+@pytest.mark.static
 def test_the_review_digest_is_the_record_without_its_reviews():
     from homelabnext.reviews import file_digest
 
@@ -311,6 +313,7 @@ def test_a_schema_invalid_record_gets_no_follow_on_registry_errors(tmp_catalog):
     assert not any("does not name it as its endpoint" in p for p in problems), problems
 
 
+@pytest.mark.static
 def test_the_schema_class_enum_is_the_tables_vocabulary():
     import json
 
@@ -377,6 +380,7 @@ def test_only_a_server_that_acts_through_the_broker_promises_an_approval(tmp_cat
     assert any(t["approval"] for t in broker["tools"] if "exec" in t["classes"])
 
 
+@pytest.mark.static
 def test_the_schema_says_only_the_broker_grants_an_approval():
     import json
 
@@ -413,6 +417,7 @@ def test_every_shipped_acting_server_is_the_broker_or_an_unreviewed_direct_draft
             assert not rec.get("reviews"), sid
 
 
+@pytest.mark.static
 def test_job_submission_and_shell_commands_are_the_brokers():
     """ADR-0030: no tool server reaches the controller (a job is submitted through the broker
     action agent.job.submit, docs/stackstorm.md; the controller serves no MCP endpoint), and the
@@ -430,6 +435,7 @@ def test_job_submission_and_shell_commands_are_the_brokers():
 
 
 # ---------------------------------------------------------------- only the broker's front is broker
+@pytest.mark.static
 def test_the_broker_records_tools_are_the_brokers_real_tools():
     """B2: hnx-broker.yml lists exactly what homelabnext/broker/mcp_tools.py registers."""
     rec = yaml.safe_load((CATALOG / "hnx-broker.yml").read_text())
@@ -478,6 +484,7 @@ def test_a_new_record_claiming_the_broker_is_refused(tmp_catalog):
     assert any("k8s-ops.yml: acts_via: broker, but only the broker's own" in p for p in problems)
 
 
+@pytest.mark.static
 def test_a_send_is_an_effect_that_goes_through_the_broker():
     """S2: posting to chat, sending mail, publishing a notification or an HTTP request change
     something elsewhere: class send, broker-only (the broker's notify actions), and a server that

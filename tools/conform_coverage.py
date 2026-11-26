@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail unless each blocking capability has a passing conformance suite.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:conform-check]
+#   trigger: [make:conform-check]
 #   inputs: the conformance suites and the target (--target, default fake)
 #   outputs: build/conform-report.json and a summary on stdout
 #   exit:

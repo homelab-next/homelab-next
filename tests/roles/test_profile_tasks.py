@@ -79,6 +79,7 @@ def test_vlan_bridge_verifier_refuses_a_bad_bridge_name(tmp_path, bridge):
     assert "Read bridge VLAN filtering state" not in r.stdout
 
 
+@pytest.mark.static
 def test_vlan_bridge_verifier_reads_through_argv_not_a_free_string():
     tasks = yaml.safe_load(BRIDGE_TASKS.read_text())
     for t in tasks:

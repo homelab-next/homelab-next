@@ -181,6 +181,7 @@ def test_converge_is_idempotent(tmp_path):
     assert r.returncode == 0 and r.stdout.count("changed=0") == 2, r.stdout
 
 
+@pytest.mark.static
 def test_main_runs_validate_then_dirs_then_credentials_then_settings_then_the_optional_unit():
     steps = yaml.safe_load((Path(ROLE) / "tasks" / "main.yml").read_text())
     assert [t["ansible.builtin.include_tasks"] for t in steps] == [
@@ -189,6 +190,7 @@ def test_main_runs_validate_then_dirs_then_credentials_then_settings_then_the_op
     assert steps[-1]["when"] == "source_census_install_unit | bool"  # off unless the site asks
 
 
+@pytest.mark.static
 def test_the_state_is_the_service_users_alone_and_the_credentials_are_private():
     dirs = (Path(ROLE) / "tasks" / "dirs.yml").read_text()
     assert "shell: /usr/sbin/nologin" in dirs and "system: true" in dirs

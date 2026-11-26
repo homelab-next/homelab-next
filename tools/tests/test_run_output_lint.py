@@ -93,5 +93,6 @@ def test_a_file_without_a_script_header_is_not_a_script(tmp_path):
     assert lint.scripts(tmp_path) == []
 
 
+@pytest.mark.static
 def test_the_repository_is_clean(capsys):
     assert lint.main([str(REPO)]) == 0, capsys.readouterr().out

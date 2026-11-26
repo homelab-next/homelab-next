@@ -18,7 +18,7 @@ summary_of: outline:sha256:d352356126acf331
   and the label reader this ADR extends), ADR-0047 (traced runs: the review's run id and model),
   ADR-0049 (the SOC data plane and the lab's checks as modules), and ADR-0026's amendment (placing
   what the split left unplaced); `tools/experimental.py`, `tools/product_name_lint.py`,
-  `tools/dup_check.py`, `tools/fix_has_test.py`, `tests/gates/test_ci_trusted_gates.py`,
+  `tools/dup_check.py`, `tools/fix_has_test.py`, the trusted-gates test (removed with the job on 2026-11-25),
   `.github/workflows/ci.yml`, `.github/workflows/codeql.yml`, `tools/licences.yml`
 - **Depends-on:** ADR-0046, ADR-0047
 
@@ -221,7 +221,7 @@ operator's label triggered.
      row's `paths:` shrinking, a `covers:` entry removed, or a `revisit:` date moved later.
    - `tools/allowlist_ratchet.py --base <sha>` holds every listed file to the base commit's, run
      by the base's code in `trusted-gates` like `experimental.py ratchet`, and joins `RATCHETS` in
-     `tests/gates/test_ci_trusted_gates.py`. A test fails when a `tools/*.allow.yml`, a
+     that job's test (job and test removed 2026-11-25: `make precheck` runs the ratchets now). A test fails when a `tools/*.allow.yml`, a
      `*.baseline.json` or a suppression marker that a gate reads is not in `tools/ratchets.yml`.
    - Growth passes only on the run that the operator's `allowlist-growth` label triggered, read the
      way ADR-0046 decision 4 reads `experimental-growth` (the `labeled` event names the governance

@@ -10,6 +10,7 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +49,7 @@ def test_every_family_the_adr_refuses_is_denied_and_lgpl_is_not():
     assert not [d for d in denied if d.startswith("LGPL")], "LGPL is allowed unmodified"
 
 
+@pytest.mark.static
 def test_each_exempted_package_is_a_separately_run_tool_named_in_notice():
     notice = (ROOT / "NOTICE").read_text()
     section = notice.split("Separately run software", 1)

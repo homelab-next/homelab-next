@@ -36,6 +36,7 @@ def _failing(rep):
     return [u for u in rep["uncounted"] if not u["reason"].startswith("status ")]
 
 
+@pytest.mark.static
 def test_committed_golden_report_is_current(capsys):
     assert main(["coverage", "--check", str(GOLDEN)]) == 0
     rep = json.loads(GOLDEN.read_text())
@@ -79,6 +80,7 @@ def test_a_rule_without_fixtures_is_not_counted(det):
     assert _failing(rep)[0]["reason"] == "no must_fire fixture"
 
 
+@pytest.mark.static
 def test_evasion_misses_are_gaps_not_coverage_loss():
     rep = json.loads(GOLDEN.read_text())
     assert {"rule": "det:web-shell-write", "evasion": "double-extension.json"} in rep[

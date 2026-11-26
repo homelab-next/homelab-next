@@ -2789,6 +2789,7 @@ def test_trivy_refuses_bad_inputs(first):
     assert all(f and "trivy: an OnCalendar schedule" in m for f, m in results), results
 
 
+@pytest.mark.static
 def test_trivy_installs_the_pinned_version_and_holds_it():
     import re
 
@@ -3593,6 +3594,7 @@ def test_clamav_clearing_the_private_mirror_removes_the_line_and_restarts_freshc
     assert restarts(3) == 2
 
 
+@pytest.mark.static
 def test_clamav_config_reads_the_guest_file_not_the_controller():
     # controller == guest in the harness, so pin the structure: the guest stat is registered
     # before the lineinfile and gates it, and the controller-side `is file` test is gone.

@@ -23,6 +23,7 @@ ALL = (
 
 
 # ---------------------------------------------------------------- the repository passes
+@pytest.mark.static
 def test_repository_packs_validate_cleanly():
     rep = validate_repo(root=ROOT)
     assert [str(p) for p in rep.problems] == []
@@ -34,6 +35,7 @@ def test_each_pack_is_clean(name):
     assert problems(pack(name)) == []
 
 
+@pytest.mark.static
 def test_schema_examples_are_real_packs():
     examples = ROOT / "schemas" / "workflows" / "examples"
     rep = validate_repo([examples], root=ROOT)
@@ -41,6 +43,7 @@ def test_schema_examples_are_real_packs():
     assert len(rep.packs) == 2
 
 
+@pytest.mark.static
 def test_schema_negatives_fail():
     files = sorted((ROOT / "schemas" / "workflows" / "negative").glob("pack.*"))
     rep = validate_repo(files, root=ROOT)
@@ -200,6 +203,7 @@ def test_deploy_pin_of_a_pack_that_cannot_run_fails(tmp_path):
     ), details
 
 
+@pytest.mark.static
 def test_deployable_problems_pass_a_runnable_pack():
     from homelabnext.workflows.validate import deployable_problems
 
@@ -251,6 +255,7 @@ RUNNABLE = (
 DEPLOYABLE_UNPINNED = ("cti-watch-site", "cti-watch-lake")
 
 
+@pytest.mark.static
 def test_repository_deploy_manifest_pins_every_runnable_pack():
     import yaml
 

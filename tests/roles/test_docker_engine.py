@@ -378,6 +378,7 @@ def test_a_primary_key_whose_fingerprint_is_not_read_is_refused(first):
     assert not first.setup["ring"].exists()
 
 
+@pytest.mark.static
 def test_the_docker_commands_reach_this_hosts_daemon_whatever_the_environment_says():
     """health and readiness pin DOCKER_HOST and DOCKER_CONFIG, so a DOCKER_HOST, a context or a
     CLI plugin from the account's environment cannot answer for another engine."""
@@ -523,6 +524,7 @@ def test_check_mode_on_a_guest_with_no_daemon_json_reports_it_instead_of_failing
     assert "changed=0" not in r.stdout  # the new file is reported as a change
 
 
+@pytest.mark.static
 def test_a_real_run_is_not_guarded_and_the_guard_follows_the_repository_in_check_mode_only():
     """Outside --check nothing is skipped (the guard is false whatever the repository did), and
     inside it the guard is the repository task reporting a change."""

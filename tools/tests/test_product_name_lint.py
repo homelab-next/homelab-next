@@ -489,6 +489,7 @@ def test_against_the_base_from_a_subdirectory_a_dropped_name_is_still_seen(tmp_p
     assert "'kuma' retired since" in capsys.readouterr().out
 
 
+@pytest.mark.static
 def test_the_repository_passes_its_own_lint():
     assert run(ROOT) == 0
 

@@ -173,6 +173,7 @@ def test_levels_follow_the_worst_class():
     assert level_of(None) == "unclassified"
 
 
+@pytest.mark.static
 def test_every_class_of_the_table_has_a_level():
     """A class without a CLASS_LEVEL entry would fall to 'privileged' silently (hnx-codemode,
     which only reads, was rated above the broker)."""
@@ -181,6 +182,7 @@ def test_every_class_of_the_table_has_a_level():
     assert level_of(["read", "codemode"]) == "read"
 
 
+@pytest.mark.static
 def test_no_example_is_both_egress_and_send():
     table = yaml.safe_load((REPO / "homelabnext/agent/tool_classes.yml").read_text())
 
@@ -289,6 +291,7 @@ def test_a_manifest_that_names_its_profile_lints_clean_and_one_that_names_none_i
     assert any("names no profiles" in n for _, n in notes)
 
 
+@pytest.mark.static
 def test_the_example_manifests_name_their_profiles_and_fit_them():
     from homelabnext.agent.readers import SESSIONS, lint_paths
 

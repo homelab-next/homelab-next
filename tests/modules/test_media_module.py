@@ -121,6 +121,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -129,6 +130,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["media"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -159,6 +161,7 @@ def test_the_image_pin_is_the_product_version_and_a_digest():
     assert image.split("@")[1].startswith("sha256:") and len(image.split("@")[1]) == 71
 
 
+@pytest.mark.static
 def test_the_defaults_are_a_configurable_read_only_library_cpu_transcoding_and_quick_connect():
     d = ld.load_yaml(MODULE / "roles" / "media" / "defaults" / "main.yml")
     assert d["media_library_path"] == "/srv/media"
@@ -244,6 +247,7 @@ def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+@pytest.mark.static
 def test_the_declared_footprint_memory_matches_the_default_memory_limit():
     """The guest also hosts another module: the footprint is the container limit (12g), not the tmpfs plus it."""
     manifest = yaml.safe_load((ROOT / "modules" / "media" / "module.yml").read_text())

@@ -138,6 +138,7 @@ def test_reachability_never_raises_a_ceiling(registry, specs):
     assert "view links: a public view's TLP ceiling is clear, not red" in problems
 
 
+@pytest.mark.static
 def test_the_views_schema_spells_labels_as_the_label_type_does():
     schema = json.loads((ROOT / "schemas/status/views.schema.json").read_text(encoding="utf-8"))
     assert tuple(schema["$defs"]["tlp"]["enum"]) == tlp.LABELS
@@ -222,6 +223,7 @@ def test_an_export_served_twice_is_refused():
     assert any("export activity.csv is served by 2 transforms" in p for p in problems)
 
 
+@pytest.mark.static
 def test_the_registry_is_governance():
     """A change to the release transforms is human-approve: CODEOWNERS names the registry and
     the code that applies it."""
@@ -293,6 +295,7 @@ def test_each_value_kind_is_closed(kind, good, bad):
     assert not any(rel.check_value(kind, v) for v in bad), kind
 
 
+@pytest.mark.static
 def test_the_closed_sets_match_the_activity_schema():
     schema = json.loads((ROOT / "schemas/status/agent_activity.schema.json").read_text("utf-8"))
     props = schema["properties"]
@@ -688,6 +691,7 @@ def test_the_public_agent_pages_render_from_the_released_document(served):
         assert b"Make a change" not in body and b"Test lab" in body, path
 
 
+@pytest.mark.static
 def test_the_registry_file_is_packaged():
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert '"status/*.yml"' in pyproject

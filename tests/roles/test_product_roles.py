@@ -294,6 +294,7 @@ def test_a_signing_key_file_with_an_unpinned_key_beside_the_pinned_one_is_refuse
     assert r.returncode != 0 and "not the pinned" in r.stdout and not ring.exists()
 
 
+@pytest.mark.static
 def test_the_pinned_fingerprints_are_the_vendor_keys():
     pins = {
         "wazuh_agent": ["0DCFCA5547B19D2A6099506096B3EE5F29111145"],  # Wazuh.com (Wazuh Signing Key)
@@ -329,6 +330,7 @@ def test_tailscale_node_tags_the_zone(first):
     assert '"tailscale_node_tags": ["tag:zone-mgmt", "tag:dns"]' in r.stdout
 
 
+@pytest.mark.static
 def test_the_role_and_the_policy_agree_on_the_zone_tag():
     from homelabnext.compute.gen.tailscale_acl import ZONE_TAG_PREFIX
 

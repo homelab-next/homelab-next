@@ -29,6 +29,7 @@ def test_defaults_are_applied():
     assert p.min_history_days == p.learn_days == 4
 
 
+@pytest.mark.static
 def test_the_example_spec_loads():
     spec = load_spec(ROOT / "examples/novelty/spec.yml", SCHEMAS)
     assert [p.id for p in spec.profiles] == ["host-dst-port", "user-src-ip"]

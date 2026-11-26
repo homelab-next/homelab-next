@@ -588,6 +588,7 @@ def test_every_envelope_attribute_an_example_sends_is_allowed(tmp_path):
     }  # fmt: skip
 
 
+@pytest.mark.static
 def test_the_allowed_envelope_attributes_are_the_envelope_schemas_own():
     from homelabnext.orchestration.store import ENVELOPE_ATTRIBUTES
 
@@ -655,6 +656,7 @@ def test_dataschema_naming_the_type_and_a_real_model_name_are_accepted(store):
     assert store.consume(body(ev)).status == "processed"
 
 
+@pytest.mark.static
 def test_the_job_model_pattern_is_the_turn_records_model_rule():
     from conformance.protocols.inference import MODEL_PATTERN
 

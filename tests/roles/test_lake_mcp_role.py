@@ -158,6 +158,7 @@ def test_health_fails_when_the_server_cannot_read_the_lake(tmp_path):
     assert r.returncode != 0
 
 
+@pytest.mark.static
 def test_health_runs_the_check_as_the_account_without_become_user():
     """Becoming an unprivileged user needs ACL tools a guest may lack; the check runs under runuser instead."""
     text = (Path(ROLE) / "tasks" / "health.yml").read_text()

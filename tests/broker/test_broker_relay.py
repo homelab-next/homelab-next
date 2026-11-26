@@ -816,6 +816,7 @@ def test_a_stream_whose_dedup_window_is_shorter_than_configured_is_refused():
     nj.make(**kw)  # a client that does not publish (the bridge) asks for nothing
 
 
+@pytest.mark.static
 def test_the_documented_and_lab_windows_agree():
     """The relay targets (docs/broker.md, the lab's) ask for no more than the streams they are
     documented or provisioned with keep."""
@@ -965,6 +966,7 @@ def test_the_adapter_marks_a_permission_violation_permanent():
     assert m and m.group(1) == "a.b.c"
 
 
+@pytest.mark.static
 def test_a_denied_jetstream_api_call_is_permanent_though_nats_py_lowercases_it():
     """Found live (round 4): nats-py hands the server's -ERR over lowercased
     (``permissions violation for publish to "$js.api.consumer.create..."``), so a denied

@@ -66,6 +66,7 @@ def test_a_module_hands_its_export_files_to_compose_app_and_names_known_kinds(ap
     assert passes[0]["compose_app_export_files"].endswith("compose_app_export_files }}")
 
 
+@pytest.mark.static
 def test_the_status_hub_schedules_its_state_through_the_same_timer_when_the_lab_turns_it_on():
     tasks = yaml.safe_load((ROOT / "ansible/roles/status_hub/tasks/main.yml").read_text())
     task = next(

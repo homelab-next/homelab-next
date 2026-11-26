@@ -1662,6 +1662,7 @@ FORBIDDEN_ACTS = re.compile(
 )
 
 
+@pytest.mark.static
 def test_no_hook_ever_initialises_unseals_or_reads_a_share():
     """The role's whole task tree: the operator initialises and unseals, never the role."""
     text = "\n".join(
