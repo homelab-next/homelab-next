@@ -20,8 +20,11 @@ prometheus_base_rule_names: [Watchdog, TargetDown, NoTargets, DiskAlmostFull, Fi
 prometheus_hardware_rule_names: [CpuTemperatureHigh, CpuTemperatureCritical, NvmeTemperatureHigh, NvmeTemperatureCritical, GpuTemperatureHigh, GpuTemperatureCritical, GpuPowerOverCap, GpuPowerCapNotApplied, GpuLost, GpuCountDropped, GpuDriverError, GpuNotComputing, PoolUnhealthy, PoolDeviceErrors, PoolDataErrors, PoolAlmostFull, BoardSensorCritical, BoardSensorWarning, FanFailed, FanReadingLost, BoardCriticalEvent, GuestDown, HardwareMetricsStale, HardwareCollectorDown]
 prometheus_snmp_rule_names: [NetworkPortDown, NetworkPortErrors, NetworkPortSpeedDropped, NasDiskUnhealthy, NasDiskTemperatureHigh, NasVolumeNotReady, NasVolumeAlmostFull, NasFanStopped]
 prometheus_llm_rule_names: [LlmProbeFailed, LlmProbeSlow]
+# the model-server throughput rule (always rendered: it reads the llama.cpp servers' own metrics, no probe needed)
+prometheus_llm_throughput_rule_names: [LlmDecodeCollapsed]
 prometheus_rule_names: >-
   {{ prometheus_base_rule_names + prometheus_hardware_rule_names
+     + (prometheus_llm_throughput_rule_names if prometheus_inference_metric_prefix | length > 0 else [])
      + (['ProbeDown'] if prometheus_probes_enabled | bool else [])
      + (prometheus_snmp_rule_names if prometheus_snmp_enabled | bool else [])
      + (prometheus_llm_rule_names if prometheus_llm_probes_on | bool else []) }}
