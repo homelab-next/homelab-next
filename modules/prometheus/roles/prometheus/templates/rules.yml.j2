@@ -360,6 +360,23 @@ groups:
 {% raw %}
           summary: "{{ $labels.instance }} hardware collector {{ $labels.collector }} cannot read its source (journalctl -u hnx-hardware-metrics)"
 {% endraw %}
+{% if prometheus_inference_metric_prefix | length > 0 %}
+  - name: hnx-llm-throughput
+    rules:
+      # tokens generated per second of generation, over the window, per model server; only while it is generating
+      - alert: LlmDecodeCollapsed
+        expr: >-
+          (rate({{ prometheus_inference_metric_prefix }}tokens_predicted_total[{{ prometheus_alert_llm_decode_window }}])
+            / rate({{ prometheus_inference_metric_prefix }}tokens_predicted_seconds_total[{{ prometheus_alert_llm_decode_window }}]))
+            < {{ prometheus_alert_llm_decode_min_tps }}
+          and rate({{ prometheus_inference_metric_prefix }}tokens_predicted_total[{{ prometheus_alert_llm_decode_window }}]) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "model server {{ $labels.job }} is generating at {{ $value | printf \"%.2f\" }} tokens/s{% endraw %} (alarm under {{ prometheus_alert_llm_decode_min_tps }}): almost certainly running on the CPU after a GPU fault - every AI job is crawling; check GpuLost/GpuNotComputing and the server's CUDA start"
+{% endif %}
 {% if prometheus_probes_enabled | bool %}
   - name: hnx-probes
     rules:
