@@ -37,6 +37,7 @@
     compose_app_dir: "{{ garage_app.compose_app_dir }}"
     compose_app_data_dir: "{{ garage_app.compose_app_data_dir }}"
     compose_app_export_dir: "{{ garage_app.compose_app_export_dir }}"
+    compose_app_export_files: "{{ garage_app.compose_app_export_files }}"
     compose_app_owner: "{{ garage_app.compose_app_owner }}"
     compose_app_group: "{{ garage_app.compose_app_group }}"
     compose_app_start: "{{ garage_app.compose_app_start }}"

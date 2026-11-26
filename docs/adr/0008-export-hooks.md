@@ -18,8 +18,11 @@ summary_of: outline:sha256:2fdd5ae7b30885dd
   results transport that carries `drills.json` to the status hub (ADR-0049 decision 7).
   Since 2026-11-25 the same timer also copies products whose state is SQLite or plain files (`compose_app_export_files`: a `sqlite`
   job through SQLite's online backup with an integrity check, a `tree` job as a gzip tar): the forge, the feed reader, the DNS server
-  and the status hub. Not yet scheduled: the object store's metadata snapshot (needs a command run in the container before the copy)
-  and the dataflow server's flows (the API and a stopped service).
+  and the status hub. Since 2026-11-26 a `tree` job also accepts `pre_exec: {service, argv}` (a snapshot command the product runs
+  inside its own container before the copy) and `stop_service: true` (`docker compose stop` before the tar and `docker compose up
+  -d` after it, in a `try/finally`), so the object store's metadata (the `/garage meta snapshot` command writes an LMDB snapshot
+  the tar then captures) and the dataflow server's state (the stored flow, users, authorizations and state repositories, archived
+  with the service stopped) are on the same timer.
 - **Status note (2026-10-28):** decisions 1 and 2 are not yet met as written; the decision is unchanged. Today `ansible/roles/compose_app/tasks/export.yml` exports a tar.gz of the live data directory, not an open-format dump (JSON, STIX, SQL), and the `restore_drill` role runs the backup product's image-level drill (`restore_drill_cli`), not a restore from an export.
 - **Amended:** 2026-11-07 by ADR-0040 (decision 6): export and import become methods of each
   stateful slot's protocol, with a round-trip requirement; and by ADR-0042 (decision 2): a dump

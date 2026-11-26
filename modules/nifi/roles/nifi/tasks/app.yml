@@ -49,6 +49,18 @@
       compose_app_group: "{{ nifi_group }}"
       compose_app_start: "{{ nifi_start }}"
       compose_app_validate_with_docker: "{{ nifi_validate_with_docker }}"
+      # the scheduled copy (compose_app_export_timer, ADR-0008 decision 1, ADR-0042 decision 2):
+      # the stored flow, users, authorizations and state repositories, archived with the service
+      # stopped (a tar of files NiFi is writing is not a consistent copy; see tasks/export.yml's
+      # one-off hook). The provenance repository is rebuilt as flows run, so it is left out of the
+      # scheduled copy and travels in the guest's image backup instead; the logs and the smoke
+      # output are not state, so they are left out too.
+      compose_app_export_files:
+        - name: dataflow-state
+          kind: tree
+          path: "{{ nifi_data_root }}"
+          stop_service: true
+          exclude: [provenance_repository, logs, smoke, drivers]
       compose_app_spec:
         services:
           nifi:

@@ -163,6 +163,16 @@ matches**, and mounts the directory **read-only** at `<container home>/drivers/<
 | `restore` | `nifi_restore_source` (an export directory); mode `state` checks the archive's hash against the listing and its members (no link, no path outside the state's own), extracts beside the live data, then with the service stopped moves every replaced path aside under `<data root>/before-restore` (never deleted: move it away before the next restore, which refuses to go over it) and the staged ones in; mode `flows` imports the portable definitions by name where absent, then for every named flow binds the group to the provider's parameter context, enables its controller services (waiting for ENABLED) and starts it only when `nifi_flow_run` names it true (a second run changes nothing). The sensitive-props key must be the one the export was taken under |
 | `upgrade` | refuses a target that is not pinned by tag and digest, is another repository, is older, or has the running tag at another digest (unless `nifi_allow_same_tag_rebuild`); records the bump; the playbook exports first, then converges (the configuration files are taken afresh from the new image; NiFi migrates its repositories forward on first start) |
 
+## The scheduled copy
+
+With `compose_app_export_timer` on (the lab's group variable), a nightly timer (`hnx-export-nifi`, 07:30 UTC) stops the service,
+writes a gzip tar of the whole data root (the stored flow at `conf/flow.json.gz`, users, authorizations and the state, flowfile,
+content and database repositories), and starts the service again in a `try/finally` so a failed tar still restarts it. The copy
+is written to `export/db/dataflow-state/dataflow-state.tar.gz` with a sha256 listing. The provenance repository (large, rebuilt as
+flows run), the logs and the smoke output are not state and are excluded; the seeded configuration files, which hold the
+container's passwords, are rebuilt from the image on restart and are not in the stored flow (the sensitive-props key is held in
+the secret store). The one-off `export` hook above (flow definitions through the API and the state archive) stays the exit copy.
+
 ## Overlay checklist
 
 1. Select the module for the `dataflow` slot, place its `server` role on the lake guest (the same

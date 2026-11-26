@@ -54,6 +54,7 @@
     compose_app_dir: "{{ nifi_app.compose_app_dir }}"
     compose_app_data_dir: "{{ nifi_app.compose_app_data_dir }}"
     compose_app_export_dir: "{{ nifi_app.compose_app_export_dir }}"
+    compose_app_export_files: "{{ nifi_app.compose_app_export_files }}"
     compose_app_owner: "{{ nifi_app.compose_app_owner }}"
     compose_app_group: "{{ nifi_app.compose_app_group }}"
     compose_app_start: "{{ nifi_app.compose_app_start }}"

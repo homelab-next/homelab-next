@@ -28,7 +28,16 @@ Two more job kinds need no container: ``sqlite`` copies every file a glob matche
 online backup API (a consistent snapshot of a live database, read-only on the source), and checks
 the copy (``PRAGMA integrity_check`` is ``ok`` and it holds a table); ``tree`` writes a gzip tar of a
 directory, minus the listed exclusions, and checks it reads back.  A glob that matches nothing or a
-tree that is empty is a failure, not an empty success."""
+tree that is empty is a failure, not an empty success.
+
+A ``tree`` job can also quiesce the source before it tars it (products whose live files are no
+database: the object store's metadata database, the dataflow engine's stored flow and repositories).
+``pre_exec: {service, argv}`` runs ``docker compose exec -T <service> <argv>`` first, so a product
+takes a product-consistent snapshot of its own (e.g. the object store's ``meta snapshot``) that the
+subsequent tar then copies.  ``stop_service: true`` runs ``docker compose stop`` before the tar and
+``docker compose up -d`` after it (in a ``try/finally``, so a failed tar still restarts the
+service), for a product whose repositories are a live database no snapshot command captures
+(the dataflow engine's state).  Either needs ``compose_file`` in the manifest."""
 
 import argparse
 import contextlib
@@ -111,6 +120,26 @@ def load_manifest(path):
             safe_source(job.get("path"))
             if not all(isinstance(x, str) and x for x in job.get("exclude", [])):
                 raise Refused(f"job {name!r}: exclude is a list of patterns")
+            if "pre_exec" in job:
+                pre = job["pre_exec"]
+                if (
+                    not isinstance(pre, dict)
+                    or not NAME.match(str(pre.get("service", "")))
+                    or not isinstance(pre.get("argv"), list)
+                    or not pre["argv"]
+                    or not all(isinstance(a, str) and a for a in pre["argv"])
+                ):
+                    raise Refused(f"job {name!r}: pre_exec is {{service, argv: [str, ...]}}")
+                if "compose_file" not in doc:
+                    raise Refused(
+                        f"manifest lacks 'compose_file' for tree job {name!r} with pre_exec"
+                    )
+            if job.get("stop_service") not in (None, False, True):
+                raise Refused(f"job {name!r}: stop_service is a bool")
+            if job.get("stop_service") and "compose_file" not in doc:
+                raise Refused(
+                    f"manifest lacks 'compose_file' for tree job {name!r} with stop_service"
+                )
     return doc
 
 
@@ -213,8 +242,20 @@ def sqlite_job(job, out):
     return files
 
 
-def tree_job(job, out):
+def compose_project(doc, action):
+    """Run `docker compose -f FILE <action...>` against the project; the action is argv."""
+    argv = ["docker", "compose", "-f", doc["compose_file"], *action]
+    proc = subprocess.run(argv, capture_output=True, check=False)
+    if proc.returncode != 0:
+        tail = proc.stderr.decode("utf-8", "replace").strip().splitlines()[-1:] or [""]
+        raise RuntimeError(
+            f"docker compose {' '.join(action)}: exit {proc.returncode}: {tail[0][:200]}"
+        )
+
+
+def tree_job(job, out, doc):
     root, exclude = job["path"].rstrip("/"), job.get("exclude", [])
+    pre_exec, stop_service = job.get("pre_exec"), bool(job.get("stop_service"))
     if not os.path.isdir(root):
         raise RuntimeError(f"{job['service']}: {root} is not a directory")
 
@@ -231,9 +272,27 @@ def tree_job(job, out):
     tmp = os.path.join(out, "." + name + ".tmp")
     with contextlib.suppress(FileNotFoundError):
         os.unlink(tmp)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "wb") as raw, tarfile.open(fileobj=raw, mode="w:gz") as tar:
-        tar.add(root, arcname="tree", filter=keep)
+
+    def _tar_it():
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as raw, tarfile.open(fileobj=raw, mode="w:gz") as tar:
+            tar.add(root, arcname="tree", filter=keep)
+
+    if stop_service:
+        # the service MUST be brought back whatever happens, so the tar sits in try/finally
+        compose_project(doc, ["stop"])
+        try:
+            if pre_exec:
+                compose(doc, pre_exec["service"], pre_exec["argv"], subprocess.DEVNULL)
+            _tar_it()
+        finally:
+            compose_project(doc, ["up", "-d"])
+    else:
+        if pre_exec:
+            # the pre_exec runs with the service UP so it is a snapshot the product writes itself
+            compose(doc, pre_exec["service"], pre_exec["argv"], subprocess.DEVNULL)
+        _tar_it()
+
     with tarfile.open(tmp, "r:gz") as tar:
         members = sum(1 for m in tar if m.isfile())
     if members == 0:
@@ -251,7 +310,7 @@ def run_job(doc, job, stage):
     if engine == "sqlite":
         return sqlite_job(job, out)
     if engine == "tree":
-        return tree_job(job, out)
+        return tree_job(job, out, doc)
     if engine == "postgres":
         listing = compose_text(
             doc,
