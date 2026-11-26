@@ -36,7 +36,7 @@
       ansible.builtin.assert:
         that:
           - wazuh_alerts_stat.stat.exists
-          - (now(utc=true).timestamp() | int) - (wazuh_alerts_stat.stat.mtime | int) <= (wazuh_alerts_max_age_seconds | int)
+          - (now().timestamp() | int) - (wazuh_alerts_stat.stat.mtime | int) <= (wazuh_alerts_max_age_seconds | int)
         fail_msg: >-
           siem: the alert stream {{ wazuh_data_root }}/manager/logs/alerts/alerts.json has not been written for over
           {{ wazuh_alerts_max_age_seconds }} seconds (or does not exist): the manager is up but not producing alerts;
