@@ -167,6 +167,10 @@ argument_specs:
         type: int
         description: Seconds for each health request.
         default: 10
+      caddy_siem_agent_unit:
+        type: str
+        description: 'The SIEM agent''s systemd unit on this host, restarted when the access-log block changed (empty: the site restarts it).'
+        default: ''
   health:
     short_description: Fail unless the container is healthy, the certificate is current and loaded, every name is served over verified TLS, gated sites redirect to sign in, the catch-all answers 404, the running config strips identity headers and mTLS upstreams refuse a peer without the client certificate.
     options:
