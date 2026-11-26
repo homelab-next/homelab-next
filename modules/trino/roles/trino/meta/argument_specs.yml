@@ -193,9 +193,20 @@ argument_specs:
       trino_maintenance_acknowledged_restore:
         type: bool
         description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
-          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
-          trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
+          restored or migrated one, or lake_verify (its all-history check) passed on every restored schema).
+          The timer is armed when trino_maintenance_enabled is true and either this is true or
+          trino_maintenance_schemas is a flat list of entries all present in trino_maintenance_safe_schemas;
+          otherwise the units are installed and the timer is stopped and disabled.
         default: false
+      trino_maintenance_safe_schemas:
+        type: list
+        elements: str
+        description: Schemas known safe to maintain without trino_maintenance_acknowledged_restore (fresh
+          namespaces the operator has pre-cleared); each entry a literal lower-case schema name, not a glob
+          and not a `schema.table`. Empty (the default) leaves the single-gate behaviour (the ack is required).
+          Narrow trino_maintenance_schemas to a flat list of entries in this set to arm maintenance for the
+          fresh part of a mixed lake without first reconciling the restored tables' history.
+        default: []
       trino_maintenance_schemas:
         type: list
         elements: str
@@ -537,9 +548,20 @@ argument_specs:
       trino_maintenance_acknowledged_restore:
         type: bool
         description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
-          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
-          trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
+          restored or migrated one, or lake_verify (its all-history check) passed on every restored schema).
+          The timer is armed when trino_maintenance_enabled is true and either this is true or
+          trino_maintenance_schemas is a flat list of entries all present in trino_maintenance_safe_schemas;
+          otherwise the units are installed and the timer is stopped and disabled.
         default: false
+      trino_maintenance_safe_schemas:
+        type: list
+        elements: str
+        description: Schemas known safe to maintain without trino_maintenance_acknowledged_restore (fresh
+          namespaces the operator has pre-cleared); each entry a literal lower-case schema name, not a glob
+          and not a `schema.table`. Empty (the default) leaves the single-gate behaviour (the ack is required).
+          Narrow trino_maintenance_schemas to a flat list of entries in this set to arm maintenance for the
+          fresh part of a mixed lake without first reconciling the restored tables' history.
+        default: []
       trino_maintenance_schemas:
         type: list
         elements: str
@@ -807,9 +829,20 @@ argument_specs:
       trino_maintenance_acknowledged_restore:
         type: bool
         description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
-          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
-          trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
+          restored or migrated one, or lake_verify (its all-history check) passed on every restored schema).
+          The timer is armed when trino_maintenance_enabled is true and either this is true or
+          trino_maintenance_schemas is a flat list of entries all present in trino_maintenance_safe_schemas;
+          otherwise the units are installed and the timer is stopped and disabled.
         default: false
+      trino_maintenance_safe_schemas:
+        type: list
+        elements: str
+        description: Schemas known safe to maintain without trino_maintenance_acknowledged_restore (fresh
+          namespaces the operator has pre-cleared); each entry a literal lower-case schema name, not a glob
+          and not a `schema.table`. Empty (the default) leaves the single-gate behaviour (the ack is required).
+          Narrow trino_maintenance_schemas to a flat list of entries in this set to arm maintenance for the
+          fresh part of a mixed lake without first reconciling the restored tables' history.
+        default: []
       trino_maintenance_schemas:
         type: list
         elements: str
@@ -1077,9 +1110,20 @@ argument_specs:
       trino_maintenance_acknowledged_restore:
         type: bool
         description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
-          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
-          trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
+          restored or migrated one, or lake_verify (its all-history check) passed on every restored schema).
+          The timer is armed when trino_maintenance_enabled is true and either this is true or
+          trino_maintenance_schemas is a flat list of entries all present in trino_maintenance_safe_schemas;
+          otherwise the units are installed and the timer is stopped and disabled.
         default: false
+      trino_maintenance_safe_schemas:
+        type: list
+        elements: str
+        description: Schemas known safe to maintain without trino_maintenance_acknowledged_restore (fresh
+          namespaces the operator has pre-cleared); each entry a literal lower-case schema name, not a glob
+          and not a `schema.table`. Empty (the default) leaves the single-gate behaviour (the ack is required).
+          Narrow trino_maintenance_schemas to a flat list of entries in this set to arm maintenance for the
+          fresh part of a mixed lake without first reconciling the restored tables' history.
+        default: []
       trino_maintenance_schemas:
         type: list
         elements: str
@@ -1347,9 +1391,20 @@ argument_specs:
       trino_maintenance_acknowledged_restore:
         type: bool
         description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
-          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
-          trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
+          restored or migrated one, or lake_verify (its all-history check) passed on every restored schema).
+          The timer is armed when trino_maintenance_enabled is true and either this is true or
+          trino_maintenance_schemas is a flat list of entries all present in trino_maintenance_safe_schemas;
+          otherwise the units are installed and the timer is stopped and disabled.
         default: false
+      trino_maintenance_safe_schemas:
+        type: list
+        elements: str
+        description: Schemas known safe to maintain without trino_maintenance_acknowledged_restore (fresh
+          namespaces the operator has pre-cleared); each entry a literal lower-case schema name, not a glob
+          and not a `schema.table`. Empty (the default) leaves the single-gate behaviour (the ack is required).
+          Narrow trino_maintenance_schemas to a flat list of entries in this set to arm maintenance for the
+          fresh part of a mixed lake without first reconciling the restored tables' history.
+        default: []
       trino_maintenance_schemas:
         type: list
         elements: str
@@ -1621,9 +1676,20 @@ argument_specs:
       trino_maintenance_acknowledged_restore:
         type: bool
         description: The operator's acknowledgement that the lake is safe to maintain unattended (not a freshly
-          restored or migrated one, or lake_verify (its all-history check) passed). The timer is armed only when
-          trino_maintenance_enabled and this are both true; otherwise it is stopped and disabled.
+          restored or migrated one, or lake_verify (its all-history check) passed on every restored schema).
+          The timer is armed when trino_maintenance_enabled is true and either this is true or
+          trino_maintenance_schemas is a flat list of entries all present in trino_maintenance_safe_schemas;
+          otherwise the units are installed and the timer is stopped and disabled.
         default: false
+      trino_maintenance_safe_schemas:
+        type: list
+        elements: str
+        description: Schemas known safe to maintain without trino_maintenance_acknowledged_restore (fresh
+          namespaces the operator has pre-cleared); each entry a literal lower-case schema name, not a glob
+          and not a `schema.table`. Empty (the default) leaves the single-gate behaviour (the ack is required).
+          Narrow trino_maintenance_schemas to a flat list of entries in this set to arm maintenance for the
+          fresh part of a mixed lake without first reconciling the restored tables' history.
+        default: []
       trino_maintenance_schemas:
         type: list
         elements: str

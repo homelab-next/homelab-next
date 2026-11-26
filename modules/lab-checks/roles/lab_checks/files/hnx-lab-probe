@@ -3,10 +3,10 @@
 # hnx-script:
 #   id: lab-checks-probe
 #   kind: tool
-#   purpose: Small read-only probes a lab criterion's observable runs (an HTTP status, a TCP connect, a DNS answer, a metrics value, a last-run record); each exits by the invariants runner's semantics.
+#   purpose: Small read-only probes a lab criterion's observable runs (an HTTP status, a TCP connect, a DNS answer, a metrics value, a last-run record, a lake table's freshness or statistics coverage through the lake-catalog REST interface); each exits by the invariants runner's semantics.
 #   owner: platform
 #   trigger: [role:lab_checks]
-#   inputs: "http URL [--status N,N] [--ca FILE] [--timeout S] | tcp HOST PORT [--timeout S] | dns RESOLVER NAME [--type A] [--expect ADDR] [--timeout S] [--port N] | prom BASE_URL QUERY (--min N | --max N | --eq N) [--empty fail|zero] | lastrun DIR JOB MAX_AGE_S [--now EPOCH]"
+#   inputs: "http URL [--status N,N] [--ca FILE] [--timeout S] | tcp HOST PORT [--timeout S] | dns RESOLVER NAME [--type A] [--expect ADDR] [--timeout S] [--port N] | prom BASE_URL QUERY (--min N | --max N | --eq N) [--empty fail|zero] | lastrun DIR JOB MAX_AGE_S [--now EPOCH] | lake-table-fresh CATALOG_URL NAMESPACE TABLE --max-age-s N [--ca FILE] [--timeout S] [--now EPOCH] | lake-table-stats CATALOG_URL NAMESPACE TABLE [--ca FILE] [--timeout S]"
 #   outputs: one line of evidence on stdout (the reason on a failure)
 #   exit:
 #     "0": the probe held
@@ -190,6 +190,90 @@ def _ts(v) -> int:
         raise Cant(f"unreadable timestamp {v!r}") from e
 
 
+_NAMEPART = __import__("re").compile(r"^[a-z0-9_][a-z0-9_.-]{0,127}\Z")
+
+
+def _lake_table_load(base: str, namespace: str, table: str, ca: str | None,
+                     timeout: float) -> dict:
+    """Read one lake table's metadata through the lake-catalog REST interface
+    (``GET <base>/namespaces/{ns}/tables/{t}``), unauthenticated.  Returns the ``metadata``
+    document.  The probe is read-only; only the catalog is contacted, never the object store.
+
+    ``base`` is the prefix up to (not including) ``/namespaces``: the reference catalog
+    implementation uses ``http://host:port/v1``, a named-warehouse implementation uses
+    ``http://host:port/catalog/v1/<warehouse-id>``.
+    """
+    if urllib.parse.urlsplit(base).scheme not in ("http", "https"):
+        raise Cant(f"not an http(s) URL: {base!r}")
+    if not (_NAMEPART.match(namespace) and _NAMEPART.match(table)):
+        raise Cant(f"not a safe namespace/table: {namespace!r}/{table!r}")
+    url = (base.rstrip("/") + "/namespaces/"
+           + urllib.parse.quote(namespace, safe="") + "/tables/"
+           + urllib.parse.quote(table, safe=""))
+    ctx = ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=ctx))
+    try:
+        with opener.open(urllib.request.Request(url, method="GET"), timeout=timeout) as r:
+            doc = json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise ValueError(f"the catalog has no {namespace}.{table}") from None
+        raise Cant(f"the catalog answered HTTP {e.code}") from None
+    except (urllib.error.URLError, OSError, ssl.SSLError) as e:
+        raise Cant(f"the catalog did not answer ({type(e).__name__}: "
+                   f"{getattr(e, 'reason', e)})") from e
+    except (ValueError,) as e:  # json.load
+        raise Cant(f"the catalog answered with non-JSON: {e}") from e
+    meta = doc.get("metadata")
+    if not isinstance(meta, dict):
+        raise Cant(f"the catalog answered without a `metadata` object for {namespace}.{table}")
+    return meta
+
+
+def lake_table_fresh(base: str, namespace: str, table: str, max_age_s: int, ca: str | None,
+                     timeout: float, now: float) -> int:
+    """The table's most recent write (``metadata.last-updated-ms``) is within ``max_age_s`` of now.
+    A table that reads but has no snapshot is treated as stale (one line says so)."""
+    try:
+        meta = _lake_table_load(base, namespace, table, ca, timeout)
+    except ValueError as e:
+        return _out(FAIL, f"{namespace}.{table}: {e}")
+    last_ms = meta.get("last-updated-ms")
+    if not isinstance(last_ms, int):
+        return _out(FAIL, f"{namespace}.{table}: no `last-updated-ms` in the metadata")
+    age = int(now - last_ms / 1000.0)
+    if not meta.get("snapshots"):
+        return _out(FAIL, f"{namespace}.{table}: no snapshot yet (metadata age {age} s)")
+    if age > max_age_s:
+        return _out(FAIL, f"{namespace}.{table}: last write {age} s ago, over {max_age_s} s")
+    return _out(PASS, f"{namespace}.{table}: last write {age} s ago")
+
+
+def lake_table_stats(base: str, namespace: str, table: str, ca: str | None,
+                     timeout: float) -> int:
+    """The current snapshot has a ``.stats`` object: one entry in ``metadata.statistics`` whose
+    ``snapshot-id`` is ``current-snapshot-id``.  A missing current-snapshot statistics file is the
+    RCA's ``missing .stats object`` signal (slow queries, stale plan cost).  A table with no
+    current snapshot passes (nothing to collect stats for)."""
+    try:
+        meta = _lake_table_load(base, namespace, table, ca, timeout)
+    except ValueError as e:
+        return _out(FAIL, f"{namespace}.{table}: {e}")
+    current = meta.get("current-snapshot-id")
+    if current is None:
+        return _out(PASS, f"{namespace}.{table}: no current snapshot (nothing to collect)")
+    stats = meta.get("statistics") or []
+    if not isinstance(stats, list):
+        return _out(FAIL, f"{namespace}.{table}: `statistics` is not a list")
+    have = [s for s in stats if isinstance(s, dict) and s.get("snapshot-id") == current]
+    if not have:
+        return _out(FAIL, f"{namespace}.{table}: no .stats for current snapshot {current}")
+    path = str(have[0].get("statistics-path") or "")
+    if not path:
+        return _out(FAIL, f"{namespace}.{table}: .stats entry has no `statistics-path`")
+    return _out(PASS, f"{namespace}.{table}: .stats present for snapshot {current}")
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="hnx-lab-probe")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -223,6 +307,20 @@ def main(argv: list[str]) -> int:
     lr.add_argument("job")
     lr.add_argument("max_age", type=int)
     lr.add_argument("--now", type=float)
+    ltf = sub.add_parser("lake-table-fresh")
+    ltf.add_argument("base")
+    ltf.add_argument("namespace")
+    ltf.add_argument("table")
+    ltf.add_argument("--max-age-s", type=int, required=True)
+    ltf.add_argument("--ca")
+    ltf.add_argument("--timeout", type=float, default=10)
+    ltf.add_argument("--now", type=float)
+    lts = sub.add_parser("lake-table-stats")
+    lts.add_argument("base")
+    lts.add_argument("namespace")
+    lts.add_argument("table")
+    lts.add_argument("--ca")
+    lts.add_argument("--timeout", type=float, default=10)
     try:
         a = ap.parse_args(argv)
     except SystemExit as e:
@@ -238,6 +336,11 @@ def main(argv: list[str]) -> int:
             op = "min" if a.min is not None else "max" if a.max is not None else "eq"
             bound = {"min": a.min, "max": a.max, "eq": a.eq}[op]
             return prom(a.base, a.query, op, bound, a.empty, a.timeout)
+        if a.cmd == "lake-table-fresh":
+            return lake_table_fresh(a.base, a.namespace, a.table, a.max_age_s, a.ca, a.timeout,
+                                    a.now if a.now is not None else time.time())
+        if a.cmd == "lake-table-stats":
+            return lake_table_stats(a.base, a.namespace, a.table, a.ca, a.timeout)
         return lastrun(a.dir, a.job, a.max_age, a.now if a.now is not None else time.time())
     except Cant as e:
         return _out(CANT, f"cannot measure: {e}")

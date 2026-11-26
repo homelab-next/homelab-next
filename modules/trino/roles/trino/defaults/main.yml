@@ -73,13 +73,26 @@ trino_validate_with_docker: true
 trino_health_timeout: 10
 # --- the maintenance timer (the lake's snapshot and orphan-file hygiene) ---
 trino_maintenance_enabled: true
-# The timer is ARMED (enabled and started) only when trino_maintenance_enabled AND this is true. The
-# first maintenance run on a lake restored or migrated from another one is the dangerous one (a
-# current-only data copy under a full-history catalog: expire/orphan statements hang or delete), and the
-# role cannot see how the lake got here, so arming is an explicit operator act: set this true only after
-# `lake_verify.py` (its all-history check, on by default) passed (or the lake was never restored), and after the allow/skip lists
-# below say what may be touched. Until then the units are installed and the timer is stopped and disabled.
+# The timer is ARMED (enabled and started) only when trino_maintenance_enabled AND
+# (trino_maintenance_acknowledged_restore OR the allow-list is confined to schemas the operator has
+# declared safe under trino_maintenance_safe_schemas). The first maintenance run on a lake restored
+# or migrated from another one is the dangerous one (a current-only data copy under a full-history
+# catalog: expire/orphan statements hang or delete; RCA plans/2026-11-17-lake-maintenance-rca.md);
+# the role cannot see how the lake got here, so arming is an explicit operator act. Set this true
+# only after `lake_verify.py` (its all-history check, on by default) passed on every restored
+# schema (or the lake was never restored), and after the allow/skip lists below say what may be
+# touched. Until then the units are installed and the timer is stopped and disabled.
 trino_maintenance_acknowledged_restore: false
+# Schemas known safe to maintain WITHOUT the whole-lake acknowledgement above: fresh namespaces
+# that were never restored, or namespaces the operator has personally cleared. Each entry is a
+# literal lower-case schema name (not a glob). Empty (the default): nothing bypasses the ack, so
+# arming requires trino_maintenance_acknowledged_restore (the pre-existing single-gate behaviour).
+# Narrow trino_maintenance_schemas to a flat list of entries in this set to arm maintenance for the
+# fresh part of a mixed lake without first reconciling the restored tables' history (see the RCA's
+# ranked fix, step 4). An allow-list containing a wildcard (`*`, `?`), or any schema (or schema's
+# dotted schema.table) not in this set, keeps the ack gate in place because the role cannot prove
+# at render time which tables the glob or an uncleared schema will reach.
+trino_maintenance_safe_schemas: []
 # which tables are touched: schema or schema.table globs (lower case only, [a-z0-9_*?]: the engine's names are lower case, and an upper-case pattern would silently match nothing); deny (skip) wins
 trino_maintenance_schemas: ["*"]
 trino_maintenance_skip: []

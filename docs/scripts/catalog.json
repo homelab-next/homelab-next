@@ -1094,13 +1094,13 @@
         "100": "the probe could not measure (bad usage, an unreadable record, the metrics API unreachable)"
       },
       "id": "lab-checks-probe",
-      "inputs": "http URL [--status N,N] [--ca FILE] [--timeout S] | tcp HOST PORT [--timeout S] | dns RESOLVER NAME [--type A] [--expect ADDR] [--timeout S] [--port N] | prom BASE_URL QUERY (--min N | --max N | --eq N) [--empty fail|zero] | lastrun DIR JOB MAX_AGE_S [--now EPOCH]",
+      "inputs": "http URL [--status N,N] [--ca FILE] [--timeout S] | tcp HOST PORT [--timeout S] | dns RESOLVER NAME [--type A] [--expect ADDR] [--timeout S] [--port N] | prom BASE_URL QUERY (--min N | --max N | --eq N) [--empty fail|zero] | lastrun DIR JOB MAX_AGE_S [--now EPOCH] | lake-table-fresh CATALOG_URL NAMESPACE TABLE --max-age-s N [--ca FILE] [--timeout S] [--now EPOCH] | lake-table-stats CATALOG_URL NAMESPACE TABLE [--ca FILE] [--timeout S]",
       "kind": "tool",
       "language": "python",
       "outputs": "one line of evidence on stdout (the reason on a failure)",
       "owner": "platform",
       "path": "modules/lab-checks/roles/lab_checks/files/hnx-lab-probe",
-      "purpose": "Small read-only probes a lab criterion's observable runs (an HTTP status, a TCP connect, a DNS answer, a metrics value, a last-run record); each exits by the invariants runner's semantics.",
+      "purpose": "Small read-only probes a lab criterion's observable runs (an HTTP status, a TCP connect, a DNS answer, a metrics value, a last-run record, a lake table's freshness or statistics coverage through the lake-catalog REST interface); each exits by the invariants runner's semantics.",
       "status": "active",
       "trigger": [
         "role:lab_checks"
