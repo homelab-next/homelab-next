@@ -120,6 +120,14 @@ argument_specs:
         type: str
         description: "The notify channel's TLP ceiling (ADR-0033), used with a topic."
         default: red
+      status_hub_guests_src:
+        type: str
+        description: "A directory on the controller of guest files (guests/*.yml, flat, with the _nodes.yml, _baselines.yml and _backup_policies.yml beside them) copied to <status_hub_config_dir>/guests: the Topology and Baselines pages and the topology, dataflow and schedule JSON (hnx status serve --guests). Needs status_hub_site_src; empty: none."
+        default: ""
+      status_hub_site_src:
+        type: str
+        description: "The lab's site model (site.yml) on the controller, copied to <status_hub_config_dir>/site.yml: the zones the guest pages draw (--guests-site). Needs status_hub_guests_src; empty: none."
+        default: ""
       status_hub_registers_dir:
         type: path
         description: "A directory of register files (kanban.yml, lessons.yml, runbooks.yml, invariants.yml) the hub serves as pages (hnx status serve --registers); empty: none."
