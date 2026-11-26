@@ -5,6 +5,15 @@ Lifecycle: an *alert* is ``new`` -> ``promoted`` (a case exists) or ``dismissed`
 reason).  A *case* is ``open`` -> ``in_progress`` -> ``closed`` (needs a resolution); a closed
 case accepts no new notes until reopened.  Alerts with the same ``dedup_key`` while one is still
 ``new`` collapse into one alert whose ``count`` grows.
+
+**ADR-0040 decision 6 (leave-the-product export).** Adopted additively through
+:class:`conformance.fakes.portable.PortableCaseStore`, which exposes the
+:class:`~conformance.protocols.migration.Migratable` shape (``slot``, ``export_formats``,
+``export``, ``import_``) with the ``jsonl`` format (IRIS-aligned).  The migration suite's
+round-trip MUST runs against that adapter (see ``MIGRATION_PROOF`` in
+``tests/modules/test_import_validation.py``).  Promoting this to a required Protocol method
+here is a contract minor version (ADR-0041 step 5); until then adopters satisfy both protocols
+through composition.
 """
 
 from __future__ import annotations
