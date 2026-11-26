@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the weekly read-only cloud-posture scan, its findings exporter, credential file, mutelist and timer.
+    options: &opts
+      prowler_logical_id:
+        type: str
+        description: The instance's id (the unit set's name), e.g. prowler.
+        required: true
+      prowler_config_dir:
+        type: path
+        description: Where the settings, the mutelist and the credentials directory are written.
+        default: /etc/hnx/{{ prowler_logical_id }}
+      prowler_data_root:
+        type: path
+        description: 'The module''s data root on the host: state/, output/, export/.'
+        default: /var/lib/hnx-modules/{{ prowler_logical_id }}
+      prowler_venv:
+        type: path
+        description: The virtualenv the pinned scanner is installed into; the module owns it.
+        default: /opt/hnx-modules/{{ prowler_logical_id }}/venv
+      prowler_owner:
+        type: str
+        description: Owner of the install and config directories and the credential files.
+        default: root
+      prowler_user:
+        type: str
+        description: The unprivileged account the scan runs as.
+        default: hnx-{{ prowler_logical_id }}
+      prowler_group:
+        type: str
+        description: The group of that account; it owns the data root's working directories.
+        default: hnx-{{ prowler_logical_id }}
+      prowler_manage_accounts:
+        type: bool
+        description: 'Create the user and group (false: the site provides them).'
+        default: true
+      prowler_version:
+        type: str
+        description: The scanner's exact version (x.y.z), installed from the package index into the virtualenv. Never "latest".
+        default: "5.36.0"
+      prowler_login_ref:
+        type: str
+        description: 'The secret reference holding "<access key id>:<secret access key>" of a read-only principal; resolved at deploy time into a root-only file.'
+        default: secret:prowler/aws-credentials
+      prowler_default_region:
+        type: str
+        description: The region the credential's API calls are made through (the scan itself covers prowler_regions, or every region).
+        default: us-east-1
+      prowler_regions:
+        type: list
+        elements: str
+        description: Regions to scan. Empty scans every region (a scanner that skips one is a blind spot).
+        default: []
+      prowler_oncalendar:
+        type: str
+        description: The scan's systemd calendar (weekly; never an interval).
+        default: "Tue *-*-* 03:00:00"
+      prowler_random_delay_s:
+        type: int
+        description: The timer's randomized delay in seconds.
+        default: 900
+      prowler_timeout_s:
+        type: int
+        description: The exporter's limit on one scan, in seconds.
+        default: 3600
+      prowler_findings_path:
+        type: path
+        description: The findings file (JSON lines, replaced whole by every scan) the SIEM agent and the log pipeline tail.
+        default: /var/log/prowler-findings.json
+      prowler_findings_group:
+        type: str
+        description: The group that may read the findings file (the SIEM agent's or the pipeline's).
+        default: root
+      prowler_findings_mode:
+        type: str
+        description: The findings file's mode.
+        default: "0640"
+      prowler_mutelist:
+        type: list
+        elements: dict
+        description: 'Accepted findings, each {account, check, resources, description, regions?, review?}. Every entry needs a reason and pinned resources; review (YYYY-MM) marks a deferred gap and fails health once passed.'
+        default: []
+      prowler_scan_max_age_h:
+        type: int
+        description: Health fails when the last successful scan is older than this many hours (0 does not judge).
+        default: 192
+      prowler_health_timeout:
+        type: int
+        description: Seconds a health probe may take.
+        default: 10
+      prowler_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      prowler_last_run_group:
+        type: str
+        description: The group that may read the shared last-run records.
+        default: root
+      prowler_restore_source:
+        type: path
+        description: 'Restore only: the directory a prior export wrote (holding prowler-findings.json).'
+        default: ""
+  health:
+    short_description: Judge the scanner, the credential file, the timer, the last scan's age and the mutelist's review dates.
+    options: *opts
+  readiness:
+    short_description: Fail unless systemd, a virtualenv-capable Python and the credential are in place.
+    options: *opts
+  backup:
+    short_description: Export the state and write the backup manifest of the data root.
+    options: *opts
+  restore:
+    short_description: Restore the findings file from an export.
+    options: *opts
+  upgrade:
+    short_description: Validate a raise of the scanner's pin before the converge.
+    options: *opts
+  export:
+    short_description: Write the open-format exit copy of the last-run record and the findings.
+    options: *opts

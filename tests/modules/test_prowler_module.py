@@ -55,7 +55,7 @@ def test_the_manifest_is_a_feature_with_its_own_secret_and_internet_egress_only(
     assert not (MODULE / "conformance").exists()
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["prowler"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
-    assert DEFAULTS["prowler_credentials_ref"] == m["config"]["aws_credentials"]["default"]
+    assert DEFAULTS["prowler_login_ref"] == m["config"]["aws_credentials"]["default"]
     assert m["config"]["aws_credentials"]["type"] == "secret"
     assert m["config"]["aws_credentials"]["default"] == "secret:prowler/aws-credentials"
 
@@ -82,7 +82,9 @@ def test_the_defaults_hold_no_address_no_account_and_no_lab_name():
     assert not re.search(r"\.(casa|local|lan)\b", code)
     assert not re.search(r"\b\d{12}\b", code)  # no AWS account id
     assert re.fullmatch(r"\d+\.\d+\.\d+", DEFAULTS["prowler_version"])  # pinned, not latest
-    assert DEFAULTS["prowler_regions"] == []  # all regions: a scanner that skips one is a blind spot
+    assert (
+        DEFAULTS["prowler_regions"] == []
+    )  # all regions: a scanner that skips one is a blind spot
     assert DEFAULTS["prowler_mutelist"] == []  # an exposure is muted by the site, with a reason
     spec = yaml.safe_load((ROLE / "meta" / "argument_specs.yml").read_text())["argument_specs"][
         "main"
@@ -92,7 +94,7 @@ def test_the_defaults_hold_no_address_no_account_and_no_lab_name():
 
 def test_the_credential_is_written_only_by_a_task_that_never_logs_it_and_is_root_only():
     tasks = yaml.safe_load((ROLE / "tasks" / "config.yml").read_text())
-    writers = [t for t in tasks if "prowler_credentials_ref" in yaml.dump(t)]
+    writers = [t for t in tasks if "prowler_login_ref" in yaml.dump(t)]
     assert len(writers) == 1
     (w,) = writers
     assert w["no_log"] is True

@@ -87,7 +87,9 @@ def test_a_failing_check_is_one_flat_prefixed_row_and_passes_are_only_counted(tm
 
 
 def test_a_muted_finding_is_counted_as_muted_even_though_its_status_code_stays_fail(tmp_path):
-    res = px.parse_findings(report(tmp_path, [finding(suppressed=True), finding("PASS", check="b")]))
+    res = px.parse_findings(
+        report(tmp_path, [finding(suppressed=True), finding("PASS", check="b")])
+    )
     assert (res.passed, res.failed, res.muted, res.total) == (1, 0, 1, 2)
     assert res.rows == []
 
@@ -124,7 +126,9 @@ def test_a_report_that_is_not_json_is_an_error(tmp_path):
 
 def test_the_summary_scores_over_the_verdicts_acted_on_and_never_divides_by_zero(tmp_path):
     res = px.parse_findings(
-        report(tmp_path, [finding(), finding("PASS", check="b"), finding(suppressed=True, check="c")])
+        report(
+            tmp_path, [finding(), finding("PASS", check="b"), finding(suppressed=True, check="c")]
+        )
     )
     s = px.summary_event(res, "5.36.0", T0)
     assert s["pw_kind"] == "summary" and s["pw_score"] == 50.0
@@ -138,7 +142,9 @@ def test_the_summary_scores_over_the_verdicts_acted_on_and_never_divides_by_zero
 
 
 def test_the_version_is_the_number_only():
-    assert px.version_number("Prowler 5.36.0 (You are running the latest version, yay!)") == "5.36.0"
+    assert (
+        px.version_number("Prowler 5.36.0 (You are running the latest version, yay!)") == "5.36.0"
+    )
     assert px.version_number("") == "unknown"
 
 
@@ -193,9 +199,14 @@ def test_exit_code_three_is_a_successful_scan_with_findings(tmp_path):
     c = cfg(tmp_path)
     stand = Stand(tmp_path, 3, [finding()])
     stand.dir = c.output_dir
-    code = px.run(c, {"AWS_ACCESS_KEY_ID": "a" * 5, "AWS_SECRET_ACCESS_KEY": "b" * 5}, runner=stand, now=T0)
+    code = px.run(
+        c, {"AWS_ACCESS_KEY_ID": "a" * 5, "AWS_SECRET_ACCESS_KEY": "b" * 5}, runner=stand, now=T0
+    )
     assert code == 0
-    assert c.findings.exists() and json.loads((c.state_dir / "last-run.json").read_text())["ok"] is True
+    assert (
+        c.findings.exists()
+        and json.loads((c.state_dir / "last-run.json").read_text())["ok"] is True
+    )
 
 
 def test_any_other_exit_code_fails_and_leaves_the_last_findings_untouched(tmp_path):
@@ -203,7 +214,9 @@ def test_any_other_exit_code_fails_and_leaves_the_last_findings_untouched(tmp_pa
     c.findings.write_text("previous\n")
     stand = Stand(tmp_path, 1, [finding()])
     stand.dir = c.output_dir
-    code = px.run(c, {"AWS_ACCESS_KEY_ID": "a" * 5, "AWS_SECRET_ACCESS_KEY": "b" * 5}, runner=stand, now=T0)
+    code = px.run(
+        c, {"AWS_ACCESS_KEY_ID": "a" * 5, "AWS_SECRET_ACCESS_KEY": "b" * 5}, runner=stand, now=T0
+    )
     assert code == 1 and c.findings.read_text() == "previous\n"
     assert json.loads((c.state_dir / "last-run.json").read_text())["ok"] is False
 
@@ -213,7 +226,9 @@ def test_a_scan_with_no_report_fails_and_leaves_the_last_findings_untouched(tmp_
     c.findings.write_text("previous\n")
     stand = Stand(tmp_path, 0, None)
     stand.dir = c.output_dir
-    code = px.run(c, {"AWS_ACCESS_KEY_ID": "a" * 5, "AWS_SECRET_ACCESS_KEY": "b" * 5}, runner=stand, now=T0)
+    code = px.run(
+        c, {"AWS_ACCESS_KEY_ID": "a" * 5, "AWS_SECRET_ACCESS_KEY": "b" * 5}, runner=stand, now=T0
+    )
     assert code == 1 and c.findings.read_text() == "previous\n"
 
 
@@ -223,13 +238,17 @@ def test_the_command_scans_every_region_unless_told_and_names_the_mutelist(tmp_p
     c = cfg(tmp_path, mutelist=mute)
     stand = Stand(tmp_path, 0, [finding("PASS")])
     stand.dir = c.output_dir
-    px.run(c, {"AWS_ACCESS_KEY_ID": "a" * 5, "AWS_SECRET_ACCESS_KEY": "b" * 5}, runner=stand, now=T0)
+    px.run(
+        c, {"AWS_ACCESS_KEY_ID": "a" * 5, "AWS_SECRET_ACCESS_KEY": "b" * 5}, runner=stand, now=T0
+    )
     assert "--region" not in stand.argv and "--mutelist-file" in stand.argv
     assert stand.argv[1] == "aws" and "json-ocsf" in stand.argv
     c2 = cfg(tmp_path, regions=["eu-west-1", "us-east-1"])
     stand2 = Stand(tmp_path, 0, [finding("PASS")])
     stand2.dir = c2.output_dir
-    px.run(c2, {"AWS_ACCESS_KEY_ID": "a" * 5, "AWS_SECRET_ACCESS_KEY": "b" * 5}, runner=stand2, now=T0)
+    px.run(
+        c2, {"AWS_ACCESS_KEY_ID": "a" * 5, "AWS_SECRET_ACCESS_KEY": "b" * 5}, runner=stand2, now=T0
+    )
     i = stand2.argv.index("--region")
     assert stand2.argv[i + 1 : i + 3] == ["eu-west-1", "us-east-1"]
 
@@ -237,16 +256,25 @@ def test_the_command_scans_every_region_unless_told_and_names_the_mutelist(tmp_p
 def test_missing_credentials_are_refused_before_the_scanner_runs_and_never_echoed(tmp_path, capsys):
     c = cfg(tmp_path)
     called = []
-    code = px.run(c, {"AWS_ACCESS_KEY_ID": "a" * 5}, runner=lambda *a, **k: called.append(1), now=T0)
+    code = px.run(
+        c, {"AWS_ACCESS_KEY_ID": "a" * 5}, runner=lambda *a, **k: called.append(1), now=T0
+    )
     assert code == 2 and not called
 
 
-def test_an_error_never_carries_the_scanners_stderr_past_its_cap_or_the_credentials(tmp_path, capsys):
+def test_an_error_never_carries_the_scanners_stderr_past_its_cap_or_the_credentials(
+    tmp_path, capsys
+):
     secret_value = "s" * 12
     c = cfg(tmp_path)
     stand = Stand(tmp_path, 1, None)
     stand.dir = c.output_dir
-    px.run(c, {"AWS_ACCESS_KEY_ID": "a" * 5, "AWS_SECRET_ACCESS_KEY": secret_value}, runner=stand, now=T0)
+    px.run(
+        c,
+        {"AWS_ACCESS_KEY_ID": "a" * 5, "AWS_SECRET_ACCESS_KEY": secret_value},
+        runner=stand,
+        now=T0,
+    )
     err = capsys.readouterr().err
     assert len(err) < 1500 and secret_value not in err
     assert secret_value not in (c.state_dir / "last-run.json").read_text()
@@ -280,9 +308,15 @@ def test_the_output_directory_may_not_be_a_symlink_out_of_the_tree(tmp_path):
 
 
 def test_config_is_read_from_the_environment_with_safe_defaults(tmp_path):
-    c = px.config_from_env({"PROWLER_BIN": "/opt/p/bin/prowler", "PROWLER_OUTPUT_DIR": "/var/lib/x/out",
-                            "PROWLER_FINDINGS": "/var/log/f.json", "PROWLER_STATE_DIR": "/var/lib/x/state",
-                            "PROWLER_REGIONS": "eu-west-1  us-east-1"})
+    c = px.config_from_env(
+        {
+            "PROWLER_BIN": "/opt/p/bin/prowler",
+            "PROWLER_OUTPUT_DIR": "/var/lib/x/out",
+            "PROWLER_FINDINGS": "/var/log/f.json",
+            "PROWLER_STATE_DIR": "/var/lib/x/state",
+            "PROWLER_REGIONS": "eu-west-1  us-east-1",
+        }
+    )
     assert c.regions == ["eu-west-1", "us-east-1"] and c.mutelist is None
     assert c.mode == 0o640 and c.timeout == 3600
     with pytest.raises(px.ConfigError):

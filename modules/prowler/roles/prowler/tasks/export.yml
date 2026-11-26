@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy, in open formats: the last-run record and the findings file (both JSON) under
+# <data root>/export/<stamp>/. Built beside and renamed into place, so a half-written export is never
+# mistaken for a finished one. The scanner's own full report stays under output/ (it is replaced by
+# the next scan) and is not copied: the findings are the account's failing checks.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Name this export
+      ansible.builtin.set_fact:
+        prowler_export_stamp: "{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}"
+    - name: Build the export beside its final name
+      ansible.builtin.file:
+        path: "{{ prowler_export_dir }}/.{{ prowler_export_stamp }}.incoming"
+        state: directory
+        owner: "{{ prowler_owner }}"
+        group: "{{ prowler_owner_group }}"
+        mode: "0700"
+    - name: Copy the record and the findings into it
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ prowler_export_dir }}/.{{ prowler_export_stamp }}.incoming/{{ item.dest }}"
+        remote_src: true
+        owner: "{{ prowler_owner }}"
+        group: "{{ prowler_owner_group }}"
+        mode: "0600"
+      loop:
+        - {src: "{{ prowler_state_dir }}/last-run.json", dest: "last-run.json"}
+        - {src: "{{ prowler_findings_path }}", dest: "prowler-findings.json"}
+      loop_control:
+        label: "{{ item.dest }}"
+      failed_when: false
+    - name: Rename it into place
+      ansible.builtin.command:
+        argv: [mv, -T, "{{ prowler_export_dir }}/.{{ prowler_export_stamp }}.incoming", "{{ prowler_export_dir }}/{{ prowler_export_stamp }}"]
+      changed_when: true
+  tags: [export]

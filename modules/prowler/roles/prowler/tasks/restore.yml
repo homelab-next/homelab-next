@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the findings file from an export (prowler_restore_source: <export>/ holding
+# prowler-findings.json), so the agent and the pipeline see the last scan's findings again until the
+# next scan replaces them. The source is checked first: it must be JSON lines whose first line is the
+# summary. The timer keeps running; the file is replaced in one rename.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: A restore source is named, and is an absolute directory of its own
+      ansible.builtin.assert:
+        that:
+          - prowler_restore_source is match('^/[^/.][^/]*(/[^/.][^/]*)+\Z')
+          - prowler_restore_source is not match('^' ~ (prowler_state_dir | regex_escape) ~ '(/|\Z)')
+        fail_msg: "prowler: prowler_restore_source must be an absolute path of at least two components, outside the live state directory"
+    - name: Read the exported findings
+      ansible.builtin.slurp:
+        src: "{{ prowler_restore_source }}/prowler-findings.json"
+      register: prowler_restore_findings
+    - name: The export is a scan's findings (JSON lines, the summary first)
+      ansible.builtin.assert:
+        that:
+          - (prowler_restore_findings.content | b64decode).splitlines() | length > 0
+          - ((prowler_restore_findings.content | b64decode).splitlines() | first | from_json).pw_kind | default('') == 'summary'
+        fail_msg: "prowler: {{ prowler_restore_source }}/prowler-findings.json is not a findings file (its first line is not the summary)"
+    - name: Install the findings
+      ansible.builtin.copy:
+        content: "{{ prowler_restore_findings.content | b64decode }}"
+        dest: "{{ prowler_findings_path }}"
+        owner: "{{ prowler_user }}"
+        group: "{{ prowler_findings_group }}"
+        mode: "{{ prowler_findings_mode }}"
+  tags: [restore]

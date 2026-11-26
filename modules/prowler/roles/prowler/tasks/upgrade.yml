@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# The scanner is pinned (prowler_version), so an upgrade is raising that pin and converging: this hook
+# validates the inputs, refuses to go on when the credential is not usable, and the converge is the
+# install. The summary line records the scanner's version, so the first scan after shows it.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The credential resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+  tags: [upgrade]

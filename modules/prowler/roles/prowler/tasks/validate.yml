@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# Refuse a bad input before anything is read or written: the names that end up in unit names, paths and
+# the scanner's command line are checked here, so no later task has to trust them.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - prowler_logical_id is match('^[a-z][a-z0-9-]{0,30}\Z')
+      - prowler_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - prowler_login_ref is match('^secret:[A-Za-z0-9._/-]+\Z')
+      - prowler_default_region is match('^[a-z]{2}(-[a-z]+)+-[0-9]\Z')
+      - prowler_regions is sequence and prowler_regions is not string
+      - prowler_regions | reject('match', '^[a-z]{2}(-[a-z]+)+-[0-9]\Z') | list | length == 0
+      - prowler_oncalendar is match('^[A-Za-z0-9 *:/,.-]{3,80}\Z')
+      - prowler_random_delay_s | int >= 0
+      - prowler_timeout_s | int >= 60
+      - prowler_findings_path is match('^/[^/.][^/]*(/[^/.][^/]*)*\Z')
+      - prowler_findings_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - prowler_findings_mode is match('^0[0-7]{3}\Z')
+      - prowler_scan_max_age_h | int >= 0
+      - prowler_mutelist is sequence and prowler_mutelist is not string
+      - >-
+        [prowler_config_dir, prowler_data_root, prowler_venv]
+        | reject('match', '^/[^/.][^/]*(/[^/.][^/]*)+\Z') | list | length == 0
+    fail_msg: >-
+      prowler: an input is invalid (the instance id, the pinned scanner version, the credential
+      reference, the regions, the calendar, the findings path and absolute paths of at least two
+      components are all checked; the version must be an exact x.y.z, never "latest")
+  tags: [readiness, health, backup, export, restore, upgrade]
+
+# A mutelist is never a noise filter: every entry carries a reason, pins its resources, and a
+# deferred entry (one with a review month) names that month.
+- name: Every mutelist entry has an account, a check, pinned resources and a reason
+  ansible.builtin.assert:
+    that:
+      - item.account | default('') is match('^([0-9]{12}|\*)\Z')
+      - item.check | default('') is match('^[a-z0-9_*]{1,128}\Z')
+      - item.resources | default([]) is sequence and item.resources | default([]) is not string
+      - item.resources | default([]) | length > 0
+      - item.resources | default([]) | reject('match', '^[^\n\r"\\]{1,256}\Z') | list | length == 0
+      - item.description | default('') is match('^[^\n\r"\\]{10,300}\Z')
+      - item.regions | default(['*']) | reject('match', '^(\*|[a-z]{2}(-[a-z]+)+-[0-9])\Z') | list | length == 0
+      - item.review | default('2000-01') is match('^[0-9]{4}-(0[1-9]|1[0-2])\Z')
+      - item.review is defined or '.*' not in item.resources
+    fail_msg: >-
+      prowler: a prowler_mutelist entry is not valid ({{ item.check | default('?') }}): it needs a
+      12-digit account (or *), a check id, a non-empty list of resources (a blanket '.*' only on a
+      deferred entry that names its review month, YYYY-MM) and a description of at least ten
+      characters saying why the exposure is deliberate. No quotes, backslashes or line breaks in them.
+  loop: "{{ prowler_mutelist }}"
+  loop_control:
+    label: "{{ item.check | default('?') }}"
+  tags: [readiness, health, backup, export, restore, upgrade]
+
+- name: No account has the same check twice (the scanner reads one entry per check)
+  ansible.builtin.assert:
+    that: (prowler_mutelist | map(attribute='account') | zip(prowler_mutelist | map(attribute='check')) | map('join', '/') | list | unique | length) == (prowler_mutelist | length)
+    fail_msg: "prowler: prowler_mutelist names one check twice for one account: merge their resources"
+  tags: [readiness, health, backup, export, restore, upgrade]

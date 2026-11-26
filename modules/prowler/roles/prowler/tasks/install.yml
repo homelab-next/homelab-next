@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# The scanner, from the pinned version into the module's own virtualenv. Re-running with another
+# pinned version upgrades it in place; the same version is a no-op.
+- name: Create the virtualenv's parent directory (root's)
+  ansible.builtin.file:
+    path: "{{ prowler_venv | dirname }}"
+    state: directory
+    owner: "{{ prowler_owner }}"
+    group: "{{ prowler_owner_group }}"
+    mode: "0755"
+
+- name: Install the scanner at the pinned version into the virtualenv
+  ansible.builtin.pip:
+    name: "prowler=={{ prowler_version }}"
+    virtualenv: "{{ prowler_venv }}"
+    virtualenv_command: python3 -m venv
+    extra_args: --no-input
+  register: prowler_pip

@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the state and the findings first (lifecycle.remove.export_first), stop and disable the
+# timer, then remove the units, the credential file, the settings, the mutelist and the exporter, and
+# reload systemd. The data root (the last-run record, the scanner's last report, the exports), the
+# virtualenv and the findings file are kept for the operator to archive or delete; nothing in the cloud
+# account is touched (the scan was read-only) and revoking the credential there is the operator's.
+- name: Remove the weekly cloud-posture scan
+  hosts: mod_prowler_scanner
+  become: true
+  tasks:
+    - name: Export the state and the findings first
+      ansible.builtin.include_role:
+        name: prowler
+        tasks_from: export
+    - name: Stop and disable the timer (a no-op when it is not there)
+      ansible.builtin.systemd_service:
+        name: "hnx-{{ prowler_logical_id }}-scan.timer"
+        state: stopped
+        enabled: false
+      failed_when: false
+    - name: Remove the units, the credential file, the settings, the mutelist and the exporter
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/etc/systemd/system/hnx-{{ prowler_logical_id }}-scan.service"
+        - "/etc/systemd/system/hnx-{{ prowler_logical_id }}-scan.timer"
+        - "{{ prowler_config_dir | default('/etc/hnx/' ~ prowler_logical_id) }}/credentials"
+        - "{{ prowler_config_dir | default('/etc/hnx/' ~ prowler_logical_id) }}/scan.env"
+        - "{{ prowler_config_dir | default('/etc/hnx/' ~ prowler_logical_id) }}/mutelist.yaml"
+        - /usr/local/libexec/homelabnext/hnx-prowler-export
+    - name: Reload systemd
+      ansible.builtin.command:
+        argv: [systemctl, daemon-reload]
+      changed_when: true

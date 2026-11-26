@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the scan on the guest the site placed the module's `scanner` role on. The apply
+# path (docs/modules/apply.md) renders its own modules.yml from the selection and does not import this
+# file; it is the module's own entry point, for a lab that runs one module by hand:
+#   ansible-playbook -i <inventory with --selection> modules/prowler/playbooks/install.yml
+# The readiness hook refuses to go on without the credential or a virtualenv-capable Python.
+- name: Install the weekly cloud-posture scan
+  hosts: mod_prowler_scanner
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: prowler
+        tasks_from: readiness
+      tags: [mod_prowler]
+  roles:
+    - role: prowler
+      tags: [mod_prowler]

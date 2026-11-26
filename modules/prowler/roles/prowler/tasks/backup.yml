@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's paths).
+# What it holds is small: the last-run record and the scanner's last report. The findings are the lake's
+# permanent copy once landed; the configuration directory is not listed because it holds the credential
+# and is re-rendered by the install from the secret store. The export runs first.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Export the state and the findings
+      ansible.builtin.include_tasks: export.yml
+    - name: Write the backup manifest
+      ansible.builtin.copy:
+        dest: "{{ prowler_data_root }}/backup-manifest.json"
+        content: "{{ {'service': prowler_logical_id,
+                      'paths': [prowler_data_root],
+                      'restore_from': prowler_export_dir,
+                      'note': 'the configuration directory is not listed: it holds the credential and is re-rendered by the install from the secret store; the venv is rebuilt by the install; export/ holds a copy of the last-run record and the last findings'} | to_nice_json }}\n"
+        owner: "{{ prowler_owner }}"
+        group: "{{ prowler_group }}"
+        mode: "0640"
+  tags: [backup]

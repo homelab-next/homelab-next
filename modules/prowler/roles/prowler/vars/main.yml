@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Derived, not configurable: the names every task and template shares.
+prowler_marker: "managed by homelab-next (modules/prowler)"
+prowler_bin_dir: /usr/local/libexec/homelabnext
+# installed at a fixed path (the script catalog resolves a unit's ExecStart through it)
+prowler_export_script: "{{ prowler_bin_dir }}/hnx-prowler-export"
+prowler_bin: "{{ prowler_venv }}/bin/prowler"
+prowler_env_file: "{{ prowler_config_dir }}/scan.env"
+prowler_auth_dir: "{{ prowler_config_dir }}/credentials"
+prowler_login_env_file: "{{ prowler_auth_dir }}/aws.env"
+prowler_mutelist_file: "{{ prowler_config_dir }}/mutelist.yaml"
+prowler_state_dir: "{{ prowler_data_root }}/state"
+prowler_output_dir: "{{ prowler_data_root }}/output"
+prowler_export_dir: "{{ prowler_data_root }}/export"
+prowler_unit_dir: /etc/systemd/system
+prowler_scan_unit: "hnx-{{ prowler_logical_id }}-scan.service"
+prowler_scan_timer: "hnx-{{ prowler_logical_id }}-scan.timer"
+prowler_systemctl_cli: systemctl
+prowler_owner_group: root
+# "<access key id>:<secret access key>": the id is upper-case letters and digits, the key the base64
+# alphabet; a value of another shape is refused before anything is written
+prowler_login_form: '^[A-Z0-9]{16,128}:[A-Za-z0-9/+=]{30,128}\Z'
+prowler_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

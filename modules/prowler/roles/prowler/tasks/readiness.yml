@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless every dependency is there before anything is written: systemd and a Python that can make
+# a virtualenv on the host, and the credential in its form. Nothing is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The credential resolves, in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Look for systemd on the host
+      ansible.builtin.stat:
+        path: /run/systemd/system
+      register: prowler_systemd_stat
+    - name: The host runs systemd
+      ansible.builtin.assert:
+        that: prowler_systemd_stat.stat.isdir | default(false)
+        fail_msg: "prowler: the host does not run systemd (the scan is a timer and a unit)"
+    - name: The host's Python can make a virtualenv
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "import venv, ensurepip"]
+      register: prowler_venv_probe
+      changed_when: false
+      failed_when: false
+    - name: It can
+      ansible.builtin.assert:
+        that: prowler_venv_probe.rc == 0
+        fail_msg: "prowler: python3 cannot make a virtualenv (exit {{ prowler_venv_probe.rc }}): the guest's baseline must provide the venv and ensurepip modules (on Debian, the python3-venv package)"
+  tags: [readiness]

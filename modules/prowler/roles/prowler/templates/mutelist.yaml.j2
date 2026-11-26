@@ -1,0 +1,21 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ prowler_marker }}, instance {{ prowler_logical_id }}); local changes are overwritten.
+# Findings that are TRUE and INTENDED, each with the reason it is deliberate. Never a noise filter.
+# An entry with REVIEW: YYYY-MM is a deferred gap, not an intended state: the health hook fails once
+# that month has passed.
+Mutelist:
+{% if prowler_mutelist | length == 0 %}
+  Accounts: {}
+{% else %}
+  Accounts:
+{% for acct, entries in prowler_mutelist | groupby('account') %}
+    "{{ acct }}":
+      Checks:
+{% for e in entries %}
+        "{{ e.check }}":
+          Regions: {{ e.regions | default(['*']) | to_json }}
+          Resources: {{ e.resources | to_json }}
+          Description: {{ (e.description ~ (' REVIEW: ' ~ e.review if e.review is defined else '')) | to_json }}
+{% endfor %}
+{% endfor %}
+{% endif %}
