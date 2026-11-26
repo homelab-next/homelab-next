@@ -76,7 +76,7 @@ argument_specs:
       restore_drill_expect_export:
         type: list
         elements: str
-        description: Guest ids whose image must carry a fresh application export under var/backups.
+        description: Guest ids whose image must carry a fresh application export (under var/backups or a module's data root).
         default: []
       restore_drill_secret_env:
         type: dict

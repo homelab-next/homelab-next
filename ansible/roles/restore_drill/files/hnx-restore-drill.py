@@ -26,7 +26,7 @@ A drill is more than the backup product's checksum (ADR-0042 context: "the drill
 not service"): the newest snapshot must exist, be younger than ``max_snapshot_age_h`` and carry a
 passing verification; its image is restored into scratch space, attached read-only (a loop
 device; the journal is never replayed), the root filesystem must be a guest (``etc/os-release``),
-and every application export under ``var/backups`` must be fresh, internally consistent (the
+and every application export under ``var/backups`` or a module's data root must be fresh, internally consistent (the
 sha256 listing matches every dump; a custom-format dump carries its header) and restorable: the
 smallest dump is copied to scratch and compared again.  Teardown (unmount, detach, delete) is part
 of the verdict: a drill that leaves scratch behind fails.  A record never carries dumped content."""
@@ -230,8 +230,19 @@ def sha256_of(path):
         return hashlib.file_digest(fh, "sha256").hexdigest()
 
 
+# Where a guest keeps an application's scheduled export: compose_app's default directory under var/backups,
+# and each module's own data root (<data root>/export/db), where the modules put it.
+EXPORT_PATTERNS = (
+    "var/backups/**/db/manifest.json",
+    "var/lib/hnx-modules/*/export/db/manifest.json",
+)
+
+
 def find_exports(root):
-    return sorted(glob.glob(os.path.join(root, "var/backups/**/db/manifest.json"), recursive=True))
+    found = set()
+    for pattern in EXPORT_PATTERNS:
+        found.update(glob.glob(os.path.join(root, pattern), recursive=True))
+    return sorted(found)
 
 
 def check_export(manifest_path, cfg, scratch, at):
@@ -351,7 +362,7 @@ def drill_guest(cfg, guest, store, secrets, at=None):
         exports = find_exports(mnt)
         if guest.get("expect_export") and not exports:
             raise Drill(
-                "the guest should carry an application export under var/backups and has none"
+                "the guest should carry an application export (under var/backups or a module's data root) and has none"
             )
         for mf in exports:
             try:

@@ -63,8 +63,11 @@ def sha(b):
     return hashlib.sha256(b).hexdigest()
 
 
-def make_export(root, *, app="db", created=None, tamper=False, magic=b"PGDMP", stale=False):
-    base = Path(root) / "var/backups/compose" / app / "export/db"
+def make_export(
+    root, *, app="db", created=None, tamper=False, magic=b"PGDMP", stale=False, module_root=False
+):
+    where = "var/lib/hnx-modules" if module_root else "var/backups/compose"
+    base = Path(root) / where / app / "export/db"
     (base / "db").mkdir(parents=True)
     body = magic + b"data" * 10
     (base / "db" / "app.dump").write_bytes(body)
@@ -150,6 +153,14 @@ def test_a_good_drill_verifies_records_and_leaves_no_scratch_behind(lab, capsys)
     assert not list((lab / "scratch").iterdir())
     assert not (lab / "attached").exists()
     assert "PBS_PASSWORD" not in json.dumps(rec)
+
+
+def test_an_export_in_a_module_s_data_root_is_found_and_verified(lab, capsys):
+    """The modules keep their export under <data root>/export/db, not under var/backups/compose."""
+    make_export(lab / "guestfs", module_root=True)
+    rc, _ = drill(lab, "guest:app-a", "app-a")
+    assert rc == 0 and json.loads(capsys.readouterr().out)["verified"] is True
+    assert records(lab)["services"]["db"]["verified"] is True
 
 
 def test_no_export_in_a_guest_that_should_have_one_fails(lab, capsys):
