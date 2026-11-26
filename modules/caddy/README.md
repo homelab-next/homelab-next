@@ -294,8 +294,15 @@ Every MUST passes, and a strip removed from the configuration fails `spoofed-ide
   `caddy_acme_domains` (the role refuses either without the other), and a certificate reissue,
   which the next `main` starts by itself (the installed certificate no longer names exactly the
   configured names).
-- **No access log**: the generated sites carry no `log` directive, so Caddy logs no requests;
-  the hub's own log names the user. An edge access log is a follow-up in the generator.
+- **Access log** (SIEM source): every site, and the catch-all that answers 404 for an unknown name,
+  names the global logger `hnx_access` (the generator's `log hnx_access` line), which writes one JSON
+  line per request to `<data root>/logs/access.log` (the container's `/var/log/caddy`, 50 MiB x 5 files,
+  7 days) through the same redaction as the default logger plus the sign-in redirect's `code`,
+  `state`, `id_token` and `session_state`. The host's SIEM agent reads the file (one marked localfile
+  block in its configuration, added only when the agent is installed, as the IDS and zeek modules do);
+  the manager's `archives.json` carries each line to the log pipeline, whose `http_activity` mapping
+  takes the client (`request.client_ip`), the site (`request.host`), the method, `request.uri`, the
+  status and the bytes sent. The default logger no longer carries access lines, only warnings and errors.
 - **The suite does not prove** the auth proxy's 403 for a signed-in user outside a site's allowed
   groups (the contract has no such check); the generator's tests pin the `allowed_groups`
   argument and `caddy_auth_proxy`'s health proves the sign-in path.
