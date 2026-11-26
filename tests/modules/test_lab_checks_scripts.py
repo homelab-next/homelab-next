@@ -215,6 +215,97 @@ def test_lastrun_probe(tmp_path):
     assert run("timer:a/broken") == 100
 
 
+def _lake_table_metadata(**overrides):
+    # a minimal lake-catalog REST `loadTable` response
+    meta = {
+        "format-version": 2,
+        "last-updated-ms": int(time.time() * 1000),
+        "current-snapshot-id": 1_234_567,
+        "snapshots": [{"snapshot-id": 1_234_567, "timestamp-ms": int(time.time() * 1000)}],
+        "statistics": [{"snapshot-id": 1_234_567, "statistics-path": "s3://w/.../file.puffin"}],
+    }
+    meta.update(overrides)
+    return json.dumps({"metadata-location": "s3://w/ns/t.metadata.json",
+                       "metadata": meta}).encode()
+
+
+def test_lake_table_fresh_probe_passes_within_the_window_and_fails_past_it(server):
+    # reference-catalog style: base ends in "/v1", probe appends "/namespaces/<ns>/tables/<t>"
+    base = server + "/v1"
+    now_s = time.time()
+    last_fresh = int((now_s - 60) * 1000)   # 1 min ago
+    last_stale = int((now_s - 7200) * 1000)  # 2 h ago
+    _Handler.routes = {
+        "/v1/namespaces/soc/tables/raw_archive": (
+            200, _lake_table_metadata(**{"last-updated-ms": last_fresh}))
+    }
+    assert probe.main(
+        ["lake-table-fresh", base, "soc", "raw_archive", "--max-age-s", "3600"]
+    ) == 0
+    _Handler.routes["/v1/namespaces/soc/tables/raw_archive"] = (
+        200, _lake_table_metadata(**{"last-updated-ms": last_stale}))
+    assert probe.main(
+        ["lake-table-fresh", base, "soc", "raw_archive", "--max-age-s", "3600"]
+    ) == 1
+
+
+def test_lake_table_fresh_probe_is_fail_on_an_unknown_table_and_cant_on_network_error(server):
+    base = server + "/v1"
+    assert probe.main(
+        ["lake-table-fresh", base, "soc", "nonesuch", "--max-age-s", "3600"]
+    ) == 1   # 404 is a failure (not "cant measure")
+    with socket.socket() as s:
+        s.bind((LOOP, 0))
+        dead = f"http://{LOOP}:{s.getsockname()[1]}/v1"
+    assert probe.main(
+        ["lake-table-fresh", dead, "soc", "raw_archive", "--max-age-s", "3600", "--timeout", "2"]
+    ) == 100
+
+
+def test_lake_table_fresh_probe_refuses_an_unsafe_namespace_or_table(server):
+    base = server + "/v1"
+    assert probe.main(
+        ["lake-table-fresh", base, "SOC", "raw_archive", "--max-age-s", "3600"]
+    ) == 100
+    assert probe.main(
+        ["lake-table-fresh", base, "soc", "raw archive", "--max-age-s", "3600"]
+    ) == 100
+
+
+def test_lake_table_probe_works_against_a_named_warehouse_prefix(server):
+    # a named-warehouse catalog mounts each warehouse under /catalog/v1/<warehouse-id>:
+    # a non-"/v1" base works too.
+    base = server + "/catalog/v1/01a2097c-6262-7575-96f7-6db9b51cd1d9"
+    now_s = time.time()
+    _Handler.routes = {
+        "/catalog/v1/01a2097c-6262-7575-96f7-6db9b51cd1d9/namespaces/soc/tables/raw_archive": (
+            200, _lake_table_metadata(**{"last-updated-ms": int((now_s - 60) * 1000)}))
+    }
+    assert probe.main(
+        ["lake-table-fresh", base, "soc", "raw_archive", "--max-age-s", "3600"]
+    ) == 0
+
+
+def test_lake_table_stats_probe_fails_on_missing_stats_for_the_current_snapshot(server):
+    base = server + "/v1"
+    _Handler.routes = {
+        "/v1/namespaces/soc/tables/raw_archive": (200, _lake_table_metadata()),
+        "/v1/namespaces/soc/tables/no_stats": (
+            200, _lake_table_metadata(statistics=[])),
+        "/v1/namespaces/soc/tables/empty_table": (
+            200, _lake_table_metadata(**{"current-snapshot-id": None, "snapshots": [],
+                                         "statistics": []})),
+        "/v1/namespaces/soc/tables/stale_stats": (
+            200, _lake_table_metadata(statistics=[{"snapshot-id": 99,
+                                                   "statistics-path": "s3://w/.../old.puffin"}])),
+    }
+    assert probe.main(["lake-table-stats", base, "soc", "raw_archive"]) == 0
+    assert probe.main(["lake-table-stats", base, "soc", "no_stats"]) == 1
+    assert probe.main(["lake-table-stats", base, "soc", "stale_stats"]) == 1
+    # an empty table is not a failure: nothing to collect
+    assert probe.main(["lake-table-stats", base, "soc", "empty_table"]) == 0
+
+
 def test_notify_posts_the_message_with_the_token_and_a_failed_delivery_exits_non_zero(
     server, tmp_path
 ):

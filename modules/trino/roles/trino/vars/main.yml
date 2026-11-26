@@ -33,7 +33,23 @@ trino_query_gb: "{{ (trino_query_max_memory[:-2] | int) / (1 if trino_query_max_
 trino_mem_limit_gb: "{{ (trino_mem_limit[:-1] | int) / (1 if trino_mem_limit.endswith('g') else 1024) }}"
 # the shared last-run writer (role last_run) the maintenance service names
 trino_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
-# the timer runs only when maintenance is on AND the operator has acknowledged the lake's state
-trino_maintenance_armed: "{{ (trino_maintenance_enabled | bool) and (trino_maintenance_acknowledged_restore | bool) }}"
+# The timer is armed when maintenance is on AND either the operator has acknowledged the lake's
+# state OR the allow-list is strictly a literal list of schemas every one of which the operator
+# has pre-cleared as safe. An allow-glob that contains a wildcard (*, ?), a schema not in
+# trino_maintenance_safe_schemas, or any schema.table form (which NAMES a table, so its schema half
+# alone cannot prove the choice): each keeps the ack gate in place.
+trino_maintenance_allow_has_wildcard: "{{ trino_maintenance_schemas | select('search', '[*?]') | list | length > 0 }}"
+trino_maintenance_allow_has_dotted: "{{ trino_maintenance_schemas | select('search', '\\.') | list | length > 0 }}"
+trino_maintenance_allow_in_safe: >-
+  {{ (trino_maintenance_safe_schemas | length > 0)
+     and (trino_maintenance_schemas | length > 0)
+     and (not (trino_maintenance_allow_has_wildcard | bool))
+     and (not (trino_maintenance_allow_has_dotted | bool))
+     and (trino_maintenance_schemas | reject('in', trino_maintenance_safe_schemas)
+          | list | length == 0) }}
+trino_maintenance_armed: >-
+  {{ (trino_maintenance_enabled | bool) and
+     ((trino_maintenance_acknowledged_restore | bool) or
+      (trino_maintenance_allow_in_safe | bool)) }}
 trino_glob_pattern: '^[a-z0-9_*?]{1,128}(\.[a-z0-9_*?]{1,128})?\Z'
 trino_override_keys: [expire, retain_last, orphan_retention, orphan]

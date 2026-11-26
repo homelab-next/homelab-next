@@ -57,6 +57,8 @@
       - trino_cancel_confirm_timeout | int >= 5 and trino_cancel_confirm_timeout | int <= 60
       - trino_maintenance_catch_up is boolean
       - trino_maintenance_acknowledged_restore is boolean
+      - trino_maintenance_safe_schemas is iterable and trino_maintenance_safe_schemas is not string
+      - trino_maintenance_safe_schemas | map('string') | reject('match', '^[a-z0-9_]{1,128}\\Z') | list | length == 0
       - trino_maintenance_schemas is sequence and trino_maintenance_schemas | length >= 1
       - trino_maintenance_skip is sequence
       - (trino_maintenance_schemas + trino_maintenance_skip) | reject('match', trino_glob_pattern) | list | length == 0

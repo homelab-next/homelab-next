@@ -1293,6 +1293,10 @@ def _first_trino_refuses_unsafe_maintenance_lists_and_overrides(tmp_path, over):
         {"trino_maintenance_overrides": {"cti": "30d"}},
         {"trino_maintenance_overrides": ["cti"]},
         {"trino_preflight_timeout": 1},
+        {"trino_maintenance_safe_schemas": "soc"},  # a string, not a list
+        {"trino_maintenance_safe_schemas": ["SOC"]},  # upper case (engine names are lower case)
+        {"trino_maintenance_safe_schemas": ["soc.raw_archive"]},  # a schema.table (a glob only)
+        {"trino_maintenance_safe_schemas": ["bad schema"]},
     ],
 )
 @first_run(_first_trino_refuses_unsafe_maintenance_lists_and_overrides)
@@ -1362,6 +1366,105 @@ def test_trino_disarms_an_installed_timer_when_it_loses_its_acknowledgement(firs
     log = (tmp_path / "systemctl.log").read_text()
     assert "disable --now hnx-lake-maintenance.timer" in log
     assert "stop hnx-lake-maintenance.service" in log
+    assert not (tmp_path / "timer-enabled").exists()
+
+
+def _first_trino_arms_without_ack_when_allow_list_is_entirely_safe_schemas(tmp_path):
+    log = tmp_path / "systemctl.log"
+    # a mixed lake: cti and honeypot came from a restore, soc is fresh. an allow-list of the fresh
+    # schema and a safe-schemas list that names it arms without the operator ack, because no
+    # touched table came from the restore.
+    v = trino_vars(
+        tmp_path,
+        trino_maintenance_acknowledged_restore=False,
+        trino_maintenance_safe_schemas=["soc"],
+        trino_maintenance_schemas=["soc"],
+    )
+    return {
+        "role": TRINO,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": TRINO_SECRETS,
+        "setup": {"log": log, "v": v},
+    }
+
+
+@first_run(_first_trino_arms_without_ack_when_allow_list_is_entirely_safe_schemas)
+def test_trino_arms_without_ack_when_allow_list_is_entirely_safe_schemas(first):
+    r, tmp_path = first
+    log = first.setup["log"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    # armed: the enable line is in the systemctl log, the marker was written
+    assert "enable --now hnx-lake-maintenance.timer" in log.read_text()
+    assert (tmp_path / "timer-enabled").exists()
+
+
+def _first_trino_keeps_ack_gate_when_allow_list_has_a_wildcard(tmp_path):
+    # the safe list declared, but the allow-list has a wildcard: the role cannot prove at render
+    # time that no restored table is touched, so the ack is still required.
+    v = trino_vars(
+        tmp_path,
+        trino_maintenance_acknowledged_restore=False,
+        trino_maintenance_safe_schemas=["soc"],
+        trino_maintenance_schemas=["*"],
+    )
+    return {
+        "role": TRINO,
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": TRINO_SECRETS,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first_trino_keeps_ack_gate_when_allow_list_has_a_wildcard)
+def test_trino_keeps_ack_gate_when_allow_list_has_a_wildcard(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    # not armed: the unit is installed but never enabled
+    assert (tmp_path / "units" / "hnx-lake-maintenance.timer").exists()
+    assert not (tmp_path / "timer-enabled").exists()
+    log = tmp_path / "systemctl.log"
+    assert not log.exists() or not any(
+        ln.startswith("enable") for ln in log.read_text().splitlines()
+    )
+
+
+def _first_trino_keeps_ack_gate_when_an_allowed_schema_is_not_safe(tmp_path):
+    # literal allow-list where ONE entry is not in the safe-schemas set: the ack is still required
+    # because that schema may have come from a restore the operator has not cleared.
+    v = trino_vars(
+        tmp_path,
+        trino_maintenance_acknowledged_restore=False,
+        trino_maintenance_safe_schemas=["soc"],
+        trino_maintenance_schemas=["soc", "cti"],
+    )
+    return {"role": TRINO, "tasks_from": "main", "extra_vars": v, "env": TRINO_SECRETS}
+
+
+@first_run(_first_trino_keeps_ack_gate_when_an_allowed_schema_is_not_safe)
+def test_trino_keeps_ack_gate_when_an_allowed_schema_is_not_safe(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (tmp_path / "timer-enabled").exists()
+
+
+def _first_trino_keeps_ack_gate_on_a_dotted_allow_entry(tmp_path):
+    # `safe_schemas` names only schemas; a `schema.table` glob in the allow-list keeps the gate
+    # even when its schema half is in the safe set, because the table half is not pre-cleared.
+    v = trino_vars(
+        tmp_path,
+        trino_maintenance_acknowledged_restore=False,
+        trino_maintenance_safe_schemas=["soc"],
+        trino_maintenance_schemas=["soc.raw_archive"],
+    )
+    return {"role": TRINO, "tasks_from": "main", "extra_vars": v, "env": TRINO_SECRETS}
+
+
+@first_run(_first_trino_keeps_ack_gate_on_a_dotted_allow_entry)
+def test_trino_keeps_ack_gate_on_a_dotted_allow_entry(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
     assert not (tmp_path / "timer-enabled").exists()
 
 

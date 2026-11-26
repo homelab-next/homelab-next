@@ -120,8 +120,16 @@ deleted history. The script now refuses each of those shapes:
   unknown key, a duration under the engine's floor or a `retain_last` outside 1..1000.
 - **No unattended arming on a restored lake.** The role cannot see how the lake got here, so arming is an
   explicit act: the timer is enabled and started only when `trino_maintenance_enabled` **and**
-  `trino_maintenance_acknowledged_restore` are both true (default false). Otherwise the script and units
-  are installed and the timer is **stopped and disabled**, and `health` checks that it is not running.
+  (`trino_maintenance_acknowledged_restore` is true **OR** `trino_maintenance_schemas` is a flat literal
+  list and every entry is in `trino_maintenance_safe_schemas`). Otherwise the script and units are
+  installed and the timer is **stopped and disabled**, and `health` checks that it is not running.
+  `trino_maintenance_safe_schemas` (default `[]`) is the operator's opt-in list of fresh schemas known
+  safe without the whole-lake ack; an empty list keeps the pre-existing single-gate behaviour (the ack
+  is required). A mixed lake whose fresh namespace is safe can be armed on it alone by narrowing
+  `trino_maintenance_schemas` to that namespace and listing it in `trino_maintenance_safe_schemas`, while
+  the restored namespaces stay gated until their reconciliation is acknowledged. An allow-list that
+  contains a wildcard (`*`, `?`), a `schema.table` form, or any schema absent from the safe set **keeps
+  the ack gate** in place, because the role cannot prove at render time which tables will be touched.
   **The timer does not catch up a missed run** (`trino_maintenance_catch_up: false`, i.e. `Persistent=false`),
   so arming never starts a run by itself: the first run is the next `OnCalendar` time. With `true`, a
   run missed while the host was off fires the moment the timer is started. To attend the first run:
