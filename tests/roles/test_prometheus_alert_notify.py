@@ -288,6 +288,7 @@ def test_hostile_label_text_cannot_inject_into_a_header(tmp_path, env, servers):
     assert "X-Injected" not in h and "\r" not in h["Title"] and "\n" not in h["Title"]
 
 
+@pytest.mark.static
 def test_the_units_run_the_script_report_their_runs_and_tick_on_the_schedule():
     env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
     values = {

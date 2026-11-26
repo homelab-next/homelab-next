@@ -237,6 +237,7 @@ def test_table_manifests_validate_except_the_deliberate_no_handler_one():
     assert schema_errors("broker", "manifest", TABLE["manifests"]["no-handler"]) != []
 
 
+@pytest.mark.static
 def test_shipped_examples_are_mutually_consistent():
     ex = ROOT / "schemas" / "broker" / "examples"
     req = json.loads((ex / "request.restart.json").read_text())

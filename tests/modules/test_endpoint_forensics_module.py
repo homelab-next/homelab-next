@@ -142,12 +142,14 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
     assert code == 0, out
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_two_contributed_roles():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == [CLIENT.name, SERVER.name]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -157,6 +159,7 @@ def test_roles_holds_only_the_two_contributed_roles():
     ]  # fmt: skip
 
 
+@pytest.mark.static
 def test_the_manifest_names_the_secrets_no_egress_and_a_provisional_slot():
     manifest = ld.load_yaml(MODULE / "module.yml")
     assert [c["secret"] for c in manifest["credentials"]] == [
@@ -188,6 +191,7 @@ def test_the_pins_agree_on_one_release_and_the_image_is_pinned_by_tag_and_digest
     assert version in pins[f"{MID}_client_checksums"]
 
 
+@pytest.mark.static
 def test_the_defaults_carry_only_the_modules_references():
     manifest = ld.load_yaml(MODULE / "module.yml")
     declared = {c["secret"] for c in manifest["credentials"]}
@@ -214,6 +218,7 @@ def test_the_servers_start_command_runs_the_stock_entrypoint_only_when_there_is_
 # ----------------------------------------------------------------------------- the criteria
 
 
+@pytest.mark.static
 def test_the_criteria_run_the_check_script_the_role_installs():
     manifest = ld.load_yaml(MODULE / "module.yml")
     (entry,) = manifest["contributes"]["invariants"]
@@ -376,6 +381,7 @@ def test_role_lint_passes_both_roles_and_the_lifecycle_playbooks():
         assert r.returncode == 0, r.stdout + r.stderr
 
 
+@pytest.mark.static
 def test_pin_freshness_watches_the_server_image():
     sys.path.insert(0, str(ROOT / "tools"))
     try:

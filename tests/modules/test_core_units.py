@@ -65,6 +65,7 @@ def write_role(roles: Path, name: str, tasks: str) -> None:
 # ----------------------------------------------------------------------------- the source
 
 
+@pytest.mark.static
 def test_every_unit_a_core_role_or_generator_names_is_a_core_unit():
     """The guard on the derivation: a unit a role installs or enables some other way than a
     ``dest:`` the loader reads (a handler, a command, a template), or one a generator writes
@@ -73,6 +74,7 @@ def test_every_unit_a_core_role_or_generator_names_is_a_core_unit():
     assert unaccounted(ROOT / "homelabnext", (".py",), CORE) == []
 
 
+@pytest.mark.static
 def test_the_generators_units_are_core_units():
     assert CORE.units_known
     assert egress.UNIT in CORE.units and node_mirror.UNIT in CORE.units

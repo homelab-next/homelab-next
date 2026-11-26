@@ -478,6 +478,7 @@ def test_each_lanes_unit_joins_only_its_own_out_group(site):
     assert "out-" not in render("job-lane.conf.j2", off, inst["fresh-shadow"])
 
 
+@pytest.mark.static
 def test_the_group_exists_before_the_dropin_that_names_it():
     main = (ROLE / "tasks" / "main.yml").read_text()
     assert main.index("dirs.yml") < main.index("config.yml")

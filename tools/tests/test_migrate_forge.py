@@ -425,6 +425,7 @@ def test_a_copy_that_arrives_different_is_an_error(private):
 # ----------------------------------------------------------------------------- freeze, guards, cli
 
 
+@pytest.mark.static
 def test_freeze_and_unfreeze_only_stop_and_start_the_container():
     host = Host(
         Path(tempfile.mkdtemp(dir=ROOT / "build" if (ROOT / "build").exists() else None)),
@@ -444,6 +445,7 @@ def test_freeze_and_unfreeze_only_stop_and_start_the_container():
         mt.unfreeze(ep(), restart="sometimes", _ctx=host.ctx())
 
 
+@pytest.mark.static
 def test_a_freeze_of_an_instance_with_no_restart_policy_changes_no_policy():
     host = Host(Path(tempfile.mkdtemp(dir=ROOT / "build" if (ROOT / "build").exists() else None)),
                 running=True, policy="no")  # fmt: skip

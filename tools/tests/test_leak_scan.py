@@ -96,6 +96,7 @@ def test_clean_tree_exits_zero(tmp_path: Path):
     assert "clean" in r.stdout
 
 
+@pytest.mark.static
 def test_repo_scans_itself_clean():
     r = run_scan(str(ROOT / "tools"))
     assert r.returncode == 0, r.stdout
@@ -1105,6 +1106,7 @@ def test_a_line_ending_in_a_form_feed_keeps_its_file_context():
     assert [h.line for h in hits if h.pattern == "keyed-secret"] == [4]
 
 
+@pytest.mark.perf
 def test_go_source_stays_linear_on_a_large_file():
     # verify5.md (v5/perf): a slice per keyed match made a 20k-line Go file take minutes
     line = f'\t{TOK}Path := filepath.Join(dir, "{TOK}.json") + "x"\n'

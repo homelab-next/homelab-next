@@ -56,9 +56,9 @@
       "purpose": "Fail when a gate's allowlist or inline suppression markers outgrow the reviewed counts in tools/allowlist_counts.yml.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
+        "make:allowlist-counts",
         "make:gates",
-        "make:allowlist-counts"
+        "make:ratchets"
       ]
     },
     {
@@ -188,7 +188,6 @@
       "purpose": "Fail when a Caddy config in the tree could let a client set its own identity header behind forward_auth (judged on the Caddyfile text and, with a caddy binary, on Caddy's own adapted JSON), cannot be read, or a Caddy pin is below 2.11.2.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
         "make:caddy-lint"
       ]
     },
@@ -252,7 +251,6 @@
       "purpose": "Fail unless CHANGELOG.md keeps an Unreleased section and one for the current version.",
       "status": "active",
       "trigger": [
-        "ci:ci/lint",
         "make:changelog-check"
       ]
     },
@@ -274,7 +272,6 @@
       "purpose": "Fail when a tracked source, config or template file has no SPDX-License-Identifier in its first five lines.",
       "status": "active",
       "trigger": [
-        "ci:ci/lint",
         "make:spdx",
         "pre-commit:spdx-header"
       ]
@@ -373,7 +370,6 @@
       "purpose": "Fail when a package, capability, role, plugin, compose stack or tool has no tests.",
       "status": "active",
       "trigger": [
-        "ci:ci/lint",
         "make:component-tests"
       ]
     },
@@ -414,7 +410,6 @@
       "purpose": "Fail unless each blocking capability has a passing conformance suite.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
         "make:conform-check"
       ]
     },
@@ -459,7 +454,6 @@
       "purpose": "Fail when an event type or shared lake table lacks a schema with publisher and consumer contract-test fixtures.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
         "make:contracts"
       ]
     },
@@ -620,10 +614,9 @@
       "purpose": "Fail when copy-pasted Python appears that the committed duplication baseline does not hold; the baseline only shrinks.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
-        "ci:ci/trusted-gates",
         "make:dup-baseline",
-        "make:dup-check"
+        "make:dup-check",
+        "make:ratchets"
       ]
     },
     {
@@ -663,8 +656,7 @@
       "status": "active",
       "trigger": [
         "make:experimental",
-        "ci:ci/schemas",
-        "ci:ci/trusted-gates"
+        "make:ratchets"
       ]
     },
     {
@@ -861,7 +853,6 @@
       "purpose": "Fail when test code reads the wall clock or unseeded randomness directly, or library code reads the clock other than as an injectable default.",
       "status": "active",
       "trigger": [
-        "ci:ci/lint",
         "make:hermetic-lint"
       ]
     },
@@ -966,6 +957,43 @@
       "trigger": [
         "role:status_hub",
         "timer:status_hub/hnx-hub-pull"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every tracked file is clean",
+        "1": "some file is not"
+      },
+      "id": "hygiene",
+      "inputs": "the tracked tree (git ls-files), from the repository root or ROOT",
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per problem, or hygiene: clean",
+      "owner": "maintainers",
+      "path": "tools/hygiene.py",
+      "purpose": "Fail when a tracked file is a symlink, larger than 512 KB, holds a merge-conflict marker or a private key block, or is YAML or JSON that does not parse.",
+      "status": "active",
+      "trigger": [
+        "make:hygiene"
+      ]
+    },
+    {
+      "exit": {
+        "0": "installed",
+        "1": "not inside a git work tree"
+      },
+      "id": "install-prepush-hook",
+      "inputs": "PY; the clone's hooks directory (git rev-parse --git-path hooks)",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "<hooks>/pre-push (an existing foreign hook moved to pre-push.saved)",
+      "owner": "maintainers",
+      "path": "tools/install-prepush-hook.sh",
+      "purpose": "Install `make precheck` as the git pre-push hook of the clone or worktree it runs in.",
+      "status": "active",
+      "trigger": [
+        "make:prepush-hook",
+        "manual"
       ]
     },
     {
@@ -1439,7 +1467,6 @@
       "purpose": "Fail when a pinned Python package, a Go module a go.mod requires or a compose image has no reviewed licence entry, or a linked one is copyleft.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
         "make:licence-check"
       ]
     },
@@ -1752,7 +1779,6 @@
       "purpose": "Fail when code or config writes an endpoint literal instead of a registry lookup.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
         "make:gates"
       ]
     },
@@ -1958,6 +1984,25 @@
     },
     {
       "exit": {
+        "0": "every gate passed",
+        "1": "some gate failed (the targets are named)",
+        "2": "the base could not be decided in CI"
+      },
+      "id": "precheck",
+      "inputs": "PY, PRECHECK_JOBS, BASE, HNX_PR_BASE, HNX_PUSH_BEFORE; the working tree",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "each gate's output, grouped per make target; the failed targets and the elapsed time",
+      "owner": "maintainers",
+      "path": "tools/precheck.sh",
+      "purpose": "Run every static gate (lint, schemas, docs facts, catalogs, ratchets, leak and hygiene scans, invariants' fast criteria, the static pytest rules) in one parallel make run and name what failed.",
+      "status": "active",
+      "trigger": [
+        "make:precheck"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "at least one finding",
         "2": "misconfiguration (not an overlay, unreadable .sops.yaml or marker)"
@@ -1975,7 +2020,6 @@
       "purpose": "Fail when a private overlay holds a plaintext secret or an unencrypted sealed file, or when this public tree holds any part of a private overlay.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
         "make:private-overlay-check"
       ]
     },
@@ -1999,10 +2043,9 @@
       "purpose": "Fail when a product name appears in the core outside its provider module, beyond the shrinking baseline.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
-        "ci:ci/trusted-gates",
         "make:gates",
-        "make:product-names-baseline"
+        "make:product-names-baseline",
+        "make:ratchets"
       ]
     },
     {
@@ -2083,7 +2126,6 @@
       "purpose": "Fail when a record vanished, a key occurs twice, or a record carries no uid.",
       "status": "active",
       "trigger": [
-        "ci:ci/trusted-gates",
         "make:ids-check",
         "pre-commit:register-ids-check-dupes",
         "pre-commit:register-ids-check-lost",
@@ -2149,7 +2191,6 @@
       "purpose": "Fail when a role or playbook breaks the role interface (docs/role-interface.md).",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
         "code:homelabnext/scaffold/core.py",
         "make:gates"
       ]
@@ -2170,7 +2211,6 @@
       "purpose": "Fail when a repository script or tool writes scratch files to a literal path outside its run directory or build/.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
         "make:run-output-lint"
       ]
     },
@@ -2193,8 +2233,6 @@
       "purpose": "Fail when a schema is invalid, lacks an example or a negative, or breaks its frozen baseline.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
-        "ci:ci/trusted-gates",
         "code:homelabnext/cli.py",
         "make:schemas",
         "script:product-name-lint"
@@ -2219,7 +2257,6 @@
       "purpose": "Fail when a private notify, state, lake-query, schema-registry, broker-tier or records-inbox helper is re-implemented outside the shared libraries (reviewed allowlist).",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
         "make:helpers-lint"
       ]
     },
@@ -2280,7 +2317,6 @@
       "purpose": "Fail when Python code, a YAML/JSON config or a Caddyfile turns TLS certificate verification off.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
         "make:tls-lint"
       ]
     },
@@ -2563,7 +2599,6 @@
       "purpose": "Fail when a runtime config, role, compose file, example or golden output points at the admin workstation.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
         "make:workstation-lint"
       ]
     },
@@ -2583,7 +2618,6 @@
       "purpose": "Fail when package code parses YAML with yaml.safe_load or SafeLoader instead of the budgeted loaders of homelabnext/_yaml.py, beyond the counts in tools/yaml_loader.allow.yml.",
       "status": "active",
       "trigger": [
-        "ci:ci/schemas",
         "make:gates"
       ]
     }

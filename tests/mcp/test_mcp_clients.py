@@ -151,6 +151,7 @@ def test_two_definitions_under_one_name_are_refused(tmp_path):
     assert list(clients.home_servers(same, "hermes")[0]) == ["notes"]  # identical: rendered once
 
 
+@pytest.mark.static
 def test_every_home_of_a_spec_holds_every_instance():
     r = clients.render_spec(SPECS / "hermes.yml")
     primary, fallback = (yaml.safe_load(o.text)["mcp_servers"] for o in r.outputs)
@@ -202,6 +203,7 @@ def test_render_one_profile_from_the_command_line(tmp_path, capsys):
     assert cli.main([*base, "--param", "bad"]) == 2
 
 
+@pytest.mark.static
 def test_the_broker_docs_show_the_rendered_entry():
     rendered = json.loads((SPECS / "claude-code" / "broker-agent.mcp.json").read_text())
     want = json.dumps(
@@ -213,6 +215,7 @@ def test_the_broker_docs_show_the_rendered_entry():
 
 
 # ----------------------------------------------------------------------- orchestrator
+@pytest.mark.static
 def test_orchestrator_catalog_and_grants_are_its_format():
     r = clients.render_spec(SPECS / "orchestrator.yml")
     catalog, grants = r.outputs
@@ -248,6 +251,7 @@ def test_orchestrator_catalog_and_grants_are_its_format():
     assert clients.drift(r) == []
 
 
+@pytest.mark.static
 def test_the_orchestrator_denies_the_catalogs_keys_character_for_character():
     """One deny list: the Go grants loader's DeniedEnvPattern is :data:`servers.DENIED_ENV`."""
     go = (ROOT / "orchestrator" / "internal" / "grants" / "grants.go").read_text()
@@ -262,6 +266,7 @@ def test_the_orchestrator_denies_the_catalogs_keys_character_for_character():
         assert m.group(1) == py.pattern, name
 
 
+@pytest.mark.static
 def test_the_old_client_name_still_renders():
     spec = yaml.safe_load((SPECS / "orchestrator.yml").read_text())
     assert clients.client_name("llm-orchestrator") == clients.ORCHESTRATOR
@@ -774,6 +779,7 @@ def test_yaml_merge_keys_are_read_and_duplicates_still_refused():
     assert clients.load_strict(merged, "p")["c"] == {"x": 1, "y": 2}
 
 
+@pytest.mark.static
 def test_a_lean_profile_cannot_declare_itself_local_only_to_render_a_local_only_server():
     """The policy, not the profile, attests ``data_tier: local-only`` (round 4 design note)."""
     doc = yaml.safe_load((SPECS / "policy" / "ceilings.yml").read_text())
@@ -817,6 +823,7 @@ def test_render_needs_the_review_policy_and_runs_the_full_record_check(tmp_path,
         clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)
 
 
+@pytest.mark.static
 def test_the_orchestrator_catalog_has_no_kind_for_a_server_that_acts_directly():
     """ADR-0030: a server that acts other than through the broker is a kind of the orchestrator's
     catalog only when a rendered profile is granted it (a policy's direct_mcp exception); else its

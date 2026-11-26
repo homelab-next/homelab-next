@@ -20,6 +20,7 @@ import shutil
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.modules import cli as mcli
@@ -112,6 +113,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == [ROLE]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -134,6 +136,7 @@ def test_the_row_is_internal_https_with_the_products_own_accounts_and_no_public_
     assert "public_hostname" not in row and "version" not in row and "roles" not in row
 
 
+@pytest.mark.static
 def test_the_secrets_are_the_ten_the_role_reads_and_nothing_else():
     manifest = ld.load_yaml(MODULE / "module.yml")
     declared = sorted(c["secret"] for c in manifest["credentials"])
@@ -158,6 +161,7 @@ def test_the_images_are_pinned_and_the_product_images_tag_carries_the_version():
         assert d[P + key].split("@")[0].endswith(f":v{version}"), key  # one release
 
 
+@pytest.mark.static
 def test_the_slot_is_registered_classified_and_provisional():
     slots = ld.load_yaml(ROOT / "examples" / "modules" / "slots.yml")["slots"]
     assert slots[SLOT]["contract"] is None and slots[SLOT]["stateful"] is True
@@ -165,6 +169,7 @@ def test_the_slot_is_registered_classified_and_provisional():
     assert classes["capabilities"][f"cap:{SLOT}"] == ["record-write"]
 
 
+@pytest.mark.static
 def test_pin_freshness_watches_the_four_images():
     sys.path.insert(0, str(ROOT / "tools"))
     try:

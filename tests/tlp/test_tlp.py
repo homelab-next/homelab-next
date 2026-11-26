@@ -200,6 +200,7 @@ def test_the_spelling_tables_are_read_only():
         tlp._SPELLINGS["red"] = Label.CLEAR  # type: ignore[index]
 
 
+@pytest.mark.static
 def test_publishing_sidecar_uses_the_canonical_enum():
     path = ROOT / "modules/publishing/interfaces/publishable-item.schema.json"
     schema = json.loads(path.read_text(encoding="utf-8"))

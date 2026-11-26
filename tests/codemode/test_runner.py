@@ -92,6 +92,7 @@ def _fake(tmp_path, executor, commands, **kw):
 # -- the conformance suite -------------------------------------------------------------------------
 
 
+@pytest.mark.static
 def test_the_suite_passes_on_both_brokers():
     for target in ("fake", "broker-reference"):
         run = run_capability("codemode-runner", target, ROOT)
@@ -99,6 +100,7 @@ def test_the_suite_passes_on_both_brokers():
         assert [r.status for r in run.results] == ["pass"] * 9, [r.evidence for r in run.results]
 
 
+@pytest.mark.static
 def test_every_mutant_is_caught_by_its_own_check_only():
     runs = mutation_runs("codemode-runner", ROOT)
     assert len(runs) == 10
@@ -175,6 +177,7 @@ def _index_copy(tmp_path):
     return tmp_path
 
 
+@pytest.mark.static
 def test_the_prelude_is_rebuilt_from_the_index_and_equals_the_committed_one():
     preludes = load_preludes(INDEX)
     assert sorted(preludes) == ["profile:reader", "profile:triage"]

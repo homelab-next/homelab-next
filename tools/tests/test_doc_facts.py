@@ -12,6 +12,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,6 +39,7 @@ def _tracked_docs() -> list[Path]:
     ]
 
 
+@pytest.mark.static
 def test_the_readme_counts_the_adrs():
     text = (ROOT / "README.md").read_text()
     m = re.search(r"^(\d+) architecture decision records live in", text, re.M)
@@ -45,6 +47,7 @@ def test_the_readme_counts_the_adrs():
     assert int(m[1]) == len(ADRS)
 
 
+@pytest.mark.static
 def test_the_readme_counts_the_capabilities():
     caps = yaml.safe_load((ROOT / "capabilities.yml").read_text())["capabilities"]
     text = (ROOT / "README.md").read_text()
@@ -52,6 +55,7 @@ def test_the_readme_counts_the_capabilities():
     assert counts and set(counts) == {len(caps)}, counts
 
 
+@pytest.mark.static
 def test_the_adr_index_reserves_no_number_that_has_its_adr():
     index = (ROOT / "docs" / "adr" / "README.md").read_text()
     taken = {p.name[:4] for p in ADRS}
@@ -59,6 +63,7 @@ def test_the_adr_index_reserves_no_number_that_has_its_adr():
         assert not set(re.findall(r"\d{4}", m[1])) & taken, m[0]
 
 
+@pytest.mark.static
 def test_code_paths_named_in_the_docs_exist():
     missing = []
     for doc in _tracked_docs():
@@ -79,6 +84,7 @@ def _rows(text: str, prefix: str) -> dict[str, list[str]]:
     return out
 
 
+@pytest.mark.static
 def test_every_public_phase_names_where_it_lives():
     phases = _rows((ROOT / "docs" / "build-order.md").read_text(), "P")
     assert len(phases) >= 9
@@ -89,6 +95,7 @@ def test_every_public_phase_names_where_it_lives():
             assert (ROOT / path.split(" ")[0]).exists(), f"{phase}: {path} does not exist"
 
 
+@pytest.mark.static
 def test_the_server_phases_carry_the_tlp_exit_criteria():
     """Data is copied only after the label backfill (S-09) and the agent window closes only with
     every model role and profile under a TLP ceiling (O-12), as docs/checklist.md says."""
@@ -106,6 +113,7 @@ MODULE_PAGE_LINES = 250
 _MODULE_CITE = re.compile(r"""docs/modules\.md(?:'s)?,? "([A-Za-z`][^"]{1,100})\"""")
 
 
+@pytest.mark.static
 def test_module_pages_stay_short():
     assert len(MODULE_PAGES) > 10
     long = {
@@ -143,6 +151,7 @@ def _citing_files() -> list[Path]:
     return [ROOT / n for n in names if not history(n) and (ROOT / n).is_file()]
 
 
+@pytest.mark.static
 def test_module_section_citations_name_a_section_that_exists():
     """``docs/modules.md, "What the loader checks"`` in code, tests and pages resolves to a heading
     (or a paragraph's bold lead) on the overview or one of its reference pages; the citation is a
@@ -167,6 +176,7 @@ def test_module_section_citations_name_a_section_that_exists():
     assert dangling == []
 
 
+@pytest.mark.static
 def test_a_capability_the_docs_name_is_one_the_example_lab_provides():
     """ "the `llm-gateway` capability" in a page is something a reader can look up: a service of
     the example registry provides it, or it is a conformance capability.  The gateway every model

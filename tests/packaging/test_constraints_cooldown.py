@@ -59,6 +59,7 @@ def test_staleness_check_catches_an_old_and_an_undated_entry():
         _stale(["certifi"], today)  # the old undated form
 
 
+@pytest.mark.static
 def test_makefile_cutoff_and_dependabot_cooldown_agree():
     m = re.search(r"CONSTRAINTS_CUTOFF \?= .*date -u -d '(\d+) days ago'", MAKEFILE)
     assert m, "cannot find the cutoff in the Makefile"

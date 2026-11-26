@@ -195,6 +195,7 @@ def _files():
     return sorted({p for g in globs for p in ANSIBLE.glob(g)})
 
 
+@pytest.mark.static
 def test_a_task_sending_a_credential_follows_no_redirect_and_uses_no_proxy():
     reviewed = reviewed_headers()
     found, problems, used = [], [], []

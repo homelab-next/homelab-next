@@ -4,6 +4,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from decide_support import fixed
 
 from homelabnext.decide import (
@@ -22,6 +23,7 @@ SEED, N = 7, 200
 FIXED_COVERAGE = 0.885  # 177 of 200 decided without a human
 
 
+@pytest.mark.static
 def test_gold_set_is_deterministic():
     a, b = generate_gold_set(N, SEED), generate_gold_set(N, SEED)
     assert [r.to_dict() for r in a] == [r.to_dict() for r in b]
@@ -42,6 +44,7 @@ def test_synthetic_eval_reproduces_a_fixed_coverage_number():
     assert gate(rep).passed
 
 
+@pytest.mark.static
 def test_replay_report_matches_golden_file():
     recs = generate_gold_set(N, SEED)
     cand = replay(recs, demo_cascade())

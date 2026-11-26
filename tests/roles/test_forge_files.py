@@ -487,6 +487,7 @@ def test_a_fresh_key_without_the_archive_to_prove_again_is_refused(zpath):
         helper.check_app_key(cfg)
 
 
+@pytest.mark.static
 def test_the_encrypted_table_list_is_the_one_audited_for_the_pinned_release():
     """APP_KEY_USES was read from the pinned release's source: bumping the image fails here until
     the list is audited again against the new release and APP_KEY_USES_RULES follows it."""

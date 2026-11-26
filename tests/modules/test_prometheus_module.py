@@ -128,6 +128,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -136,6 +137,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["prometheus"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -153,6 +155,7 @@ def test_the_manifest_has_no_egress_and_the_row_no_public_route_and_no_login():
     assert "version" not in row  # a provider's row takes product.version
 
 
+@pytest.mark.static
 def test_the_slot_is_provisional_and_the_adapter_is_a_shared_one():
     slot = ld.load_yaml(MODULE / "module.yml")["provides"]["slots"]["metrics"]
     assert (
@@ -174,12 +177,14 @@ def test_the_image_pin_is_the_product_version_and_a_digest():
     assert defaults["prometheus_retention_time"] == "30d"
 
 
+@pytest.mark.static
 def test_the_lifecycle_playbooks_target_the_module_group():
     for name in ("install", "upgrade", "remove"):
         plays = yaml.safe_load((MODULE / "playbooks" / f"{name}.yml").read_text())
         assert [p["hosts"] for p in plays] == ["mod_prometheus_server"]
 
 
+@pytest.mark.static
 def test_the_module_ships_its_alert_script_with_a_catalogued_header():
     text = (MODULE / "roles/prometheus/templates/alert-notify.py.j2").read_text()
     assert "#   id: prometheus-alert-notify\n" in text
@@ -189,6 +194,7 @@ def test_the_module_ships_its_alert_script_with_a_catalogued_header():
 # ----------------------------------------------------------------------------- the generated targets
 
 
+@pytest.mark.static
 def test_a_registry_with_this_modules_row_gets_a_job_for_it_and_a_target_per_host():
     reg = load_registry(ROOT / "examples" / "services.yml")
     out = generate(reg, ["prometheus"], {"node_targets": {"port": 9100}})["prometheus"]

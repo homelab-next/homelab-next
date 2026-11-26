@@ -39,6 +39,7 @@ def _tree(tmp_path: Path, register: str = REGISTER, compose: str = COMPOSE) -> P
     return tmp_path
 
 
+@pytest.mark.static
 def test_this_repository_lists_every_pin_and_image():
     assert lc.check(lc.REPO_ROOT) == []
 

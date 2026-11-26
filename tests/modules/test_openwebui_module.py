@@ -132,6 +132,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -140,6 +141,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["openwebui"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -161,6 +163,7 @@ def test_the_row_is_public_through_the_edge_behind_the_identity_provider():
     assert "version" not in row and "clients" not in row
 
 
+@pytest.mark.static
 def test_the_manifest_asks_for_the_gateway_and_the_identity_provider_and_no_provider_key():
     manifest = ld.load_yaml(MODULE / "module.yml")
     caps = {c["cap"] for c in manifest["requires"]["capabilities"]}
@@ -169,6 +172,7 @@ def test_the_manifest_asks_for_the_gateway_and_the_identity_provider_and_no_prov
     assert "api.openai" not in text and "anthropic" not in text  # no provider named at all
 
 
+@pytest.mark.static
 def test_the_secrets_are_the_two_the_manifest_declares_plus_the_two_others_by_name():
     manifest = ld.load_yaml(MODULE / "module.yml")
     declared = sorted(c["secret"] for c in manifest["credentials"])
@@ -183,6 +187,7 @@ def test_the_secrets_are_the_two_the_manifest_declares_plus_the_two_others_by_na
     )  # the client's is the site's
 
 
+@pytest.mark.static
 def test_the_image_is_pinned_its_tag_the_product_version_and_equal_to_the_core_roles():
     defaults = ld.load_yaml(MODULE / "roles" / "openwebui" / "defaults" / "main.yml")
     core = ld.load_yaml(ROOT / "ansible" / "roles" / "open_webui" / "defaults" / "main.yml")
@@ -194,6 +199,7 @@ def test_the_image_is_pinned_its_tag_the_product_version_and_equal_to_the_core_r
     assert ref.endswith(f":v{version}")
 
 
+@pytest.mark.static
 def test_pin_freshness_watches_the_image():
     sys.path.insert(0, str(ROOT / "tools"))
     try:

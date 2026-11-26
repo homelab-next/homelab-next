@@ -272,6 +272,7 @@ def test_make_needs_an_endpoint_and_a_profiles_dir(monkeypatch, tmp_path):
         lo.make(profiles_dir=str(tmp_path), recorded_fake=True)  # the stand-in is retired
 
 
+@pytest.mark.static
 def test_the_recorded_stand_in_stays_retired():
     """ADR-0026 decision 15: no orchestration target is a recording, and nothing under
     conformance/ cites the private controller's internal/hermesagent package."""

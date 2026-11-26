@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when a package, capability, role, plugin, compose stack or tool has no tests.
 #   owner: maintainers
-#   trigger: [ci:ci/lint, make:component-tests]
+#   trigger: [make:component-tests]
 #   invariant: [Q-04]
 #   inputs: the tree under --root; the reviewed ALLOW table in this file
 #   outputs: one line per component without tests or stale ALLOW entry

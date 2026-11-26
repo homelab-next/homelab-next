@@ -6,13 +6,10 @@ tests on a laptop with no network and no private context.
 ## Ground rules
 
 1. **Sign off every commit** (Developer Certificate of Origin): `git commit -s`. The sign-off
-   certifies you may submit the work under Apache-2.0. CI's `dco` job fails a pull request with
-   a commit that lacks a `Signed-off-by:` for its author. Commit with your GitHub noreply address
-   (Settings -> Emails); CI rejects any other author or committer e-mail. Dependabot's own
-   commits, in a pull request GitHub records as opened by Dependabot, are exempt; the maintainer
-   who merges them takes the sign-off. A bot's address in a commit's author field exempts
-   nothing on its own: anyone can set it. Inside a Dependabot pull request it does (the author
-   e-mail is the only per-commit test), so review what such a pull request carries before merging.
+   certifies you may submit the work under Apache-2.0. Commit with your GitHub noreply address
+   (Settings -> Emails); CI's leak-scan job rejects any other author or committer e-mail. (CI's
+   `dco` job, which failed a pull request on a missing `Signed-off-by:`, was dropped on
+   2026-11-25 for speed; the sign-off is still the rule, and the merging maintainer checks it.)
 2. **Every schema change ships an example and a negative** (an input that must be rejected).
    Evolution is additive within a major version (ADR-0001). A schema whose ADR is still proposed
    may be a **draft** (`"x-draft": "<why, naming the ADR>"`): it has no frozen baseline and may
@@ -47,10 +44,12 @@ tests on a laptop with no network and no private context.
    scratch output only under `homelabnext.runs.run_dir(run_id)` or `build/`
    (`make run-output-lint`).
 7. **A contract change needs an ADR** (copy `docs/adr/_template.md`; one file, five headings).
-8. Python >= 3.11, standard library first. CI tests 3.11 and 3.12 (the pyproject classifiers);
-   3.13 and 3.14 are best-effort: nothing in CI runs them, and a defect only they show is fixed
-   when it is found (as 3.14's `fromisoformat` and JSON depth were), with a test that pins the
-   verdict on every version rather than a newer interpreter's. New dependencies go in an extra in
+8. Python >= 3.11, standard library first. Every pull request and push runs the suite on 3.13,
+   the Python every lab guest runs; 3.11 (the requires-python floor) runs nightly on `main`
+   (`.github/workflows/nightly.yml`, job `test-floor`), so a defect only 3.11 shows is fixed after
+   the fact. 3.12 and 3.14 are best-effort: a defect only they show is fixed when it is found (as
+   3.14's `fromisoformat` and JSON depth were), with a test that pins the verdict on every version
+   rather than a newer interpreter's. New dependencies go in an extra in
    `pyproject.toml`, must be permissively licensed (LGPL only as an unmodified dependency; a separately run tool
    such as ansible-core is the ADR-0011 decision 4 exception), and are justified in the PR. Each
    package `constraints/` pins and each image a compose stack runs has a reviewed licence entry
@@ -80,8 +79,34 @@ tests on a laptop with no network and no private context.
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 pre-commit install          # optional; a fast subset of CI's checks (plus whitespace fixers)
-make check                  # lint, tests, schema/registry gates, leak scan, changelog
+tools/install-prepush-hook.sh   # make precheck before every git push (in each clone or worktree)
+make precheck               # every static gate, in parallel: what CI's first job runs (~2 min)
+make check                  # precheck's gates plus the whole suite and the coverage floor
 ```
+
+### Before you push: `make precheck`
+
+**Run `make precheck` before every push** (agents included: it is the first thing CI runs, and
+every other job waits for it). It runs every static gate in one parallel `make -k -j` run
+(`tools/precheck.sh`, the Makefile's `precheck-run` target): ruff check and format, the schema
+and generated-docs checks (`docs facts`, systems and capability pages, the scripts catalog and
+`scripts reality`), the allowlist, product-name, copy-paste and `tools/experimental.yml` ratchets
+against the base, the review tier and swap gate, register ids, `shared_helpers_lint`, the leak,
+private-overlay and hygiene scans, `no_raw_endpoints`, `product_name_lint`, `role_lint`, SPDX,
+the changelog check, the invariants register's fast criteria, and the `static` pytest rules. It
+ends with `precheck: OK in Ns`, or `precheck: FAILED in Ns: <targets>` naming each failed target
+(each target's output is grouped above). The base is the merge base with `origin/main` (fetch
+first); `BASE=<rev>` overrides it, and with no `origin/main` the ratchets are skipped and it says
+so. `tools/install-prepush-hook.sh` installs it as the git pre-push hook of the clone or worktree
+it runs in (`git push --no-verify` skips it).
+
+A **`static` test** is a pytest rule that only reads the repository and runs no product: a grep
+or parse of the tree (no template reads a naive UTC `now()`, every role timer writes a last-run
+record, the CI file keeps its shape, every pin has an upstream). Mark it `@pytest.mark.static`;
+the files carrying the marker are the selection, run by `make static-tests` on every CPU, and the
+test shards leave it out (`-m "... and not static and not perf"`). A test that asserts a
+wall-clock bound (a linear-time parse, a scan that finishes in seconds) is `@pytest.mark.perf`:
+it runs in the nightly workflow on a quiet runner, never on a pull request.
 
 ## The leak scan
 
@@ -194,14 +219,10 @@ and an entry that no longer excuses anything fails the lint.
   of marked lines only, and a marked line edited in place is reviewed in its own file's diff. The
   counts file must sit under an explicit CODEOWNERS path rule, not the catch-all; with
   `--base`/`--ci-base` a count raised or a digest changed since the base is printed, and fails
-  unless the base's CODEOWNERS puts the counts file there. CI's schemas job runs it with
-  `--ci-base`, the change's own copy. **Follow-up, open:** add the base's copy to CI's
-  `trusted-gates` job (`"$PY" -I "$RUNNER_TEMP/base/tools/allowlist_ratchet.py" --base "$BASE"
-  "$GITHUB_WORKSPACE"`, and `allowlist_ratchet` to `RATCHETS` in
-  `tests/gates/test_ci_trusted_gates.py`) in the first change after the tool is on `main`. Until
-  then a change can edit `tools/allowlist_ratchet.py` itself to always pass, and only the `/tools/`
-  code-owner review stands in the way; `tools/tests/test_allowlist_ratchet.py` keeps this note
-  here until the step exists. Each other gate's `tools/*.allow.yml` is a list named after the
+  unless the base's CODEOWNERS puts the counts file there. CI's precheck job runs it (`make precheck`,
+  the ratchets target) with `--base`, the change's own copy; with the base-code `trusted-gates` job
+  dropped (operator 2026-11-25, speed first) the `/tools/` code-owner review is what stands between a
+  change and an edit of `tools/allowlist_ratchet.py` that always passes. Each other gate's `tools/*.allow.yml` is a list named after the
   file, so a new one has no count until one is reviewed in; with `--base`, a list the base has no
   count for rises from 0. What it deliberately leaves out, with why, is its `NOT_RATCHETED`: the
   two shrink-only baselines (their own ratchets), `.gitleaks.toml`'s `[[allowlists]]` (its own
@@ -344,7 +365,9 @@ A bug fix is a commit whose subject is a conventional-commit fix (`fix: ...`, `f
 whose message has a `Fixes: <issue or description>` trailer. Use one of them for every fix, and in
 the same commit add or change a test that **fails without the fix and passes with it** (write the
 test first and watch it fail). CI's `regression-tests` job (`tools/fix_has_test.py --prove`, the base
-commit's copy, so a change cannot loosen the rule that judges it) checks both halves for every commit of a pull request: a fix must touch a test file, and its test modules,
+commit's copy, so a change cannot loosen the rule that judges it) checks both halves for every commit
+of a pull request, and reports a fix it cannot prove as a **warning annotation**, never a failed run
+(operator 2026-11-25: speed first, fixed after the fact): a fix must touch a test file, and its test modules,
 run on the fix's parent commit, must have at least one failing test. One rule covers Python and Go:
 a test that fails on the parent only because it does not build, collect or import counts as failing
 only if every such error names a symbol (or module, or Go package) that the fix's own diff adds;
@@ -359,8 +382,8 @@ says why in a trailer, `No-regression-test: <reason>`; the gate lists every waiv
 
 `tools/experimental.yml` lists the components taken out of the blocking set
 ([docs/build-order.md](docs/build-order.md), "Experimental and frozen components"): their tests,
-gates, invariants and code block no merge. So the list only shrinks. CI's `trusted-gates` job runs
-the base commit's `tools/experimental.py ratchet --base` against the change, and fails when the
+gates, invariants and code block no merge. So the list only shrinks. CI's precheck job (`make precheck`,
+the ratchets target) runs `tools/experimental.py ratchet --base` against the change, and fails when the
 list adds a component, a `tests:` or `code:` path not equal to or under one the base lists, a gate,
 an invariant, a conformance capability, or a key the base's rules refuse. It also fails when the
 change's own `tools/experimental.py` assigns `LIST` or `MARKER` other than the base's does (read as
@@ -409,7 +432,8 @@ of their group in `## [Unreleased]` and deletes the fragments; `--check` only va
 
 ## Pull requests
 
-Small, one concern, green `make check`. Describe what a reviewer can run. The maintainers read each
+Small, one concern, green `make precheck` before every push (CI's first job), green `make check`
+before review. Describe what a reviewer can run. The maintainers read each
 new top-level directory once for identifiers before it ships in a release.
 
 By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).

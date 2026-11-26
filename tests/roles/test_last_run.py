@@ -26,6 +26,7 @@ needs_ansible = pytest.mark.requires_tool("ansible-playbook")
 GROUP = grp.getgrgid(os.getgid()).gr_name
 
 
+@pytest.mark.static
 def test_every_role_timer_writes_a_last_run_record():
     """The repository's own timers: each passes the check that fails a timer without the writer
     (tests/maps/test_directory.py shows it failing on one)."""

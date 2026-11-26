@@ -23,6 +23,7 @@ def client(bucket: FakeBucket) -> r2.R2Client:
     return r2.R2Client("https://store.example.test", "b", "id" * 4, "s" * 20, bucket)
 
 
+@pytest.mark.static
 def test_the_feed_matches_the_golden_fixture():
     eps = [
         fd.Episode("weekly_2026-01-05", "2026-01-05", "weekly 2026-01-05", "First", 1024),

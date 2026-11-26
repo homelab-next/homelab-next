@@ -59,6 +59,7 @@ def test_required_fields(field):
     assert validate_doc(make_doc(**{field: None}))
 
 
+@pytest.mark.static
 def test_every_kind_has_a_shape_of_its_own():
     """An action that is valid for one kind must not be valid for another."""
     docs = {
@@ -74,6 +75,7 @@ def test_every_kind_has_a_shape_of_its_own():
                 assert validate_doc(swapped), f"{kind} accepted the {other} action"
 
 
+@pytest.mark.static
 def test_schema_is_frozen_additive():
     frozen = REPO_ROOT / "schemas" / "_frozen" / "1.0" / "platform" / "customization.schema.json"
     assert frozen.is_file()

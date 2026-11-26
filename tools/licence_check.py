@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when a pinned Python package, a Go module a go.mod requires or a compose image has no reviewed licence entry, or a linked one is copyleft.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:licence-check]
+#   trigger: [make:licence-check]
 #   inputs: constraints/*.txt, every go.mod's require lines, compose/**/docker-compose*.yml, compose/**/Dockerfile and tools/licences.yml
 #   outputs: one line per problem; a summary line
 #   exit:

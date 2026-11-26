@@ -7,6 +7,11 @@ name: nightly
 # the report.  Scheduled and manual only: this workflow never runs on a pull request.  The same
 # steps run on every pull request that can affect the stack as ci.yml's lab-in-a-box job (gated by
 # lab-ok); tests/compose/test_lab_in_a_box.py holds the two copies equal, so change both together.
+#
+# Two suites ci.yml leaves to the nightly (operator 2026-11-25, speed first): the whole suite on
+# Python 3.11, the public package's requires-python floor, with only the test extra (the lake and
+# MCP SDK tests must skip cleanly without theirs), in four shards; and the `perf` tests, whose
+# wall-clock bounds a loaded pull-request runner trips (tests/context/test_levels.py and the like).
 on:
   schedule:
     - cron: "17 3 * * *"
@@ -35,7 +40,7 @@ jobs:
       # events adapter's client), hash-pinned
       - uses: ./.github/actions/python-deps
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           extras: core,nats
       - name: validate the compose file
         run: |
@@ -64,3 +69,49 @@ jobs:
           path: build/lab-smoke/
           if-no-files-found: warn
           retention-days: 14
+
+  # The requires-python floor: every test but the live, experimental and perf ones, on 3.11 with
+  # only the test extra, the network cut as in ci.yml's test job.
+  test-floor:
+    name: test-floor (3.11, ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.11"
+          extras: test
+      - env:
+          SHARD: ${{ matrix.shard }}
+        run: >-
+          sudo -E env "PATH=$PATH" "HOME=$HOME" "USER=$(id -un)" "LOGNAME=$(id -un)" unshare --net --
+          sh -c 'ip link set lo up && u=$1 g=$2 && shift 2 &&
+          exec setpriv --no-new-privs --reuid="$u" --regid="$g" --init-groups -- "$@"'
+          sh "$(id -u)" "$(id -g)"
+          python -m pytest -q -m "not live and not experimental and not perf"
+          --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
+          -n auto --dist loadfile
+          --shard "$SHARD/4" --shard-report "$RUNNER_TEMP/shard.json"
+
+  # The wall-clock performance tests (marker `perf`): linear-time parses and scans with a bound in
+  # seconds, run alone on a quiet runner so a bound that trips is a regression, not a neighbour.
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.13"
+          extras: test,lake,mcp,ansible
+      - name: the perf tests, serially
+        run: python -m pytest -q -rs -m "perf and not live and not experimental"

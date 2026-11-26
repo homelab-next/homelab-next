@@ -826,6 +826,7 @@ def _helpers(tmp_path, **kw):
     return calls, units
 
 
+@pytest.mark.static
 def test_the_helper_scripts_are_carried_and_run_by_hardened_timers():
     files = MODULE / "roles" / "media_automation" / "files"
     assert sorted(p.name for p in files.iterdir()) == [

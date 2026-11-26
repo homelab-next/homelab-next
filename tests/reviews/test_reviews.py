@@ -189,6 +189,7 @@ def test_the_old_name_scan_flags_the_role_the_reviewer_and_the_file_name():
     assert old_name_hits("x.md", "role: audit\n") == []
 
 
+@pytest.mark.static
 def test_examples_and_docs_no_longer_say_challenge():
     hits = []
     for base in ("examples", "docs"):
@@ -286,6 +287,7 @@ def test_bad_policies_fail(policy_data, mutate, needle, tmp_path):
     assert any(needle in p for p in ex.value.problems), ex.value.problems
 
 
+@pytest.mark.static
 def test_digest_command_is_stable(capsys):
     ll2 = load_aliases(REPO / "examples/registers").codes["LL-002"]
     files = [str(REPO / f"examples/registers/lessons/{ll2}.md"), str(REPO / "docs/systems/dns.md")]

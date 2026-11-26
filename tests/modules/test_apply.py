@@ -402,6 +402,7 @@ def test_a_placement_on_an_undeclared_host_role_is_refused():
         apply.render(site, {"a": _mod("a")}, {"a": "../m/a"})
 
 
+@pytest.mark.static
 def test_a_host_role_without_roles_is_a_comment_and_nothing_placed_is_a_no_op():
     sel = {"a": _mod("a", roles=())}
     out = apply.render(_sel_site(x=[("a", "a")]), sel, {"a": "../m/a"})
@@ -568,6 +569,7 @@ def test_a_missing_module_group_fails_the_run_instead_of_matching_nothing(tmp_pa
         assert "holds no host" in r.stdout, r.stdout
 
 
+@pytest.mark.static
 def test_plays_carry_only_the_module_tag():
     """Module a-b's tag is mod_a_b, and so would be module a's host role b's group tag."""
     sel = {"a-b": _mod("a-b"), "a": _mod("a")}
@@ -983,6 +985,7 @@ def test_ansible_reads_the_carried_group_vars(tmp_path, capsys):
     assert json.loads(r.stdout)["probe_value"] == "carried"
 
 
+@pytest.mark.static
 def test_limits_play_creates_data_parent_first() -> None:
     """The first play task makes the data parent root-owned 0755, before any module role runs.
 

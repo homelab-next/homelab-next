@@ -205,6 +205,7 @@ def test_a_bad_baseline_is_a_usage_error(tmp_path, bad):
     assert rc == 2 and "bad baseline" in log
 
 
+@pytest.mark.perf
 def test_the_repository_holds_its_baseline_in_seconds():
     t0 = time.perf_counter()
     rc, log = _run(REPO)

@@ -671,6 +671,7 @@ def test_a_pair_bound_to_no_module_must_be_one_of_the_cores_with_its_recovery():
 # ----------------------------------------------------------------------------- the loader
 
 
+@pytest.mark.static
 def test_a_gathered_inventory_compares_units_and_notes_the_kinds_it_does_not_report():
     tree, _ = ld.discover(ROOT / "modules", EXAMPLES, None)
     site = ld.load_yaml(SMALL_LAB)
@@ -775,6 +776,7 @@ def test_a_lab_that_takes_up_no_modules_is_checked_as_an_empty_selection(tmp_pat
     assert any("not compared (not_gathered)" in n for n in doc["notes"])
 
 
+@pytest.mark.static
 def test_an_empty_selection_judges_every_running_unit_of_a_module():
     """With an empty selection no module is selected, a core module included: a running unit of
     any module is one the site does not select; a unit bound to no module is the core's."""

@@ -92,10 +92,12 @@ def test_enabled_optional_profiles_are_conflict_checked(tmp_path, monkeypatch):
     assert r.status == "fail" and "CU011" in r.evidence
 
 
+@pytest.mark.static
 def test_shipped_profiles_pass_at_repo_root():
     assert run(REPO_ROOT).status == "pass"
 
 
+@pytest.mark.static
 def test_loadable_with_plugins_dir():
     reg = Registry()
     names = load_directory(reg, REPO_ROOT / "homelabnext" / "customization" / "plugins")

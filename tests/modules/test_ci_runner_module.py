@@ -21,6 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.modules import cli as mcli
@@ -39,6 +40,7 @@ VARS = ld.load_yaml(ROLE / "vars" / "main.yml")
 SPECS = yaml.safe_load((ROLE / "meta" / "argument_specs.yml").read_text())["argument_specs"]
 
 
+@pytest.mark.static
 def test_the_manifest_is_a_feature_with_one_runner_role_and_internet_egress_only():
     m = MANIFEST
     assert m["kind"] == "feature" and m["id"] == "ci-runner"
@@ -64,6 +66,7 @@ def test_the_pins_the_key_and_the_resolvers_are_required_with_no_default():
         assert SPECS[hook]["options"] == main, hook
 
 
+@pytest.mark.static
 def test_the_defaults_hold_no_address_and_no_lab_name():
     text = (ROLE / "defaults" / "main.yml").read_text()
     code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
@@ -96,6 +99,7 @@ def test_the_refused_ranges_cover_every_non_global_ipv4_address_and_no_global_on
                 assert not hit, a
 
 
+@pytest.mark.static
 def test_the_egress_table_holds_the_slots_user_and_ends_in_a_deny():
     text = (ROLE / "templates" / "egress.nft.j2").read_text()
     chain = text[text.index("chain output") :]
@@ -123,6 +127,7 @@ def test_the_egress_table_holds_the_slots_user_and_ends_in_a_deny():
     )  # only the slots' user is held; the host's own traffic is the hypervisor firewall's
 
 
+@pytest.mark.static
 def test_the_slot_unit_fails_closed_without_the_egress_table_and_never_shares_the_host():
     text = (ROLE / "templates" / "slot.service.j2").read_text()
     pre = [ln for ln in text.splitlines() if ln.startswith("ExecStartPre=")]
@@ -134,6 +139,7 @@ def test_the_slot_unit_fails_closed_without_the_egress_table_and_never_shares_th
     assert '"user,id=n0,ipv6=off"' in script and "hostfwd" not in script and "tap" not in script
 
 
+@pytest.mark.static
 def test_the_feed_key_is_forced_to_the_feed_command():
     tasks = yaml.safe_load((ROLE / "tasks" / "config.yml").read_text())
     key = next(t for t in tasks if "feed key" in t["name"])
@@ -144,6 +150,7 @@ def test_the_feed_key_is_forced_to_the_feed_command():
     assert '{{ ci_runner_slot_script }} feed"' in content
 
 
+@pytest.mark.static
 def test_the_build_seed_pins_the_agent_by_digest_and_resets_cloud_init():
     text = (ROLE / "templates" / "build-user-data.j2").read_text()
     assert "sha256sum -c -" in text and "{{ ci_runner_agent_sha256 }}" in text
@@ -270,6 +277,7 @@ def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+@pytest.mark.static
 def test_the_golden_image_puts_pinned_pythons_in_the_tool_cache():
     text = (ROLE / "templates" / "build-user-data.j2").read_text()
     loop = text[text.index("{% for tc in ci_runner_toolcache_pythons %}") :]

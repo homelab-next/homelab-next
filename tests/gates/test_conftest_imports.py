@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 TEST_TREES = ("tests", "tools/tests", "conformance")
 
@@ -30,6 +32,7 @@ def _conftest_imports(path: Path) -> list[int]:
     return [n.lineno for n in ast.walk(tree) if "conftest" in names(n)]
 
 
+@pytest.mark.static
 def test_no_test_module_imports_conftest_by_name():
     found = [
         f"{p.relative_to(ROOT)}:{line}"

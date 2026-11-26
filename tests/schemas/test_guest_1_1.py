@@ -34,6 +34,7 @@ def test_1_1_documents_validate_against_1_1_only(path):
     assert sc.errors_for(FROZEN_10, doc, REG) != []
 
 
+@pytest.mark.static
 def test_every_published_1_0_example_stays_valid():
     for f in sc.instances_for(ROOT / "schemas/platform/guest.schema.json", "examples"):
         assert sc.errors_for(CURRENT, sc.load_instance(f), REG) == [], f.name

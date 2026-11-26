@@ -143,6 +143,7 @@ def test_importing_the_package_loads_no_heavy_dependency():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+@pytest.mark.static
 def test_no_literal_endpoints_in_the_package():
     # the repository gate (tools/no_raw_endpoints.py) is the real control; this is a fast local echo
     import re

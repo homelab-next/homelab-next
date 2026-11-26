@@ -155,6 +155,7 @@ def test_a_trailing_newline_or_a_case_twin_is_refused(mutate, needle):
     assert any(needle in p for p in found), found
 
 
+@pytest.mark.static
 def test_the_schema_and_the_library_agree_on_the_schema_examples_and_negatives():
     """Every schema negative is also refused by the library, and the example accepted."""
     sm.Store.from_dict(json.loads((SCHEMAS / "examples" / "model_store.valid.json").read_text()))
@@ -324,6 +325,7 @@ def test_the_cli_validates_lists_and_resolves(tmp_path, capsys):
     assert hnx(["models", "store", "validate", store, "--roles", str(rp)]) == 2
 
 
+@pytest.mark.static
 def test_the_store_library_is_standard_library_only():
     src = (ROOT / "homelabnext" / "models" / "store.py").read_text()
     imports = {

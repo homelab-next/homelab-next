@@ -24,6 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.modules import cli as mcli
@@ -79,6 +80,7 @@ def role_vars() -> dict:
 # ----------------------------------------------------------------------------- the manifest
 
 
+@pytest.mark.static
 def test_the_module_fills_the_forge_slot_with_the_shared_client():
     m = manifest()
     assert m["kind"] == "provider" and m["egress"] == "none"
@@ -128,6 +130,7 @@ def test_the_image_is_pinned_by_digest_at_the_product_version_and_not_older_than
     assert f"{P}_image" in rv[f"{P}_product_version"]
 
 
+@pytest.mark.static
 def test_every_secret_is_in_the_modules_own_namespace_and_the_role_reads_exactly_these():
     refs = [c["secret"] for c in manifest()["credentials"]]
     assert refs and all(r.startswith(f"secret:{MID}/") for r in refs)
@@ -176,6 +179,7 @@ def _tasks(items):
             yield from _tasks(t.get(key))
 
 
+@pytest.mark.static
 def test_no_secret_is_looked_up_into_a_command_line():
     """A command's argv is visible to every user of the guest; the secrets travel in the
     environment of the docker client (named without a value), on standard input or in a 0600 file."""
@@ -190,6 +194,7 @@ def test_no_secret_is_looked_up_into_a_command_line():
     assert seen > 10
 
 
+@pytest.mark.static
 def test_a_command_with_a_dollar_in_its_argv_does_not_let_ansible_expand_it_on_the_host():
     """The command module expands $NAME in argv from the HOST's environment by default: a secret
     the docker client passes through (`-e NAME`) would land in the argv of the host process."""
@@ -208,12 +213,14 @@ def test_a_command_with_a_dollar_in_its_argv_does_not_let_ansible_expand_it_on_t
     assert repos["args"]["expand_argument_vars"] is False  # its script is full of $-variables
 
 
+@pytest.mark.static
 def test_nothing_in_the_module_names_the_operators_workstation():
     for f in MODULE.rglob("*"):
         if f.is_file():
             assert not re.search(r"192\.168\.|wsl", f.read_text().lower()), f
 
 
+@pytest.mark.static
 def test_the_helpers_are_the_files_the_role_installs():
     files = sorted(p.name for p in (ROLE / "files").iterdir())
     assert files == [f"{P}_restore.py", f"hnx_{P}.py"]
@@ -290,6 +297,7 @@ def _args(ov: Path) -> list[str]:
             "--mcp-catalog", str(ROOT / "examples" / "mcp")]  # fmt: skip
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -338,6 +346,7 @@ def test_a_row_with_a_public_name_is_refused_because_the_module_has_no_public_ro
 # ----------------------------------------------------------------------------- pins, lint
 
 
+@pytest.mark.static
 def test_pin_freshness_watches_the_image():
     sys.path.insert(0, str(ROOT / "tools"))
     try:

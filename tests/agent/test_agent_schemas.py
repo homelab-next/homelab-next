@@ -65,10 +65,12 @@ def test_every_negative_fails_for_a_reason_of_its_own(path):
         assert sc.errors_for(schema, sc.load_instance(neg), REGISTRY), neg.name
 
 
+@pytest.mark.static
 def test_check_repo_clean_for_new_dirs():
     assert sc.check_repo(ROOT, DIRS, strict=True) == []
 
 
+@pytest.mark.static
 def test_existing_golden_suite_format_unchanged_and_valid():
     path = ROOT / "homelabnext" / "golden" / "examples" / "classifier_smoke.yml"
     doc = sc.load_instance(path)
@@ -77,6 +79,7 @@ def test_existing_golden_suite_format_unchanged_and_valid():
     assert parse_suite(doc).name == "classifier-smoke"  # the real loader agrees
 
 
+@pytest.mark.static
 def test_golden_schema_and_loader_agree_on_rejects():
     schema = json.loads((ROOT / "schemas/agent/golden_task.schema.json").read_text())
     for neg in sc.instances_for(ROOT / "schemas/agent/golden_task.schema.json", "negative"):
@@ -91,6 +94,7 @@ def test_golden_schema_and_loader_agree_on_rejects():
             parse_suite(sc.load_instance(neg))
 
 
+@pytest.mark.static
 def test_examples_have_no_lab_identifiers():
     """Generic shapes from the leak scanner, plus the run-time deny-list when HNX_DENYLIST is set."""
     import os
@@ -105,6 +109,7 @@ def test_examples_have_no_lab_identifiers():
                 assert hits == [], hits
 
 
+@pytest.mark.static
 def test_profile_include_detail_is_checked_by_the_schema():
     """agent/profile 1.4: include.detail is `summary` or `outline` (absent means full); the
     compiler never writes `full`, and an unknown value is refused."""

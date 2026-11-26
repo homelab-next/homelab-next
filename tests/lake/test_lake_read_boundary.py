@@ -13,6 +13,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "homelabnext"
 EXEMPT = ("homelabnext/lake/", "homelabnext/conform/")
@@ -50,6 +52,7 @@ def raw_reads(source: str, module: str) -> list[int]:
     )
 
 
+@pytest.mark.static
 def test_no_module_outside_the_lake_reads_it_raw():
     bad = []
     for path in sorted(PACKAGE.rglob("*.py")):

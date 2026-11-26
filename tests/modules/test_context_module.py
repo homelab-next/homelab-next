@@ -21,6 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.context import semantic_model
@@ -114,6 +115,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -122,6 +124,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["context"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -157,6 +160,7 @@ def test_the_role_defaults_hold_no_lab_value():
     assert DEFAULTS["context_build_repositories"] == ["localhost/hnx-context"]
 
 
+@pytest.mark.static
 def test_the_dockerfile_pins_its_base_its_wheels_git_and_the_model():
     text = (MODULE / "image" / "Dockerfile").read_text()
     from_line = next(line for line in text.splitlines() if line.startswith("FROM "))

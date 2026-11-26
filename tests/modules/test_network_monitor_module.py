@@ -90,6 +90,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -98,6 +99,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_the_module_contributes_one_role_and_no_credential():
     manifest = ld.load_yaml(MODULE / "module.yml")
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == [MID]
@@ -183,6 +185,7 @@ def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+@pytest.mark.static
 def test_the_siem_agent_reads_each_captures_event_streams_and_only_those():
     """The monitor adds one marked localfile block for each capture's event streams to an installed
     SIEM agent (the IDS module's contract), so a re-converge keeps the agent reading the logs."""

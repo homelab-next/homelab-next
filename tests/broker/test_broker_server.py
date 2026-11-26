@@ -895,6 +895,7 @@ def test_cli_dev_identity_is_refused_unless_the_manifest_allows_it(tmp_path, cli
     assert cli("pending") == []  # the operator's read of the state needs no identity
 
 
+@pytest.mark.static
 def test_the_production_example_validates_and_refuses_dev_identity():
     doc = yaml.safe_load((EXAMPLES / "manifest.production.yml").read_text())
     assert validate_manifest(doc, EXAMPLES)[1] == []

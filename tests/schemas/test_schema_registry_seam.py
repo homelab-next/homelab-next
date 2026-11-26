@@ -30,6 +30,7 @@ def test_registry_of_extends_a_base_and_reads_draft_2020_12_by_default():
     assert reg["urn:example:b"] == want
 
 
+@pytest.mark.static
 def test_the_packaged_registry_skips_frozen_and_instance_folders():
     ids = set(schema_registry())
     assert COMMON in ids
@@ -41,6 +42,7 @@ def test_the_packaged_registry_skips_frozen_and_instance_folders():
                 assert schema_registry().contents(doc["$id"]) != doc
 
 
+@pytest.mark.static
 def test_validator_resolves_refs_across_families():
     # a status schema $refs the shared ids; the validator resolves them offline
     v = validator("status", "observation.schema.json")

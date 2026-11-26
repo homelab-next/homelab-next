@@ -32,6 +32,7 @@ def codes(findings):
 # ---- schema ------------------------------------------------------------------------------------
 
 
+@pytest.mark.static
 def test_schema_id_is_minor_2_and_baselines_exist():
     """1.1 added maintained_upstream; 1.2 lets a link name a record by uid (ADR-0019)."""
     schema = json.loads((REPO_ROOT / "schemas/platform/customization.schema.json").read_text())
@@ -40,6 +41,7 @@ def test_schema_id_is_minor_2_and_baselines_exist():
         assert (FROZEN / f"{minor}/platform/customization.schema.json").is_file()
 
 
+@pytest.mark.static
 def test_every_1_0_document_still_validates():
     """Additive: the 1.0 examples validate under 1.1 and the frozen 1.0 baseline, unchanged."""
     from jsonschema import Draft202012Validator
@@ -142,6 +144,7 @@ def test_the_three_profiles_are_flagged_and_never_expire(uni):
         assert lint(items, uni, today) == [], today
 
 
+@pytest.mark.static
 def test_x09_passes_shipped_profiles_far_in_the_future():
     r = x09.make_check(lambda: FAR).fn(Context(REPO_ROOT))
     assert r.status == "pass", r.evidence

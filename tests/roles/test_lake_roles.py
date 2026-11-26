@@ -788,6 +788,7 @@ def test_trino_refuses_to_run_without_access_rules_unless_unrestricted_is_said(f
     assert ok.returncode == 0, ok.stdout + ok.stderr
 
 
+@pytest.mark.static
 def test_the_shipped_example_rules_let_only_the_maintenance_user_change_the_lake():
     rules = json.loads((Path(TRINO) / "files" / "lake-access.example.json").read_text())
     tables = rules["tables"]
@@ -1111,6 +1112,7 @@ def test_maintenance_test_notify_sends_one_low_priority_message(maintenance):
     assert r.returncode == 0 and len(notify.messages) == 1 and engine.statements == []
 
 
+@pytest.mark.static
 def test_no_rendered_file_names_the_workstation_or_wsl():
     """Review Focus 5: nothing the lake modules render may call the operator's workstation."""
     for module in ("garage", "iceberg-rest", "trino"):

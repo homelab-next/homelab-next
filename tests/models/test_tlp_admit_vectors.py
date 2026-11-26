@@ -13,6 +13,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from homelabnext import tlp
 from homelabnext.registry.model_tlp import admit
 
@@ -78,6 +80,7 @@ def _text() -> str:
     return json.dumps(build(), indent=1, ensure_ascii=False) + "\n"
 
 
+@pytest.mark.static
 def test_the_vectors_file_is_what_admit_says():
     if os.environ.get("HNX_REGEN_TLP_VECTORS") == "1":
         VECTORS.write_text(_text(), encoding="utf-8")

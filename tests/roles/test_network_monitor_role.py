@@ -154,6 +154,7 @@ def test_a_failed_build_stops_before_any_unit_is_written(tmp_path):
     assert not list((tmp_path / "units").iterdir())
 
 
+@pytest.mark.static
 def test_a_capture_restarts_only_when_a_unit_the_script_or_the_image_changed():
     # the systemd module needs a real systemd, so CI reads the task: the restart is conditioned on
     # exactly the four things that change what a capture runs, and nothing else
@@ -415,6 +416,7 @@ def test_the_retire_condition_is_a_boolean_ansible_accepts(tmp_path, units, cont
     assert ("RETIRE-RUNS" in r.stdout) is runs
 
 
+@pytest.mark.static
 def test_nothing_is_retired_before_the_module_owns_the_captures():
     tasks = yaml.safe_load((ROLE_DIR / "tasks" / "main.yml").read_text())
     retire = next(t for t in tasks if t.get("name", "").startswith("Retire the predecessor"))

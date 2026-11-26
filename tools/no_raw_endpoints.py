@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when code or config writes an endpoint literal instead of a registry lookup.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:gates]
+#   trigger: [make:gates]
 #   invariant: [X-01]
 #   inputs: the tree; tools/no_raw_endpoints.allow.yml
 #   outputs: one line per violation (or a census)

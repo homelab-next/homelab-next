@@ -181,6 +181,7 @@ def test_a_sidecar_with_a_bad_hash_or_no_files_is_refused(tmp_path):
         gt.load_item(root, "site")
 
 
+@pytest.mark.static
 def test_the_notify_titles_are_the_manifests_pair():
     """The manifest is the only source of a module's pair: the code's titles must equal it."""
     from pathlib import Path

@@ -317,6 +317,7 @@ def test_the_hub_page_shows_central_bindings(tmp_path):
 
 
 # ---------------------------------------------------------------- site flows
+@pytest.mark.static
 def test_flows_follow_the_network_models_order():
     doc = yaml.safe_load(SITE_FLOWS.read_text())
     assert flows_from_site(doc) == (
@@ -504,6 +505,7 @@ def _hujson(text: str):
     return json.loads("\n".join(x for x in text.splitlines() if not x.startswith("//")))
 
 
+@pytest.mark.static
 def test_policy_follows_the_site_flows_golden():
     f = fleet_at(FLEET, SITE_FLOWS)
     text = render(f, "tailscale-acl")["tailscale-policy.hujson"]

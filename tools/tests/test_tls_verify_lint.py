@@ -110,6 +110,7 @@ def test_tree_fails_then_allowlist_passes(tmp_path, capsys):
     assert lint.main([str(tmp_path), "--allowlist", str(allow)]) == 2
 
 
+@pytest.mark.static
 def test_the_repository_verifies_tls_everywhere():
     assert lint.main([str(REPO)]) == 0
 

@@ -425,6 +425,7 @@ def test_repository_agent_files_carry_no_engine_rule_numbers():
     assert lint.lint_no_rule_numbers(files, detmap.load(DET / "det_map.yml")) == []
 
 
+@pytest.mark.static
 def test_det_map_itself_only_place_for_numbers():
     # the shipped example charters/rules contain no engine numbers
     files = list((DET / "sigma").rglob("*.yml"))
@@ -604,6 +605,7 @@ def test_workflow_packs_are_agent_facing_and_undefined_det_ids_fail(tmp_path, mo
     assert "det:no-such-det" in capsys.readouterr().out
 
 
+@pytest.mark.static
 def test_shipped_workflow_packs_cite_only_defined_det_ids():
     import yaml
 

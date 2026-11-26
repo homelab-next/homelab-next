@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -33,6 +35,7 @@ def test_the_pip_block_is_cut_like_the_makefile_cuts_it():
     assert pip_block("a==1\n") == ""
 
 
+@pytest.mark.static
 def test_bootstrap_is_the_pip_block_of_the_ci_constraints():
     ci = (ROOT / "constraints" / "ci.txt").read_text()
     bootstrap = (ROOT / "constraints" / "bootstrap.txt").read_text()
@@ -41,6 +44,7 @@ def test_bootstrap_is_the_pip_block_of_the_ci_constraints():
     assert bootstrap == block, "run `make constraints` (or copy ci.txt's pip block) and commit"
 
 
+@pytest.mark.static
 def test_the_makefile_still_cuts_bootstrap_from_ci():
     make = (ROOT / "Makefile").read_text()
     assert (
@@ -49,6 +53,7 @@ def test_the_makefile_still_cuts_bootstrap_from_ci():
     )
 
 
+@pytest.mark.static
 def test_build_is_the_setuptools_block_of_the_ci_constraints():
     ci = (ROOT / "constraints" / "ci.txt").read_text()
     build = (ROOT / "constraints" / "build.txt").read_text()
@@ -57,6 +62,7 @@ def test_build_is_the_setuptools_block_of_the_ci_constraints():
     assert build == block, "run `make constraints` (or copy ci.txt's setuptools block) and commit"
 
 
+@pytest.mark.static
 def test_the_makefile_still_cuts_build_from_ci():
     make = (ROOT / "Makefile").read_text()
     assert (

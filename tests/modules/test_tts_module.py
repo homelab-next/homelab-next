@@ -126,6 +126,7 @@ def overlay_row(ov: Path) -> dict:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -134,6 +135,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["tts"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -165,6 +167,7 @@ def test_the_role_defaults_keep_the_operators_rules():
     assert len(DEFAULTS["tts_voice_files"]) == 4  # ref1.wav to ref4.wav, as the old service
 
 
+@pytest.mark.static
 def test_the_module_ships_a_voice_model_entry_that_is_valid_and_is_the_one_pinned():
     doc = json.loads(
         (ROOT / "schemas" / "platform" / "examples" / "model_store.speech.json").read_text()
@@ -184,6 +187,7 @@ def test_the_module_ships_a_voice_model_entry_that_is_valid_and_is_the_one_pinne
     assert set(REQUIRED_MODEL_FILES) <= {f["path"] for f in doc["models"]["xtts-v2"]["files"]}
 
 
+@pytest.mark.static
 def test_the_dockerfile_pins_its_base_by_digest_and_installs_only_hashed_requirements():
     text = (MODULE / "image" / "Dockerfile").read_text()
     from_line = next(line for line in text.splitlines() if line.startswith("FROM "))

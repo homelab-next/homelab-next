@@ -77,6 +77,7 @@ def test_the_search_server_and_the_runner_share_one_index_loader(tmp_path):
     assert set(load_index(tmp_path)) == {"profile:reader"}
 
 
+@pytest.mark.static
 def test_the_catalog_record_classes_the_tools_and_acts_on_nothing():
     from homelabnext.agent.readers import default_classes
     from homelabnext.mcp.servers import load

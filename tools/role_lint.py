@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when a role or playbook breaks the role interface (docs/role-interface.md).
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, code:homelabnext/scaffold/core.py, make:gates]
+#   trigger: [code:homelabnext/scaffold/core.py, make:gates]
 #   invariant: [X-05]
 #   inputs: role directories, or --playbook files with --inventory
 #   outputs: one line per finding with its rule id

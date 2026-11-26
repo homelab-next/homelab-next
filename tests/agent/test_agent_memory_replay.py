@@ -466,6 +466,7 @@ def test_fixture_times_are_in_order_and_utc():
     assert datetime.fromisoformat(fixture["start"].replace("Z", "+00:00")).tzinfo == UTC
 
 
+@pytest.mark.static
 def test_the_golden_loader_keeps_a_time_of_day_a_string():
     assert yaml.safe_load("t: 10:12") == {"t": 612}  # what YAML 1.1 makes of it
     got = yaml.load("t: 10:12\nn: 42\nh: 0x1f\nf: 1.5\nq: '09:30'", Loader=GoldenLoader)

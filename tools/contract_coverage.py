@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when an event type or shared lake table lacks a schema with publisher and consumer contract-test fixtures.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:contracts]
+#   trigger: [make:contracts]
 #   invariant: [Q-05, T-07]
 #   inputs: schemas/events, schemas/ocsf and the contract-test fixtures
 #   outputs: one line per seam without contract tests

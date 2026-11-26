@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when a Caddy config in the tree could let a client set its own identity header behind forward_auth (judged on the Caddyfile text and, with a caddy binary, on Caddy's own adapted JSON), cannot be read, or a Caddy pin is below 2.11.2.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:caddy-lint]
+#   trigger: [make:caddy-lint]
 #   invariant: [F-23]
 #   inputs: the tracked tree (Caddyfiles, templates, markdown caddyfile blocks, Caddy JSON/YAML, registries, Dockerfiles, other pins), the caddy generator, tools/caddy_lint.allow.yml and a caddy binary when one is available (required in CI)
 #   outputs: one line per unprotected forward_auth or site, identity header set outside copy_headers, construct the lint cannot read, unread config, path Caddy's own JSON shows reaching an upstream unstripped, vulnerable Caddy pin or stale allowlist rule
