@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+caldera_version_pattern: '^[0-9]+\.[0-9]+\.[0-9]+\Z'
+caldera_commit_pattern: '^[0-9a-f]{40}\Z'
+caldera_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+caldera_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+caldera_account_pattern: '^[a-z][a-z0-9_-]{0,31}\Z'
+caldera_port_pattern: '^[1-9][0-9]{1,4}/(tcp|udp)\Z'
+caldera_plugin_pattern: '^[a-z][a-z0-9_]{0,31}\Z'
+caldera_repository_pattern: '^[a-z0-9]+([./_-][a-z0-9]+)*\Z'
+# the container's published port inside is Caldera's own (conf port); the host side is caldera_port
+caldera_container_port: 8888
+caldera_container_root: /usr/src/app
+# the source tree on the host, and what of it the container sees: only conf, data and logs (never
+# the whole tree: that would shadow the UI the build baked into the image)
+caldera_src: "{{ caldera_data_root }}/src"
+caldera_seed_dir: "{{ caldera_data_root }}/seed"
+caldera_export_dir: "{{ caldera_data_root }}/export"
+# random values the server wants in its configuration besides the two passwords: generated once on
+# the host (never from a secret ref, never a default), kept 0600, written into the configuration
+caldera_seed_names: [api_key_red, api_key_blue, crypt_salt, encryption_key, tunnel_password, ftp_password]
+caldera_image_tagged: "{{ caldera_built_name }}:{{ caldera_version }}"

@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned release bump (caldera_target_version with its commit,
+# caldera_target_commit), export the data first, then converge with the new pin, which re-clones
+# the tag and rebuilds the image (the install-time egress is needed again).
+#   ansible-playbook -i <inventory> modules/caldera/playbooks/upgrade.yml \
+#     -e caldera_target_version=<x.y.z> -e caldera_target_commit=<40 hex>
+- name: Upgrade the adversary-emulation server
+  hosts: mod_caldera_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: caldera
+        tasks_from: upgrade
+    - name: Export the data before the new build opens it
+      ansible.builtin.include_role:
+        name: caldera
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: caldera
+      vars:
+        caldera_version: "{{ caldera_target_version }}"
+        caldera_source_commit: "{{ caldera_target_commit }}"

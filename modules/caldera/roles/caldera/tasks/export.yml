@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data operations, adversaries, agents, artifacts; object-tree):
+# <data root>/export/<stamp>/ with a listing.jsonl (key, size, sha256, dataset). Never the
+# generated configuration (it holds the passwords) and never the seeds.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Write the exit copy
+      ansible.builtin.include_tasks: copy_out.yml
+  tags: [export]

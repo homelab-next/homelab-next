@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). The mounts
+# deviate from upstream's own compose on purpose: upstream bind-mounts the whole source tree over
+# /usr/src/app, which shadows plugins/magma/dist (the UI the image build baked in; it is a build
+# artefact, not tracked in git) and the server dies at start on a missing directory. Only conf/,
+# data/ and logs/ need to survive a container restart, so only those three are mounted.
+- name: Read the digest of the built image
+  ansible.builtin.include_tasks: digest.yml
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    caldera_app:
+      compose_app_name: caldera
+      compose_app_dir: "{{ caldera_dir }}"
+      compose_app_data_dir: "{{ caldera_data_root }}"
+      compose_app_export_dir: "{{ caldera_export_dir }}"
+      compose_app_owner: "{{ caldera_owner }}"
+      compose_app_group: "{{ caldera_group }}"
+      compose_app_start: "{{ caldera_start }}"
+      compose_app_validate_with_docker: "{{ caldera_validate_with_docker }}"
+      compose_app_allow_placeholder_digest: "{{ ansible_check_mode and (caldera_image_absent | bool) }}"
+      compose_app_spec:
+        services:
+          caldera:
+            image: "{{ caldera_built_name }}"
+            tag: "{{ caldera_version }}"
+            digest: "{{ caldera_image_digest }}"
+            command: ["--log", "{{ caldera_log_level }}"]
+            ports: >-
+              {{ ['%s:%d:%d' | format(caldera_bind, caldera_port | int, caldera_container_port | int)]
+                 + (caldera_extra_ports | map('regex_replace', '^([0-9]+)/(tcp|udp)$', caldera_bind ~ ':\1:\1/\2') | list) }}
+            volumes:
+              - "{{ caldera_src }}/conf:{{ caldera_container_root }}/conf"
+              - "{{ caldera_src }}/data:{{ caldera_container_root }}/data"
+              - "{{ caldera_src }}/logs:{{ caldera_container_root }}/logs"
+            mem_limit: "{{ caldera_mem_limit }}"
+            healthcheck:
+              test: [CMD, python3, -c, "import socket; socket.create_connection(('localhost', 8888), 4).close()"]
+              interval: 30s
+              timeout: 8s
+              retries: 5
+              start_period: 120s
+  tags: [health, backup, restore, export, upgrade]

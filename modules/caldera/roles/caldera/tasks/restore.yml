@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore from an export snapshot (caldera_restore_source, a <stamp> directory): the snapshot is
+# checked first without writing (listing, regular single-link files, sizes, sha256, keys inside
+# the dataset roots), then the server is stopped, each file staged beside its target and renamed
+# into place, and the server is started again whatever happened. The generated configuration is
+# not in a snapshot: it is rewritten by the next converge, from the secret store.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Install the export script
+      ansible.builtin.copy:
+        src: caldera_tree.py
+        dest: "{{ caldera_data_root }}/caldera_tree.py"
+        owner: "{{ caldera_owner }}"
+        group: "{{ caldera_group }}"
+        mode: "0750"
+    - name: Check the snapshot before changing anything
+      ansible.builtin.command:
+        argv: [python3, -I, "{{ caldera_data_root }}/caldera_tree.py", check, "{{ caldera_restore_source }}"]
+      changed_when: false
+    - name: Replace the data with the server stopped
+      block:
+        - name: Stop the server
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ caldera_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Stage and rename each listed file into place
+          ansible.builtin.command:
+            argv: [python3, -I, "{{ caldera_data_root }}/caldera_tree.py", restore, "{{ caldera_restore_source }}", "{{ caldera_src }}"]
+          changed_when: true
+      always:
+        - name: Start the server again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ caldera_dir }}/docker-compose.yml", up, -d]
+          changed_when: true
+  tags: [restore]

@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - caldera_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - caldera_version is match(caldera_version_pattern)
+      - caldera_source_commit is match(caldera_commit_pattern)
+      # the one clone address the module accepts: https, no credentials, no query
+      - caldera_source_repository is match('^https://[a-z0-9.-]+(/[A-Za-z0-9_.-]+)+\.git\Z')
+      - caldera_built_name is match(caldera_repository_pattern)
+      - caldera_build_variant in ['full', 'slim']
+      - caldera_build_timezone is match('^[A-Za-z]+(/[A-Za-z_]+)?\Z')
+      - caldera_rebuild is boolean
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - caldera_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - caldera_bind != '0.0.0.0'
+      - caldera_port | int >= 1 and caldera_port | int <= 65535
+      - caldera_extra_ports is sequence and caldera_extra_ports is not string
+      - caldera_extra_ports | reject('string') | list | length == 0
+      - caldera_extra_ports | reject('match', caldera_port_pattern) | list | length == 0
+      - caldera_extra_ports | unique | list | length == caldera_extra_ports | length
+      - caldera_log_level in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+      - caldera_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - "[caldera_dir, caldera_data_root] | reject('match', caldera_path_pattern) | list | length == 0"
+      - caldera_dir != caldera_data_root
+      - caldera_admin_user is match(caldera_account_pattern)
+      - caldera_red_user is match(caldera_account_pattern)
+      - caldera_admin_user != caldera_red_user
+      - caldera_admin_login_ref is match(caldera_ref_pattern)
+      - caldera_red_login_ref is match(caldera_ref_pattern)
+      - caldera_admin_login_ref != caldera_red_login_ref
+      - caldera_plugins is sequence and caldera_plugins is not string
+      - caldera_plugins | length > 0
+      - caldera_plugins | reject('string') | list | length == 0
+      - caldera_plugins | reject('match', caldera_plugin_pattern) | list | length == 0
+    fail_msg: >-
+      caldera: a release x.y.z with its 40-hex commit, an https clone address ending .git, a lowercase
+      local image repository, a build variant full or slim, the guest's IPv4 address to publish on
+      (not all interfaces), a port, extra contact ports as <port>/tcp or <port>/udp, a log level, a
+      memory limit like 4g, absolute canonical directories that differ, two distinct account names
+      and two distinct secret: references, plugin directory names
+  tags: [readiness, health, backup, restore, export, upgrade]

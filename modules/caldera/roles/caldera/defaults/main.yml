@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# The adversary-emulation server (modules/caldera): one container built on the guest from a pinned
+# source tag, the UI and the agent contact on one port published on the guest's own address only.
+# caldera_logical_id (required): the instance's id, e.g. emulation
+caldera_version: "5.3.0"
+# the tag's commit (the tag is annotated: this is the commit it points at); the clone is refused if
+# HEAD is anything else, so a moved tag is not built
+caldera_source_commit: "b24f6e7a99cab19cbf417009bda9b9c6c81abc31"
+caldera_source_repository: https://github.com/apache/caldera.git
+# the image is the lab's own build, never pulled: no prebuilt image exists
+caldera_built_name: localhost/hnx-caldera
+# "full" bakes the offline atomic and emulation-plan libraries into the image; "slim" leaves them out
+caldera_build_variant: full
+caldera_build_timezone: UTC
+# build again even when an image of this tag and commit exists
+caldera_rebuild: false
+# published on the guest's own address (the inventory's ansible_host), never all interfaces
+caldera_bind: "{{ ansible_host }}"
+caldera_port: 8888
+# further agent contact ports to publish, each "<port>/tcp" or "<port>/udp" (host and container
+# port equal); empty: only the UI and HTTP contact port is published
+caldera_extra_ports: []
+caldera_log_level: INFO
+caldera_mem_limit: 4g
+caldera_dir: /opt/compose/caldera
+# the module's data root on its host (docs/modules/data.md): src/ (the clone: conf/, data/ and
+# logs/ are mounted in the container), seed/ (generated once, 0600) and export/
+caldera_data_root: /var/lib/hnx-modules/caldera
+caldera_owner: root
+caldera_group: root
+caldera_admin_user: admin
+caldera_admin_login_ref: secret:caldera/admin-password
+caldera_red_user: red
+caldera_red_login_ref: secret:caldera/red-password
+# plugins the server loads (a name of a directory under plugins/ in the source tree)
+caldera_plugins: [access, atomic, compass, debrief, fieldmanual, manx, response, sandcat, stockpile, training]
+caldera_start: true
+caldera_validate_with_docker: true
+caldera_health_timeout: 10

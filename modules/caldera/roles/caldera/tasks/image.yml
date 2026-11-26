@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# The image is the lab's own build of the pinned source (no prebuilt image exists). It is built
+# only when the daemon has no image of this tag labelled with this commit (or caldera_rebuild),
+# (digest.yml then reads its digest: compose_app pins by digest, and the digest of a local build
+# is known only after it).
+- name: Read the label of the image already built for this tag
+  ansible.builtin.command:
+    argv: [docker, image, inspect, --format, "{{ '{{index .Config.Labels \"hnx.source.commit\"}}' }}", "{{ caldera_image_tagged }}"]
+  register: caldera_built
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Build the image from the pinned source (slow on the first run)
+  ansible.builtin.command:
+    argv:
+      - docker
+      - build
+      - --file
+      - "{{ caldera_src }}/Dockerfile"
+      - --tag
+      - "{{ caldera_image_tagged }}"
+      - --label
+      - "hnx.source.commit={{ caldera_source_commit }}"
+      - --build-arg
+      - "VARIANT={{ caldera_build_variant }}"
+      - --build-arg
+      - "TZ={{ caldera_build_timezone }}"
+      - "{{ caldera_src }}"
+  register: caldera_build
+  changed_when: true
+  when: caldera_rebuild | bool or caldera_built.rc != 0 or (caldera_built.stdout | trim) != caldera_source_commit

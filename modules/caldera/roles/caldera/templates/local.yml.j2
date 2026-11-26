@@ -1,0 +1,59 @@
+# Managed by Ansible (role caldera). Do not edit: it is rewritten at every converge from the secret
+# store, so a password changed in the UI does not survive the next run.
+{# Upstream generates this file with random credentials at first boot and logs them to stdout; this
+   module writes it instead. Every scalar is JSON-quoted, which is valid YAML. The values that are
+   not the two passwords come from the seeds (tasks/seeds.yml); the rest is upstream's own default
+   configuration for the pinned release. #}
+ability_refresh: 60
+api_key_blue: {{ caldera_seed.api_key_blue | to_json }}
+api_key_red: {{ caldera_seed.api_key_red | to_json }}
+app.contact.dns.domain: "mycaldera.caldera"
+app.contact.dns.socket: "0.0.0.0:8853"
+app.contact.gist: "API_KEY"
+app.contact.html: "/weather"
+app.contact.http: "http://0.0.0.0:{{ caldera_container_port | int }}"
+app.contact.slack.api_key: "SLACK_TOKEN"
+app.contact.slack.bot_id: "SLACK_BOT_ID"
+app.contact.slack.channel_id: "SLACK_CHANNEL_ID"
+app.contact.tunnel.ssh.host_key_file: "REPLACE_WITH_KEY_FILE_PATH"
+app.contact.tunnel.ssh.host_key_passphrase: "REPLACE_WITH_KEY_FILE_PASSPHRASE"
+app.contact.tunnel.ssh.socket: "0.0.0.0:8022"
+app.contact.tunnel.ssh.user_name: "sandcat"
+app.contact.tunnel.ssh.user_password: {{ caldera_seed.tunnel_password | to_json }}
+app.contact.ftp.host: "0.0.0.0"
+app.contact.ftp.port: 2222
+app.contact.ftp.pword: {{ caldera_seed.ftp_password | to_json }}
+app.contact.ftp.server.dir: "ftp_dir"
+app.contact.ftp.user: "caldera_user"
+app.contact.tcp: "0.0.0.0:7010"
+app.contact.udp: "0.0.0.0:7011"
+app.contact.websocket: "0.0.0.0:7012"
+objects.planners.default: "atomic"
+crypt_salt: {{ caldera_seed.crypt_salt | to_json }}
+encryption_key: {{ caldera_seed.encryption_key | to_json }}
+exfil_dir: "/tmp/caldera"
+reachable_host_traits:
+  - "remote.host.fqdn"
+  - "remote.host.ip"
+host: "0.0.0.0"
+plugins:
+{% for p in caldera_plugins %}
+  - {{ p | to_json }}
+{% endfor %}
+port: {{ caldera_container_port | int }}
+reports_dir: "/tmp"
+auth.login.handler.module: "default"
+requirements:
+  go:
+    command: "go version"
+    type: "installed_program"
+    version: 1.19
+  python:
+    attr: "version"
+    module: "sys"
+    type: "python_module"
+    version: "3.9.0"
+users:
+  red:
+    {{ caldera_admin_user | to_json }}: {{ lookup('hnx_secret', caldera_admin_login_ref) | to_json }}
+    {{ caldera_red_user | to_json }}: {{ lookup('hnx_secret', caldera_red_login_ref) | to_json }}
