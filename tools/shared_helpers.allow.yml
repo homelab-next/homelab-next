@@ -51,3 +51,6 @@ allow:
   - path: modules/intel-ingest/roles/intel_ingest/files/hnx_intel_ingest.py
     rule: state
     reason: a standalone stdlib script run by a unit with the guest's system interpreter (no homelabnext package to import); its state file is the job's own resume checkpoint (per attribute type, the highest id ingested and the in-progress page, replaced atomically after every page), carried over from the old lab's job, not checker state
+  - path: ansible/roles/compose_app/files/hnx-export-run.py
+    rule: lake
+    reason: standalone stdlib script on guests with no homelabnext package; copies applications' own local SQLite files via the backup API for the export, not the shared lake

@@ -14,6 +14,9 @@
       compose_app_dir: "{{ freshrss_dir }}"
       compose_app_data_dir: "{{ freshrss_data_root }}"
       compose_app_export_dir: "{{ freshrss_data_root }}/export"
+      # the scheduled copy (compose_app_export_timer): every account's SQLite database through SQLite's online backup
+      compose_app_export_files:
+        - {name: feeds-db, kind: sqlite, glob: "{{ freshrss_data_root }}/data/users/*/db.sqlite"}
       compose_app_owner: "{{ freshrss_owner }}"
       compose_app_group: "{{ freshrss_group }}"
       compose_app_start: "{{ freshrss_start }}"

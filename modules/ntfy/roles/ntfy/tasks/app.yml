@@ -16,6 +16,9 @@
       compose_app_dir: "{{ ntfy_dir }}"
       compose_app_data_dir: "{{ ntfy_data_root }}"
       compose_app_export_dir: "{{ ntfy_data_root }}/export"
+      # the scheduled copy (compose_app_export_timer): the user and token store and the message cache, through SQLite's online backup
+      compose_app_export_files:
+        - {name: notify-db, kind: sqlite, glob: "{{ ntfy_data_root }}/db/*.db"}
       compose_app_owner: "{{ ntfy_owner }}"
       compose_app_group: "{{ ntfy_group }}"
       compose_app_start: "{{ ntfy_start }}"

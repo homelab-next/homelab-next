@@ -62,10 +62,10 @@ argument_specs:
         default: nvidia-ctk
       nvidia_container_toolkit_systemctl_cli: &systemctl
         type: str
-        description: The systemctl command (reads and sets the mask of the refresh units; it never restarts anything).
+        description: The systemctl command (reads and sets the mask of the refresh units and enables the boot-time CDI unit; it never restarts anything).
         default: systemctl
   health:
-    short_description: Fail unless the four packages are at the pin and held, the CDI spec exists and resolves the expected GPUs, and (without auto_refresh) the refresh units are masked.
+    short_description: Fail unless the four packages are at the pin and held, the CDI spec exists and resolves the expected GPUs, no stray second spec sits beside it, and (without auto_refresh) the vendor refresh units are masked and the boot-time CDI unit is enabled.
     options:
       nvidia_container_toolkit_expected_gpus: &expected
         type: raw
