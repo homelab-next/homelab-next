@@ -30,6 +30,7 @@ def test_the_manifest_is_a_feature_that_requires_notify_and_the_secret_store():
     assert pair["problem"] == "Invariant newly broken" and pair["recovery"] == "Invariant recovered"
 
 
+@pytest.mark.static
 def test_the_one_secret_default_is_a_reference_the_role_defaults_agree_with():
     m = _manifest()
     cfgs = list(m["config"].values())
@@ -45,6 +46,7 @@ def test_the_one_secret_default_is_a_reference_the_role_defaults_agree_with():
     assert f"ExecStart={path} invariants run" in unit
 
 
+@pytest.mark.static
 def test_the_defaults_hold_no_address_and_the_timer_is_a_calendar_never_an_interval():
     text = (ROLE / "defaults" / "main.yml").read_text()
     assert "192.168" not in text and "gluck" not in text
@@ -54,6 +56,7 @@ def test_the_defaults_hold_no_address_and_the_timer_is_a_calendar_never_an_inter
     assert "OnCalendar=" in timer and "OnBootSec=" not in timer and "OnUnitActiveSec=" not in timer
 
 
+@pytest.mark.static
 def test_the_unit_accepts_a_red_run_and_a_run_that_could_not_measure():
     # the runner exits 1 (a criterion failed) or 100 (one could not be measured): the page is the signal
     service = (ROLE / "templates" / "lab-checks.service.j2").read_text()
@@ -72,6 +75,7 @@ def test_role_lint_passes_the_role():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+@pytest.mark.static
 def test_the_role_installs_the_state_tool_beside_the_wrapper_for_the_sites_checks():
     role = ROOT / "modules" / "cti-pipeline" / "roles" / "cti_pipeline"
     config = (role / "tasks" / "config.yml").read_text()
@@ -80,6 +84,7 @@ def test_the_role_installs_the_state_tool_beside_the_wrapper_for_the_sites_check
     assert 'cti_pipeline_state_tool: "{{ cti_pipeline_install_dir }}/bin/hnx-cti-state"' in vars_
 
 
+@pytest.mark.static
 def test_the_results_reader_is_off_by_default_and_restricted_to_printing_the_published_copy():
     defaults = yaml.safe_load((ROLE / "defaults" / "main.yml").read_text())
     assert defaults["lab_checks_results_readers"] == []
@@ -93,6 +98,7 @@ def test_the_results_reader_is_off_by_default_and_restricted_to_printing_the_pub
     assert all("lab_checks_results_readers | length > 0" in t["when"] for t in tasks)
 
 
+@pytest.mark.static
 def test_the_unit_publishes_the_readers_copy_by_rename_only_with_reader_keys():
     service = (ROLE / "templates" / "lab-checks.service.j2").read_text()
     block = service.split("{% if lab_checks_results_readers | length > 0 %}")[1].split(
@@ -169,6 +175,7 @@ def _dirs_check(tmp_path: Path, group: str) -> dict[str, dict]:
     return json.loads(out_file.read_text())
 
 
+@pytest.mark.static
 def test_by_default_the_results_stay_roots_alone():
     assert _defaults()["lab_checks_results_group"] == ""
     unit = (ROLE / "templates" / "lab-checks.service.j2").read_text()

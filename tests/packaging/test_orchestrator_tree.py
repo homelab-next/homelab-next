@@ -59,12 +59,14 @@ def test_a_directory_named_for_the_test_tld_is_not_ignored_like_a_test_binary(tm
     assert r.stdout.splitlines() == ["orchestrator/internal/api/api.test"], r.stderr
 
 
+@pytest.mark.static
 def test_the_root_gitignore_names_no_components_binaries():
     """A component's binary names belong to the component (its own .gitignore or /build/)."""
     lines = [x for x in (ROOT / ".gitignore").read_text().splitlines() if not x.startswith("#")]
     assert not [x for x in lines if "orchestrator" in x]
 
 
+@pytest.mark.static
 def test_codeowners_own_the_go_module():
     lines = (ROOT / ".github" / "CODEOWNERS").read_text().splitlines()
     assert any(line.split()[:1] == ["/orchestrator/"] and len(line.split()) > 1 for line in lines)
@@ -75,6 +77,7 @@ def _gomod_directories() -> list[str]:
     return [d for u in updates if u["package-ecosystem"] == "gomod" for d in u["directories"]]
 
 
+@pytest.mark.static
 def test_dependabot_lists_no_go_module_that_does_not_exist():
     """A gomod entry for a module that is not there updates nothing (orchestrator/ never landed);
     the next test adds it back when one does.  Cadence and cooldown: tests/packaging/
@@ -104,6 +107,7 @@ def test_the_dependabot_check_names_each_module_and_its_linters():
     ]
 
 
+@pytest.mark.static
 def test_manifest_prunes_the_go_module():
     lines = [line.strip() for line in (ROOT / "MANIFEST.in").read_text().splitlines()]
     assert "prune orchestrator" in lines

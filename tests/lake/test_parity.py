@@ -80,6 +80,7 @@ def test_fakelake_matches_cassette_without_any_heavy_dependency(fake):
     assert compare(doc, fake) == []
 
 
+@pytest.mark.static
 def test_cassette_lake_replays_every_recording_and_misses_loudly():
     c = CassetteLake.load(CASSETTE)
     assert isinstance(c, LakeClient)

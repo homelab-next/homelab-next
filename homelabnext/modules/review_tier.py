@@ -162,8 +162,8 @@ GOVERNANCE = (
     "homelabnext/tlp.py",  # the TLP label type the rules read a dataset's declaration with
     "tools/schema_check.py",  # which re-exports it for the repository's tools
     ".github/workflows/ci.yml",  # the step that runs the check
-    # what sets up the interpreter and the packages every other CI job runs (the trusted-gates job
-    # takes the base's copies; the rest take the change's, so a change here steers them)
+    # what sets up the interpreter and the packages every CI job runs (the jobs take the change's
+    # copies, so a change here steers them)
     ".github/actions/python-deps/action.yml",
     "constraints/bootstrap.txt",
     "constraints/ci.txt",

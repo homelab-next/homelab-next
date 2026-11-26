@@ -28,6 +28,7 @@ def fresh(doc=None):
     return t, pins.run_eval(t, SUITES, pins.fake_factory, model_name="fake-golden")
 
 
+@pytest.mark.static
 def test_the_committed_table_is_schema_valid_and_fully_pinned():
     from schema_check import build_registry
 

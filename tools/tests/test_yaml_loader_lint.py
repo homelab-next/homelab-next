@@ -5,6 +5,8 @@ loaders; the reviewed uses of yaml.safe_load/SafeLoader only shrink."""
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import yaml_loader_lint as lint
 
@@ -22,6 +24,7 @@ def _tree(tmp_path: Path, files: dict[str, str], allow: str = "allow: []\n") -> 
     return tmp_path
 
 
+@pytest.mark.static
 def test_the_repository_holds_its_baseline():
     assert lint.main([str(REPO)]) == 0
 

@@ -130,6 +130,7 @@ def _tracked() -> list[str]:
     return res.stdout.decode().split("\0")
 
 
+@pytest.mark.static
 def test_every_marked_committed_file_has_a_listed_check():
     missing = unlisted(marked_files(ROOT, _tracked()))
     assert not missing, (
@@ -147,9 +148,12 @@ def _ci_runs(ci: str, what: str) -> bool:
     return False
 
 
+@pytest.mark.static
 def test_every_row_matches_a_file_and_its_check_exists():
+    from tests.ci_runs import ci_text
+
     marked = marked_files(ROOT, _tracked())
-    ci = CI.read_text(encoding="utf-8")
+    ci = ci_text()  # ci.yml and what its precheck job's `make precheck` runs
     for glob, evidence in DERIVED:
         assert any(fnmatch.fnmatch(f, glob) for f in marked), f"stale row: {glob} matches nothing"
         kind, _, what = evidence.partition(":")
@@ -229,6 +233,7 @@ SCHEMA_GENERATOR_GLOBS = (
 )
 
 
+@pytest.mark.static
 def test_the_adr_globs_are_exactly_what_the_schema_generators_write():
     from homelabnext.schemas.__main__ import outputs
 

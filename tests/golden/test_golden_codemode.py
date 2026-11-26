@@ -590,6 +590,7 @@ def test_scripts_are_checked_against_their_suite(tmp_path):
 
 
 # ---------------------------------------------------------------- the suite format
+@pytest.mark.static
 def test_the_suites_and_the_schema_example_validate():
     registry = sc.build_registry(ROOT)
     schema = json.loads(SCHEMA.read_text())

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext import logbursts as lb
@@ -25,6 +26,7 @@ BENIGN = (
 REVIEWED_COUNT = 4
 
 
+@pytest.mark.static
 def test_the_benign_list_has_not_grown_past_its_reviewed_count():
     entries = yaml.safe_load(BENIGN.read_text())["benign"]
     assert len(entries) == REVIEWED_COUNT, (
@@ -32,6 +34,7 @@ def test_the_benign_list_has_not_grown_past_its_reviewed_count():
     )
 
 
+@pytest.mark.static
 def test_every_entry_carries_a_real_reason_and_the_list_loads():
     entries = yaml.safe_load(BENIGN.read_text())["benign"]
     assert all(len(e["reason"].split()) >= 8 for e in entries), "a reason says why, in a sentence"
@@ -39,6 +42,7 @@ def test_every_entry_carries_a_real_reason_and_the_list_loads():
     assert [b.reason for b in loaded] == [e["reason"] for e in entries]
 
 
+@pytest.mark.static
 def test_no_entry_hides_every_line_of_a_class_of_source():
     # an entry without a site value must name a specific phrase (at least 3 words)
     for e in yaml.safe_load(BENIGN.read_text())["benign"]:

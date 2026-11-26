@@ -468,6 +468,7 @@ def test_a_file_job_the_script_would_not_run_is_refused_by_the_role(tmp_path, ba
     assert r.returncode != 0 and "compose_app_export_files" in r.stdout + r.stderr
 
 
+@pytest.mark.static
 def test_the_script_is_a_program_the_interpreter_can_compile():
     compile(SCRIPT.read_text(), str(SCRIPT), "exec")
     assert sys.version_info >= (3, 8)

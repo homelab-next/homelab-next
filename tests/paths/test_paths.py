@@ -149,6 +149,7 @@ def test_this_checkout_resolves_every_kind():
     assert paths.example_file("minimal", "site.yml").is_file()
 
 
+@pytest.mark.static
 def test_source_tree_holds_no_packaged_copy():
     """The build copies the data into the wheel only; a stale copy here would shadow the truth."""
     assert not (ROOT / "homelabnext" / "_data").exists()
@@ -157,6 +158,7 @@ def test_source_tree_holds_no_packaged_copy():
 LOCATOR = re.compile(r"parents\[\d\]\s*/\s*\"(schemas|profiles|examples)\"|HNX_SCHEMA(S)?_DIR\"")
 
 
+@pytest.mark.static
 def test_no_module_locates_data_on_its_own():
     offenders = []
     for py in sorted((ROOT / "homelabnext").rglob("*.py")):
@@ -184,6 +186,7 @@ def not_a_checkout(tmp_path, monkeypatch):
     paths.clear_cache()
 
 
+@pytest.mark.static
 def test_this_checkout_is_verified():
     assert paths.checkout_root() == ROOT
     assert paths.checkout_tool("schema_check.py", feature="t") == ROOT / "tools" / "schema_check.py"

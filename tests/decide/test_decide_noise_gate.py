@@ -104,6 +104,7 @@ def test_malformed_noise_gates_are_refused(gate, over, needle):
         spec(noise_gate=gate, **over)
 
 
+@pytest.mark.static
 def test_the_schema_example_noise_gate_parses_and_lints_clean():
     import json
     from pathlib import Path

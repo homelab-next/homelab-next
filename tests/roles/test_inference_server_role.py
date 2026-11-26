@@ -731,12 +731,14 @@ def test_precheck_refuses_a_missing_cdi_spec_and_ignores_it_without_the_flag(tmp
     assert precheck(*CDI_BASE, *args[:-2], env=env).returncode == 0
 
 
+@pytest.mark.static
 def test_the_unit_gives_the_precheck_the_cdi_spec_on_cuda():
     fixed = yaml.safe_load((MODULE / "roles" / MID / "vars" / "main.yml").read_text())
     assert fixed[f"{MID}_cdi_spec"] == "/etc/cdi/nvidia.yaml" and f"{MID}_cdi_spec" not in DEFAULTS
     assert "--cdi-spec" in fixed[f"{MID}_precheck_power"]
 
 
+@pytest.mark.static
 def test_the_unit_passes_the_driver_seams_as_fixed_paths():
     fixed = yaml.safe_load((MODULE / "roles" / MID / "vars" / "main.yml").read_text())
     assert fixed[f"{MID}_proc_root"] == "/proc" and fixed[f"{MID}_dev_root"] == "/dev"
@@ -955,6 +957,7 @@ def test_precheck_refuses_a_limit_above_the_operators_200_w(tmp_path):
     assert r.returncode == 2
 
 
+@pytest.mark.static
 def test_the_check_trees_are_not_settings_and_the_ceiling_is_fixed():
     spec = yaml.safe_load((MODULE / "roles" / MID / "meta" / "argument_specs.yml").read_text())
     for hook in spec["argument_specs"].values():

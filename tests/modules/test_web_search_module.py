@@ -119,6 +119,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -127,6 +128,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == [MID]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -134,6 +136,7 @@ def test_roles_holds_only_the_contributed_role():
     assert [c["file"] for c in manifest["contributes"]["roles"]] == [f"roles/{MID}"]
 
 
+@pytest.mark.static
 def test_the_slot_is_provisional_and_stateless():
     slots = ld.load_yaml(ROOT / "examples" / "modules" / "slots.yml")["slots"]
     assert slots["web-search"]["contract"] is None and slots["web-search"]["stateful"] is False

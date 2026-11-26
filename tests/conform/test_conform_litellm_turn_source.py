@@ -387,6 +387,7 @@ def test_the_adapter_and_the_record_share_one_name_rule():
             assert turn[key] == (value if is_name(key, value) else None), (col, value)
 
 
+@pytest.mark.static
 def test_the_residual_identifier_shaped_channel_is_documented():
     """No pattern refuses words joined by "_" or "." without refusing real names (together_ai,
     Q4_K_M, dotted versions); the rule says so instead of claiming more."""

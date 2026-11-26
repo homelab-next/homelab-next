@@ -109,6 +109,7 @@ def _evidence(
     )
 
 
+@pytest.mark.static
 def test_the_example_rebinds_the_shipped_binding_to_the_store_entry():
     leg = json.loads(EXAMPLE.read_text(encoding="utf-8"))["model_roles"][0]
     assert leg["from"] == {"pin": ms._pin_of(BEFORE.get(leg["role"]).bindings[0])}
@@ -285,6 +286,7 @@ def test_a_leg_on_an_instance_the_swap_does_not_move_is_refused(reports):
     assert "backend svc:inference is not the instance the leg moves (svc:other" in backend
 
 
+@pytest.mark.static
 def test_a_fallback_on_another_backend_is_refused():
     """A leg cannot add a binding on a backend other than the instance it moves, even one kept
     beside the old binding as a fallback."""

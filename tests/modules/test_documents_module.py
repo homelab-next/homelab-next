@@ -116,6 +116,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -124,6 +125,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["documents"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -168,6 +170,7 @@ def test_the_image_pins_are_the_product_version_and_digests():
     assert defaults["documents_image"].split("@")[0].endswith(":" + version)
 
 
+@pytest.mark.static
 def test_the_defaults_are_sqlite_a_private_inbox_and_languages_as_data():
     d = ld.load_yaml(MODULE / "roles" / "documents" / "defaults" / "main.yml")
     assert d["documents_ocr_languages"] == ["eng"]

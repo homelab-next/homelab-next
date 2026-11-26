@@ -301,6 +301,7 @@ def test_records_resolve_from_uid_label_or_legacy_code_with_a_warning():
     assert resolve_record("OO 9.9", EXAMPLE_STRATEGY) == "OO 9.9"
 
 
+@pytest.mark.static
 def test_the_example_projects_link_to_example_records_and_pass_check():
     s = markdown_store(REPO / "examples/projects", strategy=EXAMPLE_STRATEGY, create=False)
     assert s.check() == [] and s.backend.problems == []

@@ -370,6 +370,7 @@ def test_usage_errors(tmp_path):
     assert policy.main(["--today", TODAY, "--pyproject", str(tmp_path / "pyproject.toml"), str(f)]) == 2  # fmt: skip
 
 
+@pytest.mark.static
 def test_skip_reasons_are_the_repositorys_pytest_ones():
     patterns, max_days = policy.skip_reasons(ROOT / "pyproject.toml")
     assert r"\bnot installed\b" in patterns and max_days == 90
@@ -468,6 +469,7 @@ def test_the_ci_job_is_pinned_and_runs_once_per_discovered_module():
     assert "unshare --net" in runs and "tools/go_test_policy.py" in runs
 
 
+@pytest.mark.static
 def test_discovery_gates_the_go_job_and_one_check_sums_it_up():
     import yaml
 
@@ -483,6 +485,7 @@ def test_discovery_gates_the_go_job_and_one_check_sums_it_up():
     assert '[ "$GATEWAY" = success ]' in verdict["run"]
 
 
+@pytest.mark.static
 def test_the_gateway_conformance_job_is_pinned_unconditional_and_builds_like_the_go_job():
     """The job go-ok requires (ADR-0026 decision 9): pinned actions, never skipped, the module's
     own Go, a read-only module graph, and the suite run as its last step without the network."""
@@ -492,7 +495,8 @@ def test_the_gateway_conformance_job_is_pinned_unconditional_and_builds_like_the
 
     jobs = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"]
     job = jobs["gateway-conformance"]
-    assert "if" not in job and "needs" not in job and "continue-on-error" not in job
+    # it waits only for precheck (the static gates), which every job needs
+    assert "if" not in job and job.get("needs") == "precheck" and "continue-on-error" not in job
     assert job["env"] == {"GOFLAGS": "-mod=readonly", "GOTOOLCHAIN": "local", "GOWORK": "off"}
     steps = job["steps"]
     for step in steps:
@@ -843,6 +847,7 @@ def test_the_policy_and_its_inputs_are_copied_before_any_test_can_change_them(tm
     assert run_test_step(tmp_path / "c", lines, 1, skips=quarantine).returncode == 0
 
 
+@pytest.mark.static
 def test_the_results_are_root_owned_and_the_tests_cannot_sudo():
     job = go_job()
     steps = job["steps"]
@@ -1389,6 +1394,7 @@ def test_go_toolchain_skips_without_go_unless_go_is_required(
         request.getfixturevalue("go_toolchain")  # evaluated once per test: its result is cached
 
 
+@pytest.mark.static
 def test_one_test_leg_installs_go_and_requires_it():
     import yaml
 

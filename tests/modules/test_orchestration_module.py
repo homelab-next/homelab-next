@@ -28,6 +28,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from conformance.suites import orchestration as orch_suite
@@ -133,6 +134,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -141,6 +143,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["orchestration"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -252,6 +255,7 @@ def test_orchestration_cannot_be_both_the_module_and_an_incumbent(tmp_path, caps
 # ----------------------------------------------------------------------------- conformance
 
 
+@pytest.mark.static
 def test_the_target_binds_the_adapter_as_the_repositorys_own_controller_target_does():
     mine = load_target(str(MODULE / "conformance" / "target.yml"), root=ROOT)
     ref = load_target(
@@ -301,6 +305,7 @@ PRIVATE = re.compile(
 )
 
 
+@pytest.mark.static
 def test_nothing_in_the_module_names_a_private_address_or_a_workstation():
     hits = []
     for p in sorted(MODULE.rglob("*")):

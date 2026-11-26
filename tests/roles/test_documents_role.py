@@ -769,6 +769,7 @@ def test_the_export_is_checked_before_it_is_archived_and_a_bad_one_fails_the_hoo
     ).exists()  # nothing was archived from an export that is not whole
 
 
+@pytest.mark.static
 def test_the_restore_verification_compares_relationships_and_thumbnails():
     code = (ROOT / "modules/documents/roles/documents/vars/main.yml").read_text()
     for needle in ('"tags", "correspondent", "document_type", "storage_path"', "documents.customfieldinstance",

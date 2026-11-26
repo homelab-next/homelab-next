@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
@@ -49,6 +51,7 @@ PULLS = [
 ]
 
 
+@pytest.mark.static
 def test_only_finished_branches_at_their_pull_request_s_head_are_deleted():
     delete, kept = pb.decide(BRANCHES, PULLS, default="main", repo=REPO)
     assert delete == ["closed-work", "merged-work"]
@@ -86,6 +89,7 @@ def test_bad_input_deletes_nothing(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
+@pytest.mark.static
 def test_the_base_of_an_open_stacked_pull_request_is_kept():
     """Deleting a branch another open pull request targets would close that pull request."""
     branches = [branch("main", "m1"), branch("step-1", "s1"), branch("step-2", "s2")]

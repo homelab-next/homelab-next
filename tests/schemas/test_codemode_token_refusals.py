@@ -6,6 +6,8 @@ and in the contract alike."""
 import json
 from pathlib import Path
 
+import pytest
+
 from conformance.protocols.broker import TOKEN_REFUSALS
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -24,6 +26,7 @@ def _enums(doc):
             yield from _enums(value)
 
 
+@pytest.mark.static
 def test_the_requestless_reasons_are_the_token_refusals():
     for name in ("execution_result", "journal_step"):
         doc = json.loads((ROOT / "schemas" / "codemode" / f"{name}.schema.json").read_text())
@@ -31,6 +34,7 @@ def test_the_requestless_reasons_are_the_token_refusals():
         assert enums and all(e == REQUESTLESS for e in enums), (name, enums)
 
 
+@pytest.mark.static
 def test_the_readme_names_every_token_refusal():
     text = (ROOT / "schemas" / "codemode" / "README.md").read_text(encoding="utf-8")
     missing = [r for r in TOKEN_REFUSALS if f"`{r}`" not in text]

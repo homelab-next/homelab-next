@@ -36,6 +36,7 @@ def _rules(path: Path) -> set[str]:
     return {rule for rule, _ in lint_doc(load(path))}
 
 
+@pytest.mark.static
 def test_every_negative_fixture_is_listed():
     assert {p.stem for p in (FIX / "negative").glob("*.yml")} == set(NEGATIVE)
 
@@ -64,6 +65,7 @@ def test_each_rule_has_a_failing_fixture():
     assert MAX_LABELS == 5
 
 
+@pytest.mark.static
 def test_the_repository_specs_pass():
     if shutil.which("git") is None or not (ROOT / ".git").exists():
         pytest.skip("needs a git checkout")
@@ -72,6 +74,7 @@ def test_the_repository_specs_pass():
     assert n >= 5  # the decide example, two schema examples, the good fixtures
 
 
+@pytest.mark.static
 def test_schema_negatives_fail_the_lint():
     n, problems = lint_paths([ROOT / "schemas" / "registers" / "negative"])
     assert n >= 4

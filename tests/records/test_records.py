@@ -318,6 +318,7 @@ def test_agent_api_cannot_reach_the_operator_movers():
     assert out.stdout.strip() == "isolated", out.stderr
 
 
+@pytest.mark.static
 def test_no_agent_side_module_imports_the_decider():
     pkg = ROOT / "homelabnext" / "records"
     # cli.py is the operator's command router (``hnx records decide``), never agent-side; the
@@ -340,6 +341,7 @@ def test_validate_note_rejects_non_mapping():
         validate_note(["not", "a", "mapping"])
 
 
+@pytest.mark.static
 def test_repo_schema_examples_validate_and_negatives_fail():
     ex = sorted((ROOT / "schemas/records/examples").glob("*.md"))
     neg = sorted((ROOT / "schemas/records/negative").glob("*.md"))

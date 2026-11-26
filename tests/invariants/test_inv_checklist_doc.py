@@ -2,6 +2,8 @@
 import pathlib
 import re
 
+import pytest
+
 from homelabnext.invariants.plugins.pillar_x import SERVER_ONLY
 
 DOC = pathlib.Path(__file__).resolve().parents[2] / "docs" / "checklist.md"
@@ -20,6 +22,7 @@ def test_checklist_is_complete_and_well_formed():
     assert {i[0] for i in ids} >= set("FCTSDOPRQMAGKELX")
 
 
+@pytest.mark.static
 def test_every_non_header_table_line_parses():
     bad = [
         line
@@ -37,6 +40,7 @@ def test_pillar_x_rows_match_plugins():
             assert (tag == "SERVER") == (i in SERVER_ONLY), i
 
 
+@pytest.mark.static
 def test_totals_line_matches_rows():
     rs = rows()
     m = re.search(

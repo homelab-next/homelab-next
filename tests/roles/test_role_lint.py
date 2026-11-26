@@ -116,6 +116,7 @@ def test_shipped_roles_pass(role):
     assert role_lint.lint_role(ROOT / "ansible" / "roles" / role) == []
 
 
+@pytest.mark.static
 def test_a_directory_of_roles_is_expanded_not_read_as_one_role(capsys):
     assert role_lint.main([str(ROOT / "ansible" / "roles")]) == 0
     assert "0 finding(s)" in capsys.readouterr().out
@@ -157,6 +158,7 @@ def test_one_playbook_flag_takes_every_playbook_a_glob_expands_to(capsys):
     assert "PB001" in out and "not a directory" not in out
 
 
+@pytest.mark.static
 def test_every_shipped_playbook_targets_a_group():
     inv = ROOT / "ansible" / "inventory" / "example" / "hosts.yml"
     pbs = sorted((ROOT / "ansible" / "playbooks").glob("*.yml"))
@@ -165,6 +167,7 @@ def test_every_shipped_playbook_targets_a_group():
         assert role_lint.lint_playbook(pb, inv) == [], pb
 
 
+@pytest.mark.static
 def test_example_inventory_has_all_capability_groups():
     inv = ROOT / "ansible" / "inventory" / "example" / "hosts.yml"
     hosts, groups = role_lint._inventory_hosts(inv)
@@ -346,6 +349,7 @@ def test_rl014_privileged_and_docker_socket(tmp_path, template, defaults, bad):
     assert ("RL014" in rules(found)) is bad, found
 
 
+@pytest.mark.static
 def test_ansible_cfg_never_disables_host_key_checking():
     import configparser
 

@@ -141,6 +141,7 @@ def test_the_site_schema_refuses_a_tag_owner(owner):
     assert jsonschema.Draft202012Validator(item).is_valid("group:deployers")
 
 
+@pytest.mark.static
 def test_hnx_site_validate_reports_it():
     doc = yaml.safe_load(SITES[0].read_text())
     reg = regmodel.load(REPO / "examples" / "minimal" / "services.yml")
@@ -153,6 +154,7 @@ def test_hnx_site_validate_reports_it():
     assert validate(doc, reg).errors == ["tailnet.deploy.zones: 'lab' is not a zone of the site"]
 
 
+@pytest.mark.static
 def test_no_declaration_is_no_access():
     doc = yaml.safe_load(SITE_FLOWS.read_text())
     del doc["tailnet"]

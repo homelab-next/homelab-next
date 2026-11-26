@@ -336,6 +336,7 @@ def test_schedule_gathers_a_checkout(tmp_path):
     )
 
 
+@pytest.mark.static
 def test_the_schedule_lists_every_scheduled_thing_the_repository_has():
     """Every catalogued ``timer:`` trigger, every scheduled workflow and every status source of
     the example registry is a row (the check fails on a checkout whose timer it cannot find)."""
@@ -471,6 +472,7 @@ def test_the_hub_reads_the_roster_inside_its_maps_root(tmp_path):
     assert "resolves outside" in MapSite(root=d, roster=r).body("roster")
 
 
+@pytest.mark.static
 def test_the_example_roster_declares_every_profile_the_repository_names():
     """Every profile a compiled profile, a broker grant or a workflow pack names has an owner and
     a runtime in examples/status/roster.yml (the fixture above shows the check failing)."""
@@ -488,6 +490,7 @@ def _doc(maps=(), agents=None):
     return build_status(snap, views, reg, [], maps=maps, agents=agents)
 
 
+@pytest.mark.static
 def test_the_directory_pages_are_a_menu_group_available_only_when_configured():
     menu = {m["id"]: m for m in _doc({"links"})["menu"]}
     for panel in ("links", "schedule", "roster", "mcp-servers"):
@@ -561,6 +564,7 @@ def test_roster_option_is_checked(tmp_path, capsys):
     assert "--roster needs --maps" in err and "not a file" in err
 
 
+@pytest.mark.static
 def test_no_page_writes_an_endpoint_literal():
     """The pages hold registry names only; their code holds no address or port literal."""
     from tools.no_raw_endpoints import scan_text

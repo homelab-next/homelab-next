@@ -282,6 +282,7 @@ def test_malformed_specs_are_refused(over, needle):
         parse_spec(spec_doc(**over))
 
 
+@pytest.mark.static
 def test_schema_examples_parse_and_match_the_json_schema():
     import jsonschema
 

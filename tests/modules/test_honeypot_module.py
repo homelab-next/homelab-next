@@ -19,6 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.modules import cli as mcli
@@ -35,6 +36,7 @@ MANIFEST = ld.load_yaml(MODULE / "module.yml")
 DEFAULTS = ld.load_yaml(ROLE / "defaults" / "main.yml")
 
 
+@pytest.mark.static
 def test_the_manifest_is_a_feature_with_its_own_secrets_and_internet_egress_only():
     m = MANIFEST
     assert m["kind"] == "feature" and m["id"] == "honeypot"
@@ -59,6 +61,7 @@ def test_every_secret_default_is_a_reference_and_none_is_a_value():
     assert refs and all(re.fullmatch(r"secret:[A-Za-z0-9._/-]+", v) for v in refs.values())
 
 
+@pytest.mark.static
 def test_the_lake_writer_is_daily_on_the_calendar_never_an_interval():
     assert re.search(r"\*-\*-\* \d\d:\d\d:\d\d", DEFAULTS["honeypot_lake_oncalendar"])
     for name in ("lake.timer.j2", "report.timer.j2"):
@@ -67,6 +70,7 @@ def test_the_lake_writer_is_daily_on_the_calendar_never_an_interval():
         assert not any(ln.startswith(("OnUnitActiveSec=", "OnBootSec=")) for ln in lines)
 
 
+@pytest.mark.static
 def test_the_defaults_hold_no_address_and_no_lab_name():
     text = (ROLE / "defaults" / "main.yml").read_text()
     code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))

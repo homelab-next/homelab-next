@@ -62,6 +62,7 @@ def test_every_negative_has_an_expectation():
     assert {p.name.split("swap_record.")[1][:-5] for p in NEG} == set(WHERE)
 
 
+@pytest.mark.static
 def test_examples_contain_only_documentation_data():
     """No address, MAC or identity shape outside the documentation ranges (tools/leak_scan.py)."""
     import importlib.util

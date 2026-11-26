@@ -361,6 +361,7 @@ _CRAFTED = (
 )
 
 
+@pytest.mark.perf
 @pytest.mark.parametrize("unit", _CRAFTED)
 def test_crafted_runs_screen_in_linear_time(unit):
     import time

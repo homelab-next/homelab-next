@@ -376,6 +376,7 @@ def test_allow_remote_needs_explicit_allowed_hosts(make_hub, registry):
     assert not host_allowed("status.lab.example", "https://evil.example", allowed)
 
 
+@pytest.mark.static
 def test_cli_refuses_allow_remote_without_allowed_host(capsys):
     from homelabnext.status.cli import main
 

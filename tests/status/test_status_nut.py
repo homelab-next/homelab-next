@@ -210,6 +210,7 @@ def test_each_site_ups_monitored_by_nut_becomes_a_source_with_what_it_feeds():
     assert s.describe()["ups"] == "ups-a"
 
 
+@pytest.mark.static
 def test_without_a_site_the_template_reads_every_ups_and_with_one_named_it_is_kept():
     specs = _lab_specs()
     assert [s.id for s in specs if s.kind == "poll-nut"] == ["power"]
@@ -220,6 +221,7 @@ def test_without_a_site_the_template_reads_every_ups_and_with_one_named_it_is_ke
     assert "power" in out  # nothing left to expand: still a source over every UPS
 
 
+@pytest.mark.static
 def test_two_templates_or_a_clashing_id_are_refused():
     site = yaml.safe_load((LAB / "site.yml").read_text())
     with pytest.raises(PowerError, match="all read every UPS"):

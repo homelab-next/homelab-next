@@ -42,6 +42,7 @@ def test_role_defaults_pass_its_own_path_pattern(role: Path) -> None:
                 assert pattern.match(val), f"{key}={val!r} fails {prefix}_path_pattern"
 
 
+@pytest.mark.static
 def test_orchestration_defaults_are_canonical_hnx_paths() -> None:
     v = _vars(ROOT / "modules" / "orchestration" / "roles" / "orchestration")
     assert v["orchestration_install_dir"] == "/opt/hnx/orchestration"

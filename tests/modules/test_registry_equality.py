@@ -129,6 +129,7 @@ def test_a_provider_row_takes_the_product_version():
     ]
 
 
+@pytest.mark.static
 def test_an_unquoted_version_equal_as_text_is_the_same():
     reg = lab_registry()
     reg["services"]["external-collector-receiver"]["version"] = "0.2.0"

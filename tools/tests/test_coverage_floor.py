@@ -95,6 +95,7 @@ def test_unreadable_report_is_exit_2(tmp_path):
     assert coverage_floor.main(["--json", str(bad)]) == 2
 
 
+@pytest.mark.static
 def test_every_unit_names_existing_code_and_tests():
     for unit, tests in coverage_floor.UNITS.items():
         assert (coverage_floor.REPO_ROOT / unit).exists(), unit
@@ -155,6 +156,7 @@ def test_each_unit_is_measured_by_its_own_tests_only(tmp_path, monkeypatch, caps
         assert targets == {coverage_floor._cov_target(u) for u in units}
 
 
+@pytest.mark.static
 def test_every_coverage_target_is_a_directory_never_a_dotted_name():
     # a dotted --cov name is imported by coverage before the tests and then dropped from
     # sys.modules, leaving a package attribute naming a discarded copy of a submodule
@@ -206,6 +208,7 @@ def test_this_repo_meets_the_floor(tmp_path, monkeypatch):
     assert coverage_floor.main([]) == 0
 
 
+@pytest.mark.static
 def test_the_test_and_dev_extras_pin_a_coverage_that_patches_subprocesses():
     """coverage_floor writes ``patch = subprocess`` (coverage >= 7.10); an older coverage ignores
     it, and leak_scan's floor then fails for a reason nobody would guess (59.8% without its

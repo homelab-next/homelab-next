@@ -636,6 +636,7 @@ def test_the_canary_code_metadata_and_role_params_are_pinned_inputs(tmp_path, mo
     assert any("different role params" in p for p in problems), problems
 
 
+@pytest.mark.static
 def test_the_cli_require_live_flag_fails_the_committed_fake_report(capsys):
     report = ROOT / "examples" / "model_roles.eval.json"
     base = ["pins", "check", "--roles", str(ROLES), "--report", str(report)]

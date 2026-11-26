@@ -394,6 +394,7 @@ def test_an_unsafe_export_directory_is_refused(bad, indexer):
     assert index.main(["export", "--url", indexer, "--dir", bad]) == 2
 
 
+@pytest.mark.static
 def test_the_webhook_script_runs_on_the_products_python_3_10():
     # the manager's own interpreter is 3.10: no datetime.UTC (a formatter's "modernise" breaks it)
     source = (FILES / "custom-hnx-alert.py").read_text()

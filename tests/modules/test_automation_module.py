@@ -134,6 +134,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -142,12 +143,14 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == [ID]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
     assert [c["file"] for c in MANIFEST["contributes"]["roles"]] == [f"roles/{ID}"]
 
 
+@pytest.mark.static
 def test_the_slot_is_provisional_and_the_client_is_a_shared_one_that_names_no_product():
     slot = MANIFEST["provides"]["slots"]["automation"]
     assert (
@@ -182,6 +185,7 @@ def test_the_row_is_internal_has_its_own_sign_in_and_a_status_source_the_hub_rea
     assert status_products.source_problems(shadow, "automation") == []
 
 
+@pytest.mark.static
 def test_the_status_fixture_the_hub_already_parses_still_parses():
     kind = ld.load_yaml(MODULE / "registry" / "services.yml")["services"]["automation"][
         "status_sources"
@@ -228,6 +232,7 @@ def test_the_manifest_declares_what_it_reaches_and_holds_no_literal_secret():
     assert (MODULE / "roles" / ID / "files" / "runtime-compat.txt").is_file()
 
 
+@pytest.mark.static
 def test_the_lifecycle_playbooks_target_the_module_group_and_export_before_removing():
     for name in ("install", "upgrade", "remove"):
         plays = yaml.safe_load((MODULE / "playbooks" / f"{name}.yml").read_text())
@@ -448,6 +453,7 @@ def test_readiness_refuses_a_table_directory_that_is_missing_or_a_file(tmp_path)
         assert (_play(tmp_path, picked, **{ID + "_table_mounts": mounts}).returncode == 0) is ok
 
 
+@pytest.mark.static
 def test_the_runner_gets_the_table_volumes_groups_and_listed_binds():
     app = (ROLE / "tasks" / "app.yml").read_text()
     assert f"+ {ID}_table_volumes }}}}" in app

@@ -164,6 +164,7 @@ HANDLER = ROOT / "workflows" / "handlers" / "notify-page.sh"
 TOKEN = "-".join(["fake", "notify", "publish", "0001"])
 
 
+@pytest.mark.static
 def test_the_page_handler_is_pinned_and_takes_every_page_a_pack_sends():
     from homelabnext.broker.validation import inline_errors
 

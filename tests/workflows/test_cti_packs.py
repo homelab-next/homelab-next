@@ -59,6 +59,7 @@ def test_the_shadow_lane_sends_shadow_and_the_real_lane_does_not():
         cs.render_pack(t, "both")
 
 
+@pytest.mark.static
 def test_each_schedule_pack_validates_pins_and_fires_one_keyed_job():
     deploy = {p["pack"]: p["digest"] for p in load_doc(ROOT / "workflows/deploy.yml")["pins"]}
     for t in cs.TIMERS:

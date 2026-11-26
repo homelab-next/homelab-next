@@ -931,6 +931,7 @@ def test_the_cli_refuses_a_module_pair_with_one_of_the_core_s_own_titles(capsys,
     assert f"publishing: notify pair {STATUS_ITEM[0]!r}: its problem title is a core title" in got
 
 
+@pytest.mark.static
 def test_the_title_pattern_is_one_for_manifest_and_inventory():
     from homelabnext.schemas.module_manifest import TITLE_PATTERN
 
@@ -1122,6 +1123,7 @@ def run(capsys, *argv, cmd="check"):
     return code, capsys.readouterr()
 
 
+@pytest.mark.static
 def test_the_cli_exits_0_clean_and_names_what_it_did_not_check(capsys):
     code, out = run(capsys, "--site", str(EXAMPLES / "sites" / "small-lab.yml"))
     assert code == 0
@@ -1137,6 +1139,7 @@ def test_the_cli_exits_0_clean_and_names_what_it_did_not_check(capsys):
     assert out.out.rstrip().endswith(f"{shipped} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_the_cli_exits_1_on_a_problem_and_prints_json(capsys):
     code, out = run(
         capsys,

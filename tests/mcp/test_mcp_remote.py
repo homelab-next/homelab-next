@@ -192,6 +192,7 @@ def test_a_word_shaped_credential_in_the_path_is_not_detected_by_design(path):
     assert _problems(_edit(transport__url="https://mcp.tracker.example.com" + path), REGISTRY) == []
 
 
+@pytest.mark.static
 def test_a_lab_servers_transport_path_carries_no_credential_either():
     rec = yaml.safe_load((ROOT / "schemas/platform/examples/mcp_server.http.yml").read_text())
     assert _problems(rec, REGISTRY) == []

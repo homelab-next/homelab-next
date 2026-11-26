@@ -24,6 +24,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from homelabnext.schema_registry import validator
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -290,6 +292,7 @@ def _text() -> str:
     return json.dumps(build(), indent=1, ensure_ascii=True) + "\n"
 
 
+@pytest.mark.static
 def test_the_vectors_file_is_what_the_schema_says():
     if os.environ.get("HNX_REGEN_GATEWAY_CONFIG_VECTORS") == "1":
         VECTORS.write_text(_text(), encoding="utf-8")

@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when Python code, a YAML/JSON config or a Caddyfile turns TLS certificate verification off.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:tls-lint]
+#   trigger: [make:tls-lint]
 #   invariant: [F-07]
 #   inputs: the tracked tree and tools/tls_verify.allow.yml
 #   outputs: one line per disabled verification

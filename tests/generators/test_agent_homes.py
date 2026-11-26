@@ -240,6 +240,7 @@ def test_a_bad_controller_block_is_a_spec_error(tmp_path, block, words):
 
 
 # ---------------------------------------------------------------- homes (A-14)
+@pytest.mark.static
 def test_the_pass_homes_pass_and_every_fail_home_fails(capsys):
     passing = sorted(str(p) for p in (HOMES / "pass").iterdir())
     assert hnx(["gen", "gateway", "homes", "--roles", str(ROLES), *passing]) == 0
@@ -286,6 +287,7 @@ def test_ip_literals(text, found):
     assert ah.ip_literals(text) == found
 
 
+@pytest.mark.static
 def test_engine_model_ids_are_bindings_and_store_names_never_role_aliases():
     table = RoleTable.from_dict(
         {

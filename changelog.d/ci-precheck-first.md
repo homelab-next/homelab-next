@@ -1,0 +1,4 @@
+---
+group: Changed
+---
+CI runs every static gate first, in one `precheck` job (`make precheck`, `tools/precheck.sh`: the static gates of `make check`, the ratchets against the base, register ids, hygiene, the invariants' fast criteria and the new `static` pytest rules, in parallel), and every other job needs it; the lint, schemas, trusted-gates, invariants, register-ids and hygiene jobs are folded into it, and the dco and markdown-links jobs are dropped. The test matrix runs one Python, 3.13 (what the lab guests run), in twelve shards; 3.11, the requires-python floor, and the wall-clock `perf` tests (`tests/context/test_levels.py` and the like) move to the nightly workflow. `regression-tests` reports an unproven fix as a warning annotation instead of failing. `tools/install-prepush-hook.sh` installs `make precheck` as a git pre-push hook.

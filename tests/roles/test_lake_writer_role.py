@@ -312,6 +312,7 @@ def test_restore_replaces_the_checkpoints_and_refuses_a_bad_source(tmp_path):
     assert "outside the live state directory" in inside.stdout + inside.stderr
 
 
+@pytest.mark.static
 def test_the_defaults_hold_no_address_and_no_secret_value():
     d = yaml.safe_load((Path(ROLE) / "defaults" / "main.yml").read_text())
     assert all(str(v).startswith("secret:") for k, v in d.items() if k.endswith("_ref") and v)

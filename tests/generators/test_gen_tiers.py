@@ -60,6 +60,7 @@ def test_the_fixture_holds_every_tier():
 
 
 # ------------------------------------------------------------------ the all-tiers golden render
+@pytest.mark.static
 def test_an_all_tiers_registry_renders_its_golden():
     on_disk = {p.relative_to(GOLDEN).as_posix() for p in GOLDEN.rglob("*") if p.is_file()}
     assert on_disk == set(FILES)
@@ -153,6 +154,7 @@ def test_endpoint_variables_name_a_rows_own_record():
     assert "hub-" not in reports
 
 
+@pytest.mark.static
 def test_metrics_jobs_are_the_primaries_and_eval_rows_by_the_name_each_answers_by():
     prom = yaml.safe_load(FILES["prometheus/scrape_configs.yml"])
     jobs = {j["job_name"]: j["static_configs"][0]["targets"] for j in prom["scrape_configs"]}
@@ -163,6 +165,7 @@ def test_metrics_jobs_are_the_primaries_and_eval_rows_by_the_name_each_answers_b
     }
 
 
+@pytest.mark.static
 def test_uptime_targets_are_the_primaries_and_eval_rows():
     http = yaml.safe_load(FILES["blackbox/targets_http.yml"])
     services = {t["labels"]["service"]: t["targets"] for t in http}

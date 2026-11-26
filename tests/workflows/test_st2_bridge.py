@@ -134,6 +134,7 @@ def test_a_malformed_bridge_file_is_refused(change):
         sb.load_bridge(doc)
 
 
+@pytest.mark.static
 def test_a_subscription_without_pinned_producers_is_refused():
     doc = json.loads(BRIDGE.read_text())
     doc["subscriptions"][0].pop("sources")
@@ -244,6 +245,7 @@ def test_a_failed_post_is_nacked_and_retried_after_a_backoff(hook):
     assert ids == ["evt-bridge-1"] * 3  # the same id each time: admit drops a second run
 
 
+@pytest.mark.static
 def test_one_failing_subject_backs_off_alone():
     """A subject whose POSTs fail is paused on its own; every other subject keeps flowing."""
     failed = json.loads((ROOT / "schemas/events/examples/agent.job.failed.valid.json").read_text())
@@ -508,6 +510,7 @@ def test_sigterm_stops_fetching_and_settles_what_is_in_flight(tmp_path, hook):
     assert rest == ["evt-bridge-2", "evt-bridge-3"]  # posted concurrently: in any order
 
 
+@pytest.mark.static
 def test_sigterm_fetches_no_further_subject_in_the_same_pass():
     """The reviewer's r3: a SIGTERM during one subject's POST still fetched (and posted) every
     later subject of that pass."""

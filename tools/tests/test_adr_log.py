@@ -45,6 +45,7 @@ def test_adr_has_five_headings_and_status(path: Path):
         assert len(body.strip()) > 40, f"{name} is empty"
 
 
+@pytest.mark.static
 def test_every_adr_and_the_template_carry_an_l0_summary():
     """ADR-0032: an ADR opens with front-matter whose summary passes the lint, before its title;
     the template shows it, so a new ADR starts with one."""
@@ -61,6 +62,7 @@ def test_negative_missing_heading_is_detected():
     assert re.findall(r"^## (.+)$", broken, re.M) != HEADINGS[1:]
 
 
+@pytest.mark.static
 def test_index_names_every_reserved_number():
     """A reader of the index sees why a number is missing, not only the test that holds it."""
     index = (ADR_DIR / "README.md").read_text()
@@ -68,6 +70,7 @@ def test_index_names_every_reserved_number():
         assert f"**{n:04d}**" in index, f"docs/adr/README.md does not name reserved ADR-{n:04d}"
 
 
+@pytest.mark.static
 def test_index_lists_every_adr():
     index = (ADR_DIR / "README.md").read_text()
     for p in ADRS:
@@ -145,11 +148,13 @@ def _state(fields: dict[str, str]) -> str:
     return (fields.get("Status") or "").split(" ", 1)[0]
 
 
+@pytest.mark.static
 def test_adr_links_are_reciprocal_and_rest_on_accepted_decisions():
     adrs = {int(p.name[:4]): header(p.read_text()) for p in ADRS}
     assert link_problems(adrs) == []
 
 
+@pytest.mark.static
 def test_the_amendments_are_linked_both_ways():
     """The amendments the ADRs record in prose carry the machine-readable pair."""
     adrs = {int(p.name[:4]): header(p.read_text()) for p in ADRS}

@@ -110,6 +110,7 @@ def test_spec_id_must_match_the_file(specs):
     assert any("does not match" in f for f in _failures(specs)["disclosure-risk"])
 
 
+@pytest.mark.static
 def test_a_faulty_model_tier_never_lowers_or_approves():
     """With every model tier failing, each case still escalates at no less than the scan's impact."""
     for name in REQUIRED:

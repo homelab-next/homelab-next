@@ -64,6 +64,7 @@ def test_negative_rejected_by_lake_validator(path):
             normalize_rows(schema, [doc])
 
 
+@pytest.mark.static
 def test_schema_files_declare_the_lake_block_and_pin_version():
     for name, s in SCHEMAS.items():
         doc = json.loads((ROOT / f"{name}.v1.json").read_text())
@@ -78,6 +79,7 @@ def test_schema_files_declare_the_lake_block_and_pin_version():
         assert s.key == key and s.partition == "day(time)"
 
 
+@pytest.mark.static
 def test_detection_id_is_logical_never_a_rule_number():
     doc = json.loads((ROOT / "detection_finding.v1.json").read_text())
     assert doc["properties"]["detection_id"]["pattern"].startswith("^det:")

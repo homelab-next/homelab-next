@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when test code reads the wall clock or unseeded randomness directly, or library code reads the clock other than as an injectable default.
 #   owner: maintainers
-#   trigger: [ci:ci/lint, make:hermetic-lint]
+#   trigger: [make:hermetic-lint]
 #   invariant: [Q-11]
 #   inputs: every .py under tests/ and tools/tests/ and homelabnext/ (or the files named)
 #   outputs: one line per finding

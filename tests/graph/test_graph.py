@@ -512,6 +512,7 @@ def test_command_refs(graph):
     ]
 
 
+@pytest.mark.static
 def test_register_entries_is_the_one_seam():
     lessons = sources._register_entries(ROOT / LESSONS)
     assert [e["uid"] for e in lessons] == [U[f"LL-00{n}"] for n in range(1, 6)]

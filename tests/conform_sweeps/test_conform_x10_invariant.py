@@ -116,6 +116,7 @@ def test_target_comes_from_the_environment(tmp_path, monkeypatch):
     assert argv[argv.index("--target") + 1] == "staging"
 
 
+@pytest.mark.static
 def test_x04_now_passes_on_this_repository():
     r = pillar_x.x04(Context(ROOT))
     assert r.status == PASS, r.evidence
@@ -141,6 +142,7 @@ def test_real_report_fails_when_a_suite_is_removed(tmp_path):
     assert r.status == FAIL and "teleporter" in r.evidence
 
 
+@pytest.mark.static
 def test_registers_through_register_and_plugins_dir():
     reg = Registry()
     x10.register(reg)

@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,6 +29,7 @@ def test_the_manifest_is_a_feature_that_requires_the_two_slots_and_the_secret_st
     assert [h["role"] for h in m["requires"]["hosts"]] == ["job"]
 
 
+@pytest.mark.static
 def test_every_secret_default_is_a_reference_and_the_state_is_exportable():
     m = _manifest()
     for cfg in m["config"].values():
@@ -42,6 +44,7 @@ def test_every_secret_default_is_a_reference_and_the_state_is_exportable():
     assert refs == {c["default"] for c in m["config"].values()}
 
 
+@pytest.mark.static
 def test_the_defaults_hold_no_address_and_the_timer_is_a_calendar_never_an_interval():
     text = (ROLE / "defaults" / "main.yml").read_text()
     assert "192.168" not in text and "gluck" not in text

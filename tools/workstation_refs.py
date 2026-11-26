@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when a runtime config, role, compose file, example or golden output points at the admin workstation.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:workstation-lint]
+#   trigger: [make:workstation-lint]
 #   invariant: [F-17]
 #   inputs: runtime configs (ansible, compose, examples, generators, conformance targets, goldens)
 #   outputs: one line per workstation-shaped reference or stale allowlist entry
