@@ -639,12 +639,19 @@ def build(
 
 
 def inputs(
-    guests_dir: str | Path, site_path: str | Path, *, registry: Any = None
+    guests_dir: str | Path,
+    site_path: str | Path,
+    *,
+    registry: Any = None,
+    problems_out: list[str] | None = None,
 ) -> tuple[Mapping[str, Any], list[Any], list[Any], dict[str, Any]]:
     """(site document, guests, zone flows, hypervisors: name -> ``_nodes.yml`` spec) read from a guest directory and the
     site model its zones come from (raises :class:`homelabnext.compute.model.ComputeError` on an
     unloadable tree or site).  The guests are judged against ``registry``, else the
-    ``services.yml`` beside the site file when there is one, as ``hnx guests`` judges them."""
+    ``services.yml`` beside the site file when there is one, as ``hnx guests`` judges them.
+    ``problems_out``: a guest set that breaks a rule ``hnx guests validate`` enforces is still
+    drawn (a map shows the lab as it is, and the rule is that command's to report), its problems
+    appended here; without it they raise."""
     from homelabnext.compute.loader import (
         NODES_FILE,
         load_fleet,
@@ -668,10 +675,12 @@ def inputs(
     if not isinstance(doc, Mapping):
         raise ComputeError(f"{site_path}: expected a mapping")
     zones, domain = open_site(site_path)
+    found: list[Any] = []
     fleet = load_fleet(
         guests_dir,
         zones,
         domain=domain or "example.internal",
+        lenient=found if problems_out is not None else None,
         require_baselines=False,
         power=site_power(site_path),
         site_addresses=addresses_from_site(doc),
@@ -680,6 +689,8 @@ def inputs(
             registry if registry is not None else load_registry_for(site_path)
         ),
     )
+    if problems_out is not None:
+        problems_out.extend(str(p) for p in found)
     nodes_file = Path(guests_dir) / NODES_FILE
     nodes = load_nodes(nodes_file) if nodes_file.is_file() else {}
     return doc, fleet.sorted(), list(flows_from_site(doc)), dict(sorted(nodes.items()))
@@ -695,8 +706,11 @@ def load(
 ) -> dict[str, Any]:
     """:func:`build` over :func:`inputs`, with the registry (services per guest), the
     dataflow view-model (its hops become flows) and the UPSes' live states when given."""
-    doc, guests, flows, nodes = inputs(guests_dir, site_path, registry=registry)
-    return build(
+    problems: list[str] = []
+    doc, guests, flows, nodes = inputs(
+        guests_dir, site_path, registry=registry, problems_out=problems
+    )
+    vm = build(
         doc,
         guests,
         flows,
@@ -705,6 +719,7 @@ def load(
         dataflow=dataflow,
         ups_state=ups_state,
     )
+    return {**vm, "guest_problems": problems} if problems else vm
 
 
 # ------------------------------------------------------------------------------------ render
@@ -900,8 +915,17 @@ def tables(vm: Mapping[str, Any]) -> str:
         for z in vm["zones"]
     ]
     f_rows = [(svg.code(f["from"]), svg.code(f["to"]), svg.e(f["allowed"])) for f in vm["flows"]]
+    notes = vm.get("guest_problems") or ()
     return (
         '<section class="maptables" aria-label="Table view"><h3>Table view</h3>'
+        + (
+            "<h3>Guest set problems</h3>"
+            '<p class="muted">drawn as it is; <code>hnx guests validate</code> reports and '
+            "enforces these</p>"
+            f'<ul class="fail">{"".join(f"<li>{svg.e(p)}</li>" for p in notes)}</ul>'
+            if notes
+            else ""
+        )
         + svg.table(
             "Guests",
             (
