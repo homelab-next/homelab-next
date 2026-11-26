@@ -13,6 +13,15 @@
       compose_app_group: "{{ garage_group }}"
       compose_app_start: "{{ garage_start }}"
       compose_app_validate_with_docker: "{{ garage_validate_with_docker }}"
+      # the scheduled copy (compose_app_export_timer, ADR-0008 decision 1, ADR-0042 decision 2):
+      # the metadata directory, with the server's own `meta snapshot` command run first so the
+      # LMDB file is captured at a consistent point (the data blocks are immutable files and
+      # travel in the guest's image backup).
+      compose_app_export_files:
+        - name: object-store-meta
+          kind: tree
+          path: "{{ garage_data_root }}/meta"
+          pre_exec: {service: garage, argv: [/garage, meta, snapshot]}
       compose_app_spec:
         services:
           garage:

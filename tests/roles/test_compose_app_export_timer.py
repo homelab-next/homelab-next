@@ -297,6 +297,150 @@ def test_two_jobs_cannot_share_a_name(env):
     assert mod.main(["--manifest", str(mf)]) == 2
 
 
+# ----------------------------------------------------------- tree pre_exec and stop_service
+# A fake docker that logs every argv to <env>/docker.log, writes a snapshot file when it sees
+# "meta snapshot" (the pre_exec case), and succeeds on the project-level commands (compose -f
+# FILE stop | compose -f FILE up -d) we need for stop_service.
+DOCKER_PROJECT = r"""
+import os, sys
+log = open(LOG, "a"); log.write(" ".join(sys.argv[1:]) + "\n"); log.close()
+# compose -f FILE stop                                → no extra op, exit 0
+# compose -f FILE up -d                               → no extra op, exit 0
+# compose -f FILE exec -T svc <argv>                  → the inner fake's behaviour
+if "-T" in sys.argv:
+    inner = sys.argv[sys.argv.index("-T") + 2:]
+    if inner[0:3] == ["/bin/snapshot", "meta", "do"] and SNAPSHOT:
+        open(SNAPSHOT, "wb").write(b"snap")
+sys.exit(0)
+"""
+
+
+@pytest.fixture
+def project_env(tmp_path, monkeypatch):
+    """A fake docker that logs every command it is given and succeeds on project-level ones."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    snapshot = tmp_path / "state" / "snapshot.lmdb"
+    body = DOCKER_PROJECT.replace("LOG", repr(str(tmp_path / "docker.log"))).replace(
+        "SNAPSHOT", repr(str(snapshot))
+    )
+    fake(bindir / "docker", body)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    return tmp_path
+
+
+def test_a_tree_job_with_pre_exec_runs_the_snapshot_before_the_tar_and_includes_it(project_env):
+    import tarfile
+
+    mod = load()
+    src = project_env / "state"
+    src.mkdir()
+    (src / "existing.json").write_text("{}")
+    mf, export = manifest(
+        project_env,
+        [
+            {
+                "service": "meta",
+                "engine": "tree",
+                "path": str(src),
+                "pre_exec": {"service": "app", "argv": ["/bin/snapshot", "meta", "do"]},
+            }
+        ],
+    )
+    assert mod.main(["--manifest", str(mf)]) == 0
+    with tarfile.open(export / "meta" / "meta.tar.gz") as tar:
+        names = sorted(m.name for m in tar if m.isfile())
+    assert "tree/snapshot.lmdb" in names and "tree/existing.json" in names
+    log = (project_env / "docker.log").read_text()
+    assert "exec -T app /bin/snapshot meta do" in log
+
+
+def test_a_tree_job_with_stop_service_quiesces_the_project_around_the_tar(project_env):
+    mod = load()
+    src = project_env / "state"
+    src.mkdir()
+    (src / "keep.txt").write_text("x")
+    mf, export = manifest(
+        project_env,
+        [
+            {
+                "service": "flows",
+                "engine": "tree",
+                "path": str(src),
+                "stop_service": True,
+            }
+        ],
+    )
+    assert mod.main(["--manifest", str(mf)]) == 0
+    assert (export / "flows" / "flows.tar.gz").exists()
+    log = (project_env / "docker.log").read_text()
+    stop_at = log.find("compose -f") + log[log.find("compose -f") :].find("stop")
+    up_at = log.find("up -d")
+    assert "stop" in log and "up -d" in log and up_at > stop_at
+
+
+def test_stop_service_restarts_the_project_even_when_the_tar_fails(project_env):
+    mod = load()
+    # the dir exists but every file is excluded → the tar step fails ("holds no file to keep"),
+    # which is a failure that happens AFTER the stop and must still be followed by up -d
+    src = project_env / "state"
+    src.mkdir()
+    (src / "excluded.log").write_text("x")
+    mf, _ = manifest(
+        project_env,
+        [
+            {
+                "service": "flows",
+                "engine": "tree",
+                "path": str(src),
+                "stop_service": True,
+                "exclude": ["*.log"],
+            }
+        ],
+    )
+    assert mod.main(["--manifest", str(mf)]) == 1
+    # the finally: brought the project back up
+    assert "up -d" in (project_env / "docker.log").read_text()
+
+
+def test_pre_exec_and_stop_service_refuse_a_manifest_with_no_compose_file(env):
+    mod = load()
+    src = env / "state"
+    src.mkdir()
+    (src / "a.txt").write_text("x")
+    for job in (
+        {
+            "service": "x",
+            "engine": "tree",
+            "path": str(src),
+            "pre_exec": {"service": "y", "argv": ["/bin/true"]},
+        },
+        {"service": "x", "engine": "tree", "path": str(src), "stop_service": True},
+    ):
+        mf, _ = manifest(env, [job])
+        doc = json.loads(mf.read_text())
+        del doc["compose_file"]
+        mf.write_text(json.dumps(doc))
+        assert mod.main(["--manifest", str(mf)]) == 2
+
+
+def test_a_malformed_pre_exec_or_stop_service_is_refused(env):
+    mod = load()
+    src = env / "state"
+    src.mkdir()
+    (src / "a.txt").write_text("x")
+    for bad in (
+        {"pre_exec": {"service": "y"}},  # no argv
+        {"pre_exec": {"service": "y", "argv": []}},  # empty argv
+        {"pre_exec": {"service": "../bad", "argv": ["/bin/true"]}},  # bad service name
+        {"pre_exec": {"service": "y", "argv": [""]}},  # empty element
+        {"stop_service": "yes"},  # not a bool
+    ):
+        job = {"service": "x", "engine": "tree", "path": str(src), **bad}
+        mf, _ = manifest(env, [job])
+        assert mod.main(["--manifest", str(mf)]) == 2
+
+
 # ------------------------------------------------------------------ the role's timer task
 SPEC = {
     "services": {
@@ -459,6 +603,20 @@ def test_files_beside_a_database_keep_the_database_jobs_and_the_compose_file(tmp
             {"name": "x", "kind": "tree", "path": "/a/b/d"},
         ],
         [{"name": "db", "kind": "tree", "path": "/a/b/c"}],  # a service of the spec
+        # pre_exec is {service, argv: non-empty list}: each of these is malformed
+        [{"name": "x", "kind": "tree", "path": "/a/b/c", "pre_exec": {"service": "y"}}],
+        [{"name": "x", "kind": "tree", "path": "/a/b/c", "pre_exec": {"argv": ["/x"]}}],
+        [{"name": "x", "kind": "tree", "path": "/a/b/c", "pre_exec": {"service": "y", "argv": []}}],
+        # pre_exec and stop_service are tree-only; a sqlite entry with either is refused
+        [
+            {
+                "name": "x",
+                "kind": "sqlite",
+                "glob": "/a/b/*.db",
+                "pre_exec": {"service": "y", "argv": ["/x"]},
+            }
+        ],
+        [{"name": "x", "kind": "sqlite", "glob": "/a/b/*.db", "stop_service": True}],
     ],
 )
 def test_a_file_job_the_script_would_not_run_is_refused_by_the_role(tmp_path, bad):
@@ -466,6 +624,60 @@ def test_a_file_job_the_script_would_not_run_is_refused_by_the_role(tmp_path, ba
         tmp_path, "compose_app", "export_timer", role_vars(tmp_path, compose_app_export_files=bad)
     )
     assert r.returncode != 0 and "compose_app_export_files" in r.stdout + r.stderr
+
+
+def test_a_tree_pre_exec_or_stop_service_puts_the_compose_file_in_the_manifest(tmp_path):
+    """A tree job that needs `docker compose` (pre_exec or stop_service) keeps compose_file in the
+    manifest and the service unit's ConditionPathExists, even when the spec runs no database."""
+    for case, files, needs_compose in (
+        (
+            "pre-exec",
+            [
+                {
+                    "name": "state",
+                    "kind": "tree",
+                    "path": "/srv/app/state",
+                    "pre_exec": {"service": "app", "argv": ["/bin/snapshot"]},
+                }
+            ],
+            True,
+        ),
+        (
+            "stop-service",
+            [
+                {
+                    "name": "state",
+                    "kind": "tree",
+                    "path": "/srv/app/state",
+                    "stop_service": True,
+                }
+            ],
+            True,
+        ),
+        (
+            "plain-tree",
+            [{"name": "state", "kind": "tree", "path": "/srv/app/state"}],
+            False,  # a plain tree copy: no compose_file needed
+        ),
+    ):
+        work = tmp_path / f"case-{case}"
+        work.mkdir(parents=True)
+        r = run_role(
+            work,
+            "compose_app",
+            "export_timer",
+            role_vars(work, spec={"services": {}}, compose_app_export_files=files),
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        mf = json.loads((work / "opt" / "export-manifest.json").read_text())
+        assert ("compose_file" in mf) is needs_compose
+        service = (work / "units" / "hnx-export-app.service").read_text()
+        assert ("ConditionPathExists" in service) is needs_compose
+        job = mf["jobs"][0]
+        if files[0].get("pre_exec"):
+            assert job["pre_exec"] == files[0]["pre_exec"]
+        if files[0].get("stop_service"):
+            assert job["stop_service"] is True
 
 
 def test_the_script_is_a_program_the_interpreter_can_compile():

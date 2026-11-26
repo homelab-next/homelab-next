@@ -1,0 +1,4 @@
+---
+group: Added
+---
+role `compose_app`: a `tree` entry of `compose_app_export_files` now accepts `pre_exec: {service, argv}` (a snapshot command the product runs inside its own container before the tar) and `stop_service: true` (`docker compose stop` before the tar and `docker compose up -d` after it, in a `try/finally` so a failed tar still restarts the service). The object store's metadata (modules/garage: `/garage meta snapshot` writes an LMDB snapshot into `meta/snapshots/`, the tar then captures the whole metadata directory) and the dataflow server's state (modules/nifi: the stored flow, users, authorizations and state repositories, archived with the service stopped, the provenance repository and logs excluded) now have a scheduled export on the same timer. ADR-0008 decision 1 and ADR-0042 decision 2 close for every stateful product the audit named.

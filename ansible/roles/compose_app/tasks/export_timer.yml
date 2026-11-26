@@ -19,7 +19,15 @@
       {%- endif -%}
       {%- endfor -%}
       {%- for f in compose_app_export_files -%}
-      {%- set _ = out.append({'service': f.name, 'engine': f.kind} | combine({'glob': f.glob} if f.kind == 'sqlite' else {'path': f.path, 'exclude': f.exclude | default([])})) -%}
+      {%- set base = {'service': f.name, 'engine': f.kind} -%}
+      {%- if f.kind == 'sqlite' -%}
+      {%- set extra = {'glob': f.glob} -%}
+      {%- else -%}
+      {%- set extra = {'path': f.path, 'exclude': f.exclude | default([])} -%}
+      {%- if f.pre_exec is defined -%}{%- set extra = extra | combine({'pre_exec': f.pre_exec}) -%}{%- endif -%}
+      {%- if f.stop_service | default(false) -%}{%- set extra = extra | combine({'stop_service': true}) -%}{%- endif -%}
+      {%- endif -%}
+      {%- set _ = out.append(base | combine(extra)) -%}
       {%- endfor -%}
       {{ out }}
     compose_app_export_images: >-
@@ -44,7 +52,13 @@
       - compose_app_export_files | selectattr('kind', 'eq', 'tree') | rejectattr('path', 'defined') | list | length == 0
       - compose_app_export_files | map(attribute='name') | unique | list | length == compose_app_export_files | length
       - (compose_app_export_files | map(attribute='name') | list) | intersect(compose_app_export_jobs | rejectattr('engine', 'in', ['sqlite', 'tree']) | map(attribute='service') | list) | length == 0
-    fail_msg: "compose_app_export_files: each entry has a unique name, a kind (sqlite with a glob, tree with a path) and a name no service of the spec uses"
+      # a tree's pre_exec is {service, argv: [str, ...]}; stop_service is a bool
+      - compose_app_export_files | selectattr('kind', 'eq', 'tree') | selectattr('pre_exec', 'defined') | rejectattr('pre_exec.service', 'defined') | list | length == 0
+      - compose_app_export_files | selectattr('kind', 'eq', 'tree') | selectattr('pre_exec', 'defined') | rejectattr('pre_exec.argv', 'defined') | list | length == 0
+      - compose_app_export_files | selectattr('kind', 'eq', 'tree') | selectattr('pre_exec', 'defined') | map(attribute='pre_exec.argv') | map('length') | reject('gt', 0) | list | length == 0
+      - compose_app_export_files | selectattr('kind', 'eq', 'sqlite') | selectattr('pre_exec', 'defined') | list | length == 0
+      - compose_app_export_files | selectattr('kind', 'eq', 'sqlite') | selectattr('stop_service', 'defined') | list | length == 0
+    fail_msg: "compose_app_export_files: each entry has a unique name, a kind (sqlite with a glob, tree with a path) and a name no service of the spec uses; a tree's pre_exec is {service, argv: [str, ...]} and stop_service is a bool; a sqlite entry has neither"
 
 - name: Remove the timer an application with no database no longer wants
   when: compose_app_export_jobs | length == 0
@@ -108,9 +122,16 @@
         group: "{{ compose_app_group }}"
         mode: "0755"
 
+    - name: Does any job need the compose file (a database dump, a pre_exec, or a stop_service)
+      ansible.builtin.set_fact:
+        compose_app_export_needs_compose: >-
+          {{ (compose_app_export_jobs | selectattr('engine', 'in', ['postgres', 'mysql']) | list | length > 0)
+             or (compose_app_export_jobs | selectattr('engine', 'eq', 'tree') | selectattr('pre_exec', 'defined') | list | length > 0)
+             or (compose_app_export_jobs | selectattr('engine', 'eq', 'tree') | selectattr('stop_service', 'defined') | list | length > 0) }}
+
     - name: Write the manifest
       ansible.builtin.copy:
-        content: "{{ {'app': compose_app_name, 'export_dir': compose_app_export_dir ~ '/db', 'jobs': compose_app_export_jobs, 'images': compose_app_export_images} | combine({'compose_file': compose_app_dir ~ '/docker-compose.yml'} if compose_app_export_jobs | selectattr('engine', 'in', ['postgres', 'mysql']) | list | length > 0 else {}) | to_nice_json }}\n"
+        content: "{{ {'app': compose_app_name, 'export_dir': compose_app_export_dir ~ '/db', 'jobs': compose_app_export_jobs, 'images': compose_app_export_images} | combine({'compose_file': compose_app_dir ~ '/docker-compose.yml'} if compose_app_export_needs_compose else {}) | to_nice_json }}\n"
         dest: "{{ compose_app_export_manifest }}"
         owner: "{{ compose_app_owner }}"
         group: "{{ compose_app_group }}"

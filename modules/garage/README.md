@@ -60,6 +60,14 @@ Data lives under `garage_data_root` (`/var/lib/hnx-modules/garage`, `root:<gid>`
 | `restore` | stops the server, unpacks `garage_restore_source/garage.tar.gz` over the data root, restarts |
 | `upgrade` | validates a tag@digest bump of the same repository and major version and records it |
 
+## The scheduled copy
+
+With `compose_app_export_timer` on (the lab's group variable), a nightly timer (`hnx-export-garage`, 07:30 UTC) runs `/garage meta
+snapshot` inside the container (the server's own consistent copy of the LMDB metadata, written to `meta/snapshots/<ts>`), then writes
+a gzip tar of the whole `meta/` directory into `export/db/object-store-meta/object-store-meta.tar.gz` with a sha256 listing and a
+manifest that names what the dump does not carry. The data blocks are immutable files and are not in the scheduled copy: they travel
+in the guest's image backup. The previous copy is kept once (`.prev`). The service is not stopped.
+
 ## Network exposure
 
 The S3 API is signed, but the lake key it admits can read and delete the whole lake. Limit inbound
