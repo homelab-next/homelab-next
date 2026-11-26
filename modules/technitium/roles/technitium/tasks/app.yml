@@ -10,6 +10,9 @@
       compose_app_dir: "{{ technitium_dir }}"
       compose_app_data_dir: "{{ technitium_data_root }}"
       compose_app_export_dir: "{{ technitium_data_root }}/export"
+      # the scheduled copy (compose_app_export_timer): the server's configuration directory (settings, zones, blocklists, accounts)
+      compose_app_export_files:
+        - {name: dns-config, kind: tree, path: "{{ technitium_data_root }}/config"}
       compose_app_owner: "{{ technitium_owner }}"
       compose_app_group: "{{ technitium_group }}"
       compose_app_start: "{{ technitium_start }}"

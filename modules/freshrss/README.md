@@ -120,6 +120,15 @@ imports each account, and compares its feeds, categories, read, unread and favou
 manifest. A failure leaves the staged file in `export/.restoring` for inspection. An account in the
 copy that the site's `freshrss_users` no longer names stops the run.
 
+### The scheduled copy
+
+With `compose_app_export_timer` on (the lab's group variable), a nightly timer (`hnx-export-freshrss`, 07:30 UTC) copies every account's
+SQLite database (`data/users/*/db.sqlite`) through SQLite's online backup while the application runs, checks each copy
+(`PRAGMA integrity_check` is `ok`, it holds a table) and replaces the last one atomically, into `export/db/feeds-db/`
+with a sha256 listing. A glob that matches nothing fails the run. It is a copy of the databases, not the product's own
+export: the OPML list and the per-account export of the `export` hook are the exit copy; `config.php` and the extensions travel in
+the guest's image backup.
+
 ## Migrating in from the old lab
 
 The old reader is the FreshRSS container on the old lab's `utility-apps` guest

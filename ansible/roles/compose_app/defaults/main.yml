@@ -59,6 +59,11 @@ compose_app_systemctl_cli: systemctl
 # image name; compose_app_export_engines {service: postgres|mysql|none} overrides (none disables).
 compose_app_export_timer: false
 compose_app_export_engines: {}
+# Files the same timer copies and verifies besides the databases: a list of {name, kind: sqlite, glob}
+# (every SQLite file the absolute glob matches, copied through SQLite's online backup and integrity-checked)
+# or {name, kind: tree, path, exclude: [patterns]} (a gzip tar of a directory). For a product whose state is
+# SQLite or plain files. A name is also the directory it is written to, so it must not be a service name.
+compose_app_export_files: []
 # 07:30 UTC is 01:30 to 02:30 in the lab's zone, before the 04:30 (America/Chicago) image backup
 compose_app_export_calendar: "*-*-* 07:30:00 UTC"
 compose_app_export_script: /usr/local/libexec/homelabnext/hnx-export-run
