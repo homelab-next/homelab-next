@@ -73,7 +73,9 @@ def test_resolve_binding_reaches_each_binding_without_falling_back(make_resolver
     """The egress canary runs every binding of a role, not just the first that resolves."""
     doc = role_doc()
     large = doc["roles"]["main-reasoner"]["bindings"][0]
-    small = dict(doc["roles"]["fast-classifier"]["bindings"][0])  # no priority: a half-set role is refused
+    small = dict(
+        doc["roles"]["fast-classifier"]["bindings"][0]
+    )  # no priority: a half-set role is refused
     doc["roles"]["main-reasoner"]["bindings"].append(small)
     r = make_resolver(doc)
     got = [r.resolve_binding("mdl:main-reasoner", b) for b in r.table.get("main-reasoner").bindings]
