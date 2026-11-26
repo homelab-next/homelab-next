@@ -478,6 +478,126 @@ def test_backup_jobs_exclude_opt_outs(good):
     assert "guest:bus-core" not in members and "guest:secrets-core" in members
 
 
+def test_backup_vmids_on_node_filters_policy_and_node(good):
+    from homelabnext.compute.gen.backup_jobs import members_on_node, vmids_on_node
+
+    # the "daily" policy's members on hv-a: idp-core (130), lake-core (140), secrets-core (131)
+    # and edge-core (110); their vmids sorted, no duplicate (B5: the deploy reads this to
+    # reconcile /etc/pve/jobs.cfg, the hand list is retired)
+    vmids = vmids_on_node(good, "daily", "hv-a")
+    assert vmids == sorted(vmids) and len(vmids) == len(set(vmids))
+    assert 140 in vmids  # lake-core on hv-a under daily
+    # secrets-core is in the daily policy with retain {daily: 14} -- the filter keeps it (an
+    # opt-out, not a retain override, is what skips a guest; LL: the retain mismatch in the
+    # lab's pm205-daily siem row is the same shape)
+    assert 131 in vmids
+    # the vmids match the members list reported (same set; vmids is sorted by vmid, the members
+    # list by guest id, so compare as sets)
+    assert set(vmids) == {g.vmid for g in members_on_node(good, "daily", "hv-a")}
+    # a guest in policy "weekly" (infer-core, vmid 230) is NOT in daily
+    assert 230 not in vmids
+    # "none" and an unknown policy both yield an empty list, never every opt-out
+    assert vmids_on_node(good, "none", "hv-a") == []
+    assert vmids_on_node(good, "no-such-policy", "hv-a") == []
+    # a known policy on an unknown node is also empty (the lab has only hv-a today)
+    assert vmids_on_node(good, "daily", "no-such-node") == []
+
+
+def test_cli_backup_members_prints_the_sorted_csv(good, capsys):
+    from homelabnext.compute.cli import main
+
+    rc = main(
+        [
+            "backup-members",
+            str(FLEET),
+            "--site",
+            str(SITE),
+            "--policy",
+            "daily",
+            "--node",
+            "hv-a",
+        ]
+    )
+    out = capsys.readouterr().out.strip()
+    # one line, a sorted vmid CSV: pass into `pvesh set /cluster/backup/<id> --vmid <csv>`
+    assert rc == 0, f"exit {rc}"
+    vmids = [int(x) for x in out.split(",")]
+    assert vmids == sorted(vmids) and len(vmids) == len(set(vmids))
+    assert 140 in vmids and 131 in vmids and 230 not in vmids
+    rc = main(
+        [
+            "backup-members",
+            str(FLEET),
+            "--site",
+            str(SITE),
+            "--policy",
+            "daily",
+            "--node",
+            "hv-a",
+            "--json",
+        ]
+    )
+    import json as _json
+
+    assert rc == 0
+    assert set(_json.loads(capsys.readouterr().out)) == set(vmids)
+
+
+def test_cli_backup_members_empty_pair_is_an_error_without_allow_empty(good, capsys):
+    from homelabnext.compute.cli import main
+
+    rc = main(
+        [
+            "backup-members",
+            str(FLEET),
+            "--site",
+            str(SITE),
+            "--policy",
+            "daily",
+            "--node",
+            "no-such-node",
+        ]
+    )
+    cap = capsys.readouterr()
+    # exit 1 (empty, no --allow-empty); the reconciler must not read "" as "the job is empty"
+    assert rc == 1 and "no guest" in cap.err and cap.out == ""
+    rc = main(
+        [
+            "backup-members",
+            str(FLEET),
+            "--site",
+            str(SITE),
+            "--policy",
+            "daily",
+            "--node",
+            "no-such-node",
+            "--allow-empty",
+        ]
+    )
+    cap = capsys.readouterr()
+    assert rc == 0 and cap.out == "\n"  # the empty join is one blank line
+
+
+def test_cli_backup_members_refuses_policy_none(good, capsys):
+    from homelabnext.compute.cli import main
+
+    rc = main(
+        [
+            "backup-members",
+            str(FLEET),
+            "--site",
+            str(SITE),
+            "--policy",
+            "none",
+            "--node",
+            "hv-a",
+        ]
+    )
+    cap = capsys.readouterr()
+    # 'none' is the opt-out marker, never a job (an opt-out list is not a backup job's membership)
+    assert rc == 2 and "opt-out marker" in cap.err
+
+
 def test_unknown_target(good):
     with pytest.raises(ComputeError, match="unknown target"):
         render(good, "nope")

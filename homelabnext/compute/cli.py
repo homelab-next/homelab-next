@@ -3,7 +3,11 @@
 
 Exit codes: 0 ok, 1 an invalid guest set (or a failed ``baselines --check``), 2 a usage error or an
 input that cannot be read or parsed (the site, the guest directory or a guest, policies, nodes,
-keys or baselines file), 3 ``plan --exit-code`` found changes (as ``hnx site plan --exit-code``)."""
+keys or baselines file), 3 ``plan --exit-code`` found changes (as ``hnx site plan --exit-code``).
+
+``backup-members`` prints the sorted vmid list for one ``(policy, node)`` pair, derived from the
+guest records, for a deploy that reconciles the real backup job (``pvesh set /cluster/backup/<id>
+--vmid``) off the lab's declaration rather than a hand list (B5)."""
 
 from __future__ import annotations
 
@@ -291,6 +295,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="like --check, and also exit 1 when a control some guest needs has no role yet, or "
         "is applied centrally on a group that holds no guest",
     )
+    m = sub.add_parser(
+        "backup-members",
+        help="print the sorted vmid list for one (policy, node) pair, derived from the guest "
+        "records (a deploy that writes the real pvesh job reads it off the lab, not a hand list)",
+    )
+    _common(m)
+    m.add_argument("--policy", required=True, help="the backup policy name (e.g. pm205-daily)")
+    m.add_argument("--node", required=True, help="the hypervisor node (e.g. pm205)")
+    m.add_argument(
+        "--json",
+        action="store_true",
+        help="print the list as JSON (default: comma-separated, as --vmid wants)",
+    )
+    m.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="exit 0 with no output when the (policy, node) pair holds no guest (default: "
+        "exit 1 and say so, which the reconciler reads as 'do not blindly truncate the job')",
+    )
     return ap
 
 
@@ -329,6 +352,39 @@ def _baselines(args: argparse.Namespace, fleet) -> int:
     if not bad:
         print("baselines: ok")
     return 1 if bad else 0
+
+
+def _backup_members(args: argparse.Namespace, fleet) -> int:
+    """Print the sorted vmid list for a (policy, node) pair.
+
+    Exit: 0 ok (one or more vmids, or empty with ``--allow-empty``), 1 the pair holds no member
+    and the caller did not pass ``--allow-empty`` (a reconciler must not read "no output" as "the
+    job is empty" by accident).  A policy the lab declares but no guest references is still "no
+    member": the empty-vs-unknown distinction belongs with validation, which already judges that.
+    """
+    from .gen.backup_jobs import vmids_on_node
+
+    if args.policy == "none":
+        print(
+            f"hnx guests: --policy {args.policy!r}: 'none' is the opt-out marker, not a policy "
+            "a job is rendered from",
+            file=sys.stderr,
+        )
+        return 2
+    vmids = vmids_on_node(fleet, args.policy, args.node)
+    if not vmids and not args.allow_empty:
+        print(
+            f"hnx guests: no guest with backup.policy {args.policy!r} is placed on "
+            f"{args.node!r} (pass --allow-empty if an empty job is intentional; otherwise check "
+            "the guest records or the policy name)",
+            file=sys.stderr,
+        )
+        return 1
+    if args.json:
+        print(json.dumps(vmids))
+    else:
+        print(",".join(str(v) for v in vmids))
+    return 0
 
 
 def _registry_problems(args: argparse.Namespace, fleet) -> list[str]:
@@ -380,6 +436,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     if args.cmd == "baselines":
         return _baselines(args, fleet)
+    if args.cmd == "backup-members":
+        return _backup_members(args, fleet)
     if args.cmd == "validate":
         if problems:
             print("\n".join(f"error: {p}" for p in problems), file=sys.stderr)

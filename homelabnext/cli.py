@@ -181,7 +181,11 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "first-match verdict for one flow)",
         _site,
     ),
-    "guests": ("validate/render/plan the guest (compute) model; baselines coverage", _guests),
+    "guests": (
+        "validate/render/plan the guest (compute) model; baselines coverage; backup-members "
+        "(the sorted vmid list for one backup policy on one node, for the reconciler)",
+        _guests,
+    ),
     "schema-check": ("check schemas, examples, negatives and frozen baselines", _schema_check),
     "secrets": (
         "the credentials a lab names: plan (list them) | seed (create the missing ones in OpenBao)",
