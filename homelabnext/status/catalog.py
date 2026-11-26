@@ -90,6 +90,7 @@ def _section(s: SourceSpec, *, linked: bool = True) -> str:
         f"- Declared by: {declared}, capability `cap:{d['capability']}`\n"
         f"- Kind: `{d['kind']}`; target: {_target(d)}\n"
         f"- Mapping: {d['mapping']}\n"
+        f"- TLP label: `{d['tlp']}`\n"
         + _credential(s)
         + feeds
         + f"- Module: `{d['module']}`; graph node `status:{d['id']}`\n"
