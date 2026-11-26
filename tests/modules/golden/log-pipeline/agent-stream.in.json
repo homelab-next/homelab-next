@@ -220,5 +220,130 @@
     },
     "timestamp": "2026-11-22T10:07:00.000+0000",
     "tlp": "clear"
+  },
+  {
+    "agent": {
+      "id": "020",
+      "ip": "192.0.2.131",
+      "name": "hnx-edge-01"
+    },
+    "data": {
+      "bytes_read": 0,
+      "duration": 0.012,
+      "level": "info",
+      "logger": "http.log.access.hnx_access",
+      "msg": "handled request",
+      "request": {
+        "client_ip": "203.0.113.50",
+        "headers": {
+          "Cookie": [
+            "REDACTED"
+          ],
+          "User-Agent": [
+            "curl/8.9.0"
+          ]
+        },
+        "host": "hub.example.internal",
+        "method": "GET",
+        "proto": "HTTP/2.0",
+        "remote_ip": "203.0.113.50",
+        "remote_port": "51234",
+        "uri": "/status.json"
+      },
+      "resp_headers": {
+        "Content-Type": [
+          "application/json"
+        ]
+      },
+      "size": 1534,
+      "status": 200,
+      "ts": 1795628767.8,
+      "user_id": ""
+    },
+    "decoder": {
+      "name": "json"
+    },
+    "full_log": "{\"level\":\"info\",\"ts\":1795628767.8,\"logger\":\"http.log.access.hnx_access\",\"msg\":\"handled request\",\"request\":{\"remote_ip\":\"203.0.113.50\",\"remote_port\":\"51234\",\"client_ip\":\"203.0.113.50\",\"proto\":\"HTTP/2.0\",\"method\":\"GET\",\"host\":\"hub.example.internal\",\"uri\":\"/status.json\",\"headers\":{\"User-Agent\":[\"curl/8.9.0\"],\"Cookie\":[\"REDACTED\"]}},\"bytes_read\":0,\"user_id\":\"\",\"duration\":0.012,\"size\":1534,\"status\":200,\"resp_headers\":{\"Content-Type\":[\"application/json\"]}}",
+    "location": "/var/lib/hnx-modules/edge/logs/access.log",
+    "timestamp": "2026-11-22T10:10:00.000+0000"
+  },
+  {
+    "agent": {
+      "id": "020",
+      "ip": "192.0.2.131",
+      "name": "hnx-edge-01"
+    },
+    "data": {
+      "bytes_read": 0,
+      "duration": 0.0004,
+      "level": "info",
+      "logger": "http.log.access.hnx_access",
+      "msg": "handled request",
+      "request": {
+        "client_ip": "203.0.113.50",
+        "headers": {
+          "Cookie": [
+            "REDACTED"
+          ],
+          "User-Agent": [
+            "curl/8.9.0"
+          ]
+        },
+        "host": "no-such.example.internal",
+        "method": "GET",
+        "proto": "HTTP/2.0",
+        "remote_ip": "203.0.113.50",
+        "remote_port": "51234",
+        "uri": "/.env"
+      },
+      "size": 12,
+      "status": 404,
+      "ts": 1795628768.1,
+      "user_id": ""
+    },
+    "decoder": {
+      "name": "json"
+    },
+    "full_log": "{\"level\":\"info\",\"ts\":1795628768.1,\"logger\":\"http.log.access.hnx_access\",\"msg\":\"handled request\",\"request\":{\"remote_ip\":\"203.0.113.50\",\"remote_port\":\"51234\",\"client_ip\":\"203.0.113.50\",\"proto\":\"HTTP/2.0\",\"method\":\"GET\",\"host\":\"no-such.example.internal\",\"uri\":\"/.env\",\"headers\":{\"User-Agent\":[\"curl/8.9.0\"],\"Cookie\":[\"REDACTED\"]}},\"bytes_read\":0,\"user_id\":\"\",\"duration\":0.0004,\"size\":12,\"status\":404}",
+    "location": "/var/lib/hnx-modules/edge/logs/access.log",
+    "timestamp": "2026-11-22T10:10:01.000+0000"
+  },
+  {
+    "agent": {
+      "id": "020",
+      "ip": "192.0.2.131",
+      "name": "hnx-edge-01"
+    },
+    "data": {
+      "duration": 3.0,
+      "level": "error",
+      "logger": "http.log.error",
+      "msg": "dial tcp: lookup status-hub.svc.example.internal: i/o timeout",
+      "request": {
+        "client_ip": "203.0.113.50",
+        "headers": {
+          "Cookie": [
+            "REDACTED"
+          ],
+          "User-Agent": [
+            "curl/8.9.0"
+          ]
+        },
+        "host": "hub.example.internal",
+        "method": "GET",
+        "proto": "HTTP/2.0",
+        "remote_ip": "203.0.113.50",
+        "remote_port": "51234",
+        "uri": "/status.json"
+      },
+      "status": 502,
+      "ts": 1795628769.0
+    },
+    "decoder": {
+      "name": "json"
+    },
+    "full_log": "{\"level\":\"error\",\"ts\":1795628769.0,\"logger\":\"http.log.error\",\"msg\":\"dial tcp: lookup status-hub.svc.example.internal: i/o timeout\",\"request\":{\"remote_ip\":\"203.0.113.50\",\"remote_port\":\"51234\",\"client_ip\":\"203.0.113.50\",\"proto\":\"HTTP/2.0\",\"method\":\"GET\",\"host\":\"hub.example.internal\",\"uri\":\"/status.json\",\"headers\":{\"User-Agent\":[\"curl/8.9.0\"],\"Cookie\":[\"REDACTED\"]}},\"duration\":3.0,\"status\":502}",
+    "location": "/var/lib/hnx-modules/edge/logs/access.log",
+    "timestamp": "2026-11-22T10:10:02.000+0000"
   }
 ]

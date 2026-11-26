@@ -75,3 +75,6 @@ caddy_mem_limit: 256m
 caddy_start: true
 caddy_validate_with_docker: true
 caddy_health_timeout: 10
+# The SIEM agent's systemd unit on this host, restarted when the access-log block changed (empty: the site
+# restarts it; the zeek and IDS modules' contract).
+caddy_siem_agent_unit: ""
