@@ -101,14 +101,14 @@ table, the route and the event: the same event always has the same id, which is 
 | Table | class_uid | Fed by |
 |---|---|---|
 | `detection_finding` | 2004 | manager alerts; sensor alerts |
-| `authentication` | 3002 | manager alerts and archives (sshd, pam and the authentication groups) |
+| `authentication` | 3002 | manager alerts and archives (sshd, pam and the authentication groups); a NAS connection-log login (`Users: .., Source IP: .., Action: Login OK/Fail`) forwarded by syslog |
 | `vulnerability_finding` | 2002 | the manager's vulnerability detector |
 | `compliance_finding` | 2003 | the manager's configuration assessment |
 | `file_activity` | 1001 | file integrity events |
 | `process_activity` | 1007 | audit and Sysmon process events |
 | `network_activity` | 4001 | router CEF records with a source and a destination; sensor flows |
 | `dns_activity` | 4003 | sensor DNS records |
-| `http_activity` | 4002 | sensor HTTP records; web access logs |
+| `http_activity` | 4002 | sensor HTTP records; the edge's access log (Caddy JSON via the host's SIEM agent: client, site, method, URI, status, bytes) |
 | `raw_archive` | none | every event, labelled, whole (`route`, `location`, `decoder_name`, `agent_*`, `rule_id`, `full_log`, `raw`) |
 
 The first five (authentication, detection_finding, dns_activity, network_activity,

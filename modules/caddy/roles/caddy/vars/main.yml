@@ -282,3 +282,22 @@ caddy_pem_cert_pattern: '-----BEGIN CERTIFICATE-----'
 caddy_pem_key_pattern: '-----BEGIN (EC |RSA )?PRIVATE KEY-----'
 # the deletes every site must run first (homelabnext.edge_identity.IDENTITY_HEADERS.strip_patterns)
 caddy_identity_marks: ["*auth-request*", "*auth_request*"]
+
+# --- the access log (read by the host's SIEM agent) -------------------------------------------------
+# every request, one JSON line, credentials redacted (Caddyfile.j2); the directory is the container
+# user's, the agent (root) reads it. The host path is under the data root; rotation is Caddy's own.
+caddy_log_root: "{{ caddy_data_root }}/logs"
+caddy_container_log_dir: /var/log/caddy
+caddy_access_log_name: access.log
+caddy_access_log_roll_size: 50MiB
+caddy_access_log_roll_keep: 5
+caddy_access_log_roll_keep_for: 168h
+# the SIEM agent on this host (the siem-agent control) reads it: one marked localfile block in the
+# agent's configuration, added only when that configuration exists (the zeek and IDS modules' contract)
+caddy_siem_agent_conf: /var/ossec/etc/ossec.conf
+caddy_siem_marker: "hnx caddy access log"
+
+# The access log's redaction (query values that carry credentials, and a Location header), shared by the
+# per-site and catch-all access loggers; a variable rather than a template macro so the Caddyfile stays plain
+# substitution (tests/modules/test_edge_module.py renders it without Jinja).
+caddy_access_log_redact_fields: "\t\t\tfields {\n\t\t\t\trequest>uri query {\n\t\t\t\t\treplace api_key REDACTED\n\t\t\t\t\treplace apikey REDACTED\n\t\t\t\t\treplace ApiKey REDACTED\n\t\t\t\t\treplace Api_Key REDACTED\n\t\t\t\t\treplace api-key REDACTED\n\t\t\t\t\treplace token REDACTED\n\t\t\t\t\treplace Token REDACTED\n\t\t\t\t\treplace access_token REDACTED\n\t\t\t\t\treplace AccessToken REDACTED\n\t\t\t\t\treplace X-Emby-Token REDACTED\n\t\t\t\t\treplace X-MediaBrowser-Token REDACTED\n\t\t\t\t\treplace x-emby-token REDACTED\n\t\t\t\t\treplace x-mediabrowser-token REDACTED\n\t\t\t\t\t# the sign-in redirect's one-time values (the access log records every callback)\n\t\t\t\t\treplace code REDACTED\n\t\t\t\t\treplace state REDACTED\n\t\t\t\t\treplace session_state REDACTED\n\t\t\t\t\treplace id_token REDACTED\n\t\t\t\t}\n\t\t\t\trequest>headers>Authorization replace REDACTED\n\t\t\t\trequest>headers>X-Emby-Authorization replace REDACTED\n\t\t\t\trequest>headers>X-Emby-Token replace REDACTED\n\t\t\t\trequest>headers>X-Mediabrowser-Token replace REDACTED\n\t\t\t\trequest>headers>X-MediaBrowser-Token replace REDACTED\n\t\t\t\trequest>headers>Cookie replace REDACTED\n\t\t\t\trequest>headers>Proxy-Authorization replace REDACTED\n\t\t\t\tresp_headers>Set-Cookie replace REDACTED\n\t\t\t\t# the sign-in redirect carries the request's URI, escaped, in Location (rd=...%3Ftoken%3D...)\n\t\t\t\tresp_headers>Location regexp \"(?i)(token|api_?key|api-key|access_token|id_token|code|state|session_state)(%3d|=)(?:[^&%]|%[^2]|%2[^6])*\" \"${1}${2}REDACTED\"\n\t\t\t}\n"

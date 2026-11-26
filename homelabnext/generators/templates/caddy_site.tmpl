@@ -1,4 +1,5 @@
 ${hostname} {
 	# service ${service} (${capability}) owner=${owner}${note}
 ${auth_block}${route_open}	reverse_proxy ${scheme}://${alias}:${port}${proxy_block}${route_close}
+	log hnx_access
 }
