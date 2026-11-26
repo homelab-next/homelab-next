@@ -4,7 +4,9 @@
 Description=Application-consistent database dump of {{ compose_app_name }} (ADR-0042)
 After=docker.service
 Requires=docker.service
+{% if compose_app_export_jobs | selectattr('engine', 'in', ['postgres', 'mysql']) | list | length > 0 %}
 ConditionPathExists={{ compose_app_dir }}/docker-compose.yml
+{% endif %}
 
 [Service]
 Type=oneshot

@@ -27,6 +27,11 @@
       compose_app_dir: "{{ gitea_dir }}"
       compose_app_data_dir: "{{ gitea_data_root }}"
       compose_app_export_dir: "{{ gitea_data_root }}/export"
+      # the scheduled copy (compose_app_export_timer): the database through SQLite's online backup, the repositories as a tree
+      # (the configuration holds the application secrets and is left out, as in the exit copy)
+      compose_app_export_files:
+        - {name: forge-db, kind: sqlite, glob: "{{ gitea_data_root }}/data/gitea.db"}
+        - {name: forge-repositories, kind: tree, path: "{{ gitea_data_root }}/data/git/repositories"}
       compose_app_owner: "{{ gitea_owner }}"
       compose_app_group: "{{ gitea_group }}"
       compose_app_start: "{{ gitea_start }}"
