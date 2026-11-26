@@ -34,7 +34,7 @@ import re
 import socket
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -117,6 +117,8 @@ def normalize_role(name: str) -> str:
 class Binding:
     backend: str  # logical service name (without the svc: prefix)
     model_id: str
+    # 0 (or absent in the table) = unset: the binding's rank is its position.  >= 1 = an explicit
+    # tier (lower first); bindings of one role with the same value are balanced, not failover.
     priority: int = 0
     version: str | None = None  # G-11 pin: the release the backend must serve
     # G-11 pin: the model store's digest of the entry, sha256:<hex> of its sha256sum listing
@@ -126,6 +128,19 @@ class Binding:
     @property
     def pinned(self) -> bool:
         return bool(self.version) and bool(self.digest and DIGEST_RE.match(self.digest))
+
+
+def priority_problems(role: str, bindings: Sequence[Binding]) -> list[str]:
+    """The mixing rule: in one role either NO binding sets a priority (0 or absent: each ranks by
+    its position, strict failover) or EVERY binding sets one (>= 1: lower first, equal = balanced).
+    A half-set role has no unambiguous order, so it is refused rather than guessed at."""
+    unset = [i for i, b in enumerate(bindings) if b.priority < 1]
+    if unset and len(unset) != len(bindings):
+        return [
+            f"role {role}: bindings {unset} have no priority while others do; set priority >= 1 "
+            "on every binding of a role or on none (equal priority = balanced, lower = tried first)"
+        ]
+    return []
 
 
 @dataclass(frozen=True)
@@ -175,6 +190,7 @@ class RoleTable:
                 if isinstance(prio, bool) or not isinstance(prio, int):
                     problems.append(f"role {name}: bindings[{i}].priority must be an integer")
                     continue
+                # a negative priority is the schema's to refuse (minimum 0), with its path
                 m = SVC_RE.match(str(b.get("backend", "")))
                 if not m:
                     problems.append(f"role {name}: bindings[{i}].backend must be a svc: id")
@@ -196,6 +212,7 @@ class RoleTable:
                 )
             if not bindings:
                 problems.append(f"role {name}: needs at least one binding")
+            problems += priority_problems(name, bindings)
             kind = r.get("kind", "chat")
             if kind not in KINDS:
                 problems.append(f"role {name}: kind {kind!r} not in {KINDS}")

@@ -60,31 +60,47 @@ func (cl *call) markServed(w http.ResponseWriter) {
 	}
 }
 
-// tryRole tries each deployment of role in order; true once one answered the caller.
+// tryRole tries the role's tiers lowest first, and within a tier its deployments balanced (tier.go); true once one answered the caller.
 // credsRefused is set when an upstream answered 401 or 403 (ADR-0038 d4).
 func (s *Server) tryRole(w http.ResponseWriter, r *http.Request, cl *call, role *Role, credsRefused *bool) bool {
-	for _, d := range role.Deployments {
-		if r.Context().Err() != nil {
-			return false
+	for _, t := range role.tierList() {
+		for _, d := range t.order() {
+			if s.tryDeployment(w, r, cl, role, d, credsRefused) {
+				return true
+			}
+			if r.Context().Err() != nil {
+				return false
+			}
 		}
-		res := s.attempt(w, r, cl, d)
-		if res.upstreamOK && (!res.answered || res.code == errOverloaded.code) {
-			// the reply was discarded: charge the attempt what it reserved (settled in record)
-			cl.discarded = append(cl.discarded, spent{role: role.alias, tokens: s.estimate(cl, role)})
-		}
-		if res.answered {
-			cl.status, cl.errorCode, cl.servedRole, cl.deployment = res.status, res.code, role.alias, d.ID
-			cl.usage, cl.ttft = res.usage, res.ttft
-			return true
-		}
-		if res.unsupported != nil && cl.unsupported == nil {
-			cl.unsupported = res.unsupported
-		}
-		if res.credsRefused {
-			*credsRefused = true
-		}
-		s.log.Warn("deployment failed, trying the next", "request_id", cl.id,
-			"deployment", d.ID, "reason", res.reason)
 	}
+	return false
+}
+
+// tryDeployment makes one attempt on d, counted in flight for the tier's balancing; true when it
+// answered the caller.
+func (s *Server) tryDeployment(w http.ResponseWriter, r *http.Request, cl *call, role *Role, d *Deployment, credsRefused *bool) bool {
+	if r.Context().Err() != nil {
+		return false
+	}
+	d.inflight.Add(1)
+	res := s.attempt(w, r, cl, d)
+	d.inflight.Add(-1)
+	if res.upstreamOK && (!res.answered || res.code == errOverloaded.code) {
+		// the reply was discarded: charge the attempt what it reserved (settled in record)
+		cl.discarded = append(cl.discarded, spent{role: role.alias, tokens: s.estimate(cl, role)})
+	}
+	if res.answered {
+		cl.status, cl.errorCode, cl.servedRole, cl.deployment = res.status, res.code, role.alias, d.ID
+		cl.usage, cl.ttft = res.usage, res.ttft
+		return true
+	}
+	if res.unsupported != nil && cl.unsupported == nil {
+		cl.unsupported = res.unsupported
+	}
+	if res.credsRefused {
+		*credsRefused = true
+	}
+	s.log.Warn("deployment failed, trying the next", "request_id", cl.id,
+		"deployment", d.ID, "reason", res.reason)
 	return false
 }

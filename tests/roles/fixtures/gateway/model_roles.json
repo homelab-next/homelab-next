@@ -15,8 +15,8 @@
     "general": {
       "tier": "large",
       "bindings": [
-        {"backend": "svc:pool", "model_id": "example-general", "priority": 0},
-        {"backend": "svc:cloud", "model_id": "example-cloud-chat", "priority": 1, "leaves_lab": true}
+        {"backend": "svc:pool", "model_id": "example-general", "priority": 1},
+        {"backend": "svc:cloud", "model_id": "example-cloud-chat", "priority": 2, "leaves_lab": true}
       ]
     }
   }

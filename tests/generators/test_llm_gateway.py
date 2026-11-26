@@ -520,6 +520,78 @@ def test_a_role_bound_twice_on_one_backend_renders_both_bindings(tmp_path):
     assert len(models) == 2 and models[1] == "openai/small-model-alt"
 
 
+# --- binding priority: failover by position, or balanced by equal priority ----------------------
+
+
+def _three_backends(prios):
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["small-local"]["bindings"] = [
+        {
+            "backend": "svc:infer-b",
+            "model_id": f"m{i}",
+            **({"priority": p} if p is not None else {}),
+        }
+        for i, p in enumerate(prios)
+    ]
+    roles["roles"]["small-local"].pop("limits")
+    return roles
+
+
+def _orders(tmp_path, roles):
+    lt = yaml.safe_load(gw.render_file(make_spec(tmp_path, roles))[PROXY_CONFIG])
+    return [d[DEPLOY_PARAMS]["order"] for d in lt["model_list"] if d["model_name"] == "small-local"]
+
+
+def test_bindings_without_priority_keep_their_position_as_order(tmp_path):
+    assert _orders(tmp_path, _three_backends([None, None, None])) == [1, 2, 3]
+    (tmp_path / "z").mkdir()
+    assert _orders(tmp_path / "z", _three_backends([0, 0, 0])) == [1, 2, 3]
+
+
+def test_equal_priority_renders_equal_order_and_a_lower_tier_stays_first(tmp_path):
+    assert _orders(tmp_path, _three_backends([1, 1, 1])) == [1, 1, 1]
+    (tmp_path / "b").mkdir()
+    assert _orders(tmp_path / "b", _three_backends([2, 1, 1])) == [1, 1, 2]
+
+
+def test_a_balanced_group_still_splits_the_limits_one_nth_each(tmp_path):
+    roles = _three_backends([1, 1, 1])
+    roles["roles"]["small-local"]["limits"] = {"window_s": 60, "max_requests": 30}
+    lt = yaml.safe_load(gw.render_file(make_spec(tmp_path, roles))[PROXY_CONFIG])
+    rpms = [d[DEPLOY_PARAMS]["rpm"] for d in lt["model_list"] if d["model_name"] == "small-local"]
+    assert rpms == [10, 10, 10]
+
+
+def test_the_neutral_config_carries_priority_only_for_a_role_that_sets_it(tmp_path):
+    def deployments(roles):
+        files = gw.render_file(make_spec(tmp_path, roles))
+        return json.loads(files["gateway/gateway.json"])["roles"]["small-local"]["deployments"]
+
+    assert all("priority" not in d for d in deployments(_three_backends([None, None, None])))
+    (tmp_path / "p").mkdir()
+    out = gw.render_file(make_spec(tmp_path / "p", _three_backends([2, 1, 1])))
+    got = json.loads(out["gateway/gateway.json"])["roles"]["small-local"]["deployments"]
+    assert [d["priority"] for d in got] == [1, 1, 2]  # the loader sorts by priority, ties stable
+
+
+def test_a_role_with_some_priorities_and_not_others_is_refused(tmp_path):
+    with pytest.raises(gw.GatewaySpecError) as e:
+        gw.render_file(make_spec(tmp_path, _three_backends([1, None, 1])))
+    assert "have no priority while others do" in "\n".join(e.value.problems)
+
+
+def test_the_schema_accepts_priority_and_refuses_a_non_integer_or_negative_one():
+    from homelabnext.registry.models import schema_problems
+
+    doc = copy.deepcopy(ROLES)
+    assert not schema_problems(doc)
+    doc["roles"]["small-local"]["bindings"][0]["priority"] = 2
+    assert not schema_problems(doc)
+    for bad in (-1, 1.5, "1"):
+        doc["roles"]["small-local"]["bindings"][0]["priority"] = bad
+        assert schema_problems(doc), bad
+
+
 # --- one secret, one credential ------------------------------------------------------------------
 
 
@@ -615,7 +687,7 @@ def test_a_role_limit_that_would_render_looser_is_refused(tmp_path):
 def _two_binding_roles(limits):
     roles = copy.deepcopy(ROLES)
     roles["roles"]["small-local"]["bindings"].append(
-        dict(roles["roles"]["small-local"]["bindings"][0], backend="svc:infer-a", priority=1)
+        dict(roles["roles"]["small-local"]["bindings"][0], backend="svc:infer-a")
     )
     roles["roles"]["small-local"]["limits"] = limits
     return roles

@@ -44,7 +44,8 @@
                 },
                 "priority": {
                   "type": "integer",
-                  "minimum": 0
+                  "minimum": 0,
+                  "description": "Rank of the binding within its role, lower first. 0 or absent: unset, the binding ranks by its position (strict failover). >= 1: an explicit tier; bindings of one role with the same value are balanced (LiteLLM shuffles within an order), and a higher value is tried only when every lower tier failed. All or none: a role where some bindings set priority >= 1 and others do not is refused (homelabnext.registry.models)."
                 },
                 "version": {
                   "type": "string",

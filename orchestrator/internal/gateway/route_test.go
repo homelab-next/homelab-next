@@ -3,9 +3,11 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -265,4 +267,118 @@ func openAIBackendNoStream(reply string) func(http.ResponseWriter, *http.Request
 		delete(body, "stream")
 		openAIBackend(reply)(w, r, body)
 	}
+}
+
+// tiered gives chat-a three deployments (up1, up2, up3) with the given priorities (nil: unset).
+func tiered(f func() (string, string, string), prios []int) func(cfg map[string]any) {
+	return func(cfg map[string]any) {
+		u1, u2, u3 := f()
+		deps := []any{}
+		for i, u := range []string{u1, u2, u3} {
+			id := "chat-a-" + string(rune('1'+i))
+			d := dep(id, "openai", "local", u, "backend-a"+string(rune('1'+i)), nil)
+			if prios != nil {
+				d["priority"] = prios[i]
+			}
+			deps = append(deps, d)
+		}
+		roleOf(cfg, "chat-a")["deployments"] = deps
+	}
+}
+
+func newTiered(t *testing.T, prios []int) *fixture {
+	t.Helper()
+	return newFixtureOpts(t, nil, func(cfg map[string]any) {
+		// the upstream URLs are known only once the fixture exists: take them from the base config
+		deps := roleOf(cfg, "chat-a")["deployments"].([]any)
+		u1 := deps[0].(map[string]any)["base_url"].(string)
+		u2 := deps[1].(map[string]any)["base_url"].(string)
+		u3 := roleOf(cfg, "chat-b")["deployments"].([]any)[0].(map[string]any)["base_url"].(string)
+		tiered(func() (string, string, string) { return u1, u2, u3 }, prios)(cfg)
+	})
+}
+
+func TestGatewayEqualPriorityBalancesTheTier(t *testing.T) {
+	f := newTiered(t, []int{1, 1, 1})
+	for i := 0; i < 9; i++ {
+		if r := f.chat(agentKey, "chat-a"); r.status != 200 {
+			t.Fatalf("%d %s", r.status, r.body)
+		}
+	}
+	// up3 is also chat-b's backend, but chat-b is not called here
+	if a, b, c := len(f.up1.calls()), len(f.up2.calls()), len(f.up3.calls()); a != 3 || b != 3 || c != 3 {
+		t.Fatalf("calls %d %d %d, want 3 each", a, b, c)
+	}
+}
+
+func TestGatewayAFailedMemberMovesOnWithinTheTierBeforeTheNextTier(t *testing.T) {
+	f := newTiered(t, []int{1, 1, 2})
+	f.up1.set(status(503))
+	for i := 0; i < 4; i++ {
+		if r := f.chat(agentKey, "chat-a"); r.status != 200 {
+			t.Fatalf("%d %s", r.status, r.body)
+		}
+	}
+	if n := len(f.up3.calls()); n != 0 {
+		t.Fatalf("the second tier was used %d times while its first tier had a healthy member", n)
+	}
+	if len(f.up2.calls()) != 4 {
+		t.Fatalf("up2 served %d, want all 4 (up1 failed each time it was tried)", len(f.up2.calls()))
+	}
+	// both members of tier 1 fail: tier 2 serves
+	f.up2.set(status(503))
+	if r := f.chat(agentKey, "chat-a"); r.status != 200 || len(f.up3.calls()) != 1 {
+		t.Fatalf("%d %s, up3 %d", r.status, r.body, len(f.up3.calls()))
+	}
+}
+
+func TestGatewayUnsetPriorityIsStrictFailover(t *testing.T) {
+	f := newTiered(t, nil)
+	for i := 0; i < 4; i++ {
+		if r := f.chat(agentKey, "chat-a"); r.status != 200 {
+			t.Fatalf("%d %s", r.status, r.body)
+		}
+	}
+	if a, b, c := len(f.up1.calls()), len(f.up2.calls()), len(f.up3.calls()); a != 4 || b != 0 || c != 0 {
+		t.Fatalf("calls %d %d %d, want 4 0 0", a, b, c)
+	}
+}
+
+func TestGatewayMixedPriorityConfigIsRefused(t *testing.T) {
+	cfg := baseConfig("http://127.0.0.1:1", "http://127.0.0.1:2", "http://127.0.0.1:3", "https://127.0.0.1:4")
+	deps := roleOf(cfg, "chat-a")["deployments"].([]any)
+	deps[0].(map[string]any)["priority"] = 1
+	data, _ := json.Marshal(cfg)
+	if _, err := ParseConfig(data); err == nil || !strings.Contains(err.Error(), "all or on none") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestTierOrderIsRaceFreeAndLeastInFlightFirst(t *testing.T) {
+	r := &Role{alias: "x", Deployments: []*Deployment{
+		{ID: "x-1", Priority: 1}, {ID: "x-2", Priority: 1}, {ID: "x-3", Priority: 1}}}
+	tiers := r.tierList()
+	if len(tiers) != 1 {
+		t.Fatalf("%d tiers", len(tiers))
+	}
+	tiers[0].deps[0].inflight.Store(5)
+	tiers[0].deps[1].inflight.Store(2)
+	if got := tiers[0].order()[0]; got.ID == "x-1" {
+		t.Fatal("the busiest member was first")
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				for _, d := range tiers[0].order() {
+					d.inflight.Add(1)
+					d.inflight.Add(-1)
+				}
+				r.tierList()
+			}
+		}()
+	}
+	wg.Wait()
 }

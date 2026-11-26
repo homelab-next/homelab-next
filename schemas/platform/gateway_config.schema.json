@@ -216,6 +216,11 @@
           "maxLength": 128,
           "pattern": "^[A-Za-z0-9._:/-]+$(?!\\n)"
         },
+        "priority": {
+          "description": "optional: the deployment's tier, lower first. Deployments of one role with the same priority form a tier whose members share the load (least in flight, ties rotated), and a request moves to the next tier only when every member failed. Absent: each deployment is its own tier, in list order (strict failover). All or none per role (the reader refuses a half-set role). Rendered only for a role whose bindings set priority",
+          "type": "integer",
+          "minimum": 1
+        },
         "api_key_env": {
           "description": "the environment variable holding the upstream key, or null (no auth header)",
           "oneOf": [

@@ -134,6 +134,18 @@ func (c *Config) validateRole(p *problems, r *Role) {
 		}
 		validateDeployment(p, r, i, d)
 	}
+	set := 0
+	for _, d := range r.Deployments {
+		if d != nil && d.Priority != 0 {
+			set++
+		}
+		if d != nil && d.Priority < 0 {
+			p.add("%s: deployment %s: priority must be >= 1", w, d.ID)
+		}
+	}
+	if set != 0 && set != len(nonNil(r)) {
+		p.add("%s: some deployments have a priority and some do not; set it on all or on none", w)
+	}
 	if l := r.Limits; l != nil {
 		if l.WindowS <= 0 {
 			p.add("%s: limits.window_s must be > 0", w)
