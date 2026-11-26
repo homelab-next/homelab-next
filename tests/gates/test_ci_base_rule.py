@@ -2,10 +2,10 @@
 """One base rule for every CI job that compares with a base: ``homelabnext/gitbase.py``.
 
 The schemas, register-ids, regression-tests and trusted-gates jobs each wrote the push / pull
-request / force-push rule out in shell, and the copies disagreed: trusted-gates refused a root
-commit while the other two ran with no base.  Now the rule has one copy; ``python -m
-homelabnext.gitbase`` prints the base, ``--allow-root`` is the explicit choice of the jobs that run
-without one, and trusted-gates reads the file from the commit it trusts, not from the checkout.
+request / force-push rule out in shell, and the copies disagreed.  Now the rule has one copy;
+``python -m homelabnext.gitbase`` prints the base, and ``--allow-root`` is the explicit choice of
+the callers that run without one: the precheck job (``tools/precheck.sh``, which runs the ratchets
+and the register-ids check against it) and regression-tests.
 """
 
 from __future__ import annotations
@@ -128,82 +128,54 @@ def _step(job: str, needle: str) -> dict:
     return step
 
 
+PRECHECK = ROOT / "tools" / "precheck.sh"
+
+
 @pytest.mark.parametrize(
-    ("job", "needle"), [("register-ids", "ids-check"), ("regression-tests", "fix_has_test")]
+    ("job", "needle", "text"),
+    [
+        ("precheck", "make precheck", lambda: PRECHECK.read_text()),
+        ("regression-tests", "fix_has_test", None),
+    ],
 )
-def test_the_jobs_that_run_without_a_base_on_a_root_commit_say_so_and_call_the_rule(job, needle):
+def test_the_callers_that_run_without_a_base_on_a_root_commit_say_so_and_call_the_rule(
+    job, needle, text
+):
     step = _step(job, needle)
-    assert "base=$(python -m homelabnext.gitbase --allow-root)" in step["run"]
+    run = text() if text else step["run"]
+    assert "-m homelabnext.gitbase --allow-root)" in run
     assert step["env"]["HNX_PR_BASE"] == "${{ github.event.pull_request.base.sha }}"
     assert step["env"]["HNX_PUSH_BEFORE"] == "${{ github.event.before }}"
 
 
-@pytest.mark.parametrize("job", ["register-ids", "regression-tests", "trusted-gates", "schemas"])
+@pytest.mark.parametrize("job", ["precheck", "regression-tests"])
 def test_no_job_writes_the_rule_out_again(job):
     runs = "\n".join(str(s.get("run", "")) for s in JOBS[job]["steps"])
+    if job == "precheck":
+        runs += PRECHECK.read_text()
     for copy in (ZERO, "HEAD^^{commit}", "HEAD^)", "rev-parse --verify --quiet"):
         assert copy not in runs, (job, copy)
 
 
-def _trusted_base_script() -> str:
-    """The trusted-gates base step up to the checker worktree, then the base it picked."""
-    (step,) = [s for s in JOBS["trusted-gates"]["steps"] if s.get("id") == "base"]
-    run = step["run"]
-    assert step["env"]["TRUSTED"] == "${{ github.event.pull_request.base.sha || github.sha }}"
-    assert 'git show "$TRUSTED:homelabnext/gitbase.py"' in run
-    return run[: run.index("git worktree add")] + 'echo "BASE=$base"\n'
-
-
-def _trusted(repo: Path, tmp_path: Path, event: str, trusted: str, *, pr_base="", before=""):
-    env = {
-        **os.environ,
-        "GITHUB_EVENT_NAME": event,
-        "TRUSTED": trusted,
-        "HNX_PR_BASE": pr_base,
-        "HNX_PUSH_BEFORE": before,
-        "PY": sys.executable,
-        "GITHUB_WORKSPACE": str(repo),
-        "RUNNER_TEMP": str(tmp_path),
-    }
-    return subprocess.run(
-        ["bash", "-c", _trusted_base_script()],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def _with_gitbase(path: Path, commits: int) -> Path:
-    """A repository whose every commit carries this checkout's gitbase.py."""
-    path.mkdir()
-    _git(path, "init", "-q")
-    (path / "homelabnext").mkdir()
-    for n in range(commits):
-        (path / "homelabnext" / "gitbase.py").write_text(
-            (ROOT / "homelabnext" / "gitbase.py").read_text()
-        )
-        (path / "a").write_text(str(n))
-        _git(path, "add", "-A")
-        _git(path, "commit", "-qm", f"c{n}")
-    return path
-
-
-def test_trusted_gates_takes_the_base_by_the_trusted_copy_of_the_rule(tmp_path):
-    repo = _with_gitbase(tmp_path / "r", 3)
+def test_precheck_takes_the_ci_base_from_the_rule(tmp_path):
+    """tools/precheck.sh's base selection, run as written up to the make call."""
+    repo = _repo(tmp_path / "r", 3)
     head, parent, first = (_git(repo, "rev-parse", f"HEAD~{n}") for n in range(3))
-    r = _trusted(repo, tmp_path, "pull_request", first, pr_base=first)
-    assert r.returncode == 0 and f"BASE={first}" in r.stdout, r.stderr
-    r = _trusted(repo, tmp_path, "push", head, before=ZERO)
-    assert r.returncode == 0 and f"BASE={parent}" in r.stdout, r.stderr
-
-
-def test_trusted_gates_refuses_a_root_commit_and_an_unreadable_trusted_commit(tmp_path):
-    repo = _with_gitbase(tmp_path / "r", 1)
-    head = _git(repo, "rev-parse", "HEAD")
-    r = _trusted(repo, tmp_path, "push", head, before=ZERO)
-    assert r.returncode != 0 and "BASE=" not in r.stdout
-    assert "a root commit" in r.stderr
-    r = _trusted(repo, tmp_path, "pull_request", "e" * 40, pr_base="e" * 40)
-    assert r.returncode != 0 and "BASE=" not in r.stdout
+    script = PRECHECK.read_text()
+    script = script[: script.index("log=$(mktemp)")] + 'echo "BASE=$base"\n'
+    script = script.replace('repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)', f"repo={repo}")
+    env = {**os.environ, "PY": sys.executable, "PYTHONPATH": str(ROOT), "GITHUB_EVENT_NAME": ""}
+    env.pop("BASE", None)
+    for event, extra, want in (
+        ("pull_request", {"HNX_PR_BASE": first}, first),
+        ("push", {"HNX_PUSH_BEFORE": ZERO}, parent),
+    ):
+        r = subprocess.run(
+            ["bash", "-c", script],
+            env={**env, "GITHUB_EVENT_NAME": event, **extra},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert r.returncode == 0 and f"BASE={want}" in r.stdout, r.stdout + r.stderr
+    assert head != parent

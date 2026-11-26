@@ -161,6 +161,7 @@ def test_negative_is_refused(name):
     assert exc.value.problems
 
 
+@pytest.mark.static
 def test_listener_clash_negative_fixture_is_schema_valid_but_registry_invalid():
     from homelabnext.registry.model import build_registry, schema_problems
 
@@ -172,6 +173,7 @@ def test_listener_clash_negative_fixture_is_schema_valid_but_registry_invalid():
     assert "core-01 tcp/8099 is claimed by auth-proxy metrics, status-hub" in str(exc.value)
 
 
+@pytest.mark.static
 def test_duplicate_yaml_key_is_refused():
     text = EXAMPLE.read_text(encoding="utf-8").replace(
         "  notify:\n    capability: notify",

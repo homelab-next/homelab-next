@@ -164,6 +164,7 @@ def test_the_containers_join_the_role_slice_the_module_play_names(tmp_path):
     assert compose(tmp_path)["services"][MID]["cgroup_parent"] == f"hnx-{MID}-server.slice"
 
 
+@pytest.mark.static
 def test_every_task_that_touches_the_secret_hides_it():
     """The key is read by name and rendered into one 0600 file: a task that looks it up or renders
     the settings logs nothing (no_log), so neither the run output nor a callback can carry it."""

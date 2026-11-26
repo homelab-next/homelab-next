@@ -335,6 +335,7 @@ def test_the_example_table_still_runs_only_its_chat_suite():
     assert {e["kind"] for c in rep["canary"].values() for e in c["bindings"]} == {"chat"}
 
 
+@pytest.mark.static
 def test_a_subset_table_is_evaluated_by_the_suites_that_fit_it():
     """An overlay with one chat role: the cascade's other role is not in it, and that is no
     problem (it was: 'evaluated but not in the role table')."""

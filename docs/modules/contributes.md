@@ -96,9 +96,9 @@ to the commands that run them and set the exit code (`homelabnext/cli.py`,
 through (`homelabnext/_yaml.py`, `homelabnext/modules/scope.py`). `GOVERNANCE` in `review_tier.py`
 lists them all, and a test derives the direct imports of the two tiers, `swap_evidence.py` and
 `swap.py`, so a new import that is not listed fails the suite. Their wider import tree is not
-listed: CI runs the gates with the base commit's code (the `trusted-gates` job), so a pull request
-cannot weaken its own gate through them, though it can still edit the workflow that runs the job
-(below, "What runs the gate"). A change to what sets up CI's interpreter and packages
+listed: CI ran the gates with the base commit's code (the `trusted-gates` job) until 2026-11-25;
+now `make precheck` runs them with the change's own code, so the code-owner review of a change
+through them is the control (below, "What runs the gate"). A change to what sets up CI's interpreter and packages
 (`.github/actions/python-deps/action.yml`, `constraints/bootstrap.txt`, `constraints/ci.txt`,
 `pyproject.toml`) and to the release transforms (`homelabnext/status/release_transforms.yml`,
 `homelabnext/status/release.py`; ADR-0033 decision 7) is human-approve too. So is a change to what vouches for a model a swap rebinds to (the model store, the
@@ -112,7 +112,7 @@ The overlay's equivalents (`lab/model_roles.json`, `lab/swaps/`) are rated by
 `hnx site review-tier` ([private-overlay.md](../private-overlay.md)).
 
 `hnx modules review-tier --base REV | --ci-base` prints each changed path's tier and fields (and
-the job summary in CI, where the `trusted-gates` job runs it with the base commit's own code;
+the job summary in CI, where `make precheck` runs it in the precheck job;
 `--ci-base` takes the base by `homelabnext.gitbase.ci_base`, the rule `tools/schema_check.py
 --ci-base` takes). The human approval is the pull request's **code-owner review**: the command fails when a
 human-approve change has no valid owner (`@user`, `@org/team` or an email) in CODEOWNERS as of

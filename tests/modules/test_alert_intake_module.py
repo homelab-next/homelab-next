@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,7 @@ def test_the_manifest_is_a_feature_that_requires_the_case_store_the_notifier_and
     assert [h["role"] for h in m["requires"]["hosts"]] == ["server"]
 
 
+@pytest.mark.static
 def test_every_secret_default_is_a_reference_and_the_state_is_exportable():
     m = _manifest()
     for cfg in m["config"].values():
@@ -46,6 +48,7 @@ def test_every_secret_default_is_a_reference_and_the_state_is_exportable():
     assert refs == {c["default"] for c in m["config"].values()}
 
 
+@pytest.mark.static
 def test_the_defaults_hold_no_address_and_no_lab_name_and_the_policy_is_conservative():
     text = (ROLE / "defaults" / "main.yml").read_text()
     assert "192.168" not in text and "gluck" not in text
@@ -55,6 +58,7 @@ def test_the_defaults_hold_no_address_and_no_lab_name_and_the_policy_is_conserva
     assert d["alert_intake_canary_prefix"].startswith("det:")
 
 
+@pytest.mark.static
 def test_the_unit_runs_as_its_own_user_with_the_secrets_in_a_root_only_file():
     unit = (ROLE / "templates" / "alert-intake.service.j2").read_text()
     assert "User={{ alert_intake_user }}" in unit and "NoNewPrivileges=yes" in unit
@@ -68,6 +72,7 @@ def test_the_unit_runs_as_its_own_user_with_the_secrets_in_a_root_only_file():
     assert "{{ lookup" not in (ROLE / "templates" / "alert-intake.env.j2").read_text()
 
 
+@pytest.mark.static
 def test_the_vendored_contract_file_equals_the_repositorys():
     assert (ROLE / "files" / "cases_contract.txt").read_text() == (
         ROOT / "conformance" / "protocols" / "cases.py"
@@ -108,6 +113,7 @@ def test_the_shared_library_set_the_role_installs_is_exactly_what_the_script_imp
     assert len(loaded) > 5 and sorted(listed) == sorted(loaded), (sorted(listed), sorted(loaded))
 
 
+@pytest.mark.static
 def test_the_readiness_hook_looks_for_systemd_as_a_directory():
     # /run/systemd/system is a directory on every systemd host: a check for a regular file refused every
     # real host at its first deploy (found 2026-11-23 on the lab's first placement)

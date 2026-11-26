@@ -549,6 +549,7 @@ def test_a_protected_package_changing_state_is_caught_even_when_the_version_is_t
     assert r.returncode != 0 and "libnvidia-compute-580" in r.stdout
 
 
+@pytest.mark.static
 def test_the_toolkit_packages_are_not_protected_packages():
     """The four toolkit packages match the protected pattern by name (nvidia-*, libnvidia-*) and
     move on purpose: a fresh install must not trip the assertion that protects the driver."""
@@ -790,6 +791,7 @@ def _strings(node, skip=TEXT_KEYS):
         yield str(node)
 
 
+@pytest.mark.static
 def test_no_task_restarts_reloads_loads_modules_resets_a_gpu_or_overrides_a_hold():
     """The guest's cards must never be restarted warm: no restart or reload, no module load, no
     nvidia-smi, no `nvidia-ctk runtime configure` (docker_engine owns daemon.json), nothing allowed
@@ -814,6 +816,7 @@ def test_no_task_restarts_reloads_loads_modules_resets_a_gpu_or_overrides_a_hold
                for s in _strings(yaml.safe_load((ROLE_DIR / "tasks" / "install.yml").read_text())))  # fmt: skip
 
 
+@pytest.mark.static
 def test_the_forbidden_word_scan_would_catch_each_word():
     for word in FORBIDDEN:
         doc = yaml.safe_load(f"- ansible.builtin.command: {{argv: ['x', '{word}']}}\n")
@@ -918,6 +921,7 @@ def test_without_the_driver_loaded_nothing_runs_that_could_reach_nvml(first, cas
     assert not (tmp / "etc" / "cdi" / "nvidia.yaml").exists()
 
 
+@pytest.mark.static
 def test_the_gate_comes_before_anything_that_runs_a_command():
     tasks = yaml.safe_load((ROLE_DIR / "tasks" / "main.yml").read_text())
     names = [t.get("ansible.builtin.include_tasks") for t in tasks]
@@ -1022,6 +1026,7 @@ def test_gpg_must_already_be_installed(first, state, ok):
         assert "gpg is not installed" in r.stdout
 
 
+@pytest.mark.static
 def test_the_source_never_installs_a_package():
     tasks = yaml.safe_load((ROLE_DIR / "tasks" / "source.yml").read_text())
     modules = {k for t in tasks for k in t if "." in k}
@@ -1088,6 +1093,7 @@ def test_a_second_spec_in_the_cdi_directory_fails_the_run(first):
     assert r.returncode != 0 and "sit beside" in r.stdout + r.stderr
 
 
+@pytest.mark.static
 def test_the_boot_unit_waits_for_the_nodes_instead_of_loading_modules():
     text = UNIT_TEMPLATE.read_text()
     assert "nvidia-uvm" in text and "nvidiactl" in text and "sleep 1" in text

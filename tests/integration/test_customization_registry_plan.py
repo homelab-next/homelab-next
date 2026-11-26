@@ -33,6 +33,7 @@ def test_shipped_profiles_are_inert_until_enabled(capsys):
     assert plan["items"] == [] and sorted(plan["inactive_optional"]) == sorted(PROFILES)
 
 
+@pytest.mark.static
 def test_enabled_profiles_plan_cleanly_against_the_registry_example(capsys):
     args = [a for p in PROFILES for a in ("--enable", f"{p}=edge-core")]
     code, plan = _run(capsys, *args)

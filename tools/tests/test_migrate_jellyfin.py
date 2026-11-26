@@ -468,6 +468,7 @@ def test_a_remaining_old_prefix_fails_the_import(src, tmp_path, monkeypatch):
 # ----------------------------------------------------------------------------- no downgrade
 
 
+@pytest.mark.static
 def test_the_known_migrations_are_the_pinned_versions():
     """The list the importer judges a source by is the one of the version the module pins."""
     manifest = yaml.safe_load((ROOT / "modules" / "media" / "module.yml").read_text())

@@ -52,6 +52,7 @@ def test_registry_validation_imports_neither_the_catalog_nor_the_harness():
     assert res.stdout.strip() == ""
 
 
+@pytest.mark.static
 def test_every_endpoint_variable_written_in_package_code_is_a_platform_capability():
     known = {env_var_name(c): c for c in platform_capabilities()}
     found = {
@@ -63,6 +64,7 @@ def test_every_endpoint_variable_written_in_package_code_is_a_platform_capabilit
     assert sorted(f"{path}: {var}" for path, var in found if var not in known) == []
 
 
+@pytest.mark.static
 def test_every_literal_capability_lookup_in_package_code_is_a_platform_capability():
     known = platform_capabilities()
     found = {

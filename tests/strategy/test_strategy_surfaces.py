@@ -185,6 +185,7 @@ def test_check_lost_covers_the_strategy_directories(repo):
     assert ids.check_lost(repo, "strategy/measures") == []
 
 
+@pytest.mark.static
 def test_the_real_repository_registers_are_discovered():
     found = set(ids.discover(REPO))
     assert "examples/strategy/requirements" in found and "examples/strategy/objectives" in found

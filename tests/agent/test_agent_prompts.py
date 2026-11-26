@@ -231,6 +231,7 @@ def test_cli_lint_reports_unreadable_yaml(tmp_path, capsys):
     assert "not valid YAML" in capsys.readouterr().err
 
 
+@pytest.mark.static
 def test_cli_render_examples(capsys):
     path = template_paths()[0]
     assert cli.main(["agent", "prompts", "render", str(path)]) == 0

@@ -322,6 +322,7 @@ def test_all_classes_dark_refuses_bad_input():
         dark(lake_with().query, ["nope"], now=NOW)
 
 
+@pytest.mark.static
 def test_the_census_reads_only_columns_the_raw_archive_schema_has():
     """The fixture is the lake-writer module's raw_archive schema as of its PR; the census's
     defaults (table, time and source columns) must all exist in it."""

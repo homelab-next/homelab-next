@@ -128,6 +128,7 @@ def _get(site: RegistersSite, route: str, query: str = "") -> str:
 
 
 # ---------------------------------------------------------------- menu, views, withholding
+@pytest.mark.static
 def test_the_register_panels_are_withheld_pages():
     assert set(ROUTES) == REGISTER_PANELS and REGISTER_PANELS <= WITHHELD_PANELS
     doc = yaml.safe_load(VIEWS.read_text())

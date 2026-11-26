@@ -15,6 +15,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from homelabnext.events.envelope import derive_event_id
 
 VECTORS = Path(__file__).resolve().parents[2] / "conformance/fixtures/event_id_vectors.json"
@@ -73,6 +75,7 @@ def _text() -> str:
     return json.dumps(build(), indent=1, ensure_ascii=True) + "\n"
 
 
+@pytest.mark.static
 def test_the_vectors_file_is_what_derive_event_id_says():
     if os.environ.get("HNX_REGEN_EVENT_ID_VECTORS") == "1":
         VECTORS.write_text(_text(), encoding="utf-8")
@@ -82,6 +85,7 @@ def test_the_vectors_file_is_what_derive_event_id_says():
     )
 
 
+@pytest.mark.static
 def test_the_vectors_file_round_trips_its_inputs():
     """What the file holds decodes back to exactly the inputs, so a reader in another language
     hashes the same strings this side did."""

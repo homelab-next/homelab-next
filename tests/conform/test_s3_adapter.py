@@ -187,6 +187,7 @@ def test_factory_reads_endpoint_and_credentials_from_the_environment(server, mon
         make_object_store()
 
 
+@pytest.mark.static
 def test_the_lab_target_file_names_this_adapter():
     t = load_target(str(ROOT / "compose" / "lab-in-a-box" / "targets" / "object-store.yml"))
     b = t.binding("object-store")

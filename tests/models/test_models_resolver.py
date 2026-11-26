@@ -101,6 +101,7 @@ def test_unknown_backend_service_is_a_resolution_error(make_resolver):
         make_resolver(doc).resolve("main-reasoner")
 
 
+@pytest.mark.static
 def test_schema_example_loads():
     for name in ("model_roles.valid.json", "model_roles.embedder.json"):
         doc = json.loads((ROOT / "schemas/platform/examples" / name).read_text())

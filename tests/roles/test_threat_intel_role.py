@@ -766,6 +766,7 @@ TLS = {"tls_cert_ref": "secret:pki/intel-cert", "tls_key_ref": "secret:pki/intel
 TLS_ENV = {"HNX_SECRET_PKI_INTEL_CERT": PEM_CERT, "HNX_SECRET_PKI_INTEL_KEY": PEM_KEY}
 
 
+@pytest.mark.static
 def test_no_script_the_role_runs_in_a_container_puts_a_key_in_an_argument():
     # a process's argv is readable by every user of the container: keys go to curl's config on
     # standard input and to the console through the environment of a wrapper

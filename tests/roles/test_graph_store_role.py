@@ -684,6 +684,7 @@ def _tasks(doc):
             yield from _tasks(task.get(key))
 
 
+@pytest.mark.static
 def test_every_script_run_in_the_container_is_kept_from_the_controllers_variable_expansion():
     """The command module expands ``$NAME`` in its arguments from the task's environment, which would
     put an account's password into the argument list: every task that hands a script to the container

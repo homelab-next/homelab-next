@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SKEWED = re.compile(r"now\(\s*utc\s*=\s*[Tt]rue\s*\)\s*\.timestamp\(\)")
 
 
+@pytest.mark.static
 def test_no_template_reads_a_naive_utc_now_as_an_epoch():
     hits = []
     for base in ("ansible", "modules"):

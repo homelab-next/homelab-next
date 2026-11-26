@@ -136,6 +136,7 @@ def test_aliases_still_load_where_a_reader_takes_them():
         expanded_cost(node, allow_aliases=False)
 
 
+@pytest.mark.static
 def test_the_example_registries_are_far_under_the_budget():
     for path in sorted((ROOT / "examples").glob("**/services.yml")):
         node = yaml.compose(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)

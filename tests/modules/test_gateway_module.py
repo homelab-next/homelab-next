@@ -130,6 +130,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
@@ -138,6 +139,7 @@ def test_the_public_tree_loads_clean(capsys):
     assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == ["gateway"]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -195,6 +197,7 @@ def test_every_base_image_is_pinned_by_digest_and_the_runtime_has_no_shell():
     ]  # fmt: skip
 
 
+@pytest.mark.static
 def test_the_image_runs_the_gateway_binary_as_an_unprivileged_user():
     lines = _dockerfile()
     assert any("go build" in ln and "./cmd/gateway" in ln for ln in lines)
@@ -206,6 +209,7 @@ def test_the_image_runs_the_gateway_binary_as_an_unprivileged_user():
     assert f"go {go}" in (ROOT / "orchestrator" / "go.mod").read_text()
 
 
+@pytest.mark.static
 def test_the_role_has_no_default_image_and_accepts_only_the_labs_own_repository():
     defaults = ld.load_yaml(MODULE / "roles" / "gateway" / "defaults" / "main.yml")
     assert "gateway_image" not in defaults  # an own build: there is no published image to pin
@@ -217,6 +221,7 @@ def test_the_role_has_no_default_image_and_accepts_only_the_labs_own_repository(
     assert defaults["gateway_build_repositories"] == ["localhost/hnx-llm-gateway"]
 
 
+@pytest.mark.static
 def test_the_lifecycle_playbooks_target_the_module_group():
     for name in ("install", "upgrade", "remove"):
         (play,) = yaml.safe_load((MODULE / "playbooks" / f"{name}.yml").read_text())
@@ -287,6 +292,7 @@ def test_inference_cannot_be_both_the_module_and_an_incumbent(tmp_path, capsys):
 # ----------------------------------------------------------------------------- conformance
 
 
+@pytest.mark.static
 def test_the_target_binds_the_gateway_adapter_with_keys_in_the_modules_namespace():
     target = load_target(str(MODULE / "conformance" / "target.yml"), root=ROOT)
     binding = target.binding("inference")
@@ -302,6 +308,7 @@ def test_the_target_binds_the_gateway_adapter_with_keys_in_the_modules_namespace
         make_factory(binding, root=ROOT)()
 
 
+@pytest.mark.static
 def test_the_target_proves_a_subset_of_what_ci_proves_against_the_same_source():
     module = ld.load_yaml(MODULE / "conformance" / "target.yml")["capabilities"]["inference"]
     ci = ld.load_yaml(ROOT / "compose" / "lab-in-a-box" / "targets" / "inference-own-gateway.yml")[

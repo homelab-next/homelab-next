@@ -30,6 +30,7 @@ def registry():
     return load(REPO / "examples" / "services.yml")
 
 
+@pytest.mark.static
 def test_the_committed_keyring_has_no_drift_from_its_sources(capsys):
     assert cli.main(["agent", "keyring", "check", str(SOURCES)]) == 0
     text, out = build_from_sources(SOURCES)

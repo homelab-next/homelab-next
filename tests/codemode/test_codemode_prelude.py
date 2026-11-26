@@ -204,6 +204,7 @@ def test_a_program_that_rebinds_broker_does_not_redirect_the_stubs():
     assert rec.sent == [("dns.lookup", {"name": "files"}, "svc:files")]
 
 
+@pytest.mark.static
 def test_the_committed_preludes_run_and_name_every_namespace_of_their_stubs():
     files = render(EXAMPLE / "manifest.yml")
     for slug in ("reader", "triage"):

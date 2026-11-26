@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -77,6 +78,7 @@ def test_the_fake_serves_exactly_the_backend_ids_on_its_port():
     assert elsewhere <= down
 
 
+@pytest.mark.static
 def test_the_gateway_port_is_the_binary_s_default_and_differs_from_the_fake_s():
     main = (ROOT / "orchestrator" / "cmd" / "gateway" / "main.go").read_text(encoding="utf-8")
     (default,) = re.findall(r'"listen", "[^"]*:(\d+)"', main)

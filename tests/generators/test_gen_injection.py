@@ -68,6 +68,7 @@ def test_newlines_and_metacharacters_are_refused_by_the_registry(path, value):
         build_registry(doc)
 
 
+@pytest.mark.static
 def test_trailing_newline_in_a_mapping_key_is_refused():
     doc = yaml.safe_load(EXAMPLE.read_text())
     doc["services"]["notify\n"] = doc["services"].pop("notify")

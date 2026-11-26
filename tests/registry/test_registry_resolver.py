@@ -100,6 +100,7 @@ def test_bad_override_is_rejected_not_ignored(value):
         make(env={"HNX_ENDPOINT_LAKE_QUERY": value}).resolve("lake-query")
 
 
+@pytest.mark.static
 def test_custom_env_var_name_is_honoured():
     import yaml
 

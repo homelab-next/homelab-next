@@ -13,7 +13,7 @@
 # holds all of
 # that to this file, so "experimental" is decided here and nowhere else.
 #
-# The list only shrinks: CI's trusted-gates job runs the base's `tools/experimental.py ratchet`,
+# The list only shrinks: CI's precheck job (make precheck) runs `tools/experimental.py ratchet --base`,
 # which fails a change that adds a component, a tests/code path, a gate, an invariant or a
 # conformance capability, unless the operator applied the pull-request label experimental-growth
 # (CONTRIBUTING.md, "Experimental and frozen components").  Removing an entry is always free.

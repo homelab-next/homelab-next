@@ -34,6 +34,7 @@ def test_each_generator_matches_golden(gen):
         assert golden.read_text(encoding="utf-8") == text, f"{rel} differs from golden"
 
 
+@pytest.mark.static
 def test_golden_tree_has_no_extra_files():
     files = flatten(generate(REG))
     on_disk = {p.relative_to(GOLDEN).as_posix() for p in GOLDEN.rglob("*") if p.is_file()}
@@ -79,6 +80,7 @@ def test_removed_service_prunes_only_generated_files(tmp_path):
     )
 
 
+@pytest.mark.static
 def test_registry_change_changes_dependent_outputs_only():
     doc = yaml.safe_load(EXAMPLE.read_text())
     doc["services"]["notify"]["port"] = 8097
@@ -144,6 +146,7 @@ def test_hosts_block_apply_is_idempotent_and_preserves_other_lines():
     assert "ip6-allnodes" in parsed
 
 
+@pytest.mark.static
 def test_prometheus_and_blackbox_parse_as_yaml():
     out = generate(REG, ["prometheus", "blackbox"])
     prom = yaml.safe_load(out["prometheus"]["prometheus/scrape_configs.yml"])

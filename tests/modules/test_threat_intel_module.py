@@ -117,6 +117,7 @@ def _check(ov: Path, capsys) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- the public tree
 
 
+@pytest.mark.static
 def test_roles_holds_only_the_contributed_role():
     assert sorted(p.name for p in (MODULE / "roles").iterdir()) == [MID]
     assert not any(p.is_symlink() for p in MODULE.rglob("*"))
@@ -171,6 +172,7 @@ def test_every_image_pin_is_a_tag_and_a_digest_and_the_application_tag_is_the_pr
     assert d[P + "core_image"].split("@")[0].endswith(":v" + version)
 
 
+@pytest.mark.static
 def test_the_database_is_capped_by_the_role_slice_and_no_container_publishes_but_the_application():
     text = (MODULE / "roles" / MID / "tasks" / "app.yml").read_text()
     # the slice (compose_app's cgroup_parent) is the CPU and memory cap; each container has a limit
@@ -234,6 +236,7 @@ def test_the_probe_says_so_when_the_api_answers_any_caller(monkeypatch):
 # ----------------------------------------------------------------------------- lint
 
 
+@pytest.mark.static
 def test_pin_freshness_watches_every_image():
     sys.path.insert(0, str(ROOT / "tools"))
     try:

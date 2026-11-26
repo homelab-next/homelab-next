@@ -110,6 +110,7 @@ def write(tmp_path: Path, name: str, text: str) -> Path:
 # ---- detection ---------------------------------------------------------------------------------
 
 
+@pytest.mark.static
 def test_plain_documents_are_not_encrypted():
     assert sops.format_of((MINIMAL / "site.yml").read_text(encoding="utf-8")) is None
     assert sops.format_of('{"a": 1}') is None
@@ -272,6 +273,7 @@ def test_a_sealed_site_value_that_fails_the_schema_is_not_printed(tmp_path, fake
     assert "schema: site/domain: does not match" in shown and SEALED_VALUE not in shown
 
 
+@pytest.mark.static
 def test_a_sealed_registry_value_that_fails_the_schema_is_not_printed():
     doc = registry_model.yaml.safe_load((MINIMAL / "services.yml").read_text(encoding="utf-8"))
     doc["lab"]["domain"] = SEALED_VALUE

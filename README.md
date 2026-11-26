@@ -65,6 +65,7 @@ skip and `hnx` still runs).
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
+make precheck       # every static gate in parallel, CI's first job: run it before every push
 make check          # lint, tests, schemas, gates, detections, registers, SPDX, leak scan, conformance coverage, changelog
 hnx --help          # registry, new, gen, detections, registers, invariants, ids, decide, golden, site, guests, swap, conform, custom, schema-check
 hnx registry validate examples/services.yml
@@ -88,7 +89,8 @@ then the source tree; a miss prints every place that was tried. The top-level `s
 and a test fails if the copy ever differs). The developer gates under `tools/` (`hnx schema-check`,
 `hnx new` linting) still need a checkout.
 
-`make check` is the one command CI also runs; `make conform` runs every capability suite on its own. It needs `ruff` importable as a module; pass
+`make check` is the one command CI also runs (its first job runs `make precheck`, the static gates of `make check`, and
+every other job waits for it; `tools/install-prepush-hook.sh` makes it a pre-push hook); `make conform` runs every capability suite on its own. It needs `ruff` importable as a module; pass
 `RUFF=/path/to/ruff` if yours lives elsewhere.
 
 ### Try it

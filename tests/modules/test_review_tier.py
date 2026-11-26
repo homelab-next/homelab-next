@@ -440,6 +440,7 @@ def test_codeowners_escapes_sections_and_invalid_owners():
     assert [p for p, _ in rules] == ["\\#notes", "/x/", "/y/"]
 
 
+@pytest.mark.static
 def test_this_repository_codeowns_every_module_root():
     rules = rt.parse_codeowners((ROOT / ".github" / "CODEOWNERS").read_text())
     for r in rt.MODULE_ROOTS:
@@ -992,6 +993,7 @@ def test_the_adr_0039_registry_judges_are_governance(path):
     assert path in rt.GOVERNANCE
 
 
+@pytest.mark.static
 def test_governance_lists_no_file_that_does_not_exist():
     root = ROOT
     gone = [g for g in rt.GOVERNANCE if g not in rt.CODEOWNERS_PATHS and not (root / g).is_file()]

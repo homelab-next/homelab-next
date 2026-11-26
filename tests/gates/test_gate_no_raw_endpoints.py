@@ -193,6 +193,7 @@ def test_url_with_ip_reports_once(tmp_path):
     assert len(findings) == 1 and findings[0].rule == "url-port"
 
 
+@pytest.mark.static
 def test_this_repo_passes_with_zero():
     rc, out, err = run(ROOT)
     assert rc == 0, err

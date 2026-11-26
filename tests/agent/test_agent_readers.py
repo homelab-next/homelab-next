@@ -281,6 +281,7 @@ def test_cli_compile_refuses_a_reader(tmp_path, capsys):
 
 
 # ---------------------------------------------------------------- the classification table
+@pytest.mark.static
 def test_every_platform_capability_is_classified():
     caps = yaml.safe_load((ROOT / "capabilities.yml").read_text())["capabilities"]
     table = ToolClasses.load()
@@ -367,6 +368,7 @@ def test_a_classes_file_cannot_narrow_the_reader_ban(tmp_path, capsys):
 
 
 # ---------------------------------------------------------------- lint
+@pytest.mark.static
 def test_lint_passes_on_the_repository():
     # both rules by default: readers cannot act (G-03), actors act via the broker (G-13)
     problems, counts = lint_paths([ROOT])
@@ -374,9 +376,12 @@ def test_lint_passes_on_the_repository():
     assert counts["profile"] >= 3 and counts["manifest"] >= 1
 
 
+@pytest.mark.static
 def test_make_check_and_ci_run_the_lint():
     assert "agent-lint" in (ROOT / "Makefile").read_text().split("check:", 1)[1].splitlines()[0]
-    assert "homelabnext.cli agent lint" in (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    from tests.ci_runs import ci_text
+
+    assert "homelabnext.cli agent lint" in ci_text()
 
 
 def _write(path: Path, doc) -> Path:
@@ -482,6 +487,7 @@ def test_a_shadow_record_cannot_reclassify_a_server(tmp_path):
         ToolClasses.load(catalog=d)
 
 
+@pytest.mark.static
 def test_grantable_is_an_allowlist_and_a_data_tier_is_required():
     from homelabnext.agent.readers import grant_problems
 

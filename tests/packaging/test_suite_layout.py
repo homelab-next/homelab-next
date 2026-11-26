@@ -12,9 +12,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 TESTS = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.static
 def test_no_test_module_directly_under_tests():
     stray = sorted(p.name for p in TESTS.glob("test_*.py")) + sorted(
         p.name for p in TESTS.glob("*_test.py")

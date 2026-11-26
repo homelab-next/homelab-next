@@ -244,6 +244,7 @@ def test_the_conformance_suite_passes_on_openproject():
     assert not failed and len(results) == len(SUITE.ids())
 
 
+@pytest.mark.static
 def test_the_openproject_target_runs_the_suite_and_the_page_lists_the_adapter(capsys):
     """`hnx conform run projects --target projects-openproject` drives the real adapter
     (homelabnext.conform.adapters.openproject) against the recorded fake, and the generated

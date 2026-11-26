@@ -119,5 +119,6 @@ def test_tree_fails_allowlist_passes_and_stale_entry_fails(tmp_path, capsys):
     assert lint.main([str(tmp_path), "--allowlist", str(allow)]) == 2
 
 
+@pytest.mark.static
 def test_the_repository_runtime_never_points_at_the_workstation():
     assert lint.main([str(REPO)]) == 0

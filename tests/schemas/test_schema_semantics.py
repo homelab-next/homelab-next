@@ -4,6 +4,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import schema_check as sc
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +34,7 @@ def test_note_filename_is_the_records_lanes_own_rule():
         assert sc.check_note_filename(name, FM) == check_filename(name, FM)
 
 
+@pytest.mark.static
 def test_markdown_frontmatter_round_trip_keeps_timestamps_as_strings():
     fm, body = sc.split_markdown((ROOT / "schemas/records/examples/note.proposal.md").read_text())
     assert fm["created"] == "2026-01-01T00:00:00Z"
@@ -104,6 +106,7 @@ def test_kanban_all_done_project_cannot_sit_in_partial():
     assert sc.check_kanban_board(board({**done, "column": "done"})) == []
 
 
+@pytest.mark.static
 def test_profile_ceiling_subset():
     ok = json.loads((ROOT / "schemas/platform/examples/agent_profile.valid.json").read_text())
     assert sc.check_profile_ceiling(ok) == []

@@ -7,6 +7,7 @@ import copy
 import json
 from pathlib import Path
 
+import pytest
 import schema_check as sc
 import yaml
 
@@ -39,6 +40,7 @@ def test_metrics_scheme_and_auth_are_retained_by_the_model():
     }
 
 
+@pytest.mark.static
 def test_metrics_auth_requires_a_secret_reference_and_kind_specific_fields():
     literal = yaml.safe_load(
         (ROOT / "tests/schemas/fixtures/service.2_11.literal-secret.yml").read_text()

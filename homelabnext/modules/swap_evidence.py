@@ -18,7 +18,8 @@ change proposes.  So a model is vetted in one change (the store entry and the li
 human-approve in ``hnx modules review-tier``) and rebound in a later one; a change cannot vouch
 for itself.  What this does not prove: a report's ``live`` is the claim of whoever ran it, now a
 claim a code owner reviewed; and the checking code is whatever is installed (CI runs it from a
-checkout of the base, job ``trusted-gates``).
+checkout of the base, job ``trusted-gates``, until 2026-11-25; now the change's own, in
+``make precheck``).
 
 A base is resolved once to a commit (``rev-parse --verify --end-of-options REV^{commit}``) and
 only that sha is used: an option-like value or a tree is refused.  ``require_live`` is policy, on

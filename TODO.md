@@ -17,8 +17,8 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
   `tools/experimental.yml` and is allowed to fail. Before any experimental component is enabled
   anywhere, return it to the blocking set: delete its `tools/experimental.yml` entry and restore
   its gates and invariants in one change.
-- [ ] **Create the `experimental-growth` label** (Issues, Labels). CI's `trusted-gates` job lets
-  `tools/experimental.yml` grow only on a pull request carrying it (CONTRIBUTING.md, "Experimental
+- [ ] **Create the `experimental-growth` label** (Issues, Labels). CI's precheck job (the experimental
+  ratchet) lets `tools/experimental.yml` grow only on a pull request carrying it (CONTRIBUTING.md, "Experimental
   and frozen components"); until it exists, no change can add to the list. Apply it yourself only:
   anyone with triage or write access can label a pull request, so the label is only as strong as
   that access. It approves only the head it is applied to: apply it on the final diff, and remove

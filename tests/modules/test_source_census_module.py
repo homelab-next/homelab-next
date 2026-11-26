@@ -14,6 +14,7 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
+import pytest
 import yaml
 
 from homelabnext.generators import fleet_units
@@ -38,6 +39,7 @@ def test_the_module_is_a_feature_that_requires_slots_and_provides_none():
     assert DOC["egress"] == "none"
 
 
+@pytest.mark.static
 def test_the_public_tree_loads_clean_with_it(capsys):
     assert mcli.main(["check", "--root", str(ROOT)]) == 0
     out = capsys.readouterr().out
@@ -95,6 +97,7 @@ def test_the_paging_titles_are_the_modules_notify_pair_and_carry_no_counts():
     assert pair == {"problem": census_cli.TITLE_FLAGGED, "recovery": census_cli.TITLE_CLEAN}
 
 
+@pytest.mark.static
 def test_the_role_writes_what_the_unit_and_criteria_read():
     defaults = yaml.safe_load((MODULE / "roles/source_census/defaults/main.yml").read_text())
     vars_ = yaml.safe_load((MODULE / "roles/source_census/vars/main.yml").read_text())
@@ -114,6 +117,7 @@ def test_the_role_writes_what_the_unit_and_criteria_read():
     assert all(ref.partition("/")[0].endswith(":" + DOC["id"]) for ref in refs.values())
 
 
+@pytest.mark.static
 def test_the_readme_names_the_interface_it_assumes():
     text = (MODULE / "README.md").read_text()
     for needle in (

@@ -136,8 +136,10 @@ def _run(root, only):
     return run_criteria(register()["criteria"], Context(root), only=set(only))["results"]
 
 
+@pytest.mark.static
 def test_fast_cli_gates_pass_on_the_repository_in_ci_s_invariants_job():
-    """Each fast gate passing on this repository is decided by CI's `invariants` job, which runs
+    """Each fast gate passing on this repository is decided by CI's precheck job (`make precheck`
+    runs `make invariants`), which runs
     every fast criterion of this register through the runner (`make invariants`, exit 1 on a fail,
     exit 100 on could-not-measure); `make check` runs the same commands as its own gates.  Running
     them here again cost about 55 s of a 60 s suite budget, so this test holds the wiring instead:
@@ -149,10 +151,13 @@ def test_fast_cli_gates_pass_on_the_repository_in_ci_s_invariants_job():
     target = re.search(r"^invariants:\n\t(.+)$", make, re.M)
     assert target, "the Makefile has no invariants target"
     assert "invariants run examples/registers/invariants.yml --fast" in target[1]
+    from tests.ci_runs import precheck_commands
+
     jobs = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text())["jobs"]
-    runs = [s.get("run", "") for s in jobs["invariants"]["steps"]]
-    assert any(r.strip().startswith("make invariants") for r in runs), runs
-    assert "if" not in jobs["invariants"]
+    runs = [s.get("run", "") for s in jobs["precheck"]["steps"]]
+    assert any(r.strip().startswith("make precheck") for r in runs), runs
+    assert "if" not in jobs["precheck"]
+    assert "invariants run examples/registers/invariants.yml --fast" in precheck_commands()
 
 
 def test_fast_cli_gates_are_red_on_an_empty_checkout(tmp_path, monkeypatch):
@@ -304,6 +309,7 @@ def test_m16_fails_on_a_misnamed_or_shared_uid_as_make_ids_check_does(scratch):
     assert r["status"] == "fail" and f"uid {u1} is also the uid of" in r["evidence"]
 
 
+@pytest.mark.static
 def test_fast_gates_pass_on_the_repository():
     # the slow ones (leak scans, schema check, goldens) run in `make check` and via hnx itself;
     # M-17 compares with HEAD, so it is exercised in a scratch repository below instead

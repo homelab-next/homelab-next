@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when a gate's allowlist or inline suppression markers outgrow the reviewed counts in tools/allowlist_counts.yml.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:gates, make:allowlist-counts]
+#   trigger: [make:allowlist-counts, make:gates, make:ratchets]
 #   inputs: the tracked tree; tools/allowlist_counts.yml; CODEOWNERS; the base commit's counts and CODEOWNERS (--base, --ci-base)
 #   outputs: one line per list that grew, shrank or had an entry edited against the counts file (or against the base); --update rewrites the counts and digests
 #   exit:
@@ -234,11 +234,11 @@ ENTRY_LISTS: dict[str, Callable[[Path], list[str]]] = {
 NOT_RATCHETED: dict[str, str] = {
     "tools/dup_check.baseline.json": (
         "a shrink-only baseline with its own ratchet: the duplication check fails a clone beyond it "
-        "and, against the base (--base, CI's trusted-gates job), a baseline that loosened"
+        "and, against the base (--base, CI's precheck job), a baseline that loosened"
     ),
     "tools/product_names.baseline.json": (
         "a shrink-only baseline with its own ratchet: the product-name lint fails a count above "
-        "it and, against the base (--base, CI's trusted-gates job), a baseline that grew"
+        "it and, against the base (--base, CI's precheck job), a baseline that grew"
     ),
     "the other gates' inline markers": (
         "follow-up: the edge-config, workstation-ref, tls-verify and run-output lints' "

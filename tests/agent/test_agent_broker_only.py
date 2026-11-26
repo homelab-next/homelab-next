@@ -429,6 +429,7 @@ def test_every_capability_the_repository_names_is_classed():
         assert set(table.classify("capabilities", cap)) & table.broker_only, cap
 
 
+@pytest.mark.static
 def test_the_coverage_walk_reads_every_example_registry():
     names = {p.relative_to(ROOT).as_posix() for p in _example_registries()}
     assert {

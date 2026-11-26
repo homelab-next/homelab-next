@@ -604,6 +604,7 @@ def test_model_store_takes_an_export_before_hashing_it(first):
     assert weights.stat().st_mode & 0o027 == 0, oct(weights.stat().st_mode)
 
 
+@pytest.mark.static
 def test_every_recursive_file_task_in_model_store_never_follows_links():
     """ansible.builtin.file follows links by default, and recurse applies owner and mode to each
     link's target (and recurses into a linked directory)."""
@@ -621,6 +622,7 @@ def test_every_recursive_file_task_in_model_store_never_follows_links():
     assert found >= 1  # fetch_entry.yml: the store's own staging, never a trainer's directory
 
 
+@pytest.mark.static
 def test_an_export_is_never_taken_by_path():
     """Any path-based chown of exports/<run> races a trainer's rename (the entry directory swapped
     for a link to / between the check and the lchown): promotion takes it by descriptor alone."""
@@ -739,6 +741,7 @@ def vllm_vars(tmp_path: Path, **kw) -> dict:
     return v
 
 
+@pytest.mark.static
 def test_the_rendered_instances_are_the_plans():
     """The checked-in instances file is what the plan renders (the role's input is generated)."""
     from homelabnext.models.serving import render
@@ -1378,6 +1381,7 @@ def test_open_webui_backstops_refuse_what_the_allowlist_lets_through(first, name
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
+@pytest.mark.static
 def test_open_webui_allowlist_and_reserved_names_stay_apart():
     """The allowlist is reviewed by hand; the reserved pattern and the fixed settings guard it:
     no allowed name may match the pattern or be fixed, and every name the role sets from its own
@@ -1589,6 +1593,7 @@ def test_model_store_creates_its_groups_then_its_owner_when_absent():
     assert "omit" in g["gid"] and "omit" in u["uid"]
 
 
+@pytest.mark.static
 def test_model_store_main_creates_accounts_before_the_directories_and_can_opt_out():
     import yaml
 
@@ -1652,6 +1657,7 @@ def _requirement_problems(text: str) -> list[str]:
     return problems
 
 
+@pytest.mark.static
 def test_model_store_hf_requirements_are_pinned_hashed_and_carry_no_home_path():
     import re
 
@@ -1668,6 +1674,7 @@ def test_model_store_hf_requirements_are_pinned_hashed_and_carry_no_home_path():
     assert any(p.startswith("home path") for p in _requirement_problems(leaked))
 
 
+@pytest.mark.static
 def test_model_store_installs_the_cli_by_hash_into_a_venv_and_defaults_to_it():
     import yaml
 

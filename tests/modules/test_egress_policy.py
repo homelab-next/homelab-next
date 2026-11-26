@@ -297,6 +297,7 @@ def test_a_cloud_metadata_service_is_never_a_hosts_address(addr):
         render(site)
 
 
+@pytest.mark.static
 def test_the_metadata_services_are_never_the_internet_and_match_the_guest_firewall():
     """No role reaches one over ``internet``, and the guest firewall refuses the same list."""
     for addr in eg.METADATA:
@@ -360,6 +361,7 @@ def test_the_service_fails_closed_before_loading():
     assert "Requires=hnx-example_lake-lake.slice" in svc and "Before=network-pre.target" in svc
 
 
+@pytest.mark.static
 def test_protocols_are_the_registry_s():
     schema = json.loads((ROOT / "schemas/platform/service.json").read_text())
     enum = None
@@ -556,6 +558,7 @@ def test_a_requirement_reaches_its_slot_only_from_the_roles_it_names():
     assert accepts and all(re.search(r" (tcp|udp) dport 53 accept$", ln) for ln in accepts)
 
 
+@pytest.mark.static
 def test_a_svc_target_naming_a_provider_row_is_refused_by_check_as_by_render():
     """A provider's rows are reached by their slot or instance name; naming one of its rows
     directly is no service, for the site rules as for the generator (it once passed the one and

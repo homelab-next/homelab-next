@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when a repository script or tool writes scratch files to a literal path outside its run directory or build/.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:run-output-lint]
+#   trigger: [make:run-output-lint]
 #   inputs: every Python script with an hnx-script header and tools/run_output_lint.allow.yml
 #   outputs: one line per out-of-run write or stale allowlist entry
 #   exit:

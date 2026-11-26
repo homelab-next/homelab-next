@@ -160,6 +160,7 @@ def test_third_party_images_are_pinned_by_tag_and_digest(compose):
         assert ":latest" not in image
 
 
+@pytest.mark.static
 def test_dockerfile_base_is_pinned_by_digest():
     dockerfiles = sorted(LAB.glob("*/Dockerfile"))
     assert {d.parent.name for d in dockerfiles} >= {"fakes", "broker"}
@@ -304,6 +305,7 @@ def gateway_step(name_part: str) -> dict:
     return step
 
 
+@pytest.mark.static
 def test_pull_requests_run_the_documented_gateway_only_path():
     """ci.yml's lab-gateway job brings up exactly the documented gateway-only path (so the 1280 MB
     it is budgeted at is what runs), provisions the keys in the foreground (their exit code fails
@@ -582,6 +584,7 @@ def test_negative_a_service_without_networks_is_caught(compose):
     assert off_lab_network(broken) == ["llm-gateway-keys"]
 
 
+@pytest.mark.static
 def test_trino_heap_is_tiny():
     heap = re.search(r"^-Xmx(\d+)M$", (LAB / "config/trino/jvm.config").read_text(), re.M)
     assert heap and int(heap[1]) <= 1024
@@ -854,6 +857,7 @@ def test_all_referenced_variables_are_documented(compose, env_vars):
     assert used <= set(env_vars), f"undocumented: {sorted(used - set(env_vars))}"
 
 
+@pytest.mark.static
 def test_required_credentials_have_no_default_in_the_compose_file():
     text = COMPOSE.read_text()
     for var in ("LAB_POSTGRES_PASSWORD", "LAB_S3_SECRET_KEY", "LAB_SECRETS_DEV_TOKEN"):
@@ -1214,6 +1218,7 @@ def test_broker_check_passes_only_when_every_scenario_step_did(checks):
     assert result["status"] == "fail" and "broker-e2e" in result["detail"]
 
 
+@pytest.mark.static
 def test_smoke_script_runs_the_broker_scenario_in_the_edge_container():
     text = (LAB / "smoke.sh").read_text()
     exported = text.index("export LAB_BROKER_E2E")
@@ -1313,6 +1318,7 @@ def test_bases_come_from_the_documented_env_names(checks, env_vars):
 # --- nightly workflow ----------------------------------------------------------------------------
 
 
+@pytest.mark.static
 def test_nightly_is_scheduled_and_never_runs_on_pull_requests():
     doc = yaml.safe_load(WORKFLOW.read_text())
     triggers = doc.get("on") or doc.get(True)
@@ -1320,6 +1326,7 @@ def test_nightly_is_scheduled_and_never_runs_on_pull_requests():
     assert "pull_request" not in triggers and "push" not in triggers
 
 
+@pytest.mark.static
 def test_pull_requests_run_the_nightly_s_smoke_unchanged():
     """ci.yml's lab-in-a-box job (on the pull requests tools/lab_paths.py picks) is the nightly's
     job step for step, so a pull request's green lab means what a green nightly means."""
@@ -1332,6 +1339,7 @@ def test_pull_requests_run_the_nightly_s_smoke_unchanged():
     assert any("smoke.sh" in s.get("run", "") for s in ci["steps"])
 
 
+@pytest.mark.static
 def test_nightly_pins_every_action_by_full_sha():
     uses = re.findall(r"uses:\s*(\S+)", WORKFLOW.read_text())
     assert uses
@@ -1377,6 +1385,7 @@ def test_containers_drop_capabilities_and_forbid_new_privileges(compose):
             assert "docker.sock" not in str(v), name
 
 
+@pytest.mark.static
 def test_the_secrets_exception_is_explained_above_the_service():
     text = COMPOSE.read_text()
     banner = text[text.index("# --- secrets:") : text.index("  secrets:\n")]
@@ -1709,6 +1718,7 @@ def test_make_lab_up_runs_the_guard_first(tmp_path):
     assert "docker" not in r.stderr.replace("docker's", "")  # never reached docker compose
 
 
+@pytest.mark.static
 def test_the_relays_user_and_directories_keep_the_broker_state_private():
     """The image's modes: the relay may traverse the state directory and read outbox/ through its
     group, owns relay/; nothing else of the broker's state is open to it."""
@@ -1780,6 +1790,7 @@ def test_nobody_but_the_controller_may_publish_agent_job_events():
         assert allowed == [], subject
 
 
+@pytest.mark.static
 def test_the_conformance_account_has_its_own_jetstream_limits():
     """SEC7: CONFORM's scratch streams are bounded by account limits, below the server's store,
     so leftovers of failed conformance runs cannot starve the HNX account."""
@@ -1792,6 +1803,7 @@ def test_the_conformance_account_has_its_own_jetstream_limits():
     assert limits["max_streams"] > 0 and limits["max_consumers"] > 0
 
 
+@pytest.mark.static
 def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
     e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
     stream = e2e.LAB_EVENTS_STREAM
@@ -1853,6 +1865,7 @@ def test_the_account_hash_is_the_servers():
     assert nats_account_hash("HNX") == "hKkTAyOX"
 
 
+@pytest.mark.static
 def test_acks_are_granted_token_exact_in_both_reply_subject_forms():
     """ADR-15: v1 ``$JS.ACK.<stream>.<consumer>.<5 numbers>`` (what 2.15.1 sends) and v2
     ``$JS.ACK.<domain>.<account hash>.<stream>.<consumer>.<5 numbers>[...]`` (upstream main

@@ -85,6 +85,7 @@ def test_registry_validate_and_gen_roundtrip(tmp_path, capsys):
     capsys.readouterr()
 
 
+@pytest.mark.static
 def test_schema_check_dispatches_to_the_checker(capsys):
     assert cli.main(["schema-check", "--root", str(ROOT), "--dir", "ids"]) == 0
     assert "schema_check:" in capsys.readouterr().out
@@ -111,6 +112,7 @@ def test_python_dash_m_entry_point():
     assert r.returncode == 0 and "commands:" in r.stdout
 
 
+@pytest.mark.static
 def test_console_script_is_declared():
     text = (ROOT / "pyproject.toml").read_text()
     assert 'hnx = "homelabnext.cli:main"' in text
@@ -127,6 +129,7 @@ def test_invariants_and_registers_reachable(tmp_path, capsys):
     assert json.loads(next(out.glob("*.json")).read_text()) is not None
 
 
+@pytest.mark.static
 def test_interfaces_md_lists_every_subcommand_in_order():
     """docs/interfaces.md section 2.2 names every row of COMMANDS, in order (it had dropped
     `records` and a dozen others)."""
