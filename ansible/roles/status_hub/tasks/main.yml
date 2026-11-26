@@ -75,6 +75,60 @@
     mode: "0750"
   when: status_hub_registers_dir | length > 0
 
+# The guest pages (Topology, Baselines) and the topology, dataflow and schedule JSON read the lab's
+# guest directory and site model: delivered flat beside the registry, and a guest file the lab no
+# longer has is removed (a stale guest would stay on the map).
+- name: Create the guest directory
+  ansible.builtin.file:
+    path: "{{ status_hub_config_dir }}/guests"
+    state: directory
+    owner: root
+    group: "{{ status_hub_group }}"
+    mode: "0750"
+  when: status_hub_guests_src | length > 0
+
+- name: Deliver the guest files
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ status_hub_config_dir }}/guests/{{ item | basename }}"
+    owner: root
+    group: "{{ status_hub_group }}"
+    mode: "0640"
+  loop: "{{ query('ansible.builtin.fileglob', status_hub_guests_src ~ '/*.yml') | sort }}"
+  register: status_hub_guests_delivered
+  when: status_hub_guests_src | length > 0
+
+- name: List the guest files on the hub host
+  ansible.builtin.find:
+    paths: "{{ status_hub_config_dir }}/guests"
+    patterns: ["*.yml"]
+    file_type: file
+  register: status_hub_guests_present
+  check_mode: false
+  when: status_hub_guests_src | length > 0
+
+- name: Remove a guest file the lab no longer has
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: >-
+    {{ status_hub_guests_present.files | map(attribute='path')
+       | reject('in', query('ansible.builtin.fileglob', status_hub_guests_src ~ '/*.yml') | map('basename')
+                | map('regex_replace', '^', status_hub_config_dir ~ '/guests/') | list)
+       | list }}
+  register: status_hub_guests_removed
+  when: status_hub_guests_src | length > 0
+
+- name: Deliver the site model
+  ansible.builtin.copy:
+    src: "{{ status_hub_site_src }}"
+    dest: "{{ status_hub_config_dir }}/site.yml"
+    owner: root
+    group: "{{ status_hub_group }}"
+    mode: "0640"
+  register: status_hub_site_delivered
+  when: status_hub_site_src | length > 0
+
 - name: Check the views against their schema and the registry
   ansible.builtin.command:
     argv: ["{{ status_hub_hnx_bin }}", status, views, check, "{{ status_hub_config_dir }}/views.yml",
@@ -146,6 +200,9 @@
       {{ 'restarted' if (status_hub_unit is changed or status_hub_registry_file is changed
          or status_hub_config is changed or status_hub_env is changed
          or (status_hub_views_installed is defined and status_hub_views_installed is changed)
+         or (status_hub_guests_delivered is defined and status_hub_guests_delivered is changed)
+         or (status_hub_guests_removed is defined and status_hub_guests_removed is changed)
+         or (status_hub_site_delivered is defined and status_hub_site_delivered is changed)
          or status_hub_tls_files is changed) else 'started' }}
   when: status_hub_start | bool
 

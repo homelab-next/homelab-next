@@ -1386,7 +1386,8 @@
         "timer:trino/lake-maintenance",
         "timer:trivy/scan",
         "timer:vector/hnx-vector-liveness",
-        "timer:velociraptor_server/cycle"
+        "timer:velociraptor_server/cycle",
+        "timer:wazuh/hnx-wazuh-liveness"
       ]
     },
     {
@@ -2486,6 +2487,26 @@
       "purpose": "Export the SIEM's hot index (the alerts indices) to one JSON-lines file per index, and load such files back, through the indexer's own API.",
       "status": "active",
       "trigger": [
+        "role:wazuh"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the metrics were written (a dead daemon is a metric, not a failure)",
+        "2": "usage error or an unsafe output path"
+      },
+      "id": "wazuh-liveness",
+      "inputs": "--compose-file FILE --alerts-file FILE --out FILE [--owner USER]; runs docker compose exec for the process check",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-wazuh-liveness",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the metrics file (atomic rename, 0600); one line on stdout with the same numbers",
+      "owner": "platform",
+      "path": "modules/wazuh/roles/wazuh/files/hnx_wazuh_liveness.py",
+      "purpose": "Write the SIEM manager's liveness as node-exporter textfile metrics - which daemons are live processes and how old the alert stream's last write is - so a manager that is up but not working is loud.",
+      "status": "active",
+      "trigger": [
+        "timer:wazuh/hnx-wazuh-liveness",
         "role:wazuh"
       ]
     },

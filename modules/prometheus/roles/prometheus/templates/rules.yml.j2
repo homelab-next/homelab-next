@@ -102,6 +102,38 @@ groups:
 {% raw %}
           summary: "{{ $labels.instance }} the UPS check has not written metrics for over 5 minutes"
 {% endraw %}
+  # SIEM liveness (module wazuh, textfile metrics siem_*): a manager that is up but whose daemons are not
+  # running, or whose alert stream has gone quiet, is a blind SIEM that nothing else announces. A host with
+  # no SIEM manager exposes none of these, so none of them fires there.
+  - name: hnx-siem
+    rules:
+      - alert: SiemManagerDaemonsDown
+        expr: siem_manager_daemons_running < siem_manager_daemons_expected
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} SIEM manager has {{ $value }} of its daemons running: it is up but not detecting; check for stale pid files and restart the manager container"
+{% endraw %}
+      - alert: SiemAlertStreamStale
+        expr: siem_alerts_file_age_seconds > 900 or siem_alerts_file_present == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} SIEM alert stream has not been written for over 15 minutes: the SIEM is blind"
+{% endraw %}
+      - alert: SiemLivenessCheckStale
+        expr: time() - siem_manager_check_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} the SIEM liveness check has not written metrics for over 5 minutes"
+{% endraw %}
   # Hardware (README "Hardware alerts"): the host exporter's own temperature sensors, and the families the
   # hardware-metrics control writes (pools, the board's sensors and event log, GPUs, the hypervisor's guests).
   # A host without a family exposes nothing of it, so the rule never fires there.

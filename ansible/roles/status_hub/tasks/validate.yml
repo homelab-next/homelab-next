@@ -25,6 +25,16 @@
       not a wildcard (and the allowed host names it needs off loopback), an unprivileged port,
       secrets as secret: references, a positive retention and a one-line title
 
+- name: Validate the guest directory and the site model
+  ansible.builtin.assert:
+    that:
+      - (status_hub_guests_src | length > 0) == (status_hub_site_src | length > 0)
+      - status_hub_guests_src == '' or status_hub_guests_src is match('^/[A-Za-z0-9._/-]+\Z')
+      - status_hub_site_src == '' or status_hub_site_src is match('^/[A-Za-z0-9._/-]+\Z')
+    fail_msg: >-
+      status_hub: the guest pages need both the guest directory and the site model, as absolute
+      paths on the controller (status_hub_guests_src and status_hub_site_src), or neither
+
 - name: Validate the Approvals page's settings
   ansible.builtin.assert:
     that:

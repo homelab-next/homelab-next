@@ -81,6 +81,12 @@
               - "{{ wazuh_data_root }}/certs/manager-key.pem:/etc/ssl/filebeat.key:ro"
               - "{{ wazuh_data_root }}/config/ossec.conf:/wazuh-config-mount/etc/ossec.conf:ro"
               - "{{ wazuh_data_root }}/config/authd.pass:/wazuh-config-mount/etc/authd.pass:ro"
+            # the daemons' pid files live in RAM: an unclean stop (a hard reset) leaves none behind, so the
+            # product's start never skips a daemon because a recycled pid looks alive (README, "Pid files").
+            # 1777: the daemons write their own pid files as the product's service account; compose_app
+            # gives an owner only to a service's own `user:`, the manager runs the product's init as root
+            tmpfs:
+              - {target: /var/ossec/var/run, size_bytes: 8388608, mode: "1777"}
             mem_limit: "{{ wazuh_manager_mem_limit }}"
             healthcheck:
               test: [CMD, bash, -c, "for d in analysisd remoted authd db modulesd monitord; do pgrep -x wazuh-$d >/dev/null || exit 1; done; pgrep -f 'wazuh_apid[.]py' >/dev/null"]

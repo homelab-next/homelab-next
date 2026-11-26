@@ -43,18 +43,21 @@ from homelabnext.status.model import parse_iso
 
 from . import cadence, svg
 
-KINDS = ("timer", "fleet-unit", "ci", "pack", "collector")
+KINDS = ("timer", "fleet-unit", "ci", "pack", "collector", "reported")
 KIND_TITLES = {
     "timer": "Role timers",
     "fleet-unit": "Fleet units",
     "ci": "CI schedules",
     "pack": "Workflow packs (event-driven)",
     "collector": "Status collectors",
+    "reported": "Jobs the hosts report",
 }
 FLEET_SPECS = ("**/fleet_units.yml", "**/fleet_units/*.yml")
 _VAR = re.compile(r"^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}$")
 _KEY = re.compile(r"^(\w+)=(.*)$")
 _PUSHED = {"push-event"}
+#: how a job-last-run source reads in a collector's description (``SourceSpec.mapping_text``)
+_JOB_MAPPING = "builtin job-last-run"
 #: test fixtures are not the lab's schedule
 _SKIP = ("tests/", "tools/tests/", "conformance/fixtures/")
 
@@ -286,17 +289,22 @@ def gather_scripts(root: Path) -> dict[str, list[str]]:
     return {k: sorted(v) for k, v in out.items()}
 
 
-def gather(root: str | Path, registry: Any = None) -> dict[str, Any]:
-    """Everything the page needs from a checkout and a registry (built once per process)."""
+def gather(root: str | Path | None, registry: Any = None) -> dict[str, Any]:
+    """Everything the page needs from a checkout and a registry (built once per process).
+    ``root`` None (a hub with no checkout): only the registry's collectors, and the jobs the
+    hosts report (:func:`build`) stand for the rest."""
     from homelabnext.scripts.catalog import tracked_files
 
-    r = Path(root)
-    files = tracked_files(r)
     collectors = []
     if registry is not None:
         from homelabnext.status.model import sources_from_registry
 
         collectors = [s.describe() for s in sources_from_registry(registry)]
+    if root is None:
+        return {"timers": [], "fleet_units": [], "ci": [], "packs": [], "scripts": {},
+                "collectors": collectors}  # fmt: skip
+    r = Path(root)
+    files = tracked_files(r)
     return {
         "timers": gather_timers(r, files),
         "fleet_units": gather_fleet_units(r, files),
@@ -480,6 +488,33 @@ def build(
         row["state"] = worst([r["state"] for r in reps]) if reps else None
         row["hosts"] = sum(1 for r in reps if r["host"])
         row["attention"] = [r for r in reps if r["state"] != "ok"]
+    # jobs a host reports to the hub that no timer, unit or workflow above declares: the
+    # job-last-run sources' items, so a host's timer is on the schedule with or without a checkout
+    declared = {r["id"] for r in rows}
+    job_sources = {
+        s["id"] for s in inputs.get("collectors") or () if s.get("mapping") == _JOB_MAPPING
+    }
+    jobs = _reports([o for o in observations if o.get("source") in job_sources])
+    for job, reps in jobs.items():
+        if job in declared:
+            continue
+        rows.append(
+            {
+                "id": job,
+                "kind": "reported",
+                "what": "a job reported by its host's last-run record",
+                "where": ", ".join(sorted({r["host"] for r in reps if r["host"]})) or "a host",
+                "runs": [],
+                "path": None,
+                "expression": "",
+                "cadence": "as the host's timer says: not declared here",
+                "next_run": None,
+                "last_run": max(r["last_run"] for r in reps),
+                "state": worst([r["state"] for r in reps]),
+                "hosts": sum(1 for r in reps if r["host"]),
+                "attention": [r for r in reps if r["state"] != "ok"],
+            }
+        )
     groups = [
         {"kind": k, "title": KIND_TITLES[k], "rows": [r for r in rows if r["kind"] == k]}
         for k in KINDS

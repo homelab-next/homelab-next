@@ -38,6 +38,7 @@
 #     - timer:trivy/scan
 #     - timer:vector/hnx-vector-liveness
 #     - timer:velociraptor_server/cycle
+#     - timer:wazuh/hnx-wazuh-liveness
 #   inputs: the job's id, unit, schedule and record directory (arguments); systemd's SERVICE_RESULT, EXIT_CODE and EXIT_STATUS (finish)
 #   outputs: <dir>/<job id as a file name>.json, mode 0640, group-readable by --group
 #   installs_to: /usr/local/libexec/homelabnext/hnx-last-run

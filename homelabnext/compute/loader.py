@@ -501,8 +501,14 @@ def load_fleet(
     site_addresses: Mapping[str, tuple[str, ...]] | None = None,
     delegated6: Any = None,
     placement: Mapping[str, frozenset[str]] | None = None,
+    lenient: list[Problem] | None = None,
 ) -> Fleet:
     """Load, schema- and semantically validate; raise ComputeError listing every problem.
+
+    ``lenient``: a list that receives the semantic problems (:func:`validate`) instead of
+    raising for them, so a page that shows the lab as it is (the status hub's maps) still draws a
+    guest set that breaks a policy; a file that cannot be read or does not fit the schema, and an
+    unusable baseline set, still raise.
 
     ``baselines_path`` defaults to ``DIRECTORY/_baselines.yml``; without that file there is no
     baseline set and no guest needs a baseline.  ``require_baselines=False`` tolerates guests
@@ -549,7 +555,11 @@ def load_fleet(
         delegated6=delegated6,
         placement=dict(placement or {}),
     )
-    problems += validate(fleet, require_baselines=require_baselines)
+    found = validate(fleet, require_baselines=require_baselines)
+    if lenient is not None and not problems:
+        lenient.extend(found)
+        return fleet
+    problems += found
     if problems:
         raise ComputeError(f"invalid guest set in {d}", problems)
     return fleet
