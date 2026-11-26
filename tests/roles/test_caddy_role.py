@@ -520,8 +520,21 @@ def test_the_default_logger_redacts_credentials_in_urls_and_headers(tmp_path):
     global_block = caddyfile.split("\n}\n", 1)[0]
     assert "\tlog {" in global_block and "format filter" in global_block
     assert "wrap json" in global_block
-    # no site declares its own logger that would bypass the filter
-    assert not any(line.strip().startswith("log") for line in sites.splitlines())
+    # no site declares its own logger that would bypass the filter: a site only names the role's
+    # access logger (below), which carries the same filter
+    assert {line.strip() for line in sites.splitlines() if line.strip().startswith("log")} == {
+        "log hnx_access"
+    }
+    access = global_block.split("\tlog hnx_access {", 1)[1]
+    assert "output file /var/log/caddy/access.log" in access
+    assert "include http.log.access.hnx_access" in access
+    assert "format filter" in access and "wrap json" in access
+    a_query, a_headers = _filter_rules("format filter" + access.split("format filter", 1)[1])
+    d_query, d_headers = _filter_rules(caddyfile)
+    assert (a_query, a_headers) == (d_query, d_headers)  # one redaction list, two loggers
+    assert {"code", "state", "id_token", "session_state"} <= a_query
+    # the sign-in redirect's Location carries the escaped URI: its credential values are redacted too
+    assert "resp_headers>Location regexp" in access
     query, headers = _filter_rules(caddyfile)
     for name in (
         "api_key",
