@@ -1,0 +1,1 @@
+- prometheus: `LlmDecodeCollapsed` (critical) pages when a llama.cpp model server generates under `prometheus_alert_llm_decode_min_tps` (5) tokens/s for 10m while serving - the CPU-fallback signature the one-token probe misses (2026-11-25: 0.46 tok/s for 17 h unnoticed).
