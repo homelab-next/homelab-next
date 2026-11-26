@@ -562,6 +562,18 @@ def test_a_balanced_group_still_splits_the_limits_one_nth_each(tmp_path):
     assert rpms == [10, 10, 10]
 
 
+def test_the_neutral_config_carries_priority_only_for_a_role_that_sets_it(tmp_path):
+    def deployments(roles):
+        files = gw.render_file(make_spec(tmp_path, roles))
+        return json.loads(files["gateway/gateway.json"])["roles"]["small-local"]["deployments"]
+
+    assert all("priority" not in d for d in deployments(_three_backends([None, None, None])))
+    (tmp_path / "p").mkdir()
+    out = gw.render_file(make_spec(tmp_path / "p", _three_backends([2, 1, 1])))
+    got = json.loads(out["gateway/gateway.json"])["roles"]["small-local"]["deployments"]
+    assert [d["priority"] for d in got] == [1, 1, 2]  # the loader sorts by priority, ties stable
+
+
 def test_a_role_with_some_priorities_and_not_others_is_refused(tmp_path):
     with pytest.raises(gw.GatewaySpecError) as e:
         gw.render_file(make_spec(tmp_path, _three_backends([1, None, 1])))

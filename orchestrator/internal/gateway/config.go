@@ -15,6 +15,8 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 // Config is gateway/gateway.json. Every field but conformance_only is required (a null is
@@ -44,6 +46,9 @@ type Role struct {
 
 	alias   string
 	ceiling Label
+
+	tierOnce sync.Once
+	tiers    []*tier
 }
 
 // Deployment is one backend serving a role.
@@ -55,6 +60,12 @@ type Deployment struct {
 	BaseURL   string  `json:"base_url"`
 	Model     string  `json:"model"`
 	APIKeyEnv *string `json:"api_key_env"`
+	// Priority is the deployment's tier: >= 1, lower first, equal values form one tier whose
+	// members share the load. Absent (0): every deployment of the role is its own tier in list
+	// order (strict failover). All or none per role (validate).
+	Priority int `json:"priority,omitempty"`
+
+	inflight atomic.Int64 // requests being attempted on it now (least-in-flight balancing)
 }
 
 // RoleLimits is one budget for a whole role, across all its deployments.

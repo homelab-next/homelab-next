@@ -107,13 +107,22 @@ accepted). It comes from the same spec as the LiteLLM files and says the same th
 
 - each role's kind, context limit, TLP ceiling and `leaves_lab` (both chain-inclusive: the role
   table's `role_ceiling` and `cloud_roles` over the role and its whole fallback chain, exactly what
-  `model_tlp.admit` reads), its deployments in binding order (ascending `priority`, ties in table order; the lab's own gateway
-  tries them first to last and **does not balance** equal priorities: `tryRole` is a failover
-  chain, so only LiteLLM balances today) (`openai` protocol for a local
+  `model_tlp.admit` reads), its deployments in binding order (ascending `priority`, ties in table order; `priority` is
+  written on each deployment only for a role that sets it, and equal values are one tier the lab's
+  own gateway balances, see below) (`openai` protocol for a local
   backend, its base URL without `/v1`; a cloud one on `https://api.openai.com` or
   `https://api.anthropic.com`), its fallbacks (what LiteLLM's `fallbacks` gets) and its limits as
   declared, one budget per role in its own window (not LiteLLM's per-minute, per-deployment
   share);
+- **Priority tiers in the lab's own gateway.** A role whose deployments carry `priority` is routed
+  by tier, lowest first; the deployments of one priority form a tier and share the load: each
+  request tries first the member with the fewest attempts in flight, ties broken by a rotating
+  start (so sequential requests spread evenly), and a member that fails in a failover-eligible way
+  (5xx, 429, 401/403, redirect, malformed or empty reply, connection error, timeout) moves the
+  request on to the rest of its tier before the next tier is tried; then the role's `fallback` roles
+  as before. A role with no priority has each deployment as its own tier, so it fails over strictly
+  in order exactly as it always did. The reader refuses a role where only some deployments set
+  `priority`.
 - each key's alias, environment name, owner, data tier, sending ceiling, the roles it may call
   (its own and their fallback chains, what LiteLLM's `models` gets) and its limits;
 - the admin key's environment name (the master key; its ceiling is always `red`) and the

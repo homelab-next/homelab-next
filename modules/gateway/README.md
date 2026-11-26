@@ -160,8 +160,7 @@ The overlay carries every real value ([selection](../../docs/modules/selection.m
 4. **The gateway spec** (the file `gateway_spec` names; the generator's format, `docs/llm-gateway.md`) and
    the role table `model_roles.json` it names: roles with ordered bindings (local first, the cloud binding
    last with `leaves_lab: true`; an optional `priority >= 1` on every binding of a role ranks them,
-   and with LiteLLM equal priorities are load-balanced, while this own gateway still fails over in
-   order and does not balance them), the backends (`svc:<registry row>: {locality: local}`; a cloud one
+   equal priorities are load-balanced, by LiteLLM and by this own gateway alike), the backends (`svc:<registry row>: {locality: local}`; a cloud one
    `{locality: cloud, provider: anthropic, api_key: secret:gateway/upstream-cloud}`), `master_key`,
    `telemetry_reader`, and **one `keys:` entry per caller** with its roles, `data_tier`, `tlp_ceiling` and
    limits. The spec requires a `database_url:` reference the own gateway never reads (a LiteLLM leftover of

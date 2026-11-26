@@ -1282,7 +1282,7 @@ def render_neutral(spec: Spec) -> str:
 
     Each role's TLP ceiling is :func:`role_ceilings`' and ``leaves_lab`` is
     :func:`leaves_lab_roles`' (what ``model_tlp.admit`` reads); deployments are the bindings in
-    order; ``fallbacks`` is :func:`_fallback_targets` and a key's ``roles`` :func:`_allowed`, as
+    order (with ``priority`` when the role sets it: equal priority is one balanced tier); ``fallbacks`` is :func:`_fallback_targets` and a key's ``roles`` :func:`_allowed`, as
     LiteLLM gets them; limits are the declared ones, whole (one budget per role, never split per
     deployment); every credential is the environment name its ``secret:`` reference maps to.
     Raises :class:`GatewaySpecError` with :func:`neutral_refusals` when the contract cannot
@@ -1304,17 +1304,18 @@ def _neutral_doc(spec: Spec) -> dict[str, Any]:
         deployments = []
         for i, b in enumerate(role.bindings):
             be = spec.backends[b.backend]
-            deployments.append(
-                {
-                    "id": f"{rname}-{i + 1}",
-                    "backend": be.name,
-                    "locality": be.locality,
-                    "protocol": _protocol(be),
-                    "base_url": _base_url(spec, be),
-                    "model": b.model_id,
-                    "api_key_env": secret_env_name(be.api_key) if be.api_key else None,
-                }
-            )
+            dep: dict[str, Any] = {
+                "id": f"{rname}-{i + 1}",
+                "backend": be.name,
+                "locality": be.locality,
+                "protocol": _protocol(be),
+                "base_url": _base_url(spec, be),
+                "model": b.model_id,
+                "api_key_env": secret_env_name(be.api_key) if be.api_key else None,
+            }
+            if b.priority >= 1:  # only a role that sets priorities (all or none): else unchanged
+                dep["priority"] = b.priority
+            deployments.append(dep)
         lim = role.limits
         roles[rname] = {
             "kind": role.kind,
