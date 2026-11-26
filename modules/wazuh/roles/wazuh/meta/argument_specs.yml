@@ -81,6 +81,30 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_textfile_owner:
+        type: str
+        description: The user that owns the liveness metrics file (mode 0600, read only by it); set it to the user the host exporter runs as.
+        default: root
+      wazuh_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      wazuh_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      wazuh_last_run_writer:
+        type: path
+        description: Where the shared last-run writer is installed.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'
@@ -287,6 +311,30 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_textfile_owner:
+        type: str
+        description: The user that owns the liveness metrics file (mode 0600, read only by it); set it to the user the host exporter runs as.
+        default: root
+      wazuh_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      wazuh_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      wazuh_last_run_writer:
+        type: path
+        description: Where the shared last-run writer is installed.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'
@@ -493,6 +541,30 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_textfile_owner:
+        type: str
+        description: The user that owns the liveness metrics file (mode 0600, read only by it); set it to the user the host exporter runs as.
+        default: root
+      wazuh_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      wazuh_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      wazuh_last_run_writer:
+        type: path
+        description: Where the shared last-run writer is installed.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'
@@ -698,6 +770,30 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_textfile_owner:
+        type: str
+        description: The user that owns the liveness metrics file (mode 0600, read only by it); set it to the user the host exporter runs as.
+        default: root
+      wazuh_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      wazuh_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      wazuh_last_run_writer:
+        type: path
+        description: Where the shared last-run writer is installed.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'
@@ -903,6 +999,30 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_textfile_owner:
+        type: str
+        description: The user that owns the liveness metrics file (mode 0600, read only by it); set it to the user the host exporter runs as.
+        default: root
+      wazuh_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      wazuh_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      wazuh_last_run_writer:
+        type: path
+        description: Where the shared last-run writer is installed.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'
@@ -1108,6 +1228,30 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_textfile_owner:
+        type: str
+        description: The user that owns the liveness metrics file (mode 0600, read only by it); set it to the user the host exporter runs as.
+        default: root
+      wazuh_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      wazuh_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      wazuh_last_run_writer:
+        type: path
+        description: Where the shared last-run writer is installed.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'
@@ -1317,6 +1461,30 @@ argument_specs:
         description: The manager's service group inside its container; the log pipeline joins it (group_add)
           to read the alert and archive streams.
         default: 999
+      wazuh_textfile_dir:
+        type: str
+        description: The host exporter's textfile directory the liveness timer writes to; empty turns the timer off.
+        default: /var/lib/homelabnext-textfile
+      wazuh_textfile_owner:
+        type: str
+        description: The user that owns the liveness metrics file (mode 0600, read only by it); set it to the user the host exporter runs as.
+        default: root
+      wazuh_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      wazuh_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      wazuh_last_run_writer:
+        type: path
+        description: Where the shared last-run writer is installed.
+        default: /usr/local/libexec/homelabnext/hnx-last-run
+      wazuh_alerts_max_age_seconds:
+        type: int
+        description: Seconds without a write after which the alert stream is stale (health fails; the monitoring rule pages).
+        default: 900
       wazuh_indexer_heap:
         type: str
         description: 'The indexer''s JVM heap (like 8g): half its container limit.'

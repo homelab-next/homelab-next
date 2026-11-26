@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# The liveness metrics (README, "Liveness and the stale-stream alert"): a timer writes siem_* textfile
+# metrics once a minute (which manager daemons are live processes, how old the alert stream's last
+# write is) and the monitoring rules page on them. Off when wazuh_textfile_dir is empty.
+- name: The directory for the liveness writer exists
+  ansible.builtin.file:
+    path: /usr/local/libexec/homelabnext
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the liveness writer
+  ansible.builtin.copy:
+    src: hnx_wazuh_liveness.py
+    dest: /usr/local/libexec/homelabnext/hnx-wazuh-liveness
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ wazuh_last_run_dir }}"
+    last_run_group: "{{ wazuh_last_run_group }}"
+    last_run_writer: "{{ wazuh_last_run_writer }}"
+
+- name: The textfile directory exists
+  ansible.builtin.file:
+    path: "{{ wazuh_textfile_dir }}"
+    state: directory
+    owner: "{{ wazuh_owner }}"
+    group: "{{ wazuh_group }}"
+    mode: "0755"
+
+- name: Write the liveness service and timer units
+  ansible.builtin.template:
+    src: "hnx-wazuh-liveness.{{ item }}.j2"
+    dest: "{{ wazuh_unit_dir }}/hnx-wazuh-liveness.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+  register: wazuh_liveness_units
+
+- name: Reload systemd (units changed)
+  ansible.builtin.command:
+    argv: [systemctl, daemon-reload]
+  when: wazuh_liveness_units is changed and not ansible_check_mode
+  changed_when: true
+
+- name: Enable and start the timer
+  ansible.builtin.command:
+    argv: [systemctl, enable, --now, hnx-wazuh-liveness.timer]
+  when: wazuh_start | bool and not ansible_check_mode
+  changed_when: wazuh_liveness_units is changed

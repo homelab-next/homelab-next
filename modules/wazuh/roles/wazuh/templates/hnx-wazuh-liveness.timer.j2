@@ -1,0 +1,11 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role wazuh); local changes are overwritten.
+[Unit]
+Description=homelabnext SIEM manager liveness metrics every minute (role wazuh)
+
+[Timer]
+OnCalendar={{ wazuh_liveness_interval }}
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
