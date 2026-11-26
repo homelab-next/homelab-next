@@ -4,6 +4,7 @@ id: table:soc.network_activity
 owner: lake-writer
 schema_id: https://schemas.example.internal/homelabnext/ocsf/network_activity/1.1
 retention_days: 365
+tlp: red
 maintenance:
   compact: true
   expire_snapshots_days: 7

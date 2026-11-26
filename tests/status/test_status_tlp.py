@@ -692,3 +692,54 @@ def test_the_registry_file_is_packaged():
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert '"status/*.yml"' in pyproject
     assert Path(rel.REGISTRY).is_file()
+
+
+# ---------------------------------------------------------------- a source's own label (2.16)
+def test_a_source_without_a_label_is_red_and_the_label_reaches_the_menu(registry):
+    assert spec("a").tlp == "red"
+    assert spec("a").describe()["tlp"] == "red"
+    entry = {"id": "x", "kind": "poll-file", "interval_s": 60, "what": "x", "tlp": "green"}
+    assert type(spec("a")).from_entry(entry, "svc-a", "cap-a").tlp == "green"
+    bare = {k: v for k, v in entry.items() if k != "tlp"}
+    assert type(spec("a")).from_entry(bare, "svc-a", "cap-a").tlp == "red"
+
+
+def _loosened(tid, serves_input):
+    doc = _registry_doc()
+    next(t for t in doc["transforms"] if t["id"] == tid)["input"] = serves_input
+    next(t for t in doc["transforms"] if t["id"] == tid)["output"] = "clear"
+    problems, transforms = rel.registry_problems(doc)
+    assert problems == []
+    return rel.Releases(transforms)
+
+
+def test_a_released_view_cannot_reach_a_source_above_its_transforms_input(registry):
+    specs = [spec("quiet", tlp="clear"), spec("lab"), spec("amber-one", tlp="amber")]
+    views = {**FULL_VIEWS, "menu": [
+        {**v, **({"select": {"sources": ["quiet"]}} if v["id"] == "grid" else {})}
+        for v in FULL_VIEWS["menu"]
+    ]}  # fmt: skip
+    clear_only = _loosened(rel.STATUS_PUBLIC, "clear")
+    out = views_problems(views, registry, specs, clear_only)
+    # the grid selects only the clear source: fine; the overview, the sources page and the
+    # status.json export reach every source, so the red and amber ones are refused
+    assert not any(p.startswith("view grid") for p in out)
+    assert (
+        "view overview: release transform status-public takes input clear, below source lab's "
+        "TLP label red" in out
+    )
+    assert any(
+        p.startswith("exports.status.json") and "amber-one's TLP label amber" in p for p in out
+    )
+    # the hub's own registry takes red in, so the same views are fine
+    assert not [p for p in views_problems(views, registry, specs) if "TLP label" in p]
+
+
+def test_a_view_selecting_a_module_reaches_its_sources(registry):
+    specs = [spec("quiet", tlp="clear", mapping={"module": "feeds"}), spec("lab")]
+    views = {**FULL_VIEWS, "menu": [
+        {**v, **({"select": {"modules": ["feeds"]}} if v["id"] == "grid" else {})}
+        for v in FULL_VIEWS["menu"]
+    ]}  # fmt: skip
+    out = views_problems(views, registry, specs, _loosened(rel.STATUS_PUBLIC, "clear"))
+    assert not any(p.startswith("view grid") for p in out)
