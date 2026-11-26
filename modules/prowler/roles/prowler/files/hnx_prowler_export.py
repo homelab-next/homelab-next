@@ -224,22 +224,29 @@ def summary_event(res: Result, version: str, now: datetime) -> dict:
     }
 
 
-def write_findings(path: Path, summary: dict, rows: list, mode: int) -> None:
+def render_findings(summary: dict, rows: list) -> str:
+    return "".join(json.dumps(line) + "\n" for line in [summary, *rows])
+
+
+def replace_file(path: Path, text: str, mode: int) -> None:
+    """Write beside, then rename into place: a reader tailing the file never sees half of it."""
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as out:
-        out.write(json.dumps(summary) + "\n")
-        for row in rows:
-            out.write(json.dumps(row) + "\n")
+        out.write(text)
     os.chmod(tmp, mode)
     os.replace(tmp, path)
 
 
-def record_run(state_dir: Path, doc: dict) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
-    tmp = state_dir / "last-run.json.tmp"
-    tmp.write_text(json.dumps(doc) + "\n")
-    os.replace(tmp, state_dir / "last-run.json")
+def write_findings(path: Path, summary: dict, rows: list, mode: int) -> None:
+    replace_file(path, render_findings(summary, rows), mode)
+
+
+def record_run(directory: Path, doc: dict) -> None:
+    """The last-run record the health hook reads (a torn one reads as not ok until the next run)."""
+    record = directory / "last-run.json"
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps(doc) + "\n")
 
 
 def _fail(cfg: Config, now: datetime, reason: str) -> int:

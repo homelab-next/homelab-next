@@ -28,6 +28,7 @@
 #     - timer:nut_ups/hnx-nut-ups-check
 #     - timer:openbao/acme-renew
 #     - timer:prometheus/alerts
+#     - timer:prowler/scan
 #     - timer:restore_drill/drill
 #     - timer:rkhunter/scan
 #     - timer:source_census/source-census-run

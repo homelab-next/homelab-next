@@ -16,7 +16,7 @@ EnvironmentFile={{ prowler_env_file }}
 EnvironmentFile={{ prowler_login_env_file }}
 # the timer's runs are reported to the shared last-run record (the writer runs privileged: +)
 ExecStartPre=-+/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ prowler_last_run_dir }} --group {{ prowler_last_run_group }} --job timer:prowler/scan --unit %n --calendar "{{ prowler_oncalendar }}" --delay {{ prowler_random_delay_s }}
-ExecStart={{ prowler_export_script }}
+ExecStart=/usr/local/libexec/homelabnext/hnx-prowler-export
 Environment=PYTHONSAFEPATH=1 PYTHONNOUSERSITE=1
 ExecStopPost=-+/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ prowler_last_run_dir }} --group {{ prowler_last_run_group }} --job timer:prowler/scan --unit %n --calendar "{{ prowler_oncalendar }}" --delay {{ prowler_random_delay_s }}
 # a cold run across every region can take a while; the exporter has its own limit, this is the backstop
