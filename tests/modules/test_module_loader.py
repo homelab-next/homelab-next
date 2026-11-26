@@ -1259,6 +1259,27 @@ def test_a_table_declared_only_as_a_lake_table_record_is_not_flagged_as_undeclar
     ]
 
 
+def test_a_dataset_cannot_be_labelled_above_its_lake_tables_tlp(tmp_path):
+    """ADR-0033 decision 5: the table's ``tlp`` is the most restrictive label a row may carry."""
+    tree, _ = examples(tmp_path)
+    d = tree.dirs["external-collector"]
+    rec = d / "lake" / "sessions.table.yml"
+    ds = next(x for x in tree.mods["external-collector"]["data"] if x["id"] == "sessions")
+    ds["tlp"] = "amber"
+    want = "dataset sessions is labelled amber, above its table's tlp green"
+    rec.write_text(rec.read_text().replace("tlp: red", "tlp: green"))
+    report = check(tree, (tmp_path / "fixtures",), site=SITES["small-lab"], inventory=INVENTORY)
+    assert any(want in m for m in messages(report))
+    for label in ("amber", "amber+strict", "red"):  # the table holds what its dataset is
+        rec.write_text(rec.read_text().replace("tlp: green", f"tlp: {label}"))
+        report = check(tree, (tmp_path / "fixtures",), site=SITES["small-lab"], inventory=INVENTORY)
+        assert not any("above its table's tlp" in m for m in messages(report)), label
+        rec.write_text(rec.read_text().replace(f"tlp: {label}", "tlp: green"))
+    rec.write_text(rec.read_text().replace("tlp: green\n", ""))  # no tlp: red holds every label
+    report = check(tree, (tmp_path / "fixtures",), site=SITES["small-lab"], inventory=INVENTORY)
+    assert not any("above its table's tlp" in m for m in messages(report))
+
+
 def test_the_running_check_and_the_core_collision_check_declare_the_same_tables(tmp_path):
     tree = _with_lake_only_table(tmp_path)
     load = ld.module_reader(tree)

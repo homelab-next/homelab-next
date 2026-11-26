@@ -344,6 +344,10 @@ and `render` and `serve` when they load the views, refuse:
 - a public export, or a public view whose data the hub releases (`exceptions`, `grid`, `sources`,
   `agents`, `activity`, `agent-analytics`), that no release transform serves, or one whose
   transform's output its ceiling does not allow;
+- a public entry or export that can show a status source labelled above the `input` of the release
+  transform serving it (a source's `tlp:` in the registry, service schema 2.16: the label of what
+  it reads into the hub, `red` when absent; a view reaches the sources it selects, all of them with
+  no `select`, and the exports reach every source);
 - a public entry for any other panel: a page no release transform shapes is **withheld** and may
   sit only in the `private` group, at `red` (below); and a `private` group entry that is neither a
   private page nor a withheld one.

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# A lake table's tlp is one of the five canonical labels (amber+strict, not amber-strict).
+id: table:external_collector.sessions
+owner: external-collector
+schema_id: https://schemas.example.internal/homelabnext/ocsf/network_activity/1.0
+retention_days: 180
+tlp: amber-strict
+maintenance:
+  compact: true
+  expire_snapshots_days: 7
+freshness:
+  cadence: batch
+  stale_after_s: 172800
