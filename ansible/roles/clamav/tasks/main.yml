@@ -8,6 +8,7 @@
   ansible.builtin.apt:
     name: ['clamav', 'clamav-freshclam']
     state: present
+  register: clamav_packages
 
 - name: Write the configuration, the scan script and its timer
   ansible.builtin.include_tasks: config.yml
@@ -17,3 +18,5 @@
     name: clamav-freshclam
     enabled: true
     state: started
+  # --check on a host where the package is not installed yet: the unit does not exist to look up (the real run installs it first)
+  when: not (ansible_check_mode and clamav_packages is changed)
