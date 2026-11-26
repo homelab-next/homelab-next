@@ -452,3 +452,66 @@ def test_the_sigma_bundles_are_compiled_to_the_names_the_stage_task_copies(tmp_p
     assert sorted((c[2], c[3]) for c in r.calls) == sorted(
         (root, verb) for root in roots for verb in ("lint", "run", "map", "compile")
     )
+
+
+# ----------------------------------------------------------------------------- liveness and pid files
+
+
+def _liveness():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "liveness", ROLE_DIR / "files" / f"hnx_{MID}_liveness.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_managers_pid_directory_is_a_tmpfs_so_no_pid_file_survives_a_hard_reset():
+    manager = role_text("tasks", "app.yml")
+    manager = manager[manager.index("manager:") : manager.index("dashboard:")]
+    assert re.search(r"tmpfs:\s*\n\s*- \{target: /var/ossec/var/run,", manager)
+    # nothing but the one pid directory is a tmpfs: the state under it is not lost on a restart
+    assert manager.count("target:") == 1
+
+
+def test_the_liveness_metrics_say_which_daemon_is_down_and_a_missing_stream_is_stale():
+    mod = _liveness()
+    up = dict.fromkeys(mod.DAEMONS, True)
+    up[f"{MID}-db"] = False
+    text = mod.render(up, 30.4, 1000.0)
+    assert 'siem_manager_daemon_up{daemon="' + f"{MID}-db" + '"} 0' in text
+    assert f"siem_manager_daemons_expected {len(up)}" in text
+    assert f"siem_manager_daemons_running {len(up) - 1}" in text
+    assert "siem_alerts_file_age_seconds 30" in text and "siem_alerts_file_present 1" in text
+    missing = mod.render(up, None, 1000.0)
+    assert "siem_alerts_file_present 0" in missing
+    assert f"siem_alerts_file_age_seconds {mod.ABSENT_AGE}" in missing
+
+
+def test_the_liveness_writer_reads_the_stream_age_and_refuses_an_unsafe_output(tmp_path):
+    mod = _liveness()
+    f = tmp_path / "alerts.json"
+    f.write_text("{}")
+    assert mod.alerts_age(f, f.stat().st_mtime + 90) == pytest.approx(90)
+    assert mod.alerts_age(tmp_path / "none.json", 1.0) is None
+    out = tmp_path / "text" / "siem_manager.prom"
+    out.parent.mkdir()
+    mod.write_atomic(out, "a 1\n")
+    assert out.read_text() == "a 1\n" and not list(out.parent.glob(".hnx-liveness-*"))
+    assert (out.stat().st_mode & 0o777) == 0o600  # never world-readable
+    with pytest.raises(ValueError):
+        mod.write_atomic(Path("/x.prom"), "a 1\n")
+    with pytest.raises(ValueError):
+        mod.write_atomic(out.with_suffix(".txt"), "a 1\n")
+
+
+def test_health_fails_on_a_stale_alert_stream_and_the_timer_is_wired_to_the_textfile_dir():
+    health = role_text("tasks", "health.yml")
+    assert "alerts/alerts.json" in health and P + "alerts_max_age_seconds" in health
+    assert P + "textfile_dir" in role_text("tasks", "main.yml")
+    unit = role_text("templates", f"hnx-{MID}-liveness.service.j2")
+    assert P + "textfile_dir" in unit and "alerts/alerts.json" in unit
+    d = defaults()
+    assert d[P + "alerts_max_age_seconds"] >= 120 and d[P + "textfile_dir"].startswith("/")
