@@ -125,6 +125,13 @@ prometheus_alert_gpu_temp_warning_celsius: 85
 prometheus_alert_gpu_temp_critical_celsius: 92
 # the site's per-GPU power cap: a sustained draw over it, and a power limit in force above it, alert
 prometheus_alert_gpu_power_cap_watts: 200
+# LlmDecodeCollapsed: a model server generating slower than this many tokens/s (over the window) while it is serving
+# requests is almost certainly on the CPU after a GPU fault (2026-11-25: 0.46 tok/s for 17 h against ~19 on the GPUs)
+prometheus_alert_llm_decode_min_tps: 5
+prometheus_alert_llm_decode_window: 15m
+# the metric-name prefix the inference-server slot's provider exports its counters under (tokens_predicted_total, ...);
+# the site sets it for its provider; empty leaves LlmDecodeCollapsed out
+prometheus_inference_metric_prefix: ""
 prometheus_alert_gpu_power_for: 5m
 prometheus_alert_pool_used_percent: 85
 prometheus_alert_board_event_window: 30m

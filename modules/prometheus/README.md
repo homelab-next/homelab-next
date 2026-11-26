@@ -174,7 +174,7 @@ With the probes on, `prometheus_llm_probe_roles` (model role names) are asked ev
 `prometheus_llm_probe_gateway`, with the gateway key `prometheus_llm_probe_key_ref` (a file only the
 probe exporter mounts). A refusal, a 5xx (the gateway's `upstream_unavailable`) or no answer in
 `prometheus_llm_probe_timeout` is down: `LlmProbeFailed` after 10m (critical); an answer slower than
-`prometheus_alert_llm_probe_slow_seconds` for 15m is `LlmProbeSlow` (warning). This is the caller's
+**`LlmDecodeCollapsed` (critical, always rendered)** reads the llama.cpp servers' own metrics: tokens generated per second of generation over `prometheus_alert_llm_decode_window` (15m), below `prometheus_alert_llm_decode_min_tps` (5) for 10m while the server is generating. It exists because a model server that loses its GPU falls back to the CPU and keeps answering: on 2026-11-25 the large model ran at 0.46 tok/s (normal ~19) for 17 h, the one-token probe still passed in time, and only `GpuNotComputing` fired. This alert names the impact (tokens/s) so the page reads as "every AI job is crawling". `prometheus_alert_llm_probe_slow_seconds` for 15m is `LlmProbeSlow` (warning). This is the caller's
 own path; `GpuNotComputing` is the earlier, cheaper signal of a server that fell back to the CPU.
 
 ## The slot
