@@ -96,6 +96,7 @@ Built-in mappers for sources this repository has:
 | `job-last-run` | a directory of last-run records (`poll-file`, below), or one record, or a list of them | one per job and host, `<job id>@<host>`: fail when the run failed, warn when the next one is overdue |
 | `table-snapshot-age` | a lake catalog's REST `LoadTableResult` for one table (`poll-http-json`; registry 2.12) | one item (`mapping.item`): the age of the newest snapshot against `warn_after_s` and `fail_after_s`; no snapshot is warn |
 | `backup-snapshot-age` | a backup server datastore's snapshot list, `GET /api2/json/admin/datastore/<store>/snapshots` (`poll-http-json`; registry 2.12) | one per backup group, `<type>/<id>`: the newest snapshot's age against the same limits; a failed verification is fail; an empty datastore is fail |
+| `drill-records` | the role `restore_drill` records file (`drills.json`; [ADR-0042](adr/0042-restores-are-tested-and-the-lab-can-cold-start.md); `poll-file`) | one per guest (`<guest id>`) and per exported application (`export:<app>`): the age of the last verified drill against two limits (warn/fail, default 30 d / 90 d). A record whose `last_failure` is newer than `last_verified`, or one that never verified and carries a failure, is fail; a record that never verified and has no failure is unknown, so an empty file does not read green |
 
 ### Scheduled jobs: last-run records (`job-last-run`, registry 2.6)
 

@@ -1,0 +1,65 @@
+{
+  "guests": {
+    "guest:apps": {
+      "name": "apps",
+      "last_verified": "2026-10-18T07:00:00Z",
+      "snapshot": "vm/130/2026-10-18T06:30:00Z",
+      "store": "datastore-a",
+      "duration_s": 1420
+    },
+    "guest:edge": {
+      "name": "edge",
+      "last_verified": "2026-09-25T07:00:00Z",
+      "snapshot": "vm/131/2026-09-25T06:30:00Z",
+      "store": "datastore-a",
+      "duration_s": 980
+    },
+    "guest:idp": {
+      "name": "idp",
+      "last_verified": "2026-07-01T07:00:00Z",
+      "snapshot": "vm/132/2026-07-01T06:30:00Z",
+      "store": "datastore-a",
+      "duration_s": 1210
+    },
+    "guest:cases": {
+      "name": "cases",
+      "last_verified": "2026-10-05T07:00:00Z",
+      "snapshot": "vm/139/2026-10-05T06:30:00Z",
+      "last_failure": "2026-10-19T07:00:00Z",
+      "failure": "no partition of the restored image is a root filesystem",
+      "store": "datastore-a"
+    },
+    "guest:projects": {
+      "name": "projects",
+      "last_failure": "2026-10-19T07:00:00Z",
+      "failure": "the guest should carry an application export and has none",
+      "store": "datastore-a"
+    },
+    "guest:media": {
+      "name": "media"
+    }
+  },
+  "services": {
+    "cases-postgres": {
+      "kind": "export",
+      "source": "export",
+      "snapshot": "vm/139/2026-10-05T06:30:00Z",
+      "verified": true,
+      "last_verified": "2026-10-05T07:00:00Z",
+      "guest": "guest:cases",
+      "fingerprint_match": true,
+      "files": 2
+    },
+    "idp-main": {
+      "kind": "export",
+      "source": "export",
+      "snapshot": "vm/132/2026-07-01T06:30:00Z",
+      "verified": true,
+      "last_verified": "2026-07-01T07:00:00Z",
+      "guest": "guest:idp",
+      "fingerprint_match": true,
+      "files": 1
+    }
+  },
+  "runs": 7
+}
