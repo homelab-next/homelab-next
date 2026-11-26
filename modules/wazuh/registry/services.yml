@@ -19,4 +19,47 @@ services:
     tls: internal
     auth: own
     tags: [siem, soc]
+    # The SIEM liveness status sources (README, "Liveness and the stale-stream alert"): the role's
+    # per-minute timer writes siem_* textfile metrics the host's node exporter serves, which the
+    # site's metrics service (Prometheus) scrapes. The status sources below poll the SAME series
+    # the role's alert rules fire on (SiemManagerDaemonsDown, SiemAlertStreamStale,
+    # SiemLivenessCheckStale), so a SIEM that is up but not detecting is visible on the hub whether
+    # or not an alert is firing. target.service names the metrics row (the hub resolves it through
+    # the registry; the site binds it). A series missing (the liveness timer stopped) is fail on
+    # all three. The siem-source row is tcp; these sources go OVER the metrics row (poll-prometheus
+    # needs an http(s) target), so they are declared here with target.service and pass the schema.
+    status_sources:
+      - id: wazuh-manager-daemons
+        kind: poll-prometheus
+        target: {service: metrics, path: /api/v1/query}
+        interval_s: 60
+        timeout_s: 10
+        mapping:
+          query: siem_manager_daemon_up
+          item: daemon
+          thresholds: {fail: 0, direction: below}
+          empty: fail
+        what: Each Wazuh manager daemon's liveness (siem_manager_daemon_up); a daemon not a live process is fail, no series is fail (the liveness timer stopped).
+      - id: wazuh-alert-stream-age
+        kind: poll-prometheus
+        target: {service: metrics, path: /api/v1/query}
+        interval_s: 60
+        timeout_s: 10
+        mapping:
+          query: siem_alerts_file_age_seconds
+          item: instance
+          thresholds: {warn: 300, fail: 900}
+          empty: fail
+        what: Seconds since the Wazuh manager last wrote its alert stream; warn past 5 min, fail past 15 min (matches SiemAlertStreamStale).
+      - id: wazuh-liveness-check-stale
+        kind: poll-prometheus
+        target: {service: metrics, path: /api/v1/query}
+        interval_s: 300
+        timeout_s: 10
+        mapping:
+          query: time() - siem_manager_check_timestamp_seconds
+          item: instance
+          thresholds: {warn: 300, fail: 900}
+          empty: fail
+        what: Seconds since the Wazuh liveness textfile writer last updated its metrics; warn past 5 min, fail past 15 min (matches SiemLivenessCheckStale).
     description: The Wazuh manager's agent event port (1514/tcp; enrolment on 1515 needs the enrolment password). The agents and the sensors' agents connect here.

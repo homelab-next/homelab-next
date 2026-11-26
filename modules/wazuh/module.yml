@@ -92,6 +92,7 @@ contributes:
     - file: roles/wazuh
   services:
     - file: registry/services.yml
+  status_sources: [status:wazuh-manager-daemons, status:wazuh-alert-stream-age, status:wazuh-liveness-check-stale]
   preflight:
     - {role: role:wazuh, hook: readiness}
   docs:
