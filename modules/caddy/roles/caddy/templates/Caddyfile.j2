@@ -4,40 +4,6 @@
 # hosts only); this file adds what is the role's: the global options, a health site on the
 # container's own loopback, and the catch-all that loads the certificate and answers 404 for every
 # name no site has.
-{% macro redacted_fields() %}			fields {
-				request>uri query {
-					replace api_key REDACTED
-					replace apikey REDACTED
-					replace ApiKey REDACTED
-					replace Api_Key REDACTED
-					replace api-key REDACTED
-					replace token REDACTED
-					replace Token REDACTED
-					replace access_token REDACTED
-					replace AccessToken REDACTED
-					replace X-Emby-Token REDACTED
-					replace X-MediaBrowser-Token REDACTED
-					replace x-emby-token REDACTED
-					replace x-mediabrowser-token REDACTED
-					# the sign-in redirect's one-time values (the access log records every callback)
-					replace code REDACTED
-					replace state REDACTED
-					replace session_state REDACTED
-					replace id_token REDACTED
-				}
-				request>headers>Authorization replace REDACTED
-				request>headers>X-Emby-Authorization replace REDACTED
-				request>headers>X-Emby-Token replace REDACTED
-				request>headers>X-Mediabrowser-Token replace REDACTED
-				request>headers>X-MediaBrowser-Token replace REDACTED
-				request>headers>Cookie replace REDACTED
-				request>headers>Proxy-Authorization replace REDACTED
-				resp_headers>Set-Cookie replace REDACTED
-				# the sign-in redirect carries the request's URI, escaped, in Location (rd=...%3Ftoken%3D...)
-				resp_headers>Location regexp "(?i)(token|api_?key|api-key|access_token|id_token|code|state|session_state)(%3d|=)(?:[^&%]|%[^2]|%2[^6])*" "${1}${2}REDACTED"
-			}
-{% endmacro %}
-
 {
 	admin 127.0.0.1:2019  # no-raw-endpoint: allow the admin API on the container's own loopback (caddy reload, the health hook)
 	http_port {{ caddy_container_http_port }}
@@ -57,7 +23,7 @@
 		output stderr
 		format filter {
 			wrap json
-{{ redacted_fields() }}		}
+{{ caddy_access_log_redact_fields }}		}
 	}
 	# the edge's access log: one JSON line per request, to a file the SIEM agent on this host reads
 	# (tasks/siem.yml) and the log pipeline turns into http_activity rows. The generated sites name
@@ -72,7 +38,7 @@
 		}
 		format filter {
 			wrap json
-{{ redacted_fields() }}		}
+{{ caddy_access_log_redact_fields }}		}
 		include http.log.access.hnx_access
 	}
 }
