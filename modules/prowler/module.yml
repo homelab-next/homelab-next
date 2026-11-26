@@ -8,11 +8,7 @@ manifest_version: "1.0"
 id: prowler
 kind: feature
 title: Scheduled read-only cloud-posture scan
-description: Security-audit module, lab-internal only (use outside the lab needs explicit permission). Runs a weekly read-only cloud-posture audit of a cloud account (every region unless told) from a pinned
-  virtualenv with a credential read from the secret store, writes a summary line and one flat line per
-  failing check to a findings file for the SIEM agent and the log pipeline, applies a mutelist that
-  demands a reason for every entry, and judges the scan's age, the credential file and the mutelist's
-  review dates in health.
+description: Security-audit module, lab-internal only (use outside the lab needs explicit permission). A weekly read-only cloud-posture audit from a pinned virtualenv; writes a summary and one flat line per failing check to a findings file, with a mutelist that demands a reason per entry; health judges the audit's age, the credential file and the mutelist's review dates.
 owner: operator
 author: agent:claude
 status: draft

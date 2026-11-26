@@ -11,7 +11,6 @@
       - prowler_regions is sequence and prowler_regions is not string
       - prowler_regions | reject('match', '^[a-z]{2}(-[a-z]+)+-[0-9]\Z') | list | length == 0
       - prowler_oncalendar is match('^[A-Za-z0-9 *:/,.-]{3,80}\Z')
-      - prowler_random_delay_s | int >= 0
       - prowler_timeout_s | int >= 60
       - prowler_findings_path is match('^/[^/.][^/]*(/[^/.][^/]*)*\Z')
       - prowler_findings_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')

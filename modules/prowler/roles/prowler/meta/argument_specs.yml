@@ -56,10 +56,6 @@ argument_specs:
         type: str
         description: The scan's systemd calendar (weekly; never an interval).
         default: "Tue *-*-* 03:00:00"
-      prowler_random_delay_s:
-        type: int
-        description: The timer's randomized delay in seconds.
-        default: 900
       prowler_timeout_s:
         type: int
         description: The exporter's limit on one scan, in seconds.

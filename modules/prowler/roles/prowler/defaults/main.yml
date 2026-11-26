@@ -32,7 +32,6 @@ prowler_regions: []
 # that can still be going hours after it starts). Calendar, never an interval (a timer built from
 # OnBootSec and OnUnitActiveSec can stop firing for good after one reboot at the wrong moment).
 prowler_oncalendar: "Tue *-*-* 03:00:00"
-prowler_random_delay_s: 900
 prowler_timeout_s: 3600
 
 # --- the findings -----------------------------------------------------------------------------------

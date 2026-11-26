@@ -29,7 +29,7 @@ runs on are the overlay's; the module holds none of them.
 | exporter | `/usr/local/libexec/homelabnext/hnx-prowler-export` (standard library only). Runs the scanner, parses its report, replaces the findings file whole. |
 | credential file | `<config>/credentials/aws.env`, root-only 0600, written by a task with `no_log: true`. systemd reads it as root and gives the scan its environment; the scan's own user cannot open it. |
 | settings and mutelist | `<config>/scan.env` (no secret) and `<config>/mutelist.yaml`, rendered from `prowler_mutelist`. |
-| unit and timer | `hnx-<id>-scan.service` (hardened, `Nice=10`, idle IO, 2 G cap, the module's slice) and `hnx-<id>-scan.timer` (`OnCalendar`, `Persistent=true`, a 15 minute random delay; never an interval). |
+| unit and timer | `hnx-<id>-scan.service` (hardened, `Nice=10`, idle IO, 2 G cap, the module's slice) and `hnx-<id>-scan.timer` (`OnCalendar`, `Persistent=true`, never an interval). |
 
 ## The findings file
 

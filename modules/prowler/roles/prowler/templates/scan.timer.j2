@@ -7,7 +7,6 @@ Description=prowler {{ prowler_logical_id }}: weekly read-only cloud-posture sca
 
 [Timer]
 OnCalendar={{ prowler_oncalendar }}
-RandomizedDelaySec={{ prowler_random_delay_s }}
 Persistent=true
 Unit={{ prowler_scan_unit }}
 
