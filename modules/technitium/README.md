@@ -90,6 +90,13 @@ device, an absolute or climbing path, or no zone file at all is refused.
 |---|---|---|---|
 | `zones` | `state` | every primary zone, the settings backup and the listing | zone-file, by the role's export hook |
 
+## The scheduled copy
+
+With `compose_app_export_timer` on (the lab's group variable), a nightly timer (`hnx-export-technitium`, 07:30 UTC) writes a gzip tar of the
+server's configuration directory (settings, zone files, blocklists, accounts) into `export/db/dns-config/`, with a sha256 listing, the previous
+copy kept once. It is a copy of live files: the zone export through the admin API (the `export` hook: one `.zone` file per primary zone and the
+settings backup) is the consistent exit copy and needs the administrator's secret, which a timer on the guest does not hold.
+
 ## Using it in a site
 
 The overlay carries every real value ([selection](../../docs/modules/selection.md),

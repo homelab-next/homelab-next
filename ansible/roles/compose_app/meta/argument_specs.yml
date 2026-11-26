@@ -178,6 +178,15 @@ argument_specs:
           Overrides of the engine found from a service's image: {service: postgres, mysql or none}
           (none disables the dump of that service). Each key is a service of the spec.
         default: {}
+      compose_app_export_files:
+        type: list
+        elements: dict
+        description: >-
+          Files the export timer copies and verifies besides the databases (tasks/export_timer.yml):
+          {name, kind: sqlite, glob} copies every SQLite file the absolute glob matches through the
+          online backup API and checks it; {name, kind: tree, path, exclude} writes a gzip tar of a
+          directory. A glob that matches nothing is a failed run.
+        default: []
       compose_app_export_calendar:
         type: str
         description: The timer's OnCalendar, in UTC, before the guest's image backup.

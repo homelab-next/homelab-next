@@ -29,6 +29,7 @@
     compose_app_dir: "{{ gitea_app.compose_app_dir }}"
     compose_app_data_dir: "{{ gitea_app.compose_app_data_dir }}"
     compose_app_export_dir: "{{ gitea_app.compose_app_export_dir }}"
+    compose_app_export_files: "{{ gitea_app.compose_app_export_files }}"
     compose_app_owner: "{{ gitea_app.compose_app_owner }}"
     compose_app_group: "{{ gitea_app.compose_app_group }}"
     compose_app_start: "{{ gitea_app.compose_app_start }}"

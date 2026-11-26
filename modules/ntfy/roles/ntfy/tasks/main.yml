@@ -34,6 +34,7 @@
     compose_app_dir: "{{ ntfy_app.compose_app_dir }}"
     compose_app_data_dir: "{{ ntfy_app.compose_app_data_dir }}"
     compose_app_export_dir: "{{ ntfy_app.compose_app_export_dir }}"
+    compose_app_export_files: "{{ ntfy_app.compose_app_export_files }}"
     compose_app_owner: "{{ ntfy_app.compose_app_owner }}"
     compose_app_group: "{{ ntfy_app.compose_app_group }}"
     compose_app_start: "{{ ntfy_app.compose_app_start }}"

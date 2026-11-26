@@ -128,6 +128,15 @@ tool that does not echo them). The SSH host keys are the other carried identity:
   configuration file. A member of the `docker` group sees paths in `docker inspect`, and cannot
   read `appsecrets/` (0750, not their group) or `conf/` (0700) without root.
 
+## The scheduled copy
+
+With `compose_app_export_timer` on (the lab's group variable), a nightly timer (`hnx-export-gitea`, 07:30 UTC) copies the database
+(`data/gitea.db`) through SQLite's online backup, checks the copy, and writes a gzip tar of `data/git/repositories`, into
+`export/db/forge-db/` and `export/db/forge-repositories/` with a sha256 listing; the previous copy is kept once (`.prev`). The service is
+not stopped, so the repositories are a copy of live files (git objects are written once, a ref moving during the tar is the risk a restore
+checks with `git fsck`); the `export` hook above, which stops the service, stays the consistent exit copy. The configuration, which holds
+the three application secrets, is not copied. The copy holds the accounts' password hashes: 0600 in a 0700 directory, as the exit copy.
+
 ## The export is secret-bearing
 
 `gitea dump` writes `app.ini`, so a stock `dump.zip` carries the three application secrets. The

@@ -388,10 +388,10 @@
       "installs_to": "/usr/local/libexec/homelabnext/hnx-export-run",
       "kind": "job",
       "language": "python",
-      "outputs": "<export dir>/<service>/<database>.dump or all-databases.sql, <export dir>/listing.sha256 and manifest.json (mode 0600, directories 0700); the previous dump of a service is kept once as <service>.prev",
+      "outputs": "<export dir>/<service>/<database>.dump or all-databases.sql (for a sqlite job <name>/<file>.sqlite, for a tree job <name>/<name>.tar.gz), <export dir>/listing.sha256 and manifest.json (mode 0600, directories 0700); the previous dump of a service is kept once as <service>.prev",
       "owner": "platform",
       "path": "ansible/roles/compose_app/files/hnx-export-run.py",
-      "purpose": "Take the application-consistent dump of every database engine a compose application runs (ADR-0042 decision 2, ADR-0008 decision 1) into the application's export directory, where the guest's image backup picks it up.",
+      "purpose": "Take the application-consistent dump of every database engine a compose application runs, and a consistent copy of its SQLite files and state trees (ADR-0042 decision 2, ADR-0008 decision 1), into the application's export directory, where the guest's image backup picks it up.",
       "status": "active",
       "trigger": [
         "role:compose_app",

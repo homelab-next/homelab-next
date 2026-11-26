@@ -177,6 +177,126 @@ def test_no_jobs_is_a_clean_no_op(env):
     assert not export.exists()
 
 
+# ------------------------------------------------------------------ file jobs (sqlite, tree)
+def make_db(path, rows=3, wal=False):
+    import sqlite3
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    if wal:
+        con.execute("PRAGMA journal_mode=WAL")
+    con.execute("create table t (x integer)")
+    con.executemany("insert into t values (?)", [(i,) for i in range(rows)])
+    con.commit()
+    return con  # left open: a live database
+
+
+def test_a_sqlite_job_copies_every_matching_database_while_it_is_open_and_checks_the_copy(env):
+    import sqlite3
+
+    mod = load()
+    live = [make_db(env / "data" / "users" / u / "db.sqlite", wal=True) for u in ("a", "b")]
+    mf, export = manifest(
+        env, [{"service": "feeds", "engine": "sqlite", "glob": str(env / "data/users/*/db.sqlite")}]
+    )
+    assert mod.main(["--manifest", str(mf)]) == 0
+    assert sorted(p.name for p in (export / "feeds").iterdir()) == ["a__db.sqlite", "b__db.sqlite"]
+    assert sqlite3.connect(export / "feeds" / "a__db.sqlite").execute(
+        "select count(*) from t"
+    ).fetchone() == (3,)
+    assert stat.S_IMODE((export / "feeds" / "a__db.sqlite").stat().st_mode) == 0o600
+    assert "feeds/a__db.sqlite" in (export / "listing.sha256").read_text()
+    for con in live:
+        con.close()
+
+
+def test_a_glob_that_matches_nothing_fails_instead_of_passing_empty(env):
+    mod = load()
+    mf, export = manifest(
+        env, [{"service": "feeds", "engine": "sqlite", "glob": str(env / "none/*/db.sqlite")}]
+    )
+    assert mod.main(["--manifest", str(mf)]) == 1
+    assert not (export / "feeds").exists()
+
+
+def test_a_file_that_is_not_a_database_fails_and_keeps_the_last_good_copy(env):
+    mod = load()
+    make_db(env / "data" / "x" / "db.sqlite").close()
+    mf, export = manifest(
+        env, [{"service": "feeds", "engine": "sqlite", "glob": str(env / "data/x/db.sqlite")}]
+    )
+    assert mod.main(["--manifest", str(mf)]) == 0
+    good = (export / "feeds" / "db.sqlite").read_bytes()
+    (env / "data" / "x" / "db.sqlite").write_bytes(b"this is not a database" * 50)
+    assert mod.main(["--manifest", str(mf)]) == 1
+    assert (export / "feeds" / "db.sqlite").read_bytes() == good
+
+
+def test_a_tree_job_archives_the_directory_minus_the_exclusions(env):
+    import tarfile
+
+    mod = load()
+    src = env / "state"
+    (src / "sub").mkdir(parents=True)
+    (src / "keep.json").write_text("{}")
+    (src / "sub" / "log.txt").write_text("x")
+    (src / "store.db-wal").write_text("skip")
+    mf, export = manifest(
+        env,
+        [{"service": "state", "engine": "tree", "path": str(src), "exclude": ["*.db-wal", "sub"]}],
+    )
+    assert mod.main(["--manifest", str(mf)]) == 0
+    with tarfile.open(export / "state" / "state.tar.gz") as tar:
+        names = sorted(m.name for m in tar if m.isfile())
+    assert names == ["tree/keep.json"]
+    assert stat.S_IMODE((export / "state" / "state.tar.gz").stat().st_mode) == 0o600
+    meta = json.loads((export / "manifest.json").read_text())
+    assert (
+        meta["jobs"]["state"]["engine"] == "tree"
+        and "not a quiesced dump" in meta["does_not_carry"]
+    )
+
+
+def test_a_tree_that_is_empty_or_missing_fails(env):
+    mod = load()
+    (env / "empty").mkdir()
+    for path in (env / "empty", env / "absent"):
+        mf, _ = manifest(env, [{"service": "state", "engine": "tree", "path": str(path)}])
+        assert mod.main(["--manifest", str(mf)]) == 1
+
+
+def test_file_jobs_need_no_compose_file_and_refuse_a_bad_source(env):
+    mod = load()
+    make_db(env / "data" / "x" / "db.sqlite").close()
+    mf, _ = manifest(
+        env, [{"service": "feeds", "engine": "sqlite", "glob": str(env / "data/x/db.sqlite")}]
+    )
+    doc = json.loads(mf.read_text())
+    del doc["compose_file"]
+    mf.write_text(json.dumps(doc))
+    assert mod.main(["--manifest", str(mf)]) == 0
+    for bad in (
+        {"engine": "sqlite", "glob": "rel/*.db"},
+        {"engine": "tree", "path": "/a/b"},
+        {"engine": "tree", "path": "/a/../b/c"},
+    ):
+        mf, _ = manifest(env, [{"service": "x", **bad}])
+        assert mod.main(["--manifest", str(mf)]) == 2
+    # a database job still needs the compose file
+    mf, _ = manifest(env, [{"service": "db", "engine": "postgres"}])
+    doc = json.loads(mf.read_text())
+    del doc["compose_file"]
+    mf.write_text(json.dumps(doc))
+    assert mod.main(["--manifest", str(mf)]) == 2
+
+
+def test_two_jobs_cannot_share_a_name(env):
+    mod = load()
+    jobs = [{"service": "x", "engine": "tree", "path": str(env / "a" / "b")}] * 2
+    mf, _ = manifest(env, jobs)
+    assert mod.main(["--manifest", str(mf)]) == 2
+
+
 # ------------------------------------------------------------------ the role's timer task
 SPEC = {
     "services": {
@@ -291,6 +411,61 @@ def test_the_timer_a_database_left_is_removed_when_the_database_goes(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (tmp_path / "units" / "hnx-export-app.timer").exists()
     assert "systemctl disable --now hnx-export-app.timer" in calls(tmp_path)
+
+
+FILES = [
+    {"name": "app-db", "kind": "sqlite", "glob": "/srv/app/data/users/*/db.sqlite"},
+    {"name": "app-state", "kind": "tree", "path": "/srv/app/state", "exclude": ["*.lock"]},
+]
+
+
+def test_files_alone_install_the_timer_with_no_compose_file_and_no_docker_condition(tmp_path):
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "export_timer",
+        role_vars(tmp_path, spec={"services": {}}, compose_app_export_files=FILES),
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    mf = json.loads((tmp_path / "opt" / "export-manifest.json").read_text())
+    assert mf["jobs"] == [
+        {"service": "app-db", "engine": "sqlite", "glob": "/srv/app/data/users/*/db.sqlite"},
+        {"service": "app-state", "engine": "tree", "path": "/srv/app/state", "exclude": ["*.lock"]},
+    ]
+    assert "compose_file" not in mf
+    assert "ConditionPathExists" not in (tmp_path / "units" / "hnx-export-app.service").read_text()
+    assert "systemctl enable --now hnx-export-app.timer" in calls(tmp_path)
+
+
+def test_files_beside_a_database_keep_the_database_jobs_and_the_compose_file(tmp_path):
+    r = run_role(
+        tmp_path, "compose_app", "export_timer", role_vars(tmp_path, compose_app_export_files=FILES)
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    mf = json.loads((tmp_path / "opt" / "export-manifest.json").read_text())
+    assert [j["engine"] for j in mf["jobs"]] == ["postgres", "mysql", "sqlite", "tree"]
+    assert mf["compose_file"].endswith("docker-compose.yml")
+    assert "ConditionPathExists" in (tmp_path / "units" / "hnx-export-app.service").read_text()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        [{"name": "x", "kind": "zip", "path": "/a/b/c"}],
+        [{"name": "x", "kind": "sqlite"}],
+        [{"name": "x", "kind": "tree"}],
+        [
+            {"name": "x", "kind": "tree", "path": "/a/b/c"},
+            {"name": "x", "kind": "tree", "path": "/a/b/d"},
+        ],
+        [{"name": "db", "kind": "tree", "path": "/a/b/c"}],  # a service of the spec
+    ],
+)
+def test_a_file_job_the_script_would_not_run_is_refused_by_the_role(tmp_path, bad):
+    r = run_role(
+        tmp_path, "compose_app", "export_timer", role_vars(tmp_path, compose_app_export_files=bad)
+    )
+    assert r.returncode != 0 and "compose_app_export_files" in r.stdout + r.stderr
 
 
 def test_the_script_is_a_program_the_interpreter_can_compile():

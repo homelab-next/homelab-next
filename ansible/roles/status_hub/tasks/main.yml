@@ -176,3 +176,24 @@
 - name: Collect the registered status sources (a timer; state.json for the hub to read)
   ansible.builtin.include_tasks: collect.yml
   when: status_hub_collect | bool
+
+# The scheduled copy of the hub's state (ADR-0042 decision 2, the same timer every compose application uses,
+# switched on by the same group variable): the activity store through SQLite's online backup, the rest of the
+# state directory as a tree. The hub runs as a unit, so the timer's manifest has no database job and no compose file.
+- name: Schedule the copy of the hub's state
+  ansible.builtin.include_role:
+    name: compose_app
+    tasks_from: export_timer
+  vars:
+    compose_app_name: "{{ status_hub_logical_id }}"
+    compose_app_dir: "{{ status_hub_config_dir }}"
+    compose_app_owner: root
+    compose_app_group: root
+    compose_app_export_dir: "{{ status_hub_export_dir }}"
+    compose_app_export_files:
+      - {name: hub-activity-db, kind: sqlite, glob: "{{ status_hub_state_dir }}/activity.db"}
+      - name: hub-state
+        kind: tree
+        path: "{{ status_hub_state_dir }}"
+        exclude: ["activity.db*", "*.lock"]
+  when: compose_app_export_timer | default(false) | bool

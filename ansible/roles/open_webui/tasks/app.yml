@@ -59,6 +59,10 @@
       compose_app_dir: "{{ open_webui_dir }}"
       compose_app_data_dir: "{{ open_webui_dir }}/data"
       compose_app_export_dir: "{{ open_webui_export_dir }}"
+      # the scheduled copy (compose_app_export_timer): the chat history and accounts database through SQLite's online backup
+      # (the vector index under data/vector_db travels in the guest's image backup)
+      compose_app_export_files:
+        - {name: chat-db, kind: sqlite, glob: "{{ open_webui_dir }}/data/webui.db"}
       compose_app_owner: "{{ open_webui_owner }}"
       compose_app_group: "{{ open_webui_group }}"
       compose_app_start: "{{ open_webui_start }}"

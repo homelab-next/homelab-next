@@ -3,12 +3,14 @@
 # systemd timer per application runs hnx-export-run, which dumps every database engine the spec
 # runs (or compose_app_export_engines names) from inside its own container into the export
 # directory, where the guest's image backup picks it up; a restore drill reads it from there.
-# Opt-in with compose_app_export_timer; an application with no supported engine renders nothing.
+# Besides the databases, compose_app_export_files names SQLite files (a glob) and state trees the same
+# timer copies and verifies (a product whose state is SQLite or plain files has no database server to
+# dump). Opt-in with compose_app_export_timer; an application with neither renders nothing.
 - name: Work out the dump jobs (a database image, or the explicit override; none disables)
   ansible.builtin.set_fact:
     compose_app_export_jobs: >-
       {%- set out = [] -%}
-      {%- for sname, svc in compose_app_spec.services | dictsort -%}
+      {%- for sname, svc in (compose_app_spec | default({}, true)).services | default({}, true) | dictsort -%}
       {%- set base = (svc.image | string).split('/')[-1] -%}
       {%- set auto = 'postgres' if base is match('^(postgres|postgis|pgvector|timescaledb)') else ('mysql' if base is match('^(mariadb|mysql)') else '') -%}
       {%- set engine = compose_app_export_engines[sname] | default(auto) -%}
@@ -16,10 +18,13 @@
       {%- set _ = out.append({'service': sname, 'engine': engine}) -%}
       {%- endif -%}
       {%- endfor -%}
+      {%- for f in compose_app_export_files -%}
+      {%- set _ = out.append({'service': f.name, 'engine': f.kind} | combine({'glob': f.glob} if f.kind == 'sqlite' else {'path': f.path, 'exclude': f.exclude | default([])})) -%}
+      {%- endfor -%}
       {{ out }}
     compose_app_export_images: >-
       {%- set out = {} -%}
-      {%- for sname, svc in compose_app_spec.services | dictsort -%}
+      {%- for sname, svc in (compose_app_spec | default({}, true)).services | default({}, true) | dictsort -%}
       {%- set _ = out.update({sname: svc.image ~ ':' ~ svc.tag ~ '@' ~ svc.digest}) -%}
       {%- endfor -%}
       {{ out }}
@@ -28,8 +33,18 @@
   ansible.builtin.assert:
     that:
       - compose_app_export_engines.values() | reject('in', ['postgres', 'mysql', 'none']) | list | length == 0
-      - compose_app_export_engines.keys() | reject('in', compose_app_spec.services.keys() | list) | list | length == 0
+      - compose_app_export_engines.keys() | reject('in', (compose_app_spec | default({}, true)).services | default({}, true) | list) | list | length == 0
     fail_msg: "compose_app_export_engines: each key is a service of the spec and each value postgres, mysql or none"
+
+- name: Refuse a file job the script would not run
+  ansible.builtin.assert:
+    that:
+      - compose_app_export_files | map(attribute='kind') | reject('in', ['sqlite', 'tree']) | list | length == 0
+      - compose_app_export_files | selectattr('kind', 'eq', 'sqlite') | rejectattr('glob', 'defined') | list | length == 0
+      - compose_app_export_files | selectattr('kind', 'eq', 'tree') | rejectattr('path', 'defined') | list | length == 0
+      - compose_app_export_files | map(attribute='name') | unique | list | length == compose_app_export_files | length
+      - (compose_app_export_files | map(attribute='name') | list) | intersect(compose_app_export_jobs | rejectattr('engine', 'in', ['sqlite', 'tree']) | map(attribute='service') | list) | length == 0
+    fail_msg: "compose_app_export_files: each entry has a unique name, a kind (sqlite with a glob, tree with a path) and a name no service of the spec uses"
 
 - name: Remove the timer an application with no database no longer wants
   when: compose_app_export_jobs | length == 0
@@ -95,7 +110,7 @@
 
     - name: Write the manifest
       ansible.builtin.copy:
-        content: "{{ {'app': compose_app_name, 'compose_file': compose_app_dir ~ '/docker-compose.yml', 'export_dir': compose_app_export_dir ~ '/db', 'jobs': compose_app_export_jobs, 'images': compose_app_export_images} | to_nice_json }}\n"
+        content: "{{ {'app': compose_app_name, 'export_dir': compose_app_export_dir ~ '/db', 'jobs': compose_app_export_jobs, 'images': compose_app_export_images} | combine({'compose_file': compose_app_dir ~ '/docker-compose.yml'} if compose_app_export_jobs | selectattr('engine', 'in', ['postgres', 'mysql']) | list | length > 0 else {}) | to_nice_json }}\n"
         dest: "{{ compose_app_export_manifest }}"
         owner: "{{ compose_app_owner }}"
         group: "{{ compose_app_group }}"
