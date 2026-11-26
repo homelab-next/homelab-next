@@ -216,6 +216,42 @@ def test_schedule_view_model_and_page_match_their_goldens():
     golden("schedule.html", html)
 
 
+def test_a_hub_with_no_checkout_lists_the_jobs_its_hosts_report():
+    """No timer files to read: the job-last-run sources' items are the schedule's jobs, each with
+    its hosts, its newest run and the worst state; a job a declared row already covers is not
+    listed twice, and another source's items are not jobs."""
+    inputs = schedule.gather(None, None)
+    assert inputs["timers"] == [] and inputs["collectors"] == []
+    inputs["collectors"] = [
+        {"id": "job-runs", "kind": "poll-file", "service": "records", "interval_s": 60,
+         "stale_after_s": 180, "what": "Last runs", "mapping": "builtin job-last-run"},
+        {"id": "queues", "kind": "poll-file", "service": "records", "interval_s": 60,
+         "stale_after_s": 180, "what": "Queues", "mapping": "selectors"},
+    ]  # fmt: skip
+    obs = [
+        {"source": "job-runs", "item": "timer:aide/scan@web-1", "state": "ok",
+         "summary": "success", "observed_at": "2026-10-20T23:55:00Z", "value": 3600},
+        {"source": "job-runs", "item": "timer:aide/scan@web-2", "state": "warn",
+         "summary": "overdue since 2026-10-19T03:00:00Z", "observed_at": "2026-10-20T23:55:00Z",
+         "value": 90000},
+        {"source": "queues", "item": "queued", "state": "ok", "observed_at": "2026-10-20T23:55:00Z"},
+    ]  # fmt: skip
+    vm = schedule.build(inputs, now=NOW, observations=obs)
+    rows = {r["id"]: r for g in vm["groups"] for r in g["rows"] if g["kind"] == "reported"}
+    assert list(rows) == ["timer:aide/scan"] and vm["counts"]["reported"] == 1
+    row = rows["timer:aide/scan"]
+    assert row["state"] == "warn" and row["hosts"] == 2 and row["where"] == "web-1, web-2"
+    assert row["last_run"] == "2026-10-20T22:55:00Z"  # the newest of the two hosts' runs
+    assert [a["host"] for a in row["attention"]] == ["web-2"]
+    html = schedule.render(vm)
+    assert "Jobs the hosts report" in html and "timer:aide/scan" in html
+    inputs["timers"] = [{"id": "timer:aide/scan", "owner": "aide", "what": "AIDE scan",
+                         "path": "r/scan.timer", "calendars": ["*-*-* 03:00:00 UTC"],
+                         "delay_s": None, "problems": []}]  # fmt: skip
+    again = schedule.build(inputs, now=NOW, observations=obs)
+    assert again["counts"]["reported"] == 0 and again["counts"]["timer"] == 1
+
+
 def test_schedule_without_a_time_computes_no_next_run():
     vm = schedule.build(SCHEDULE_INPUTS)
     assert {r["next_run"] for g in vm["groups"] for r in g["rows"]} == {None}
