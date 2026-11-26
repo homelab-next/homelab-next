@@ -1278,6 +1278,25 @@ tests:
         exp_alerts:
           - exp_labels: {severity: critical, instance: n, vmid: "130", name: apps, type: qemu}
             exp_annotations: {summary: "n guest 130 (apps) is not running but is set to start at boot"}
+  - name: a model server generating under 5 tokens/s fires (CPU fallback); a normal one and an idle one do not
+    interval: 1m
+    input_series:
+      # cpu: 30 tokens a minute over 60 s of generation = 0.5 tok/s; gpu: 1140 tokens over 60 s = 19 tok/s; idle: nothing generated
+      - {series: 'srv:tokens_predicted_total{job="inference-large", instance="cpu"}', values: '0+30x40'}
+      - {series: 'srv:tokens_predicted_seconds_total{job="inference-large", instance="cpu"}', values: '0+60x40'}
+      - {series: 'srv:tokens_predicted_total{job="inference-small", instance="gpu"}', values: '0+1140x40'}
+      - {series: 'srv:tokens_predicted_seconds_total{job="inference-small", instance="gpu"}', values: '0+60x40'}
+      - {series: 'srv:tokens_predicted_total{job="inference-idle", instance="idle"}', values: '5x40'}
+      - {series: 'srv:tokens_predicted_seconds_total{job="inference-idle", instance="idle"}', values: '9x40'}
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LlmDecodeCollapsed
+        exp_alerts:
+          - exp_labels: {severity: critical, job: inference-large, instance: cpu}
+            exp_annotations: {summary: "model server inference-large is generating at 0.50 tokens/s (alarm under 5): almost certainly running on the CPU after a GPU fault - every AI job is crawling; check GpuLost/GpuNotComputing and the server's CUDA start"}
+      - eval_time: 5m
+        alertname: LlmDecodeCollapsed
+        exp_alerts: []
 """
 
 ON_TESTS = """\
@@ -1365,10 +1384,16 @@ def _rules_test(tmp_path, tests: str):
 
 def test_the_hardware_rules_fire_and_clear_on_what_they_should(tmp_path):
     require_tool("docker")
-    assert render(tmp_path).returncode == 0
+    assert render(tmp_path, prometheus_inference_metric_prefix="srv:").returncode == 0
     r = _rules_test(tmp_path, HW_TESTS)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "SUCCESS" in r.stdout
+
+
+def test_without_an_inference_metric_prefix_the_throughput_rule_is_not_rendered(tmp_path):
+    assert render(tmp_path).returncode == 0
+    rules = (tmp_path / "data/config/rules.yml").read_text()
+    assert "LlmDecodeCollapsed" not in rules and "hnx-llm-throughput" not in rules
 
 
 def test_the_snmp_and_llm_probe_rules_fire_and_clear_on_what_they_should(tmp_path):

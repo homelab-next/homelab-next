@@ -171,6 +171,18 @@ argument_specs:
         description: 'The site''s per-GPU power cap (W): a sustained draw over it and a power limit in
   force above it alert.'
         default: 200
+      prometheus_alert_llm_decode_min_tps: &alert_llm_decode_min_tps
+        type: int
+        description: 'LlmDecodeCollapsed: a generating model server slower than this (tokens/s) pages.'
+        default: 5
+      prometheus_alert_llm_decode_window: &alert_llm_decode_window
+        type: str
+        description: 'LlmDecodeCollapsed: the rate window for the tokens/s.'
+        default: 15m
+      prometheus_inference_metric_prefix: &inference_metric_prefix
+        type: str
+        description: 'The metric-name prefix of the inference-server slot provider''s counters (LlmDecodeCollapsed reads <prefix>tokens_predicted_total and <prefix>tokens_predicted_seconds_total; empty: the rule is not rendered).'
+        default: ""
       prometheus_alert_gpu_power_for: &alert_gpu_power_for
         type: str
         description: How long a draw over the cap must last for GpuPowerOverCap.
@@ -405,6 +417,9 @@ argument_specs:
       prometheus_alert_gpu_temp_critical_celsius: *alert_gpu_temp_critical_celsius
       prometheus_alert_gpu_power_cap_watts: *alert_gpu_power_cap_watts
       prometheus_alert_gpu_power_for: *alert_gpu_power_for
+      prometheus_alert_llm_decode_min_tps: *alert_llm_decode_min_tps
+      prometheus_alert_llm_decode_window: *alert_llm_decode_window
+      prometheus_inference_metric_prefix: *inference_metric_prefix
       prometheus_alert_pool_used_percent: *alert_pool_used_percent
       prometheus_alert_board_event_window: *alert_board_event_window
       prometheus_alert_guest_down_for: *alert_guest_down_for
@@ -492,6 +507,9 @@ argument_specs:
       prometheus_alert_gpu_temp_critical_celsius: *alert_gpu_temp_critical_celsius
       prometheus_alert_gpu_power_cap_watts: *alert_gpu_power_cap_watts
       prometheus_alert_gpu_power_for: *alert_gpu_power_for
+      prometheus_alert_llm_decode_min_tps: *alert_llm_decode_min_tps
+      prometheus_alert_llm_decode_window: *alert_llm_decode_window
+      prometheus_inference_metric_prefix: *inference_metric_prefix
       prometheus_alert_pool_used_percent: *alert_pool_used_percent
       prometheus_alert_board_event_window: *alert_board_event_window
       prometheus_alert_guest_down_for: *alert_guest_down_for
@@ -577,6 +595,9 @@ argument_specs:
       prometheus_alert_gpu_temp_critical_celsius: *alert_gpu_temp_critical_celsius
       prometheus_alert_gpu_power_cap_watts: *alert_gpu_power_cap_watts
       prometheus_alert_gpu_power_for: *alert_gpu_power_for
+      prometheus_alert_llm_decode_min_tps: *alert_llm_decode_min_tps
+      prometheus_alert_llm_decode_window: *alert_llm_decode_window
+      prometheus_inference_metric_prefix: *inference_metric_prefix
       prometheus_alert_pool_used_percent: *alert_pool_used_percent
       prometheus_alert_board_event_window: *alert_board_event_window
       prometheus_alert_guest_down_for: *alert_guest_down_for
@@ -667,6 +688,9 @@ argument_specs:
       prometheus_alert_gpu_temp_critical_celsius: *alert_gpu_temp_critical_celsius
       prometheus_alert_gpu_power_cap_watts: *alert_gpu_power_cap_watts
       prometheus_alert_gpu_power_for: *alert_gpu_power_for
+      prometheus_alert_llm_decode_min_tps: *alert_llm_decode_min_tps
+      prometheus_alert_llm_decode_window: *alert_llm_decode_window
+      prometheus_inference_metric_prefix: *inference_metric_prefix
       prometheus_alert_pool_used_percent: *alert_pool_used_percent
       prometheus_alert_board_event_window: *alert_board_event_window
       prometheus_alert_guest_down_for: *alert_guest_down_for
