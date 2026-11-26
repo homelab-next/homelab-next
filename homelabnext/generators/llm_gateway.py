@@ -1105,7 +1105,11 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
             )
             continue
         lim = role.limits
-        n = len(role.bindings)  # the proxy limits each deployment: each gets 1/n of the role's
+        # the proxy limits each deployment: each gets 1/n of the role's.  n counts every binding,
+        # failover or balanced: LiteLLM enforces rpm/tpm/max_budget per deployment, so a balanced
+        # group (equal priority) spends its share on each member and the sum over the n
+        # deployments is the role's limit, never looser; a failover chain is the same arithmetic.
+        n = len(role.bindings)
         for i, b in enumerate(role.bindings):
             be = spec.backends[b.backend]
             params: dict[str, Any] = {}
@@ -1115,7 +1119,10 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
                 params["model"] = f"openai/{b.model_id}"
                 params["api_base"] = f"{be.base_url}/v1"
             params["api_key"] = _env_ref_litellm(be.api_key) if be.api_key else "no-key"
-            params["order"] = i + 1
+            # an explicit priority (>= 1, set on every binding of the role: the table refuses a
+            # half-set role) is the order, so equal priorities share one order and LiteLLM's
+            # simple-shuffle balances across them; without one the order is the position
+            params["order"] = b.priority if b.priority >= 1 else i + 1
             if lim.get("max_requests"):
                 params["rpm"] = _per_minute(lim["max_requests"], lim["window_s"], n)
             if lim.get("max_tokens"):

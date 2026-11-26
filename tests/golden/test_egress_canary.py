@@ -470,7 +470,7 @@ def test_the_pinned_evaluation_canaries_every_binding_and_marks_it_fake():
 
 def test_every_binding_of_a_role_is_canaried():
     doc = table_doc()
-    extra = dict(doc["roles"]["main-reasoner"]["bindings"][0], backend="svc:other", priority=1)
+    extra = dict(doc["roles"]["main-reasoner"]["bindings"][0], backend="svc:other")
     doc["roles"]["main-reasoner"]["bindings"].append(extra)
     t = RoleTable.from_dict(doc)
     _, rep = fake_report(t)

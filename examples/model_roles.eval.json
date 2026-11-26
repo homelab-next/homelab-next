@@ -185,7 +185,7 @@
       "version": 2
     },
     "code": {
-      "registry.models": "sha256:7d22a1c2e455305a64707e825e5051956966932c3776412587985816ee133b44",
+      "registry.models": "sha256:1b16adf6c1b40dbd33afcfbd50699a70ef1b4c0440912400de480cd8d43fa5f1",
       "runner": "sha256:2e8c1df02d5b366a3cd9a043ba381791f551346c11938d236c7140a65f242113",
       "scorers": "sha256:56c00a9ad13eb98dfed8f2e81250a729053e1ec5335efb4326be7e34131a9613",
       "tasks": "sha256:1a2ac2ac8e9fde6ad8511a594de7e65274a6d2ef0f0abd66e8a97da69d7b4d11"
@@ -198,7 +198,7 @@
       "impact_keywords": "sha256:b52c8fbf86afbbb3b83e17950826b068a9d6b54888adb08b9d5c691cad28dd1a",
       "spec": "sha256:eebf1221c2f81b13bf23e90529e62b0d9230e2d8561c4b6f9406feb5821e4282"
     },
-    "digest": "sha256:4268866b3ac7ccac4884b6eb449875632dba91a0ec746737b4a7c06e05c4c043",
+    "digest": "sha256:b413a7ae3739c2e94aa659b8507e23aaec01a76eec6dd3c22a0ccb2fb64aec53",
     "eval": 3,
     "kinds": {
       "fast-classifier": "chat",
