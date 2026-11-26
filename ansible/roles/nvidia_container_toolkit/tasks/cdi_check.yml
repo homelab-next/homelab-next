@@ -22,3 +22,23 @@
       nvidia_container_toolkit: nvidia-ctk cdi list names {{ nvidia_container_toolkit_names | join(', ') or 'no GPU' }};
       wanted nvidia.com/gpu=all and
       {{ 'at least one GPU index' if nvidia_container_toolkit_expected_gpus == 'any' else 'exactly the indices 0 to ' ~ (nvidia_container_toolkit_expected_gpus | int - 1) }}
+
+# A second spec for the same devices (nvidia-ctk appends .yaml to an --output that lacks it, so a
+# stray nvidia.yaml.new.yaml is easy to leave) makes every device "conflicting" and docker then fails
+# with "unresolvable CDI devices".
+- name: Look for another spec beside the role's in the CDI directory
+  ansible.builtin.find:
+    paths: "{{ nvidia_container_toolkit_cdi_spec | dirname }}"
+    patterns: ["*.yaml", "*.yml", "*.json"]
+  register: nvidia_container_toolkit_cdi_files
+  check_mode: false
+
+- name: Fail on a stray spec
+  vars:
+    nvidia_container_toolkit_stray: "{{ nvidia_container_toolkit_cdi_files.files | map(attribute='path') | reject('equalto', nvidia_container_toolkit_cdi_spec) | list }}"
+  ansible.builtin.assert:
+    that: nvidia_container_toolkit_stray | length == 0
+    fail_msg: >-
+      nvidia_container_toolkit: {{ nvidia_container_toolkit_stray | join(', ') }} sit beside
+      {{ nvidia_container_toolkit_cdi_spec }}: two specs for one device make every NVIDIA CDI device
+      conflicting (docker: unresolvable CDI devices); remove the extra file

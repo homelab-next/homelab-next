@@ -47,6 +47,7 @@ interface v1 ([docs/role-interface.md](../../../docs/role-interface.md)).
 6. **Installs the four packages at one exact version** only if they are not all installed at it and
    held (state `hi`). On a converged host no apt command runs at all.
 7. **Keeps the CDI spec current** and checks what the runtime resolves.
+8. **Enables a boot-time unit that regenerates the spec** (see below), unless `auto_refresh` is true.
 
 ## The driver is never touched: how that is enforced
 
@@ -72,6 +73,31 @@ long, an empty list and a missing `all` all fail. Devices named by UUID are not 
 **Docker reads CDI specs from `/etc/cdi` when a container asks for a device, so nothing is
 restarted** when the spec changes. (The engine needs CDI support, which current Docker Engine
 releases have on by default.)
+
+## The spec is rewritten at every boot
+
+The spec records each device node's **major number**, and `/dev/nvidia-uvm`'s is assigned when its
+module loads, so it can differ between boots (234, then 235 after a cold boot). A spec written
+before the reboot then gives the container a `/dev/nvidia-uvm` with the wrong major: `cuInit` fails
+(CUDA error 999) while `nvidia-smi` in the container still works, and the model silently runs on the CPU.
+
+With `auto_refresh: false` the role installs and **enables** `hnx-nvidia-cdi.service` (a oneshot, not
+started by the role: the spec was just written for this boot). Each boot it runs
+`Before=docker.service containerd.service`, after modules-load, udev-settle and nvidia-persistenced:
+it waits (at most 90 s) for `/dev/nvidiactl` and `/dev/nvidia-uvm`, runs
+`nvidia-ctk cdi generate` into the state directory (outside `/etc/cdi`), copies it to a hidden
+temporary name **inside `/etc/cdi`** whose name ends in neither `.yaml` nor `.json` (so it is never
+loaded), and renames it over the spec: a reader sees the old spec or the new one. It loads no kernel
+module (the vendor's `nvidia-cdi-refresh` units, which do, stay masked), so the "cards are never
+touched warm" rule holds. The vendor's units were not unmasked on purpose for that reason.
+
+**Never leave a second spec in `/etc/cdi`.** `nvidia-ctk cdi generate --output=X.new` writes
+`X.new.yaml` (it appends `.yaml`), and two specs for one device make every `nvidia.com` device
+"conflicting": docker then fails with "unresolvable CDI devices". `health` (and every run) fails
+when any `*.yaml`, `*.yml` or `*.json` other than the role's spec is in that directory.
+
+A stale spec is also detectable at the consumer: the `llamacpp` module's pre-start check compares
+the spec's device majors with the live nodes and refuses to start the server on a mismatch.
 
 ## The auto-refresh choice
 
@@ -118,7 +144,7 @@ baselines:
 | Hook | What it checks or does |
 |---|---|
 | `readiness` | `nvidia-ctk --version` answers the pinned version, and `<dev_root>/nvidiactl` exists (the driver is loaded or the card passed through). Nothing talks to a GPU. |
-| `health` | The four packages are installed at `<version>-<revision>` and held (`hi`); the spec exists and `nvidia-ctk cdi list` shows `=all` and the expected GPUs; and, with `auto_refresh` false, both refresh units are `masked`. |
+| `health` | The four packages are installed at `<version>-<revision>` and held (`hi`); the spec exists and `nvidia-ctk cdi list` shows `=all` and the expected GPUs; no other spec is in the CDI directory; and, with `auto_refresh` false, both vendor refresh units are `masked` and `hnx-nvidia-cdi.service` is `enabled`. |
 | `upgrade` | Refuses a target that is not a newer `x.y.z` than `nvidia_container_toolkit_version`. Then set the pin (and revision) and re-run `main`. |
 | `backup`, `restore`, `export` | Nothing to do: the toolkit holds no data, and the spec is generated from the driver on each run. |
 

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Container GPU access by CDI name for a guest whose NVIDIA driver is installed by hand and held:
 # the four toolkit packages at one pinned version, held, installed only if apt would touch nothing
-# else, and a CDI spec the role keeps current. The driver, the kernel and every other package are
+# else, and a CDI spec the role keeps current (rewritten at every boot, device majors change). The driver, the kernel and every other package are
 # never installed, upgraded or removed; nothing is restarted; no kernel module is loaded.
 - name: Validate the inputs
   ansible.builtin.include_tasks: validate.yml
@@ -37,3 +37,7 @@
 
 - name: Keep the CDI spec current and check what the runtime resolves
   ansible.builtin.include_tasks: cdi.yml
+
+- name: Regenerate the spec at every boot, before docker starts a GPU container
+  ansible.builtin.include_tasks: boot_refresh.yml
+  when: not nvidia_container_toolkit_auto_refresh
