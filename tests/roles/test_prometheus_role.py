@@ -1528,3 +1528,171 @@ def test_an_snmp_target_the_registry_has_no_host_for_is_refused_by_name(tmp_path
                   pvars(tmp_path, **over), ENV_ON)  # fmt: skip
     assert r.returncode != 0
     assert "no-such-host" in r.stdout and "are not hosts of the registry" in r.stdout
+
+
+# ----------------------------------------------------------------------------- reliability alerts
+
+RELIABILITY_TESTS = """\
+rule_files: [/etc/prometheus/rules.yml]
+evaluation_interval: 1m
+tests:
+  - name: a unit failed for the window warns; a flapping-to-active or a healthy one does not; a critical unit is not a warning
+    interval: 1m
+    input_series:
+      - {series: 'node_systemd_unit_state{instance="a", name="foo.service", state="failed"}', values: '1x40'}
+      - {series: 'node_systemd_unit_state{instance="b", name="foo.service", state="failed"}', values: '0x40'}
+      - {series: 'node_systemd_unit_state{instance="c", name="foo.service", state="failed"}', values: '1x5 0x35'}
+      - {series: 'node_systemd_unit_state{instance="a", name="wazuh-agent.service", state="failed"}', values: '1x40'}
+      - {series: 'node_systemd_unit_state{instance="a", name="foo.service", state="active"}', values: '0x40'}
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SystemdUnitFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: a, name: foo.service, state: failed}
+            exp_annotations: {summary: "a unit foo.service has been failed for most of 15m (systemctl status; journalctl -u)"}
+  - name: a critical unit (an agent, a lake writer instance, the model server) pages as critical over the short window, and only that
+    interval: 1m
+    input_series:
+      - {series: 'node_systemd_unit_state{instance="a", name="wazuh-agent.service", state="failed"}', values: '1x20'}
+      - {series: 'node_systemd_unit_state{instance="s", name="hnx-lake-writer@raw_archive.service", state="failed"}', values: '1x20'}
+      - {series: 'node_systemd_unit_state{instance="g", name="hnx-llamacpp-large.service", state="failed"}', values: '0x20'}
+      - {series: 'node_systemd_unit_state{instance="a", name="foo.service", state="failed"}', values: '1x20'}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CriticalUnitFailed
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: a, name: wazuh-agent.service, state: failed}
+            exp_annotations: {summary: "a critical unit wazuh-agent.service has been failed for most of 5m: a blind spot or a stopped pipeline (systemctl status; journalctl -u)"}
+          - exp_labels: {severity: critical, instance: s, name: "hnx-lake-writer@raw_archive.service", state: failed}
+            exp_annotations: {summary: "s critical unit hnx-lake-writer@raw_archive.service has been failed for most of 5m: a blind spot or a stopped pipeline (systemctl status; journalctl -u)"}
+      # only foo.service is the generic rule's: the critical names are left out of it
+      - eval_time: 10m
+        alertname: SystemdUnitFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: a, name: foo.service, state: failed}
+            exp_annotations: {summary: "a unit foo.service has been failed for most of 15m (systemctl status; journalctl -u)"}
+  - name: a timer job whose runs all failed for an hour fires; one that succeeded since, or whose timer stopped, does not
+    interval: 1m
+    input_series:
+      # failing every run: failed state throughout, the timer firing every 10 minutes
+      - {series: 'node_systemd_unit_state{instance="a", name="job.service", state="failed", type="oneshot"}', values: '1x100'}
+      - {series: 'node_systemd_timer_last_trigger_seconds{instance="a", name="job.timer"}', values: '0x9 600x10 1200x10 1800x10 2400x10 3000x10 3600x10 4200x10 4800x10 5400x20'}
+      # failed once, then a run succeeded
+      - {series: 'node_systemd_unit_state{instance="b", name="job.service", state="failed", type="oneshot"}', values: '1x30 0x70'}
+      - {series: 'node_systemd_timer_last_trigger_seconds{instance="b", name="job.timer"}', values: '0x9 600x10 1200x10 1800x10 2400x10 3000x10 3600x10 4200x10 4800x10 5400x20'}
+      # a failed oneshot whose timer never fires inside the window (a manual unit): the generic rule's, not this one
+      - {series: 'node_systemd_unit_state{instance="c", name="job.service", state="failed", type="oneshot"}', values: '1x100'}
+      - {series: 'node_systemd_timer_last_trigger_seconds{instance="c", name="job.timer"}', values: '100x100'}
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: TimerJobNotSucceeding
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: a, name: job.service, state: failed, type: oneshot}
+            exp_annotations: {summary: "a timer job job.service has failed on every run for 1h: nothing it feeds is being updated (journalctl -u)"}
+  - name: an OOM kill in the window fires; a counter that is not moving does not
+    interval: 1m
+    input_series:
+      - {series: 'node_vmstat_oom_kill{instance="a"}', values: '3x5 4x15'}
+      - {series: 'node_vmstat_oom_kill{instance="b"}', values: '7x20'}
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: HostOomKill
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: a}
+            exp_annotations: {summary: "a the kernel OOM-killed 1 process(es) in the last 10m (journalctl -k | grep -i oom): the host or its cgroup is short of memory"}
+      - eval_time: 20m
+        alertname: HostOomKill
+        exp_alerts: []
+  - name: a filesystem draining toward zero within the horizon fires; a flat or tmpfs one does not
+    interval: 1m
+    input_series:
+      # 1000 bytes of 10000, losing 1 a minute: a day of that is 1440, so it ends within the horizon
+      - {series: 'node_filesystem_avail_bytes{instance="a", mountpoint="/data", fstype="ext4"}', values: '1000-1x300'}
+      - {series: 'node_filesystem_size_bytes{instance="a", mountpoint="/data", fstype="ext4"}', values: '10000x300'}
+      - {series: 'node_filesystem_avail_bytes{instance="b", mountpoint="/data", fstype="ext4"}', values: '1000x300'}
+      - {series: 'node_filesystem_size_bytes{instance="b", mountpoint="/data", fstype="ext4"}', values: '10000x300'}
+      - {series: 'node_filesystem_avail_bytes{instance="c", mountpoint="/run", fstype="tmpfs"}', values: '1000-1x300'}
+      - {series: 'node_filesystem_size_bytes{instance="c", mountpoint="/run", fstype="tmpfs"}', values: '10000x300'}
+    alert_rule_test:
+      - eval_time: 300m
+        alertname: FilesystemFillPredicted
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: a, mountpoint: /data, fstype: ext4}
+            exp_annotations: {summary: "a /data is filling at its recent rate and will be full within 24 h (-740B projected)"}
+"""
+
+CERT_TESTS = """\
+rule_files: [/etc/prometheus/rules.yml]
+evaluation_interval: 1m
+tests:
+  - name: a certificate under 14 days warns, under 3 days pages, a long one and a non-TLS probe do not
+    interval: 1h
+    input_series:
+      # expiry timestamps against the evaluation time (3600 s into the test): 10 d left, 2 d left, already expired, 60 d left, a plain-HTTP probe's 0
+      - {series: 'probe_success{job="probe", service="w", instance="https://w/"}', values: '1x3'}
+      - {series: 'probe_ssl_earliest_cert_expiry{job="probe", service="w", instance="https://w/"}', values: '867600x3'}
+      - {series: 'probe_ssl_earliest_cert_expiry{job="probe", service="c", instance="https://c/"}', values: '176400x3'}
+      - {series: 'probe_ssl_earliest_cert_expiry{job="probe", service="x", instance="https://x/"}', values: '1x3'}
+      - {series: 'probe_ssl_earliest_cert_expiry{job="probe", service="ok", instance="https://ok/"}', values: '5184000x3'}
+      - {series: 'probe_ssl_earliest_cert_expiry{job="probe", service="plain", instance="http://p/"}', values: '0x3'}
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: CertExpiringSoon
+        exp_alerts:
+          - exp_labels: {severity: warning, job: probe, service: w, instance: "https://w/"}
+            exp_annotations: {summary: "w (https://w/) certificate expires in 10d 0h 0m 0s: under 14 days, renewal is not happening"}
+      - eval_time: 1h
+        alertname: CertExpiryCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, job: probe, service: c, instance: "https://c/"}
+            exp_annotations: {summary: "c (https://c/) certificate expires in 2d 0h 0m 0s (or has expired): under 3 days"}
+          - exp_labels: {severity: critical, job: probe, service: x, instance: "https://x/"}
+            exp_annotations: {summary: "x (https://x/) certificate expires in -59m 59s (or has expired): under 3 days"}
+"""
+
+
+def _rule_unit_test(tmp_path, text, **over):
+    require_tool("docker")
+    assert render(tmp_path, **over).returncode == 0
+    work = tmp_path / "rules"
+    work.mkdir()
+    shutil.copy(tmp_path / "data/config/rules.yml", work / "rules.yml")
+    (work / "tests.yml").write_text(text)
+    for p in (work, work / "rules.yml", work / "tests.yml"):
+        p.chmod(0o755 if p.is_dir() else 0o644)
+    r = _promtool(
+        tmp_path, "test", "rules", "/etc/prometheus/tests.yml", mounts={work: "/etc/prometheus"}
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_reliability_rules_fire_on_what_they_should_and_not_on_what_they_should_not(tmp_path):
+    _rule_unit_test(
+        tmp_path,
+        RELIABILITY_TESTS,
+        prometheus_alert_critical_units=r"wazuh-agent\.service|hnx-lake-writer@.+\.service|vector\.service|hnx-llamacpp.*\.service",
+    )
+
+
+def test_the_certificate_rules_bands_and_the_non_tls_probe(tmp_path):
+    _rule_unit_test(tmp_path, CERT_TESTS, prometheus_probes_enabled=True)
+
+
+def test_no_certificate_rule_without_probes(tmp_path):
+    assert render(tmp_path).returncode == 0
+    text = (tmp_path / "data/config/rules.yml").read_text()
+    assert "CertExpir" not in text and "CriticalUnitFailed" in text
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"prometheus_alert_critical_units": 'a"b'},
+        {"prometheus_alert_critical_units": "a`b"},
+        {"prometheus_alert_unit_failed_for": "soon"},
+        {"prometheus_alert_fill_horizon_hours": 0},
+        {"prometheus_alert_cert_warning_days": 2, "prometheus_alert_cert_critical_days": 3},
+    ],
+)
+def test_a_malformed_reliability_setting_is_refused(tmp_path, over):
+    assert render(tmp_path, **over).returncode != 0

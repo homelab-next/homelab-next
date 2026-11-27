@@ -278,6 +278,50 @@ argument_specs:
         type: int
         description: 'LlmProbeSlow: a successful probe slower than this (s).'
         default: 60
+      prometheus_alert_unit_failed_for: &alert_unit_failed_for
+        type: str
+        description: "SystemdUnitFailed: how long (an averaging window, like 15m) a unit must have been failed."
+        default: 15m
+      prometheus_alert_unit_failed_ignore: &alert_unit_failed_ignore
+        type: str
+        description: "A regex of unit names SystemdUnitFailed ignores (empty: none)."
+        default: ''
+      prometheus_alert_critical_units: &alert_critical_units
+        type: str
+        description: "A regex of unit names that matter: they page as CriticalUnitFailed and are left out of SystemdUnitFailed."
+        default: 'hnx-lake-writer@.+\.service'
+      prometheus_alert_critical_unit_failed_for: &alert_critical_unit_failed_for
+        type: str
+        description: "CriticalUnitFailed: the averaging window a critical unit must have been failed."
+        default: 5m
+      prometheus_alert_timer_job_failing_for: &alert_timer_job_failing_for
+        type: str
+        description: "TimerJobNotSucceeding: how long a timer-driven oneshot must have failed on every run."
+        default: 1h
+      prometheus_alert_oom_window: &alert_oom_window
+        type: str
+        description: "HostOomKill: any kernel OOM kill within this window."
+        default: 10m
+      prometheus_alert_fill_lookback: &alert_fill_lookback
+        type: str
+        description: "FilesystemFillPredicted: the window the fill rate is measured over."
+        default: 6h
+      prometheus_alert_fill_horizon_hours: &alert_fill_horizon_hours
+        type: int
+        description: "FilesystemFillPredicted: alert when the free space is projected to end within this many hours."
+        default: 24
+      prometheus_alert_fill_ignore_fstypes: &alert_fill_ignore_fstypes
+        type: str
+        description: "A regex of filesystem types FilesystemFillPredicted ignores."
+        default: 'tmpfs|overlay|squashfs|ramfs|devtmpfs|fuse.*|nsfs|proc|sysfs'
+      prometheus_alert_cert_warning_days: &alert_cert_warning_days
+        type: int
+        description: "CertExpiringSoon: days left under which a probed certificate warns."
+        default: 14
+      prometheus_alert_cert_critical_days: &alert_cert_critical_days
+        type: int
+        description: "CertExpiryCritical: days left under which a probed certificate pages."
+        default: 3
       prometheus_alert_target_down_for: &alert_target_down_for
         type: str
         description: "How long a target must be down before TargetDown fires."
@@ -442,6 +486,17 @@ argument_specs:
       prometheus_llm_probe_timeout: *llm_probe_timeout
       prometheus_alert_llm_probe_failed_for: *alert_llm_probe_failed_for
       prometheus_alert_llm_probe_slow_seconds: *alert_llm_probe_slow_seconds
+      prometheus_alert_unit_failed_for: *alert_unit_failed_for
+      prometheus_alert_unit_failed_ignore: *alert_unit_failed_ignore
+      prometheus_alert_critical_units: *alert_critical_units
+      prometheus_alert_critical_unit_failed_for: *alert_critical_unit_failed_for
+      prometheus_alert_timer_job_failing_for: *alert_timer_job_failing_for
+      prometheus_alert_oom_window: *alert_oom_window
+      prometheus_alert_fill_lookback: *alert_fill_lookback
+      prometheus_alert_fill_horizon_hours: *alert_fill_horizon_hours
+      prometheus_alert_fill_ignore_fstypes: *alert_fill_ignore_fstypes
+      prometheus_alert_cert_warning_days: *alert_cert_warning_days
+      prometheus_alert_cert_critical_days: *alert_cert_critical_days
       prometheus_alert_target_down_for: *alert_target_down_for
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
@@ -532,6 +587,17 @@ argument_specs:
       prometheus_llm_probe_timeout: *llm_probe_timeout
       prometheus_alert_llm_probe_failed_for: *alert_llm_probe_failed_for
       prometheus_alert_llm_probe_slow_seconds: *alert_llm_probe_slow_seconds
+      prometheus_alert_unit_failed_for: *alert_unit_failed_for
+      prometheus_alert_unit_failed_ignore: *alert_unit_failed_ignore
+      prometheus_alert_critical_units: *alert_critical_units
+      prometheus_alert_critical_unit_failed_for: *alert_critical_unit_failed_for
+      prometheus_alert_timer_job_failing_for: *alert_timer_job_failing_for
+      prometheus_alert_oom_window: *alert_oom_window
+      prometheus_alert_fill_lookback: *alert_fill_lookback
+      prometheus_alert_fill_horizon_hours: *alert_fill_horizon_hours
+      prometheus_alert_fill_ignore_fstypes: *alert_fill_ignore_fstypes
+      prometheus_alert_cert_warning_days: *alert_cert_warning_days
+      prometheus_alert_cert_critical_days: *alert_cert_critical_days
       prometheus_alert_target_down_for: *alert_target_down_for
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
@@ -620,6 +686,17 @@ argument_specs:
       prometheus_llm_probe_timeout: *llm_probe_timeout
       prometheus_alert_llm_probe_failed_for: *alert_llm_probe_failed_for
       prometheus_alert_llm_probe_slow_seconds: *alert_llm_probe_slow_seconds
+      prometheus_alert_unit_failed_for: *alert_unit_failed_for
+      prometheus_alert_unit_failed_ignore: *alert_unit_failed_ignore
+      prometheus_alert_critical_units: *alert_critical_units
+      prometheus_alert_critical_unit_failed_for: *alert_critical_unit_failed_for
+      prometheus_alert_timer_job_failing_for: *alert_timer_job_failing_for
+      prometheus_alert_oom_window: *alert_oom_window
+      prometheus_alert_fill_lookback: *alert_fill_lookback
+      prometheus_alert_fill_horizon_hours: *alert_fill_horizon_hours
+      prometheus_alert_fill_ignore_fstypes: *alert_fill_ignore_fstypes
+      prometheus_alert_cert_warning_days: *alert_cert_warning_days
+      prometheus_alert_cert_critical_days: *alert_cert_critical_days
       prometheus_alert_target_down_for: *alert_target_down_for
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
@@ -713,6 +790,17 @@ argument_specs:
       prometheus_llm_probe_timeout: *llm_probe_timeout
       prometheus_alert_llm_probe_failed_for: *alert_llm_probe_failed_for
       prometheus_alert_llm_probe_slow_seconds: *alert_llm_probe_slow_seconds
+      prometheus_alert_unit_failed_for: *alert_unit_failed_for
+      prometheus_alert_unit_failed_ignore: *alert_unit_failed_ignore
+      prometheus_alert_critical_units: *alert_critical_units
+      prometheus_alert_critical_unit_failed_for: *alert_critical_unit_failed_for
+      prometheus_alert_timer_job_failing_for: *alert_timer_job_failing_for
+      prometheus_alert_oom_window: *alert_oom_window
+      prometheus_alert_fill_lookback: *alert_fill_lookback
+      prometheus_alert_fill_horizon_hours: *alert_fill_horizon_hours
+      prometheus_alert_fill_ignore_fstypes: *alert_fill_ignore_fstypes
+      prometheus_alert_cert_warning_days: *alert_cert_warning_days
+      prometheus_alert_cert_critical_days: *alert_cert_critical_days
       prometheus_alert_target_down_for: *alert_target_down_for
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
