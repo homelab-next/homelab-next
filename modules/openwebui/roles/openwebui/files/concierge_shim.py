@@ -1,4 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: concierge-shim
+#   kind: service
+#   purpose: Front the lab's gateway for the chat app with named model tiers mapped to gateway roles (listed only while the role is live), a persona, bounded history and optional retrieval from the context service.
+#   owner: platform
+#   trigger: [role:openwebui]
+#   inputs: CONCIERGE_CONFIG (a JSON settings file); the gateway key, the shim's token and optionally the context token from the environment
+#   outputs: an OpenAI-compatible HTTP endpoint on the settings' port; one request-line per call on stderr, never prompt text
+#   exit:
+#     "0": stopped, or --healthcheck answered
+#     "1": --healthcheck did not get 200
 """The concierge shim: a small OpenAI-compatible front for the lab's own gateway.
 
 It sits between Open WebUI and the gateway (the optional sidecar of modules/openwebui) and adds the
@@ -349,7 +360,7 @@ def load(path: str) -> Shim:
 
 def healthcheck(port: int) -> int:
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as r:
+        with urllib.request.urlopen(f"http://localhost:{port}/health", timeout=5) as r:
             return 0 if r.status == 200 else 1
     except OSError:
         return 1

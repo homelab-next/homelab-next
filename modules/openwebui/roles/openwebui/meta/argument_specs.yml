@@ -112,6 +112,10 @@ argument_specs:
         type: str
         description: "The shim container's memory limit."
         default: 256m
+      openwebui_concierge_port:
+        type: int
+        description: "The port the shim listens on inside the project's network (never published)."
+        default: 8900
       openwebui_concierge_tiers:
         type: dict
         description: "Tier name to gateway role; a tier is listed only while the gateway lists its role."

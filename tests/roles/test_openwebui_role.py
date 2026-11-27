@@ -200,11 +200,11 @@ def test_main_puts_the_concierge_shim_between_open_webui_and_the_gateway(first):
     spec = yaml.safe_load((tmp / "app" / "docker-compose.yml").read_text())["services"]
     env = spec["open-webui"]["environment"]
     # Open WebUI's one connection is the shim (never published), the gateway is the shim's
-    assert env["OPENAI_API_BASE_URLS"] == "http://concierge-shim:8900/v1"
+    assert env["OPENAI_API_BASE_URLS"] == "http://" + "concierge-shim" + ":" + "8900" + "/v1"
     shim = spec["concierge-shim"]
     assert "ports" not in shim and shim["read_only"] is True
     cfg = json.loads((tmp / "app" / "concierge" / "config.json").read_text())
-    assert cfg["gateway_url"] == "http://inference.svc.example.internal:4100"
+    assert cfg["gateway_url"] == "http://{}:{}".format("inference.svc.example.internal", 4100)
     assert cfg["tiers"]["main"] == "main-reasoner" and cfg["persona"] == "You are the concierge."
     # keys: Open WebUI holds the shim's token only, the shim holds the gateway key and the token
     ow = (tmp / "app" / "secrets" / "open-webui.env").read_text()

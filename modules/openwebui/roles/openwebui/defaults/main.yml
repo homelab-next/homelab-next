@@ -46,6 +46,8 @@ openwebui_concierge_enabled: false
 openwebui_concierge_image: "docker.io/library/python:3.11.17-slim-trixie@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377"
 openwebui_concierge_link_ref: secret:openwebui/shim-token
 openwebui_concierge_mem_limit: 256m
+# the port the shim listens on inside the project's network (never published)
+openwebui_concierge_port: 8900
 # tier name -> gateway role. A tier is offered in the model list only while the gateway lists its role
 # (the main tier always), so fast and deep appear on their own when their roles exist.
 openwebui_concierge_tiers: {fast: fast, main: main-reasoner, deep: deep}

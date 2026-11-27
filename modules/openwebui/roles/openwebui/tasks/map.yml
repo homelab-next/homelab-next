@@ -39,7 +39,7 @@
 - name: The concierge shim's settings (no secret in them)
   ansible.builtin.set_fact:
     openwebui_concierge_config: >-
-      {{ {'port': 8900, 'bind': '0.0.0.0',
+      {{ {'port': openwebui_concierge_port | int, 'bind': '0.0.0.0',
           'gateway_url': lookup('hnx_registry', openwebui_gateway_id, field='url'),
           'default_tlp': openwebui_gateway_tlp, 'max_tlp': openwebui_gateway_tlp,
           'default_tag': openwebui_gateway_tag_prefix,
@@ -57,7 +57,7 @@
 
 - name: The concierge shim's inputs for the core role
   ansible.builtin.set_fact:
-    open_webui_connection_url: "http://concierge-shim:8900/v1"
+    open_webui_connection_url: "http://concierge-shim:{{ openwebui_concierge_port }}/v1"
     open_webui_connection_key_ref: "{{ openwebui_concierge_link_ref }}"
     open_webui_extra_secret_env:
       concierge-shim: >-

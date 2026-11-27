@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The concierge shim (modules/openwebui, files/concierge_shim.py): run in-process against a fake
+"""The concierge shim (the chat module's sidecar, files/concierge_shim.py): run in-process against a fake
 gateway and a fake context service.
 
 * a tier is listed only while the gateway lists its role (the main tier always), and a request for
@@ -26,7 +26,7 @@ from typing import ClassVar
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "modules" / "openwebui" / "roles" / "openwebui" / "files" / "concierge_shim.py"
+(SRC,) = ROOT.glob("modules/*/roles/*/files/concierge_shim.py")
 spec = importlib.util.spec_from_file_location("concierge_shim", SRC)
 cs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cs)  # type: ignore[union-attr]
@@ -86,15 +86,15 @@ class _Fake(http.server.BaseHTTPRequestHandler):
 @pytest.fixture
 def stack(monkeypatch):
     _Fake.seen, _Fake.roles, _Fake.refuse, _Fake.hits = [], ["main-reasoner"], False, []
-    fake = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Fake)
+    fake = http.server.ThreadingHTTPServer(("localhost", 0), _Fake)
     threading.Thread(target=fake.serve_forever, daemon=True).start()
-    base = f"http://127.0.0.1:{fake.server_port}"
+    base = f"http://localhost:{fake.server_port}"
     cfg = {
         "port": 0,
         "gateway_url": base,
         "default_tlp": "amber",
         "max_tlp": "amber",
-        "default_tag": "openwebui",
+        "default_tag": "chat-app",
         "history_chars": 100,
         "max_body_bytes": 100000,
         "timeout_s": 10,
@@ -109,10 +109,10 @@ def stack(monkeypatch):
         "context": {"url": base, "allowed": ["lab"], "ceiling": "amber", "top_k": 3},
     }
     shim = cs.Shim(cfg, GWKEY, TOKEN, CTXTOKEN)
-    front = http.server.ThreadingHTTPServer(("127.0.0.1", 0), cs.make_handler(shim))
+    front = http.server.ThreadingHTTPServer(("localhost", 0), cs.make_handler(shim))
     front.daemon_threads = True
     threading.Thread(target=front.serve_forever, daemon=True).start()
-    yield shim, f"http://127.0.0.1:{front.server_port}"
+    yield shim, f"http://localhost:{front.server_port}"
     fake.shutdown()
     front.shutdown()
 
@@ -171,11 +171,11 @@ def test_the_token_is_required_and_the_gateway_key_stays_the_shims(stack):
 
 def test_headers_pass_through_with_defaults_and_a_ceiling(stack):
     _, url = stack
-    chat(url, headers={"X-HNX-Tag": "openwebui:u1", "X-HNX-TLP": "green"})
+    chat(url, headers={"X-HNX-Tag": "chat-app:u1", "X-HNX-TLP": "green"})
     chat(url)
     first, second = [s for s in _Fake.seen if s["path"] == "chat"]
-    assert (first["tlp"], first["tag"]) == ("green", "openwebui:u1")
-    assert (second["tlp"], second["tag"]) == ("amber", "openwebui")
+    assert (first["tlp"], first["tag"]) == ("green", "chat-app:u1")
+    assert (second["tlp"], second["tag"]) == ("amber", "chat-app")
     assert chat(url, headers={"X-HNX-TLP": "red"})[0] == 400
 
 

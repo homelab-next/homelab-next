@@ -155,7 +155,7 @@ returns to) and a stricter `health`.
 `openwebui_concierge_enabled: true` adds one more container to the same compose project: the concierge
 shim (`roles/openwebui/files/concierge_shim.py`, standard library only, run from the pinned stock
 Python image with the file mounted read-only, as nobody, read-only root, no published port). Open WebUI's
-one connection then points at the shim (`http://concierge-shim:8900/v1`) with the shim's own token
+one connection then points at the shim (the sidecar's compose service name, port 8900, path `/v1`) with the shim's own token
 (`secret:openwebui/shim-token`, declared in the manifest); the shim holds the gateway key and calls
 the gateway, so the gateway still sees one caller, the app's key, with the per-user `X-HNX-Tag` and
 `X-HNX-TLP` passed through (the shim refuses a label above its own ceiling; the gateway key's ceiling
