@@ -186,11 +186,11 @@ def test_main_renders_the_container_the_unit_and_converges(tmp_path):
 def test_main_gives_the_container_shared_memory_and_no_other_writable_path(tmp_path):
     r = run_role(tmp_path, ROLE, "main", role_vars(tmp_path))
     assert r.returncode == 0, r.stdout + r.stderr
-    text = (tmp_path / "app" / "docker-compose.yml").read_text()
     svc = compose(tmp_path)
     shm = [v for v in svc["volumes"] if isinstance(v, dict)]
     assert shm == [{"type": "tmpfs", "target": "/dev/shm", "tmpfs": {"size": 2147483648}}]
-    assert "network_mode" not in svc and "ulimits" not in text
+    assert "network_mode" not in svc
+    assert svc["ulimits"] == {"memlock": {"soft": -1, "hard": -1}}
     assert [v for v in svc["volumes"] if isinstance(v, str) and not v.endswith(":ro")] == [
         f"{tmp_path / 'data' / 'data'}:/data"
     ]
@@ -334,9 +334,7 @@ REFUSED = {
     "three layers": {"direction_file": DIRECTION, "direction_layers": [4, 20, 44]},
     # the named settings, each of its own type and range
     "a setting that is no name of the list": {"extra_args": {"api_key": "x"}},
-    "kv_streaming that is a boolean": {"extra_args": {"kv_streaming": True}},
     "kv_streaming of another word": {"extra_args": {"kv_streaming": "always"}},
-    "mmap_experts that is a boolean": {"extra_args": {"mmap_experts": False}},
     "a pcie_frac above 0.95": {"extra_args": {"pcie_frac": 1}},
     "a negative pcie_frac": {"extra_args": {"pcie_frac": -0.1}},
     "a pcie_frac that is a string": {"extra_args": {"pcie_frac": "0.5"}},
@@ -904,3 +902,40 @@ def test_the_data_hooks_say_there_is_nothing_to_do(tmp_path, hook):
     r = run_role(tmp_path, ROLE, hook, role_vars(tmp_path))
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (tmp_path / "app").exists() and not list((tmp_path / "units").glob("*.service"))
+
+
+def test_a_yaml_boolean_is_accepted_for_the_on_off_settings(tmp_path):
+    """An unquoted on or off is a boolean to YAML 1.1: true means on, false means off."""
+    r = run_role(
+        tmp_path,
+        ROLE,
+        "main",
+        role_vars(tmp_path, extra_args={"kv_streaming": True, "mmap_experts": False}),
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    env = compose(tmp_path)["environment"]
+    assert env[ENV + "KV_STREAMING"] == "on" and env[ENV + "MMAP_EXPERTS"] == "0"
+    other = tmp_path / "other"
+    other.mkdir()
+    r = run_role(
+        other,
+        ROLE,
+        "main",
+        role_vars(other, extra_args={"kv_streaming": False, "mmap_experts": True}),
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    env = compose(other)["environment"]
+    assert env[ENV + "KV_STREAMING"] == "off" and env[ENV + "MMAP_EXPERTS"] == "1"
+
+
+def test_health_fails_when_the_container_log_says_the_engine_ran_out_of_pinned_memory(tmp_path):
+    env = _fakes(tmp_path)
+    fake(
+        tmp_path / "fakes" / "docker",
+        "import sys\n"
+        "if 'logs' in sys.argv:\n    print('[pinned-memory-exhausted]')\n"
+        f'else:\n    sys.stdout.write(\'{{"Service": "{MID}", "State": "running", "Health": "healthy"}}\\n\')\n',
+    )
+    with engine() as srv:
+        r = _run_health(tmp_path, srv, env, load_timeout=1, load_poll_s=1)
+    assert r.returncode != 0 and "pinned-memory-exhausted" in r.stdout

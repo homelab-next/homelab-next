@@ -8,7 +8,7 @@
 
 # the image the lab builds from the pinned release (modules/strata/README.md, "The image"): a tag of this module's own
 # repository, <release>-<commit12>, and the digest of the OCI manifest the recipe produces
-strata_image: "localhost/hnx-strata:0.2.22-b28ca95e3e68@sha256:5fa487d5345b04ee7022b27d18f0f8c228d531c0b8c8fab21f1797b040e3be41"
+strata_image: "localhost/hnx-strata:0.2.22-b28ca95e3e68@sha256:56b45c63485f8f70ee263c86a6f60853951fc415c64bbaa5e6aa096eb7337c04"
 # the `docker save` / OCI archive of that image (guest path, checked with sha256sum before the deploy), loaded when the
 # daemon lacks the digest: a model runtime's egress is default-deny, so it cannot build or pull; empty: the daemon has it
 strata_image_archive: ""

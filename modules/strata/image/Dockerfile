@@ -41,7 +41,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 COPY --from=source /src /src
 ARG CUDA_ARCHITECTURES="80"
-RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir -r terminal/requirements.txt -r terminal/requirements-build.txt
+# The build tools are installed by hash (the wheels' sha256, taken from PyPI for cmake 4.4.3 and ninja 1.13.2); the upstream's
+# runtime requirements are pinned by version only, are build-time only and ship in no image layer (the engine package is
+# the binary and the libraries collect_libs.py names; the Terminal stage installs its own wheels by hash from the upstream's lock)
+RUN python3 -m venv /venv \
+ && printf '%s\n' \
+      'cmake==4.4.3 --hash=sha256:bae3c4954623ec4d62e62c70443f0da7988b733111c2871fcc6a31ead5137e20' \
+      'ninja==1.13.2 --hash=sha256:65a24341b5ac09fcadcc37082660be40a94174e51a937fabf6e2cae26225fa2c' > /tmp/build-tools.txt \
+ && /venv/bin/pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: -r /tmp/build-tools.txt \
+ && /venv/bin/pip install --no-cache-dir -r terminal/requirements.txt
 RUN set -e; \
     real=""; for a in $(echo "$CUDA_ARCHITECTURES" | tr ';,' '  '); do real="$real;${a}-real"; done; real=${real#;}; \
     last=$(echo "$CUDA_ARCHITECTURES" | tr ';,' '  ' | awk '{print $NF}'); \
@@ -106,7 +114,7 @@ RUN chmod 0755 /opt/strata/entrypoint.sh /opt/strata/healthcheck.py \
 ENV STRATA_COMPONENTS_DIR=/opt/strata/components STRATA_INSTALL_DIR=/data/install XDG_STATE_HOME=/data/state \
     XDG_CONFIG_HOME=/data/config HOME=/data/home PORT=8080 LANG=C.UTF-8 PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 \
     PYTHONDONTWRITEBYTECODE=1 STRATA_IN_DOCKER=1 HF_HUB_OFFLINE=1 \
-    NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
 LABEL org.opencontainers.image.title="Strata (sm_80)" \
       org.opencontainers.image.source="https://github.com/Niko1221/Strata" \
       org.opencontainers.image.licenses="MIT" \

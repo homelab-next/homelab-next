@@ -14,7 +14,7 @@ argument_specs:
       strata_image: &a_image
         type: str
         description: 'localhost/hnx-strata:<release>-<commit12>@sha256:<digest>: the lab''s own build of the pinned Strata release (README.md, The image).'
-        default: localhost/hnx-strata:0.2.22-b28ca95e3e68@sha256:5fa487d5345b04ee7022b27d18f0f8c228d531c0b8c8fab21f1797b040e3be41
+        default: localhost/hnx-strata:0.2.22-b28ca95e3e68@sha256:56b45c63485f8f70ee263c86a6f60853951fc415c64bbaa5e6aa096eb7337c04
       strata_image_archive: &a_image_archive
         type: path
         description: 'A local archive of that image (guest path), loaded when the daemon lacks the digest (the guest cannot pull or build: its egress is default-deny); empty: the daemon has it.'

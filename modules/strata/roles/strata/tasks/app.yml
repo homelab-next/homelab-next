@@ -52,6 +52,8 @@
       volumes:
         - "{{ strata_model_dir }}:{{ strata_container_models_dir }}:ro"
         - "{{ strata_data_root }}/data:{{ strata_container_data_dir }}"
+      # Strata pins RAM for the card (its own Docker guide passes --ulimit memlock=-1:-1); compose_app accepts memlock only
+      ulimits: {memlock: -1}
       # the engine and the server share memory through /dev/shm (docker's default is 64 MiB; the image's own recipe asks for 2 GiB)
       tmpfs:
         - {target: /dev/shm, size_bytes: 2147483648}

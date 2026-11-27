@@ -72,6 +72,13 @@
         compose_app_name: strata
         compose_app_dir: "{{ strata_app.compose_app_dir }}"
         compose_app_spec: "{{ strata_app.compose_app_spec }}"
+    - name: The container's log does not say the engine ran out of pinned memory
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ strata_app.compose_app_dir }}/docker-compose.yml", logs, --no-color, --tail, "2000"]
+      register: strata_logs
+      changed_when: false
+      check_mode: false  # read-only: it runs in --check too
+      failed_when: "'pinned-memory-exhausted' in strata_logs.stdout"
     - name: Ask what it serves
       ansible.builtin.uri:
         url: "http://{{ strata_bind }}:{{ strata_port | int }}/v1/models"

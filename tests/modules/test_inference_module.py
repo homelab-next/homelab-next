@@ -46,7 +46,7 @@ ADAPTER = "homelabnext.conform.adapters.inference_server:make"
 
 def _find() -> Path:
     """The provider this file pins: the module the environment names (HNX_INFERENCE_MODULE; default
-    the first provider of the slot that uses the shared adapter, by id). The slot has more than one
+    the one provider that runs a published image, i.e. has no image/Dockerfile). The slot has more than one
     provider; each one's own facts have their own test file."""
     hits = [
         p.parent
@@ -55,7 +55,11 @@ def _find() -> Path:
         == ADAPTER
     ]
     assert hits, hits
-    want = os.environ.get("HNX_INFERENCE_MODULE", hits[0].name)
+    prebuilt = [h for h in hits if not (h / "image" / "Dockerfile").is_file()]
+    assert len(prebuilt) == 1, (
+        prebuilt
+    )  # the default provider runs a published image; the lab-built one is named by the environment
+    want = os.environ.get("HNX_INFERENCE_MODULE", prebuilt[0].name)
     (hit,) = [h for h in hits if h.name == want]
     return hit
 

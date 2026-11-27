@@ -74,7 +74,7 @@ the wrong type or range is refused before a file is written.
 | `strata_spec_depth` | `4` | `--set spec=N` (0 to 8; 0 leaves it to the engine) |
 | `strata_kv_mode` | `k8v4` | `--kv` (`int8`, `q4_0`, `k8v4`, `fp16`) |
 | `strata_drafting` | `off` | `--drafting` (`off`, `auto`, `mtp`) |
-| `strata_extra_args.kv_streaming` | `off` | `--set kv-streaming=on\|off\|auto` |
+| `strata_extra_args.kv_streaming` | `off` | `--set kv-streaming=on\|off\|auto` (a YAML boolean is accepted: an unquoted `on` is `true` to YAML 1.1, and `true`/`false` mean `on`/`off`) |
 | `strata_extra_args.mmap_experts` | `on` | `--set mmap-experts=on` (`off` leaves the engine's own copy in RAM; `auto` leaves the choice to the launcher) |
 | `strata_extra_args.pcie_frac` | `0` | `--set pcie-frac=F` (0 to 0.95) |
 | `strata_extra_args.threads` | engine's | `--set pool-workers=N` (1 to 256: the CPU threads that compute experts) |
@@ -185,21 +185,21 @@ holds the one image manifest and its digest is the image's), `SOURCE_DATE_EPOCH`
 takes is
 
 ```
-strata_image: localhost/hnx-strata:0.2.22-b28ca95e3e68@sha256:5fa487d5345b04ee7022b27d18f0f8c228d531c0b8c8fab21f1797b040e3be41
+strata_image: localhost/hnx-strata:0.2.22-b28ca95e3e68@sha256:56b45c63485f8f70ee263c86a6f60853951fc415c64bbaa5e6aa096eb7337c04
 strata_image_archive: /var/lib/hnx-images/hnx-strata-0.2.22-b28ca95e3e68.oci.tar
-strata_image_archive_sha256: ce803457cfbf4321613ee3beb345994def0106e548218d313c9e4c03e8dd865d
+strata_image_archive_sha256: 0e36446088c63f997fa1c0861d2efd26038204a3b2427b025566bea77f707d27
 ```
 
 The role refuses an image of any other repository, a tag that is not `<release>-<commit12>` and a
-placeholder digest; it checks the archive's sha256 **before** `docker load` and the digest after. **A
+placeholder digest; it checks the archive's sha256 **before** `docker load` and the digest after. **The built image's digest is the pin, not the inputs:** the Dockerfile fetches by tag and checks the commit, the Terminal stage installs the upstream's hash-locked wheels and a sha256-checked CPython (`package_terminal.py`), the build tools (cmake, ninja) are installed `--require-hashes`, but the upstream's `requirements.txt` for the build venv (not shipped in any layer) is pinned by version only and the Ubuntu and CUDA apt packages are not pinned at all. **A
 rebuild is not promised to give the same digest, and measured, it does not**: a `--no-cache` rebuild
 of the same files minutes later (the Ubuntu archive, PyPI and the compiler answer with what they hold
 and produce what they produce) changed three of the six layers (the runtime's apt layer, the Terminal and
 the engine). The pin is therefore the digest the operator built and recorded, and the saved archive, not
 a rebuild, is what is deployed. This build, made on 2026-11-26 (CUDA 13.0.0 `nvcc`, the engine package
 `0.1.69-linux-x86_64-cuda-cuda13`, 595 MB), has manifest digest
-`sha256:5fa487d5345b04ee7022b27d18f0f8c228d531c0b8c8fab21f1797b040e3be41` and archive sha256
-`ce803457cfbf4321613ee3beb345994def0106e548218d313c9e4c03e8dd865d`. The container could not be
+`sha256:56b45c63485f8f70ee263c86a6f60853951fc415c64bbaa5e6aa096eb7337c04` and archive sha256
+`0e36446088c63f997fa1c0861d2efd26038204a3b2427b025566bea77f707d27`. The container could not be
 run with a card here (no GPU on the build machine): the image's checks that ran are that the engine
 package verifies, every library resolves inside the image, `strata launch --help` lists every flag
 the starter passes, the starter refuses with a clear message when no card is visible, and the
@@ -241,6 +241,8 @@ functions handle the reset at a restart) and no per-request latency.
 
 ## Health and readiness
 
+**The registry health row is up before the model is.** `/health` answers 200 from the moment Strata's API is up, with `"loaded": false` until the model is loaded, and `/v1/models` answers 200 with an empty list while it is not (checked in the v0.2.22 source). A registry health row asserts a status only, never a body, and `/v1/models/<id>` (404 until loaded) needs the id Strata derives from the pack, which is not known before a run on the card. So a monitor on the row sees "up" for the minutes the model loads; the container's own healthcheck and this role's `health` hook wait for `loaded` true.
+
 `readiness` (preflight, before `main`): the container engine is ready, every shard, the direction
 file and the store's listing exist as regular files, the CDI spec is written. `health`: the unit is
 active; the card rules hold; the container is running and healthy; `/health` says `loaded`; `/v1/models`
@@ -280,10 +282,7 @@ the image against its own build. At the first deploy, in order:
    shard 1 `219ea929...d15`, shard 2 `316b46f3...e113`): the launcher's setup reports a file that does not match what it pins.
 3. `mmap-experts` over the read-only virtiofs mount works; if the engine reports a mapping failure,
    set `mmap_experts: off` and raise the placement's memory.
-4. The container's `RLIMIT_MEMLOCK`: Strata's own Docker guide passes `--ulimit memlock=-1:-1` so the
-   engine can pin RAM. `compose_app` has no `ulimits` key (a reviewed addition, like `devices` and
-   `group_add` were), so this module does not set it. With the experts on the card and mapped, the
-   engine pins little; if it reports `[pinned-memory-exhausted]`, that key is the next change.
+4. `RLIMIT_MEMLOCK`: the container gets `ulimits: memlock -1` (a reviewed `compose_app` key that accepts memlock only, -1 or a number), as Strata's Docker guide asks. The health hook fails if the container's log shows `pinned-memory-exhausted`.
 5. `/v1/models` `meta.n_ctx` equals the context asked for, then tighten the health check to equality.
 6. The decode rate on the real card, against `LlmDecodeCollapsed`'s threshold, and whether the opt-in
    CMP 170HX kernels above are worth a named key.

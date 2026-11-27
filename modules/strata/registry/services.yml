@@ -7,6 +7,9 @@
 # Internal only: no public_hostname and no public route. The server has no key of its own (it
 # answers anyone the guest firewall lets in: the gateway and the metrics scraper), so auth: none says
 # what the network is doing. A scraper's Accept header makes /metrics answer in the text exposition format.
+# health: Strata answers /health 200 from the moment its API is up, with "loaded": false until the model is, and a
+# registry health row can assert a status only (no body), so this row reports up while the model still loads; the role's
+# health hook is what waits for loaded (README.md, "Health and readiness"). /v1/models also answers 200 with an empty list.
 services:
   inference:
     capability: inference

@@ -51,8 +51,10 @@ strata_vram_reserve_max_mib: 65536
 strata_spec_depth_max: 8
 strata_parallel_max: 16
 # the values the settings take when the site leaves them unset (kv_streaming and mmap_experts are words, never booleans: auto leaves the choice to the launcher)
-strata_kv_streaming_value: "{{ strata_extra_args.kv_streaming | default('off') }}"
-strata_mmap_experts_value: "{{ strata_extra_args.mmap_experts | default('on') }}"
+# YAML 1.1 reads an unquoted on/off as a boolean, so a boolean is accepted and means the word
+strata_switch_words: {'true': 'on', 'false': 'off', 'on': 'on', 'off': 'off', 'auto': 'auto'}
+strata_kv_streaming_value: "{{ strata_switch_words[strata_extra_args.kv_streaming | default('off') | string | lower] }}"
+strata_mmap_experts_value: "{{ strata_switch_words[strata_extra_args.mmap_experts | default('on') | string | lower] }}"
 strata_pcie_frac_value: "{{ strata_extra_args.pcie_frac | default(0) }}"
 # the environment the image's starter turns into the launcher's command line (image/entrypoint.sh): named settings only
 strata_environment: >-

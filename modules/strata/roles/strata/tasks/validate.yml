@@ -61,8 +61,8 @@
       # the settings, by name of the allow-list only, each of its own type
       - strata_extra_args is mapping
       - strata_extra_args.keys() | list | difference(strata_extra_keys) | length == 0
-      - strata_extra_args.kv_streaming is not defined or (strata_extra_args.kv_streaming is string and strata_extra_args.kv_streaming in strata_switch_values)
-      - strata_extra_args.mmap_experts is not defined or (strata_extra_args.mmap_experts is string and strata_extra_args.mmap_experts in strata_switch_values)
+      - strata_extra_args.kv_streaming is not defined or strata_extra_args.kv_streaming is boolean or (strata_extra_args.kv_streaming is string and strata_extra_args.kv_streaming in strata_switch_values)
+      - strata_extra_args.mmap_experts is not defined or strata_extra_args.mmap_experts is boolean or (strata_extra_args.mmap_experts is string and strata_extra_args.mmap_experts in strata_switch_values)
       - >-
         strata_extra_args.pcie_frac is not defined
         or ((strata_extra_args.pcie_frac is integer or strata_extra_args.pcie_frac is float) and strata_extra_args.pcie_frac is not boolean
