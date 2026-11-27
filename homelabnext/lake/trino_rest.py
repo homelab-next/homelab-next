@@ -48,6 +48,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
@@ -250,6 +251,74 @@ class TrinoRestLake(AdapterBase):
     def list_tables(self) -> list[str]:
         have = set(self._rest.list_tables(self._ns))
         return sorted(n for n in self._schemas if n in have)
+
+    def expire_snapshots(
+        self,
+        table: str,
+        *,
+        keep: int = 0,
+        max_age_ms: int = 0,
+        now_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Expire the table's old snapshots through the catalog (metadata only: no data, manifest
+        or metadata file is deleted; orphan files are a separate maintenance).
+
+        A snapshot is expired when it is beyond the newest ``keep`` (0: no count limit) or older
+        than ``max_age_ms`` (0: no age limit); the snapshot ``main`` points at is never expired.
+        Only a table whose refs are exactly ``{main}`` is touched: a tag or a branch pins history
+        this method does not judge, so it is refused (``skipped`` says so). The commit asserts
+        the table uuid and that ``main`` is unchanged, so a concurrent commit makes it retry on
+        fresh metadata. Returns ``{"expired", "kept", "before", "skipped"}``."""
+        s = self._schema(table)
+        if keep < 0 or max_age_ms < 0:
+            raise LakeError("expire_snapshots: keep and max_age_ms must not be negative")
+        if not keep and not max_age_ms:
+            raise LakeError("expire_snapshots: give keep or max_age_ms (nothing to expire by)")
+        now = int(time.time() * 1000) if now_ms is None else now_ms
+        for attempt in range(3):
+            meta = self._rest.load_table(self._ns, s.name)
+            snaps = list(meta.get("snapshots") or [])
+            out: dict[str, Any] = {"expired": 0, "kept": len(snaps), "before": len(snaps)}
+            refs = meta.get("refs") or {}
+            if set(refs) != {"main"}:
+                out["skipped"] = f"refs other than main only: {sorted(refs) or 'no main'}"
+                return out
+            main = refs["main"].get("snapshot-id")
+
+            def stamp(
+                x: Mapping[str, Any],
+            ) -> int:  # a snapshot without a time reads as new: never aged out
+                return int(x.get("timestamp-ms", now))
+
+            order = sorted(snaps, key=stamp, reverse=True)
+            newest = {x["snapshot-id"] for x in order[:keep]}
+            drop = [
+                x["snapshot-id"]
+                for x in order
+                if x["snapshot-id"] != main
+                and (
+                    (keep and x["snapshot-id"] not in newest)
+                    or (max_age_ms and now - stamp(x) > max_age_ms)
+                )
+            ]
+            if not drop:
+                return out
+            try:
+                after = self._rest.remove_snapshots(
+                    self._ns,
+                    s.name,
+                    drop,
+                    main_snapshot_id=main,
+                    table_uuid=str(meta.get("table-uuid")),
+                )
+            except CommitConflict:
+                if attempt == 2:
+                    raise
+                continue
+            out["expired"] = len(drop)
+            out["kept"] = len(after.get("snapshots") or []) if after else len(snaps) - len(drop)
+            return out
+        return out  # pragma: no cover - the loop returns or raises
 
     def describe(self, table: str) -> TableInfo:
         s = self._schema(table)

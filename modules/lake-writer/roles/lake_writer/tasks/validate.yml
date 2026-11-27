@@ -30,6 +30,10 @@
       - lake_writer_oncalendar is match('^[A-Za-z0-9 *:/,.-]{3,80}\Z')
       - lake_writer_max_attempts | int >= 1 and lake_writer_max_attempts | int <= 20
       - lake_writer_max_batches | int >= 0
+      - lake_writer_max_commit_rows | int >= 1
+      - lake_writer_snapshot_keep | int >= 0
+      - lake_writer_snapshot_max_age_hours | float >= 0
+      - lake_writer_catalog_max_bytes | int >= 1024
       - lake_writer_health_max_age_s | int >= 60
       - lake_writer_health_max_pending | int >= 1
       - >-
