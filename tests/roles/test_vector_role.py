@@ -13,6 +13,7 @@ import json
 import os
 import pwd
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -72,6 +73,7 @@ def vector_vars(tmp_path: Path, **kw) -> dict:
         "vector_trusted_recorders": [ROUTER_ADDR],
         "vector_detection_ids": {"5712": "det:ssh-auth-failure-burst"},
         "vector_start": False,
+        "vector_textfile_dir": "",  # the liveness timer writes outside the sandbox: tested statically
         "vector_validate_with_docker": False,
     }
     v.update(kw)
@@ -284,3 +286,96 @@ def test_upgrade_refuses_an_unpinned_target_and_records_a_pinned_one(first):
     assert ok.returncode == 0, ok.stdout + ok.stderr
     pending = json.loads((tmp_path / "app" / "pending-upgrade.json").read_text())
     assert pending == {"service": "vector", "tag": "9.9.9-debian", "digest": "sha256:" + "a" * 64}
+
+
+# ----------------------------------------------------------------------------- stale socket, liveness
+
+
+def _liveness():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "vector_liveness", MODULE / "roles/vector/files/hnx_modules/vector/liveness.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # no __pycache__ in the role tree
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.dont_write_bytecode = keep
+    return mod
+
+
+def _first_main_for_the_socket(tmp_path):
+    v = vector_vars(tmp_path)
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": SECRETS, "setup": {"v": v}}
+
+
+@first_run(_first_main_for_the_socket)
+def test_the_aggregator_removes_only_its_own_stale_listener_socket_at_every_start(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
+    agg, side = doc["services"]["vector"], doc["services"]["sidecar"]
+    ep = agg["entrypoint"]
+    assert ep[:2] == ["/bin/sh", "-c"] and "rm -f --" in ep[2] and "exec /usr/bin/vector" in ep[2]
+    assert ep[-1] == "/run/hnx/out.sock"  # the one path, and no glob, no directory
+    assert "*" not in " ".join(ep) and agg["command"] == ["--config", "/etc/vector/vector.yaml"]
+    assert "entrypoint" not in side
+
+
+def test_the_liveness_metrics_name_a_dead_container_a_stale_status_and_the_rows_moved():
+    mod = _liveness()
+    up = {"running": True, "healthy": True, "restarts": 0}
+    states = {"vector": {"running": True, "healthy": False, "restarts": 212}, "sidecar": up}
+    status = {
+        "time": 940.0,
+        "listening": True,
+        "errors": {},
+        "counters": {"vector/siem-archives": {"in": 3, "rows": 7, "unlabelled": 0}},
+    }
+    text = mod.render(states, status, 1000.0)
+    assert 'vector_pipeline_container_restarts{service="vector"} 212' in text
+    assert 'vector_pipeline_container_healthy{service="vector"} 0' in text
+    assert 'vector_pipeline_container_running{service="sidecar"} 1' in text
+    assert (
+        "vector_pipeline_status_age_seconds 60" in text
+        and "vector_pipeline_status_present 1" in text
+    )
+    assert 'vector_pipeline_rows_total{route="vector/siem-archives"} 7' in text
+    assert "vector_pipeline_check_timestamp_seconds 1000" in text
+    missing = mod.render(states, None, 1000.0)
+    assert "vector_pipeline_status_present 0" in missing
+    assert f"vector_pipeline_status_age_seconds {mod.ABSENT_AGE}" in missing
+    assert "vector_pipeline_rows_total{" not in missing  # no counter is invented
+
+
+def test_the_liveness_writer_reads_the_status_and_refuses_an_unsafe_output(tmp_path):
+    mod = _liveness()
+    f = tmp_path / "status.json"
+    assert mod.read_status(f) is None  # missing
+    f.write_text("not json")
+    assert mod.read_status(f) is None
+    f.write_text("[1]")
+    assert mod.read_status(f) is None
+    f.write_text('{"time": 5}')
+    assert mod.read_status(f) == {"time": 5}
+    out = tmp_path / "text" / "vector_pipeline.prom"
+    out.parent.mkdir()
+    mod.write_atomic(out, "a 1\n")
+    assert out.read_text() == "a 1\n" and not list(out.parent.glob(".hnx-liveness-*"))
+    assert (out.stat().st_mode & 0o777) == 0o600  # never group- or world-readable
+    with pytest.raises(ValueError):
+        mod.write_atomic(Path("/x.prom"), "a 1\n")
+    with pytest.raises(ValueError):
+        mod.write_atomic(out.with_suffix(".txt"), "a 1\n")
+
+
+def test_the_timer_is_wired_to_the_textfile_dir_and_off_when_it_is_empty():
+    role = MODULE / "roles" / "vector"
+    assert "vector_textfile_dir | length > 0" in (role / "tasks/main.yml").read_text()
+    unit = (role / "templates/hnx-vector-liveness.service.j2").read_text()
+    assert "vector_textfile_dir" in unit and "run/status.json" in unit
+    d = yaml.safe_load((role / "defaults/main.yml").read_text())
+    assert d["vector_textfile_dir"].startswith("/")
+    assert "vector_textfile_dir" in (role / "tasks/validate.yml").read_text()

@@ -1528,3 +1528,32 @@ def test_an_snmp_target_the_registry_has_no_host_for_is_refused_by_name(tmp_path
                   pvars(tmp_path, **over), ENV_ON)  # fmt: skip
     assert r.returncode != 0
     assert "no-such-host" in r.stdout and "are not hosts of the registry" in r.stdout
+
+
+def test_the_log_pipeline_rules_page_on_a_stalled_archive_stream_and_a_crash_loop(tmp_path):
+    r = render(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rules = yaml.safe_load((tmp_path / "data/config/rules.yml").read_text())
+    by = {
+        x["alert"]: x
+        for g in rules["groups"]
+        if g["name"] == "hnx-log-pipeline"
+        for x in g["rules"]
+    }
+    assert sorted(by) == [
+        "LogPipelineArchiveIntakeStalled",
+        "LogPipelineContainerDown",
+        "LogPipelineContainerUnhealthy",
+        "LogPipelineCrashLooping",
+        "LogPipelineLivenessCheckStale",
+        "LogPipelineStatusStale",
+    ]
+    stalled = by["LogPipelineArchiveIntakeStalled"]
+    assert "[15m]" in stalled["expr"] and "siem-archives" in stalled["expr"]
+    assert stalled["labels"]["severity"] == "critical" and stalled["for"] == "2m"
+    assert (
+        ">= 3" in by["LogPipelineCrashLooping"]["expr"]
+        and "[15m]" in by["LogPipelineCrashLooping"]["expr"]
+    )
+    assert "> 300" in by["LogPipelineStatusStale"]["expr"]
+    assert all("{{ $labels.instance }}" in x["annotations"]["summary"] for x in by.values())

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Fixed spec rules, not settings: role vars outrank inventory, so a deployment cannot loosen them.
 compose_app_service_keys:
-  [image, tag, digest, healthcheck, command, user, env_file, environment, ports, volumes,
+  [image, tag, digest, healthcheck, command, entrypoint, user, env_file, environment, ports, volumes,
    depends_on, restart, cap_add, read_only, mem_limit, privileged, devices, group_add, network_mode, init, tmpfs]
 compose_app_restart_policies: ["no", always, on-failure, unless-stopped]
 # docker (and its distribution) image grammar, repository part only: optional registry[:port]/

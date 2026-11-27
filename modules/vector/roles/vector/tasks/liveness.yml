@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+# The liveness metrics (README, "Liveness and the stalled-pipeline alert"): a timer writes vector_pipeline_*
+# textfile metrics once a minute (are both containers running and healthy, how often did they restart, how old
+# is the sidecar's status, how many rows has each route moved) and the monitoring rules page on them.
+# Off when vector_textfile_dir is empty.
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ vector_last_run_dir }}"
+    last_run_group: "{{ vector_last_run_group }}"
+    last_run_writer: "{{ vector_last_run_writer }}"
+
+- name: The directory for the liveness writer exists
+  ansible.builtin.file:
+    path: /usr/local/libexec/homelabnext
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the liveness writer (the package's own file, run by its shebang)
+  ansible.builtin.copy:
+    src: "{{ vector_code_src }}/liveness.py"
+    dest: /usr/local/libexec/homelabnext/hnx-vector-liveness
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: The textfile directory exists
+  ansible.builtin.file:
+    path: "{{ vector_textfile_dir }}"
+    state: directory
+    owner: "{{ vector_owner }}"
+    group: "{{ vector_owner }}"
+    mode: "0755"
+
+- name: Write the liveness service and timer units
+  ansible.builtin.template:
+    src: "hnx-vector-liveness.{{ item }}.j2"
+    dest: "{{ vector_unit_dir }}/hnx-vector-liveness.{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [service, timer]
+  register: vector_liveness_units
+
+- name: Reload systemd (units changed)
+  ansible.builtin.command:
+    argv: [systemctl, daemon-reload]
+  when: vector_liveness_units is changed and not ansible_check_mode
+  changed_when: true
+
+- name: Enable and start the timer
+  ansible.builtin.command:
+    argv: [systemctl, enable, --now, hnx-vector-liveness.timer]
+  when: vector_start | bool and not ansible_check_mode
+  changed_when: vector_liveness_units is changed
