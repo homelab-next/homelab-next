@@ -228,7 +228,7 @@ services:
   # cgroup): below mem_limit, so the server frees caches before the kernel kills it.
   events:
     <<: [*restart, *hardened]
-    image: nats:2.15.2-alpine@sha256:afae2fdbe2e326c65e1246cb83b9d05d319188734f3bd577ac8072daae78a10f
+    image: nats:2.15.3-alpine@sha256:558394a23dd3c36f2d3a64b51865fd09908010e80a542cea5e75c2af543ed62a
     command: ["-c", "/etc/nats/nats.conf"]
     environment:
       LAB_EVENTS_BROKER_PASSWORD: ${LAB_EVENTS_BROKER_PASSWORD:?see .env.example}
@@ -392,7 +392,7 @@ services:
   # Kuma tries `sudo service nscd start` and logs that it failed: no-new-privileges, by design.
   uptime:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:2.5.9-slim-rootless@sha256:053a48927ee714b1da78c6810041a44a266bd8c06dc30ead5b3f459d0f219fb0
+    image: louislam/uptime-kuma:2.5.11-slim-rootless@sha256:ebc6299a1bc8bd4a29e0bddcc04f11440e3690b1c52e19558006eeefb5a8b019
     environment:
       UPTIME_KUMA_DB_TYPE: sqlite
     volumes:
@@ -418,7 +418,7 @@ services:
   # healthy only then, so `up --wait` returns with the page in place.
   uptime-init:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:2.5.9-slim-rootless@sha256:053a48927ee714b1da78c6810041a44a266bd8c06dc30ead5b3f459d0f219fb0
+    image: louislam/uptime-kuma:2.5.11-slim-rootless@sha256:ebc6299a1bc8bd4a29e0bddcc04f11440e3690b1c52e19558006eeefb5a8b019
     entrypoint: ["node", "/provision/provision.js"]
     working_dir: /app
     environment:
