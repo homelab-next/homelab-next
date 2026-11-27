@@ -62,9 +62,43 @@
   vars:
     siem_agent_watch_auditd: "{{ hostvars[inventory_hostname].siem_agent_watch_auditd | default('auto') }}"
 
+# The vendor unit has no Restart= and a 45 s start timeout: the agent's start blocks until the manager answers, so a guest
+# that boots before the SIEM is up (a whole-host power cycle starts every guest at once) times out ONCE and stays failed
+# until someone restarts it (2026-11-26: 7 guests and the hypervisor). The drop-in retries every 30 s without a start limit,
+# so the agent joins as soon as the manager is reachable.
+- name: Name the agent unit and its drop-in directory
+  ansible.builtin.set_fact:
+    siem_agent_unit: wazuh-agent
+    siem_agent_unit_dropin_dir: "/etc/systemd/system/{{ siem_agent_unit }}.service.d"
+
+- name: Create the agent unit's drop-in directory
+  ansible.builtin.file:
+    path: "{{ siem_agent_unit_dropin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Let the agent retry a start that failed before the manager was up
+  ansible.builtin.copy:
+    dest: "{{ siem_agent_unit_dropin_dir }}/10-hnx-retry.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by homelabnext (the siem-agent role); local changes are overwritten.
+      [Unit]
+      StartLimitIntervalSec=0
+
+      [Service]
+      Restart=on-failure
+      RestartSec=30
+      TimeoutStartSec=120
+  # the start task below reloads systemd (daemon_reload) before it starts the unit
+
 - name: Enable and start the agent (restarted when its watch configuration changed)
   ansible.builtin.systemd_service:
-    name: wazuh-agent
+    name: "{{ siem_agent_unit }}"
     enabled: true
     state: "{{ 'restarted' if siem_agent_watch_changed | default(false) | bool else 'started' }}"
     daemon_reload: true
