@@ -5,6 +5,10 @@
 - name: Map this module's settings onto the core role's
   ansible.builtin.include_tasks: map.yml
 
+- name: Place the concierge shim's code and settings
+  ansible.builtin.include_tasks: concierge.yml
+  when: openwebui_concierge_enabled | bool
+
 # the core role validates its own inputs (the gateway's capability and product, the headers, the
 # sign-in, the administrator, the allowlist of extra settings), renders the compose project with
 # the keys only in the 0600 env_file, and starts it

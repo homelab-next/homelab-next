@@ -96,6 +96,68 @@ argument_specs:
         type: int
         description: "Results a web search puts in front of the model (1 to 20)."
         default: 5
+      openwebui_concierge_enabled:
+        type: bool
+        description: "Run the concierge shim between Open WebUI and the gateway (tiers, persona, bounded history, optional retrieval)."
+        default: false
+      openwebui_concierge_image:
+        type: str
+        description: "repository:tag@sha256:<digest> of the stock Python image the shim runs in."
+        default: "docker.io/library/python:3.11.17-slim-trixie@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377"
+      openwebui_concierge_link_ref:
+        type: str
+        description: "secret:<name> of the token Open WebUI presents to the shim (32 characters or more; never the gateway key)."
+        default: secret:openwebui/shim-token
+      openwebui_concierge_mem_limit:
+        type: str
+        description: "The shim container's memory limit."
+        default: 256m
+      openwebui_concierge_tiers:
+        type: dict
+        description: "Tier name to gateway role; a tier is listed only while the gateway lists its role."
+        default: {fast: fast, main: main-reasoner, deep: deep}
+      openwebui_concierge_always_on_tier:
+        type: str
+        description: "The tier listed even before the gateway answers (the one role that exists)."
+        default: main
+      openwebui_concierge_models:
+        type: list
+        elements: dict
+        description: "The models Open WebUI shows: {id, tier}, optional persona and context (bool) overrides."
+        default: [{id: concierge-fast, tier: fast}, {id: concierge, tier: main}, {id: concierge-deep, tier: deep}]
+      openwebui_concierge_persona:
+        type: str
+        description: "The system prompt every model gets; empty for none."
+        default: ""
+      openwebui_concierge_history_chars:
+        type: int
+        description: "The newest turns kept within this many characters (system messages always stay)."
+        default: 48000
+      openwebui_concierge_timeout_s:
+        type: int
+        description: "Seconds the shim waits for the gateway."
+        default: 600
+      openwebui_concierge_context_id:
+        type: str
+        description: "Registry id of the lab's context service for retrieval; empty keeps retrieval off."
+        default: ""
+      openwebui_concierge_context_link_ref:
+        type: str
+        description: "secret:<name> of the context service's caller token for the shim."
+        default: secret:context/openwebui-token
+      openwebui_concierge_context_allowed:
+        type: list
+        elements: str
+        description: "The namespaces the shim may read from the context service."
+        default: []
+      openwebui_concierge_context_ceiling:
+        type: str
+        description: "The most restrictive TLP label of a passage the shim sends to a model."
+        default: amber
+      openwebui_concierge_context_top_k:
+        type: int
+        description: "Passages retrieved per turn."
+        default: 4
       openwebui_export_dir:
         type: path
         description: "Open-format export target."

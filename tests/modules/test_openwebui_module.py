@@ -176,15 +176,19 @@ def test_the_manifest_asks_for_the_gateway_and_the_identity_provider_and_no_prov
 def test_the_secrets_are_the_two_the_manifest_declares_plus_the_two_others_by_name():
     manifest = ld.load_yaml(MODULE / "module.yml")
     declared = sorted(c["secret"] for c in manifest["credentials"])
-    assert declared == ["secret:openwebui/admin-password", "secret:openwebui/session-key"]
+    assert declared == [
+        "secret:openwebui/admin-password",
+        "secret:openwebui/session-key",
+        "secret:openwebui/shim-token",
+    ]
     defaults = ld.load_yaml(MODULE / "roles" / "openwebui" / "defaults" / "main.yml")
     refs = sorted(v for k, v in defaults.items() if k.endswith("_ref") and v)
-    assert refs == sorted([*declared, "secret:gateway/key-openwebui"])
+    # the others by name: the gateway key, and the context service's caller token (shim retrieval)
+    others = ["secret:context/openwebui-token", "secret:gateway/key-openwebui"]
+    assert refs == sorted([*declared, *others])
     text = "".join(p.read_text() for p in (MODULE / "roles").rglob("*.yml"))
     names = sorted(set(re.findall(r"secret:[a-z0-9/_.-]+", text)))
-    assert names == sorted(
-        {*declared, "secret:gateway/key-openwebui"}
-    )  # the client's is the site's
+    assert names == sorted({*declared, *others})  # the client's is the site's
 
 
 @pytest.mark.static

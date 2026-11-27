@@ -1,0 +1,4 @@
+---
+group: Added
+---
+`modules/openwebui`: an optional concierge shim (`openwebui_concierge_enabled`), a standard-library OpenAI-compatible front between Open WebUI and the gateway, run as a sidecar of the same compose project from the pinned stock Python image with the code mounted read-only. It maps named model tiers (`fast`, `main`, `deep`) to gateway roles and lists a tier only while the gateway lists its role (so a tier appears when its role exists; a request for one that is not live is a 404, never a fallback), adds a site persona, trims history to a budget, and can add passages from the lab's context service at a TLP ceiling. Open WebUI holds only the shim's own token; the shim holds the gateway key, passes `X-HNX-TLP`/`X-HNX-Tag` through, and publishes no port. The core `open_webui` role gains `open_webui_connection_url`, `open_webui_connection_key_ref`, `open_webui_extra_services` and `open_webui_extra_secret_env` (all empty by default: no change).

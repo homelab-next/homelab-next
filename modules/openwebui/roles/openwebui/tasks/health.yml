@@ -63,7 +63,7 @@
     - name: The running connection is the rendered one
       ansible.builtin.assert:
         that:
-          - openwebui_running.json.OPENAI_API_BASE_URLS == [lookup('hnx_registry', openwebui_gateway_id, field='url') ~ '/v1']
+          - openwebui_running.json.OPENAI_API_BASE_URLS == [(open_webui_connection_url | default('')) if (open_webui_connection_url | default('')) | length > 0 else lookup('hnx_registry', openwebui_gateway_id, field='url') ~ '/v1']
           - openwebui_running.json.ENABLE_OPENAI_API | bool
           - (openwebui_running.json.OPENAI_API_CONFIGS.get('0', {}).get('headers', {})) == open_webui_gateway_headers
         fail_msg: >-

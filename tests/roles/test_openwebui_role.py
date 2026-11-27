@@ -186,6 +186,65 @@ def test_main_turns_web_search_on_through_the_lab_metasearch_service_only(first)
     assert env["ENABLE_TOOL_SERVERS"] == "false"
 
 
+# ------------------------------------------------------------------------------ concierge shim
+SHIM_TOKEN = "t" * 40
+SHIM_ENV = {**ENV, "HNX_SECRET_OPENWEBUI_SHIM_TOKEN": SHIM_TOKEN}
+
+
+@first_run(lambda tmp: {"role": ROLE, "tasks_from": "main", "env": SHIM_ENV,
+                        "extra_vars": vs(tmp, openwebui_concierge_enabled=True,
+                                         openwebui_concierge_persona="You are the concierge.")})  # fmt: skip
+def test_main_puts_the_concierge_shim_between_open_webui_and_the_gateway(first):
+    r, tmp = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    spec = yaml.safe_load((tmp / "app" / "docker-compose.yml").read_text())["services"]
+    env = spec["open-webui"]["environment"]
+    # Open WebUI's one connection is the shim (never published), the gateway is the shim's
+    assert env["OPENAI_API_BASE_URLS"] == "http://concierge-shim:8900/v1"
+    shim = spec["concierge-shim"]
+    assert "ports" not in shim and shim["read_only"] is True
+    cfg = json.loads((tmp / "app" / "concierge" / "config.json").read_text())
+    assert cfg["gateway_url"] == "http://inference.svc.example.internal:4100"
+    assert cfg["tiers"]["main"] == "main-reasoner" and cfg["persona"] == "You are the concierge."
+    # keys: Open WebUI holds the shim's token only, the shim holds the gateway key and the token
+    ow = (tmp / "app" / "secrets" / "open-webui.env").read_text()
+    assert f"OPENAI_API_KEYS='{SHIM_TOKEN}'" in ow and GW not in ow
+    sh = (tmp / "app" / "secrets" / "concierge-shim.env").read_text()
+    assert f"CONCIERGE_GATEWAY_KEY='{GW}'" in sh and f"CONCIERGE_TOKEN='{SHIM_TOKEN}'" in sh
+    dumped = (tmp / "app" / "docker-compose.yml").read_text()
+    assert GW not in dumped and SHIM_TOKEN not in dumped and GW not in json.dumps(cfg)
+
+
+def test_the_concierge_shim_is_idempotent_and_off_by_default(tmp_path):
+    v = vs(tmp_path, openwebui_concierge_enabled=True)
+    assert run_role(tmp_path, ROLE, "main", v, env=SHIM_ENV).returncode == 0
+    again = run_role(tmp_path, ROLE, "main", v, env=SHIM_ENV)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+    off = tmp_path / "off"
+    off.mkdir()
+    r = run_role(off, ROLE, "main", vs(off), env=ENV)
+    assert r.returncode == 0, r.stdout + r.stderr
+    spec = yaml.safe_load((off / "app" / "docker-compose.yml").read_text())["services"]
+    assert list(spec) == ["open-webui"] and not (off / "app" / "concierge").exists()
+
+
+@pytest.mark.parametrize(
+    ("over", "needle"),
+    [
+        ({"openwebui_concierge_link_ref": "secret:gateway/key-openwebui"}, "never the gateway key"),
+        ({"openwebui_concierge_always_on_tier": "nope"}, "always-on tier"),
+        ({"openwebui_concierge_models": [{"id": "x", "tier": "nope"}]}, "known tiers"),
+        ({"openwebui_concierge_context_id": "gate"}, "namespaces the shim may read"),
+    ],
+)
+@first_run(lambda tmp, over, needle: {"role": ROLE, "tasks_from": "main", "env": SHIM_ENV,
+                                      "extra_vars": vs(tmp, openwebui_concierge_enabled=True, **over)})  # fmt: skip
+def test_the_concierge_shim_refuses_bad_settings(first, over, needle):
+    r, tmp = first
+    assert r.returncode != 0 and needle in r.stdout, (over, r.stdout[-1500:])
+    assert not (tmp / "app" / "docker-compose.yml").exists()
+
+
 def test_web_search_stays_off_without_a_service(tmp_path):
     r = run_role(tmp_path, ROLE, "main", vs(tmp_path), env=ENV)
     assert r.returncode == 0, r.stdout + r.stderr

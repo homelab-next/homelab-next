@@ -33,3 +33,58 @@
     open_webui_validate_with_docker: "{{ openwebui_validate_with_docker }}"
     open_webui_health_timeout: "{{ openwebui_health_timeout }}"
   no_log: true
+
+# The concierge shim (off: nothing below changes the core role's inputs). Open WebUI's one connection
+# points at the shim, with the shim's own token; the shim is an extra service of the same project.
+- name: The concierge shim's settings (no secret in them)
+  ansible.builtin.set_fact:
+    openwebui_concierge_config: >-
+      {{ {'port': 8900, 'bind': '0.0.0.0',
+          'gateway_url': lookup('hnx_registry', openwebui_gateway_id, field='url'),
+          'default_tlp': openwebui_gateway_tlp, 'max_tlp': openwebui_gateway_tlp,
+          'default_tag': openwebui_gateway_tag_prefix,
+          'history_chars': openwebui_concierge_history_chars | int,
+          'max_body_bytes': 4000000, 'timeout_s': openwebui_concierge_timeout_s | int,
+          'always_on_tier': openwebui_concierge_always_on_tier,
+          'tiers': openwebui_concierge_tiers, 'models': openwebui_concierge_models,
+          'persona': openwebui_concierge_persona}
+         | combine({'context': {'url': lookup('hnx_registry', openwebui_concierge_context_id, field='url'),
+                                'allowed': openwebui_concierge_context_allowed,
+                                'ceiling': openwebui_concierge_context_ceiling,
+                                'top_k': openwebui_concierge_context_top_k | int}}
+                   if openwebui_concierge_context_id | length > 0 else {}) }}
+  when: openwebui_concierge_enabled | bool
+
+- name: The concierge shim's inputs for the core role
+  ansible.builtin.set_fact:
+    open_webui_connection_url: "http://concierge-shim:8900/v1"
+    open_webui_connection_key_ref: "{{ openwebui_concierge_link_ref }}"
+    open_webui_extra_secret_env:
+      concierge-shim: >-
+        {{ {'CONCIERGE_GATEWAY_KEY': openwebui_gateway_key_ref, 'CONCIERGE_TOKEN': openwebui_concierge_link_ref}
+           | combine({'CONCIERGE_CONTEXT_TOKEN': openwebui_concierge_context_link_ref}
+                     if openwebui_concierge_context_id | length > 0 else {}) }}
+    open_webui_extra_services:
+      concierge-shim:
+        image: "{{ openwebui_concierge_image.split('@')[0].rsplit(':', 1)[0] }}"
+        tag: "{{ openwebui_concierge_image.split('@')[0].rsplit(':', 1)[1] }}"
+        digest: "{{ openwebui_concierge_image.split('@')[1] }}"
+        command: [python, /opt/concierge/concierge_shim.py]
+        user: "65534:65534"
+        read_only: true
+        environment:
+          CONCIERGE_CONFIG: /etc/concierge/config.json
+          CONCIERGE_CONFIG_SHA: "{{ (openwebui_concierge_config | to_json ~ lookup('ansible.builtin.file', role_path ~ '/files/concierge_shim.py')) | hash('sha256') }}"
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONUNBUFFERED: "1"
+        volumes:
+          - "{{ openwebui_dir }}/concierge/concierge_shim.py:/opt/concierge/concierge_shim.py:ro"
+          - "{{ openwebui_dir }}/concierge/config.json:/etc/concierge/config.json:ro"
+        mem_limit: "{{ openwebui_concierge_mem_limit }}"
+        healthcheck:
+          test: [CMD, python, /opt/concierge/concierge_shim.py, --healthcheck]
+          interval: 30s
+          timeout: 10s
+          retries: 5
+          start_period: 20s
+  when: openwebui_concierge_enabled | bool
