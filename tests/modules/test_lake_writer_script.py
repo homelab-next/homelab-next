@@ -946,11 +946,11 @@ def test_retention_and_catalog_cap_settings_come_from_the_environment(tmp_path):
 # ------------------------------------------------------------------ expiry through the real client
 
 
-def _seed(lab, ages_h, refs=None, now_ms=None):
+def _seed(lab, ages_h, refs=None):
     """The table's snapshots as ``ages_h`` hours old (oldest first); main on the newest."""
     import time
 
-    now = int(time.time() * 1000) if now_ms is None else now_ms
+    now = int(time.time() * 1000)  # hermetic: allow the real client expires by the real clock
     meta = lab.tables[("soc", "dns_activity")]
     meta["snapshots"] = [
         {"snapshot-id": i, "timestamp-ms": now - int(h * 3600_000), "manifest-list": f"m{i}"}
