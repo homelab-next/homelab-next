@@ -182,7 +182,10 @@ def test_a_multi_line_text_param_is_shown_as_text_and_escaped(served, broker):
     base, _ = served()
     _, _, body = request(base, "/approvals", headers=APPROVER)
     html = body.decode()
-    assert "<h4>param <code>content</code></h4><pre>line one\nline &lt;b&gt;two&lt;/b&gt;\n</pre>" in html
+    assert (
+        "<h4>param <code>content</code></h4><pre>line one\nline &lt;b&gt;two&lt;/b&gt;\n</pre>"
+        in html
+    )
     assert "<b>two</b>" not in html and "vp-1.md" in html  # the short param stays in the JSON
 
 

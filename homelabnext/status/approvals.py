@@ -336,7 +336,8 @@ class ApprovalsSite:
             ensure_ascii=False,
         )
         blocks = "".join(
-            f"<h4>param <code>{_e(k)}</code></h4><pre>{_e(v)}</pre>" for k, v in sorted(long.items())
+            f"<h4>param <code>{_e(k)}</code></h4><pre>{_e(v)}</pre>"
+            for k, v in sorted(long.items())
         )
         facts = "".join(
             f"<dt>{_e(k)}</dt><dd>{v}</dd>"
