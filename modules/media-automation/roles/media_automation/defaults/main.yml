@@ -93,6 +93,8 @@ media_automation_helper_cleanup_enabled: true
 media_automation_helper_stalled_enabled: true
 # Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
 media_automation_helper_rename_enabled: true
+# Create the system account (named hnx-media, uid/gid = the apps') the helper units run as; systemd refuses a numeric User= with no passwd entry.
+media_automation_helper_account_manage: true
 # Hours without progress before a torrent counts as stalled.
 media_automation_helper_stall_hours: 24
 # Minimum age of a directory/partfile before the cleanup removes it.

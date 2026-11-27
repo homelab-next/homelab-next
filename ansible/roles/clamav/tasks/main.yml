@@ -20,3 +20,26 @@
     state: started
   # --check on a host where the package is not installed yet: the unit does not exist to look up (the real run installs it first)
   when: not (ansible_check_mode and clamav_packages is changed)
+
+# Debian 13's clamav-freshclam package also ships clamav-freshclam-once.timer, which runs `freshclam` a second time a day while the
+# daemon above already holds /var/log/clamav/freshclam.log: every run fails "Failed to lock the log file" and the unit stays failed
+# (seen on every ClamAV guest, 2026-11-27). The daemon does the updates, so the duplicate timer is masked.
+- name: Look for the second, one-shot updater timer
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/system/clamav-freshclam-once.timer
+  register: clamav_freshclam_once
+
+- name: Mask the one-shot updater (the daemon keeps the signatures current)
+  ansible.builtin.systemd_service:
+    name: clamav-freshclam-once.timer
+    enabled: false
+    masked: true
+    state: stopped
+  when: clamav_freshclam_once.stat.exists
+
+- name: Clear the one-shot updater's failed state
+  ansible.builtin.command:
+    argv: ["{{ clamav_systemctl_cli }}", reset-failed, clamav-freshclam-once.service]
+  changed_when: false
+  failed_when: false
+  when: clamav_freshclam_once.stat.exists
