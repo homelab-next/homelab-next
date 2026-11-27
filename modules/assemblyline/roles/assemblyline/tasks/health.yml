@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# Read only. A CONTAINMENT check as much as a liveness one (ADR-0052 decision 9): every container is
+# healthy; only the scaler and the updater hold the docker socket or run privileged. That no analysis
+# service has internet access switched on is read from the product's own API in the next change.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Read every container of the project
+      ansible.builtin.command:
+        argv: [docker, ps, --all, --filter, "label=com.docker.compose.project=assemblyline", --format, "{% raw %}{{.ID}}{% endraw %}"]
+      register: assemblyline_ids
+      changed_when: false
+    - name: Inspect them
+      ansible.builtin.command:
+        argv: "{{ ['docker', 'inspect'] + assemblyline_ids.stdout_lines }}"
+      register: assemblyline_inspect
+      changed_when: false
+      when: assemblyline_ids.stdout_lines | length > 0
+    - name: Hold the containers to the containment rules
+      vars:
+        _c: "{{ assemblyline_inspect.stdout | from_json }}"
+        _priv_allowed: [scaler, updater]
+        _name: "{{ _c | map(attribute='Config.Labels') | map(attribute='com.docker.compose.service') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _c | selectattr('State.Health.Status', 'defined') | rejectattr('State.Health.Status', 'eq', 'healthy') | list | length == 0
+          - >-
+            _c | selectattr('HostConfig.Privileged') | map(attribute='Config.Labels')
+            | map(attribute='com.docker.compose.service') | difference(_priv_allowed) | list | length == 0
+          - >-
+            _c | selectattr('HostConfig.Binds', 'defined') | selectattr('HostConfig.Binds', 'search', 'docker.sock')
+            | map(attribute='Config.Labels') | map(attribute='com.docker.compose.service') | difference(_priv_allowed) | list | length == 0
+        fail_msg: >-
+          assemblyline: a container is not healthy, or one other than scaler/updater is privileged or holds the docker socket
+          (ADR-0052 decision 9); containers: {{ _name | join(', ') }}
+      when: assemblyline_ids.stdout_lines | length > 0
+    - name: A container exists for the project
+      ansible.builtin.assert:
+        that: assemblyline_ids.stdout_lines | length > 0
+        fail_msg: "assemblyline: no container of the project is present (not started yet?)"
+  tags: [health]

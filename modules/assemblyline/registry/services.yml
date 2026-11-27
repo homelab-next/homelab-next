@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes, keyed by the slot and renamed to the
+# instance the site selects; version is product.version, host the module's host role
+# (docs/modules/registry-rows.md). The appliance's front terminates TLS itself (a certificate the
+# deploy renders), so the row is https with tls: internal. auth: own: the product's local accounts and
+# API keys (OpenID Connect sign-in is PR 2). NO public_hostname here: the edge route for the UI is the
+# site's, with the grant, and the guest admits the edge guest's address only. The submitters reach
+# the API at this row over the lab's network and are admitted by the guest's firewall rules.
+services:
+  file-analysis:
+    capability: file-analysis
+    impl: assemblyline
+    host: server
+    protocol: https
+    port: 443
+    health: {kind: tcp}
+    owner: operator
+    tls: internal
+    auth: own
+    tags: [file-analysis, research]
+    description: AssemblyLine 4 file analysis (lab-internal research); local accounts and API keys; submitters are admitted by the guest firewall, there is no outbound path.

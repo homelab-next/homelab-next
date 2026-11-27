@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Import the image archive when one is named (offline delivery)
+  ansible.builtin.command:
+    argv: [docker, load, -i, "{{ assemblyline_image_archive }}"]
+  changed_when: true
+  when: assemblyline_image_archive | length > 0 and assemblyline_start | bool
+
+# The passwords reach only the env files (0600). The datastore reads ELASTIC_PASSWORD at its first start;
+# the product's processes substitute the datastore and object-store passwords into their configuration
+# file. The service key is validated (credentials.yml) but NOT rendered into any container yet: the product
+# reads it from an environment variable whose name the public repository's leak scan refuses to carry (its
+# secret-name rule cannot be waived), so how it reaches the containers is a decision owed for the next change
+# (README "What PR 2 needs", item 3).
+- name: Read the credentials
+  ansible.builtin.set_fact:
+    assemblyline_secret_env:
+      elasticsearch: &es_secret
+        ELASTIC_PASSWORD: "{{ lookup('hnx_secret', assemblyline_elastic_login_ref) }}"
+      expiry: &product_secrets
+        ELASTIC_PASSWORD: "{{ lookup('hnx_secret', assemblyline_elastic_login_ref) }}"
+        FILESTORE_PASSWORD: "{{ lookup('hnx_secret', assemblyline_filestore_login_ref) }}"
+      workflow: *product_secrets
+      heartbeat: *product_secrets
+      statistics: *product_secrets
+      plumber: *product_secrets
+      dispatcher: *product_secrets
+      ingester: *product_secrets
+      service_server: *product_secrets
+      ui: *product_secrets
+      socketio: *product_secrets
+  no_log: true
+
+- name: Render and (when allowed) start the project
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ assemblyline_app.compose_app_name }}"
+    compose_app_dir: "{{ assemblyline_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ assemblyline_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ assemblyline_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ assemblyline_app.compose_app_owner }}"
+    compose_app_group: "{{ assemblyline_app.compose_app_group }}"
+    compose_app_start: "{{ assemblyline_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ assemblyline_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ assemblyline_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ assemblyline_secret_env }}"
+    compose_app_bind_roots: ["{{ assemblyline_dir }}", "{{ assemblyline_data_root }}"]
+  no_log: true
+
+# The scaffold stops here on purpose: a started project without the privileged pair, the configuration
+# file and the internal networks is not the appliance and must not look like one.
+- name: Refuse to start an incomplete appliance
+  ansible.builtin.fail:
+    msg: >-
+      assemblyline: this change renders the datastore, the broker and the product's own containers but not
+      the scaler and updater (privileged, docker socket), the configuration file, the object store, the TLS
+      front or the internal networks (README "What PR 2 needs"); assemblyline_start must stay false until
+      they land
+  when: assemblyline_start | bool

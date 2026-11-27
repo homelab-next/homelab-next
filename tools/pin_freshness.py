@@ -157,6 +157,26 @@ SOURCES: dict[str, tuple[str, str]] = {
         "the Docker official image (docker.io/library/redis): compare its tags with the Redis release "
         "page by hand, within the pinned major version (the broker holds queued tasks only)",
     ),
+    "role:assemblyline/assemblyline_core_image": (
+        "none",
+        "the project publishes its release tag in the compose repository's .env (AL_VERSION, "
+        "CybercentreCanada/assemblyline-docker-compose): compare that with the pin by hand, a release at "
+        "least 14 days old",
+    ),
+    "role:assemblyline/assemblyline_rust_image": ("none", "the same release as assemblyline_core_image (one tag for all five)"),
+    "role:assemblyline/assemblyline_ui_image": ("none", "the same release as assemblyline_core_image (one tag for all five)"),
+    "role:assemblyline/assemblyline_socketio_image": ("none", "the same release as assemblyline_core_image (one tag for all five)"),
+    "role:assemblyline/assemblyline_frontend_image": ("none", "the same release as assemblyline_core_image (one tag for all five)"),
+    "role:assemblyline/assemblyline_elastic_image": (
+        "none",
+        "docker.elastic.co/elasticsearch: the version the release's compose repository pins (8.10.2 for "
+        "4.8.0), moved only when a release names a newer one",
+    ),
+    "role:assemblyline/assemblyline_redis_image": (
+        "none",
+        "the Docker official image (docker.io/library/redis): compare its tags with the Redis release "
+        "page by hand, within the 7.2 line (BSD)",
+    ),
     "role:keycloak/keycloak_image": ("github", "keycloak/keycloak"),
     "role:keycloak/keycloak_postgres_image": (
         "none",
@@ -311,6 +331,23 @@ NOTES: dict[str, str] = {
     "role:caddy_auth_proxy/caddy_auth_proxy_image": (
         "an image (modules/caddy, the -alpine variant): bump the tag and its digest together, with "
         "the lab registry's auth-proxy version"
+    ),
+    "role:assemblyline/assemblyline_core_image": (
+        "an image (modules/assemblyline): bump the tag and its digest together with the other four "
+        "assemblyline images (one release), product.version in modules/assemblyline/module.yml and the lab "
+        "registry's version; the same or a newer release only (the datastore migrates forward on first "
+        "start and cannot go back; the upgrade playbook refuses an older one and exports first)"
+    ),
+    "role:assemblyline/assemblyline_rust_image": "an image (modules/assemblyline): the tag and its digest together with assemblyline_core_image, the same release tag",
+    "role:assemblyline/assemblyline_ui_image": "an image (modules/assemblyline): the tag and its digest together with assemblyline_core_image, the same release tag",
+    "role:assemblyline/assemblyline_socketio_image": "an image (modules/assemblyline): the tag and its digest together with assemblyline_core_image, the same release tag",
+    "role:assemblyline/assemblyline_frontend_image": "an image (modules/assemblyline): the tag and its digest together with assemblyline_core_image, the same release tag",
+    "role:assemblyline/assemblyline_elastic_image": (
+        "an image (modules/assemblyline): the tag and its digest together, within the major version the "
+        "release supports"
+    ),
+    "role:assemblyline/assemblyline_redis_image": (
+        "an image (modules/assemblyline): the tag and its digest together, within the 7.2 line"
     ),
     "role:keycloak/keycloak_image": (
         "an image (modules/keycloak): bump the tag and its digest together, with product.version "

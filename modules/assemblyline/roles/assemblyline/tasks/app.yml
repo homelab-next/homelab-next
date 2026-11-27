@@ -1,0 +1,145 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). No environment
+# holds a secret: the passwords go in compose_app_secret_env. Rendered here: the datastore, the broker
+# and the core processes that need neither the docker socket nor a privileged container. NOT rendered
+# yet (README "What PR 2 needs"): scaler and updater (privileged, docker socket), the object store and
+# the TLS front, and the internal networks.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    # what every product container shares (an anchor, so ui and socketio keep their images' own command)
+    assemblyline_base: &base
+      depends_on: [elasticsearch, redis]
+      volumes:
+        - "{{ assemblyline_dir }}/config/config.yml:{{ assemblyline_container_config }}:ro"
+        - "{{ assemblyline_dir }}/config/classification.yml:{{ assemblyline_container_classification }}:ro"
+      mem_limit: "{{ assemblyline_core_mem_limit }}"
+    assemblyline_app:
+      compose_app_name: assemblyline
+      compose_app_dir: "{{ assemblyline_dir }}"
+      compose_app_data_dir: "{{ assemblyline_data_root }}"
+      compose_app_export_dir: "{{ assemblyline_data_root }}/export"
+      compose_app_owner: "{{ assemblyline_owner }}"
+      compose_app_group: "{{ assemblyline_group }}"
+      compose_app_start: "{{ assemblyline_start }}"
+      compose_app_validate_with_docker: "{{ assemblyline_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          elasticsearch:
+            image: "{{ assemblyline_elastic_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ assemblyline_elastic_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ assemblyline_elastic_image.split('@')[1] }}"
+            user: "{{ assemblyline_elastic_uid | int }}:{{ assemblyline_elastic_gid | int }}"
+            environment:
+              ingest.geoip.downloader.enabled: "false"
+              xpack.security.enabled: "true"
+              discovery.type: single-node
+              logger.level: WARN
+              ES_JAVA_OPTS: "-Xms{{ assemblyline_elastic_mem_mb | int }}m -Xmx{{ assemblyline_elastic_mem_mb | int }}m -Dlog4j2.formatMsgNoLookups=true"
+            volumes:
+              - "{{ assemblyline_data_root }}/datastore:/usr/share/elasticsearch/data"
+              - "{{ assemblyline_data_root }}/export/datastore:/usr/share/elasticsearch/snapshots"
+            mem_limit: "{{ assemblyline_elastic_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, "curl --silent --fail -u elastic:$$ELASTIC_PASSWORD http://$$HOSTNAME:9200/_cluster/health || exit 1"]
+              interval: 30s
+              timeout: 30s
+              retries: 3
+              start_period: 60s
+          redis:
+            image: "{{ assemblyline_redis_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ assemblyline_redis_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ assemblyline_redis_image.split('@')[1] }}"
+            user: "{{ assemblyline_redis_uid | int }}:{{ assemblyline_redis_gid | int }}"
+            command: [redis-server, --io-threads, "2", --save, "", --appendonly, "no"]
+            mem_limit: "{{ assemblyline_redis_mem_limit }}"
+            healthcheck:
+              test: [CMD, redis-cli, ping]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 5s
+          expiry:
+            <<: *base
+            image: "{{ assemblyline_core_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ assemblyline_release_tag }}"
+            digest: "{{ assemblyline_core_image.split('@')[1] }}"
+            command: [python, -m, assemblyline_core.expiry.run_expiry]
+            healthcheck: &heartbeat
+              test: [CMD, bash, -c, "if [[ ! `find /tmp/heartbeat -newermt '-30 seconds'` ]]; then false; fi"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 60s
+          workflow:
+            <<: *base
+            image: "{{ assemblyline_core_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ assemblyline_release_tag }}"
+            digest: "{{ assemblyline_core_image.split('@')[1] }}"
+            command: [python, -m, assemblyline_core.workflow.run_workflow]
+            healthcheck: *heartbeat
+          heartbeat:
+            <<: *base
+            image: "{{ assemblyline_core_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ assemblyline_release_tag }}"
+            digest: "{{ assemblyline_core_image.split('@')[1] }}"
+            command: [python, -m, assemblyline_core.metrics.run_heartbeat_manager]
+            healthcheck: &alive
+              test: [CMD-SHELL, "kill -0 1"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 60s
+          statistics:
+            <<: *base
+            image: "{{ assemblyline_core_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ assemblyline_release_tag }}"
+            digest: "{{ assemblyline_core_image.split('@')[1] }}"
+            command: [python, -m, assemblyline_core.metrics.run_statistics_aggregator]
+            healthcheck: *alive
+          plumber:
+            <<: *base
+            image: "{{ assemblyline_rust_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ assemblyline_release_tag }}"
+            digest: "{{ assemblyline_rust_image.split('@')[1] }}"
+            command: [assemblyline-server, plumber]
+            healthcheck: *alive
+          dispatcher:
+            <<: *base
+            image: "{{ assemblyline_rust_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ assemblyline_release_tag }}"
+            digest: "{{ assemblyline_rust_image.split('@')[1] }}"
+            command: [assemblyline-server, dispatcher]
+            healthcheck: *alive
+          ingester:
+            <<: *base
+            image: "{{ assemblyline_rust_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ assemblyline_release_tag }}"
+            digest: "{{ assemblyline_rust_image.split('@')[1] }}"
+            command: [assemblyline-server, ingester]
+            healthcheck: *alive
+          service_server:
+            <<: *base
+            image: "{{ assemblyline_rust_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ assemblyline_release_tag }}"
+            digest: "{{ assemblyline_rust_image.split('@')[1] }}"
+            command: [assemblyline-server, service-api]
+            healthcheck: *alive
+          ui:
+            <<: *base
+            image: "{{ assemblyline_ui_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ assemblyline_release_tag }}"
+            digest: "{{ assemblyline_ui_image.split('@')[1] }}"
+            mem_limit: "{{ assemblyline_ui_mem_limit }}"
+            healthcheck:
+              test: [CMD-SHELL, "python3 -c \"import socket; socket.create_connection(('localhost', 5000), 3)\""]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 60s
+          socketio:
+            <<: *base
+            image: "{{ assemblyline_socketio_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ assemblyline_release_tag }}"
+            digest: "{{ assemblyline_socketio_image.split('@')[1] }}"
+            healthcheck: *alive
+  tags: [health, backup, export, upgrade]
