@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to back up (the weights are the model store's; its data directory is rebuilt on start)
+  ansible.builtin.debug:
+    msg: strata keeps no data a backup must capture; its data directory holds the launcher settings and the tokenizer built from the weights, both rebuilt on start
+  tags: [backup]

@@ -549,6 +549,22 @@ class FakeLab:
                         },
                     )
                 for r in req["requirements"]:
+                    if r["type"] == "assert-ref-snapshot-id":  # the commit's main is the one read
+                        if (meta.get("refs") or {}).get(r["ref"], {}).get("snapshot-id") != r[
+                            "snapshot-id"
+                        ]:
+                            return self._json(
+                                h,
+                                409,
+                                {
+                                    "error": {
+                                        "message": "ref moved",
+                                        "type": "CommitFailedException",
+                                        "code": 409,
+                                    }
+                                },
+                            )
+                        continue
                     assert r["type"] == "assert-table-uuid"
                     if r["uuid"] != meta["table-uuid"]:
                         return self._json(
@@ -565,6 +581,11 @@ class FakeLab:
                 for u in req["updates"]:
                     if u["action"] == "set-properties":
                         meta["properties"].update(u["updates"])
+                    elif u["action"] == "remove-snapshots":
+                        gone = set(u["snapshot-ids"])
+                        meta["snapshots"] = [
+                            x for x in meta.get("snapshots") or [] if x["snapshot-id"] not in gone
+                        ]
                     elif u["action"] == "remove-properties":
                         for k in u["removals"]:
                             meta["properties"].pop(k, None)

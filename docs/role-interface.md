@@ -194,6 +194,7 @@ first on a `compose_app` module's host.
   device is refused. `group_add` lists supplementary groups by number (the render group's id on
   the host, which does not resolve by name inside an image), never 0. A GPU container still gets
   `cap_drop: [ALL]` and `no-new-privileges`.
+* `ulimits` is optional and accepts only `memlock` (`-1` for unlimited, or a number of bytes; soft and hard are the same), for a model server that pins RAM for its GPU. Output is byte-identical without it.
 * `tmpfs` is a list of RAM-backed mounts, `[{target, size_bytes, mode, uid, gid, exec}]`, rendered in the compose
   long syntax (`type: tmpfs`, `tmpfs: {size, mode}`) after the service's `volumes`. `target` is an
   absolute, canonical container path (not `/`) that equals, lies inside or contains no other mount

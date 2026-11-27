@@ -117,12 +117,14 @@ def make_clients(
     catalog_credential: str | None = None,
     ca_file: str | None = None,
     engine_options: Mapping[str, Any] | None = None,
+    catalog_max_bytes: int | None = None,
 ) -> tuple[Any, RestCatalog]:
     """The engine client and the catalog client :func:`make_lake` reads and writes through, as
     ``user`` (see the module doc for ``credential`` and ``catalog_credential``); nothing is sent
     while they are built.  ``engine_options`` are the engine client's own settings among
     :data:`ENGINE_OPTIONS` (a session catalog and schema, session properties, the per-request
-    timeout, the reply size bound); never its endpoint, user, sign-in or opener, which are this
+    timeout, the reply size bound); ``catalog_max_bytes`` bounds a catalog reply (default 16 MiB; a
+    table with many snapshots has large metadata); never its endpoint, user, sign-in or opener, which are this
     function's to set."""
     extra = dict(engine_options or {})
     unknown = sorted(set(extra) - ENGINE_OPTIONS)
@@ -173,6 +175,7 @@ def make_clients(
         prefix_optional=catalog_prefix_optional,
         auth=bearer,
         opener=opener,
+        **({} if catalog_max_bytes is None else {"max_bytes": catalog_max_bytes}),
     )
     return engine, catalog
 

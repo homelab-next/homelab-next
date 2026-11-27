@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# A model runtime's egress is default-deny, so the guest cannot pull the pinned image from the
+# registry. When strata_image_archive names a local archive of that exact image (the OCI archive the
+# recipe in README.md writes, or a `docker save`, compressed or not; docker load reads gzip, xz and zstd), its sha256 is
+# checked against strata_image_archive_sha256 BEFORE it is loaded, the image is loaded from it if the daemon lacks the
+# digest, and the role refuses to go on if it is still missing after the load.
+- name: Ask whether the daemon already has the pinned image
+  ansible.builtin.command:
+    argv: [docker, image, inspect, --format, "{{ '{{.Id}}' }}", "{{ strata_repository }}@{{ strata_digest }}"]
+  register: strata_have_image
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Load the pinned image from the archive when the daemon lacks it
+  when: strata_have_image.rc != 0
+  block:
+    - name: The archive is a regular file
+      ansible.builtin.stat:
+        path: "{{ strata_image_archive }}"
+        follow: false
+        checksum_algorithm: sha256
+      register: strata_archive
+    - name: Refuse anything but a regular archive whose sha256 is the pinned one (before anything is loaded)
+      ansible.builtin.assert:
+        that:
+          - strata_archive.stat.exists and strata_archive.stat.isreg
+          - strata_archive.stat.checksum | default('') == strata_image_archive_sha256
+        fail_msg: >-
+          strata: {{ strata_image_archive }} is not a regular file whose sha256 is the pinned strata_image_archive_sha256
+          ({{ strata_image_archive_sha256 }}; it is {{ strata_archive.stat.checksum | default('not readable') }})
+    - name: Load the image
+      ansible.builtin.command:
+        argv: [docker, load, -i, "{{ strata_image_archive }}"]
+      changed_when: true
+    - name: The pinned digest is there now
+      ansible.builtin.command:
+        argv: [docker, image, inspect, --format, "{{ '{{.Id}}' }}", "{{ strata_repository }}@{{ strata_digest }}"]
+      changed_when: false
+      register: strata_loaded
+      failed_when: strata_loaded.rc != 0

@@ -270,3 +270,29 @@ def test_turning_the_boot_unit_off_disables_and_deletes_an_existing_one(tmp_path
     r, _ = _boot(tmp_path, compose_app_start=True, compose_app_boot_unit=False)
     assert r.returncode == 0
     assert (tmp_path / "sc.log").read_text().splitlines().count("daemon-reload") == 2
+
+
+def _ulimit_spec(**ulimits):
+    return {"services": {"web": {"image": "registry.example.internal/demo/web", "tag": "1.2.3",
+                                 "digest": DIGEST, "healthcheck": {"test": ["CMD", "true"]},
+                                 **({"ulimits": ulimits} if ulimits else {})}}}  # fmt: skip
+
+
+def test_ulimits_render_memlock_only_and_nothing_without_the_key(tmp_path):
+    r, _ = _boot(tmp_path, compose_app_spec=_ulimit_spec(memlock=-1))
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (tmp_path / "app" / "docker-compose.yml").read_text()
+    assert '    ulimits:\n      "memlock":\n        soft: -1\n        hard: -1\n' in text
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    r, _ = _boot(plain, compose_app_spec=_ulimit_spec())
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "ulimits" not in (plain / "app" / "docker-compose.yml").read_text()
+
+
+@pytest.mark.parametrize("bad", [{"nofile": 1024}, {"memlock": "unlimited"}, {"memlock": True},
+                                 {"memlock": -2}, {"memlock": 1.5}])  # fmt: skip
+def test_ulimits_refuse_anything_but_memlock_minus_one_or_a_number(tmp_path, bad):
+    r, _ = _boot(tmp_path, compose_app_spec=_ulimit_spec(**bad))
+    assert r.returncode != 0
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()

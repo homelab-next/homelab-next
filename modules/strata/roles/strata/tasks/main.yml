@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+# Not followed: a model file that is a link out of the store is refused, so what the server loads is the entry's own.
+- name: Refuse when the weights (every shard, and the direction file) are not in the store as regular files (run model_store first)
+  ansible.builtin.stat:
+    path: "{{ strata_model_dir }}/{{ item }}"
+    follow: false
+    get_checksum: false
+  loop: "{{ strata_all_files }}"
+  register: strata_weights
+  failed_when: not (strata_weights.stat.exists and strata_weights.stat.isreg)
+
+- name: Create the directory of the pre-start check
+  ansible.builtin.file:
+    path: "{{ strata_precheck_bin | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Install the pre-start check (power cap and GPU count, then the weights' bytes)
+  ansible.builtin.copy:
+    src: hnx-strata-precheck
+    dest: "{{ strata_precheck_bin }}"
+    mode: "0755"
+
+- name: Load the pinned image from the local archive when the daemon lacks it
+  ansible.builtin.include_tasks: image.yml
+  when: strata_image_archive != ''
+
+# The container is rendered but never started here: the unit below is its only starter.
+- name: Render the compose project
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ strata_app.compose_app_name }}"
+    compose_app_dir: "{{ strata_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ strata_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ strata_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ strata_app.compose_app_owner }}"
+    compose_app_group: "{{ strata_app.compose_app_group }}"
+    compose_app_bind_extra: "{{ strata_app.compose_app_bind_extra }}"
+    compose_app_start: false
+    compose_app_validate_with_docker: "{{ strata_validate_with_docker }}"
+    compose_app_spec: "{{ strata_app.compose_app_spec }}"
+
+- name: Read the compose file's checksum (a changed project restarts the unit)
+  ansible.builtin.stat:
+    path: "{{ strata_dir }}/docker-compose.yml"
+    checksum_algorithm: sha256
+    follow: false
+  register: strata_compose
+  # in --check on a first install nothing wrote the file yet: report the change, do not fail
+  failed_when: not strata_compose.stat.exists and not ansible_check_mode
+
+- name: Write the unit
+  ansible.builtin.template:
+    src: strata.service.j2
+    dest: "{{ strata_unit_dir }}/{{ strata_unit_name }}"
+    mode: "0644"
+  vars:
+    strata_compose_sum: "{{ strata_compose.stat.checksum | default('') }}"
+  register: strata_unit
+
+- name: Reload systemd when the unit changed (with strata_start false the unit is only written)
+  ansible.builtin.command:
+    argv: ["{{ strata_systemctl_cli }}", daemon-reload]
+  when: strata_start | bool and strata_unit is changed
+  changed_when: true
+
+- name: Restart the server when its unit or project changed
+  ansible.builtin.command:
+    argv: ["{{ strata_systemctl_cli }}", restart, "{{ strata_unit_name }}"]
+  when: strata_start | bool and strata_unit is changed
+  changed_when: true
+
+- name: Enable and start the server
+  ansible.builtin.command:
+    argv: ["{{ strata_systemctl_cli }}", enable, --now, "{{ strata_unit_name }}"]
+  when: strata_start | bool
+  changed_when: false

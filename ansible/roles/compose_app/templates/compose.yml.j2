@@ -49,6 +49,14 @@ services:
 {% if svc.group_add | default([]) | length > 0 %}
     group_add: {{ ql(svc.group_add) }}
 {% endif %}
+{% if svc.ulimits | default({}) | length > 0 %}
+    ulimits:
+{% for k, v in svc.ulimits | dictsort %}
+      {{ q(k) }}:
+        soft: {{ v | int }}
+        hard: {{ v | int }}
+{% endfor %}
+{% endif %}
 {% if svc.mem_limit is defined %}
     mem_limit: {{ q(svc.mem_limit) }}
 {% endif %}

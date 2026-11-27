@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (strata_target_image, tag and digest of a newer
+# build), then converge with the new pin (set strata_image to the target in the overlay). The
+# weights do not move; run the health hook and the inference suite through the gateway after.
+#   ansible-playbook -i <inventory> modules/strata/playbooks/upgrade.yml -e strata_target_image=<ref>
+- name: Upgrade Strata
+  hosts: mod_strata_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: strata
+        tasks_from: upgrade
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: strata
+      vars:
+        strata_image: "{{ strata_target_image }}"

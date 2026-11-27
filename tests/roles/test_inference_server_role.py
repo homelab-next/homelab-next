@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _find() -> Path:
+    """The provider this file pins: the provider of the inference slot (shared adapter) that runs a published image. The slot has more than one provider; each one's own role has its own test file."""
     hits = [
         p.parent
         for p in sorted((ROOT / "modules").glob("*/module.yml"))
@@ -42,8 +43,9 @@ def _find() -> Path:
         .get("adapter")
         == "homelabnext.conform.adapters.inference_server:make"
     ]
-    assert len(hits) == 1, hits
-    return hits[0]
+    # the provider that runs a published image; the other one builds its own
+    (hit,) = [h for h in hits if not (h / "image" / "Dockerfile").is_file()]
+    return hit
 
 
 MODULE = _find()
