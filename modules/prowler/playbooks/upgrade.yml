@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: the scanner is pinned (prowler_version), so an upgrade is raising that pin and converging. The
+# upgrade hook validates the inputs and the credential, the state is exported first, then the role
+# converges: pip installs the new pinned version into the virtualenv. Run the health hook after.
+#   ansible-playbook -i <inventory> modules/prowler/playbooks/upgrade.yml
+- name: Upgrade the weekly cloud-posture scan
+  hosts: mod_prowler_scanner
+  become: true
+  tasks:
+    - name: Validate the upgrade
+      ansible.builtin.include_role:
+        name: prowler
+        tasks_from: upgrade
+    - name: Export the state and the findings first
+      ansible.builtin.include_role:
+        name: prowler
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: prowler

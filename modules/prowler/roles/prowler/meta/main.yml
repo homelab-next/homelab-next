@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "A weekly read-only cloud-posture scan run from a pinned virtualenv with a root-only credential file, its failing checks written as flat JSON lines for the SIEM agent and the log pipeline, a mutelist that demands a reason for every entry, and a health hook that judges the scan's age and the mutelist's review dates."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

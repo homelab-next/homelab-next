@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the exporter, the settings, the credentials and the pinned scanner are in place, the
+# credential file is root-only, the timer is armed, the last scan succeeded lately and the findings
+# file is no older than that, and no deferred mutelist entry is past its review month. Nothing is
+# written; the findings reaching the lake is the log pipeline's and the lake writer's health.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Look for the exporter, the settings, the credentials, the mutelist and the scanner
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: prowler_files
+      loop: "{{ [prowler_export_script, prowler_env_file, prowler_login_env_file, prowler_mutelist_file, prowler_bin] }}"
+    - name: They are all there
+      ansible.builtin.assert:
+        that: prowler_files.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: "prowler: missing {{ prowler_files.results | rejectattr('stat.exists') | map(attribute='item') | list }} (run the install)"
+    - name: The credential file is root-only
+      ansible.builtin.assert:
+        that:
+          - prowler_files.results[2].stat.mode == '0600'
+          - prowler_files.results[2].stat.pw_name == 'root'
+        fail_msg: "prowler: {{ prowler_login_env_file }} is not 0600 root (it holds the cloud credential): run the install"
+    - name: Ask the scanner for its version
+      ansible.builtin.command:
+        argv: ["{{ prowler_bin }}", --version]
+      register: prowler_version_out
+      changed_when: false
+      failed_when: false
+    - name: It is the pinned version
+      ansible.builtin.assert:
+        that: prowler_version in (prowler_version_out.stdout | default('')) or prowler_version in (prowler_version_out.stderr | default(''))
+        fail_msg: "prowler: the installed scanner is not {{ prowler_version }} ({{ (prowler_version_out.stdout | default('')) | truncate(120) }}): run the upgrade"
+    - name: Ask systemd about the timer
+      ansible.builtin.command:
+        argv: ["{{ prowler_systemctl_cli }}", is-active, "{{ prowler_scan_timer }}"]
+      register: prowler_active
+      changed_when: false
+      failed_when: false
+    - name: The timer is armed
+      ansible.builtin.assert:
+        that: prowler_active.rc == 0
+        fail_msg: "prowler: the scan timer is not active ({{ prowler_active.stdout | default('') }})"
+    - name: Read the last scan's record
+      ansible.builtin.slurp:
+        src: "{{ prowler_state_dir }}/last-run.json"
+      register: prowler_last_run
+      failed_when: false
+    - name: Look at the last scan's age and the findings file
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: prowler_ages
+      loop: ["{{ prowler_state_dir }}/last-run.json", "{{ prowler_findings_path }}"]
+    - name: The last scan succeeded, lately, and the findings are no older
+      ansible.builtin.assert:
+        that:
+          - prowler_ages.results[0].stat.exists
+          - prowler_last_run.content is defined
+          - (prowler_last_run.content | b64decode | from_json).ok | default(false)
+          - (now().timestamp() | int) - (prowler_ages.results[0].stat.mtime | int) <= (prowler_scan_max_age_h | int) * 3600
+          - prowler_ages.results[1].stat.exists
+          - (now().timestamp() | int) - (prowler_ages.results[1].stat.mtime | int) <= (prowler_scan_max_age_h | int) * 3600
+        fail_msg: >-
+          prowler: no successful scan in {{ prowler_scan_max_age_h }} h, or the findings file is older
+          (the scan failed, never ran, or the credential was refused: journalctl -u {{ prowler_scan_unit }}).
+          A failed scan leaves the previous findings in place on purpose, so a stale file is the signal
+      when: prowler_scan_max_age_h | int > 0
+    - name: No deferred mutelist entry is past its review month
+      ansible.builtin.assert:
+        that: item.review | default('9999-12') >= now(utc=true).strftime('%Y-%m')
+        fail_msg: >-
+          prowler: the mutelist entry for {{ item.check }} was deferred until {{ item.review }} and that
+          month has passed: fix the finding and remove the entry, or re-decide it and set a new review month
+      loop: "{{ prowler_mutelist }}"
+      loop_control:
+        label: "{{ item.check }}"
+  tags: [health]

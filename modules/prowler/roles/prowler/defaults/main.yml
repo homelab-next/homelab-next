@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+# The scheduled cloud-posture scan as one module role (modules/prowler): a weekly, read-only scan of
+# a cloud account, its findings written as JSON lines to a file the SIEM agent and the log pipeline
+# tail. Nothing here is a lab value: the credential is a `secret:` reference, every account, region
+# and exposure the site chooses to accept is the overlay's.
+# prowler_logical_id (required): the instance id, e.g. prowler
+
+prowler_config_dir: "/etc/hnx/{{ prowler_logical_id }}"
+# the module's data root (docs/modules/data.md): state/ (the last-run record), output/ (the scanner's
+# own report, replaced every run) and export/
+prowler_data_root: "/var/lib/hnx-modules/{{ prowler_logical_id }}"
+# the scanner's virtualenv: the module owns it (a system-wide install is refused by a
+# distribution's externally-managed Python, and breaking that for one tool is not a trade worth making)
+prowler_venv: "/opt/hnx-modules/{{ prowler_logical_id }}/venv"
+prowler_owner: root
+prowler_user: "hnx-{{ prowler_logical_id }}"
+prowler_group: "hnx-{{ prowler_logical_id }}"
+prowler_manage_accounts: true
+
+# --- the scanner ------------------------------------------------------------------------------------
+# pinned, never "latest": the version in use is also recorded in every summary line (pw_version)
+prowler_version: "5.36.0"
+# the credential: ONE secret holding "<access key id>:<secret access key>" for a read-only
+# principal (the provider's SecurityAudit and ViewOnlyAccess policies). It is resolved at deploy time
+# and written to a root-only file the unit loads; it is never in a variable, a template or a log.
+prowler_login_ref: secret:prowler/aws-credentials
+prowler_default_region: us-east-1
+# empty: scan EVERY region. Deliberate: an attacker with a credential uses the region nobody watches,
+# and a scanner that looks at one reintroduces exactly that blind spot. The calls are read-only.
+prowler_regions: []
+# Tuesday, early: a weekly scan that avoids the vulnerability scanner's own heavy day (a full run of
+# that can still be going hours after it starts). Calendar, never an interval (a timer built from
+# OnBootSec and OnUnitActiveSec can stop firing for good after one reboot at the wrong moment).
+prowler_oncalendar: "Tue *-*-* 03:00:00 UTC"
+prowler_timeout_s: 3600
+
+# --- the findings -----------------------------------------------------------------------------------
+# the file the SIEM agent and the log pipeline tail; the unit's user writes it
+prowler_findings_path: /var/log/prowler-findings.json
+prowler_findings_group: root
+prowler_findings_mode: "0640"
+
+# --- the mutelist -----------------------------------------------------------------------------------
+# Findings that are TRUE and INTENDED (a decoy's exposed port), and only those. Each entry:
+#   account:     a 12-digit account id, or "*"
+#   check:       the scanner's check id
+#   resources:   a list of resource ids or regexes; pin the instance, never the whole check
+#   description: why it is deliberate and what would make it stop being so (required)
+#   regions:     optional, default ["*"]
+#   review:      optional YYYY-MM: marks the entry DEFERRED (a real gap accepted until that month,
+#                not an intended state). The health hook fails once the month has passed, because an
+#                accepted risk that outlives its date is how it turns into a forgotten one.
+# A mutelist is never a noise filter: that is how a SIEM is blinded one reasonable entry at a time.
+prowler_mutelist: []
+
+# --- health -----------------------------------------------------------------------------------------
+# fail when the last successful scan is older than this many hours (0: do not judge); the default is a
+# week and a day, the timer's period plus a day for a run that started late
+prowler_scan_max_age_h: 192
+prowler_health_timeout: 10
+# the shared last-run record directory (role last_run) and the group that may read it
+prowler_last_run_dir: /var/lib/homelabnext/last-run
+prowler_last_run_group: root
+# restore: the directory a prior export wrote (prowler-findings.json)
+prowler_restore_source: ""

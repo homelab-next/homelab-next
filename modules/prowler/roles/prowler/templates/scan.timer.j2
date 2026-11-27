@@ -1,0 +1,14 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# {{ prowler_marker }}, instance {{ prowler_logical_id }}); local changes are overwritten.
+# Weekly on the calendar, never an interval: OnBootSec plus OnUnitActiveSec can stop firing for good
+# after a reboot at the wrong moment.
+[Unit]
+Description=prowler {{ prowler_logical_id }}: weekly read-only cloud-posture scan
+
+[Timer]
+OnCalendar={{ prowler_oncalendar }}
+Persistent=true
+Unit={{ prowler_scan_unit }}
+
+[Install]
+WantedBy=timers.target

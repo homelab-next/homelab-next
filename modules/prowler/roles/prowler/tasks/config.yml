@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Create the script, configuration and credentials directories (root's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ prowler_owner }}"
+    group: "{{ prowler_owner_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ prowler_bin_dir }}", mode: "0755"}
+    - {path: "{{ prowler_config_dir }}", mode: "0755"}
+    - {path: "{{ prowler_auth_dir }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the findings exporter
+  ansible.builtin.copy:
+    src: hnx_prowler_export.py
+    dest: "{{ prowler_export_script }}"
+    owner: "{{ prowler_owner }}"
+    group: "{{ prowler_owner_group }}"
+    mode: "0755"
+
+- name: Write the scan's settings (no secret in it)
+  ansible.builtin.template:
+    src: scan.env.j2
+    dest: "{{ prowler_env_file }}"
+    owner: "{{ prowler_owner }}"
+    group: "{{ prowler_owner_group }}"
+    mode: "0644"
+
+- name: Write the cloud credentials for the unit (an environment file, root-only; systemd reads it as root)
+  ansible.builtin.template:
+    src: prowler.env.j2
+    dest: "{{ prowler_login_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  vars:
+    prowler_login: "{{ lookup('hnx_secret', prowler_login_ref) }}"
+  no_log: true
+
+- name: Write the mutelist
+  ansible.builtin.template:
+    src: mutelist.yaml.j2
+    dest: "{{ prowler_mutelist_file }}"
+    owner: "{{ prowler_owner }}"
+    group: "{{ prowler_owner_group }}"
+    mode: "0644"
+
+- name: Create the findings file before the agent tails it
+  ansible.builtin.file:
+    path: "{{ prowler_findings_path }}"
+    state: touch
+    owner: "{{ prowler_user }}"
+    group: "{{ prowler_findings_group }}"
+    mode: "{{ prowler_findings_mode }}"
+    access_time: preserve
+    modification_time: preserve
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ prowler_last_run_dir }}"
+    last_run_group: "{{ prowler_last_run_group }}"
+    last_run_writer: "{{ prowler_last_run_writer }}"
+
+- name: Write the units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ prowler_unit_dir }}/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - {src: scan.service.j2, dest: "{{ prowler_scan_unit }}"}
+    - {src: scan.timer.j2, dest: "{{ prowler_scan_timer }}"}
+  loop_control:
+    label: "{{ item.dest }}"
+  register: prowler_units
+
+- name: Reload systemd after a unit changed
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: prowler_units.changed | bool and not ansible_check_mode
+
+- name: Enable the timer (a changed timer is restarted so its schedule takes)
+  ansible.builtin.systemd_service:
+    name: "{{ prowler_scan_timer }}"
+    enabled: true
+    state: "{{ 'restarted' if prowler_units.changed else 'started' }}"
+  when: not ansible_check_mode

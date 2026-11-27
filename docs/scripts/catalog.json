@@ -1405,6 +1405,7 @@
         "timer:nut_ups/hnx-nut-ups-check",
         "timer:openbao/acme-renew",
         "timer:prometheus/alerts",
+        "timer:prowler/scan",
         "timer:restore_drill/drill",
         "timer:rkhunter/scan",
         "timer:source_census/source-census-run",
@@ -2086,6 +2087,27 @@
       "trigger": [
         "timer:prometheus/alerts",
         "role:prometheus"
+      ]
+    },
+    {
+      "exit": {
+        "0": "scanned, findings written",
+        "1": "the scan failed or produced no usable report (the previous findings are left as they were)",
+        "2": "refused before any scan (a missing credential, an unsafe path)"
+      },
+      "id": "prowler-export",
+      "inputs": "environment PROWLER_* (scan.env) and the cloud credentials in AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (a root-only EnvironmentFile the unit loads)",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-prowler-export",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the findings file (JSON lines, replaced whole), last-run.json under the state directory, one line on stdout",
+      "owner": "platform",
+      "path": "modules/prowler/roles/prowler/files/hnx_prowler_export.py",
+      "purpose": "Run the cloud-posture scanner read-only against the account and replace the findings file (one summary line, then one flat line per failing check) the SIEM agent and the log pipeline tail.",
+      "status": "active",
+      "trigger": [
+        "timer:prowler/scan",
+        "role:prowler"
       ]
     },
     {

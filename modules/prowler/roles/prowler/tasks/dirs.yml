@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# The account, then the directories, one owner each: the data root is root's, read by the module's
+# group; state/ and output/ are the module's user's (the scan writes there); export/ is root's (the
+# backup, export and restore hooks run as root). The scanner's report enumerates the account, so
+# nothing here is world-readable.
+- name: Create the module's group
+  ansible.builtin.group:
+    name: "{{ prowler_group }}"
+    system: true
+  when: prowler_manage_accounts | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the module's user (no home, no shell)
+  ansible.builtin.user:
+    name: "{{ prowler_user }}"
+    group: "{{ prowler_group }}"
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+  when: prowler_manage_accounts | bool
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the data root and the export directory (root's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ prowler_owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ prowler_data_root }}", group: "{{ prowler_group }}", mode: "0750"}
+    - {path: "{{ prowler_export_dir }}", group: "{{ prowler_owner_group }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore, upgrade]
+
+- name: Create the working directories (the module's user's)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ prowler_user }}"
+    group: "{{ prowler_group }}"
+    mode: "0750"
+  loop:
+    - {path: "{{ prowler_state_dir }}"}
+    - {path: "{{ prowler_output_dir }}"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore, upgrade]
