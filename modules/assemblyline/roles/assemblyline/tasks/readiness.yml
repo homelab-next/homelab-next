@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# The provider's dependencies are the container engine (docker_engine, applied before this module),
+# its credentials in the secret store and, when the images are delivered by archive, the archive; it
+# calls no other service and the guest has no way to.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: The image archive is on the guest when one is named
+      ansible.builtin.stat:
+        path: "{{ assemblyline_image_archive }}"
+      register: assemblyline_archive
+      when: assemblyline_image_archive | length > 0
+    - name: Refuse a named archive that is missing
+      ansible.builtin.assert:
+        that: assemblyline_archive.stat.exists | bool
+        fail_msg: "assemblyline: assemblyline_image_archive {{ assemblyline_image_archive }} is not on the guest; import it (docker save on the workstation, copy in) before the first start (ADR-0052 decision 7)"
+      when: assemblyline_image_archive | length > 0
+  tags: [readiness]

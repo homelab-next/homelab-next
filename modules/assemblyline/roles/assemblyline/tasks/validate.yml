@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - assemblyline_logical_id is match(assemblyline_logical_id_pattern)
+      - assemblyline_all_images | select('match', assemblyline_pinned_ref_pattern) | list | length == assemblyline_all_images | length
+      - assemblyline_release_images | map('split', '@') | map('first') | map('regex_replace', '^.*:', '') | unique | list | length == 1
+      - assemblyline_release_tag is match(assemblyline_release_tag_pattern)
+      - assemblyline_refs | select('match', assemblyline_ref_pattern) | list | length == assemblyline_refs | length
+      - assemblyline_refs | unique | list | length == assemblyline_refs | length
+      - assemblyline_dir is match(assemblyline_path_pattern)
+      - assemblyline_data_root is match(assemblyline_path_pattern)
+      - assemblyline_export_dir is match(assemblyline_path_pattern)
+      - assemblyline_port | int > 0 and assemblyline_port | int < 65536
+      - assemblyline_elastic_mem_mb | int >= 2048
+      - assemblyline_submission_ttl_days | int >= 1
+      - assemblyline_image_archive == '' or assemblyline_image_archive is match(assemblyline_path_pattern)
+      - assemblyline_start is boolean
+    fail_msg: >-
+      assemblyline: the registry id (lowercase, hyphenated), every image as repository:tag@sha256:<64 hex>
+      with ONE release tag on the five assemblyline images (X.Y.Z.stableN), distinct secret:<name>
+      references, absolute data paths, a port, an Elasticsearch heap of at least 2048 MB and an expiry of
+      at least one day are required
+
+- name: This instance is the file-analysis row
+  ansible.builtin.assert:
+    that:
+      - lookup('hnx_registry', assemblyline_logical_id, field='capability') == 'file-analysis'
+      - lookup('hnx_registry', assemblyline_logical_id, field='impl') == 'assemblyline'
+    fail_msg: "assemblyline: {{ assemblyline_logical_id }} must be a registry row of capability file-analysis and product assemblyline"
