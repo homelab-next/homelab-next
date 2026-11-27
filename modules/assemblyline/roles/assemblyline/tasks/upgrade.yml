@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate and record a release bump: every assemblyline image of the target set (assemblyline_target_images,
+# a mapping core, rust, ui, socketio, frontend to repository:tag@sha256:<digest>) has the SAME release tag, the
+# same repositories as the running set and a tag not older than the running one (the datastore migrates
+# forward on first start and cannot go back). The playbook exports first, then converges.
+- block:
+    - name: Name the target set
+      ansible.builtin.assert:
+        that:
+          - assemblyline_target_images is mapping
+          - assemblyline_target_images.keys() | sort | list == ['core', 'frontend', 'rust', 'socketio', 'ui']
+          - assemblyline_target_images.values() | select('match', assemblyline_pinned_ref_pattern) | list | length == 5
+          - assemblyline_target_images.values() | map('split', '@') | map('first') | map('regex_replace', '^.*:', '') | unique | list | length == 1
+          - (assemblyline_target_images.values() | first).split('@')[0].rsplit(':', 1)[1] is match(assemblyline_release_tag_pattern)
+          - assemblyline_target_images.core.split('@')[0].rsplit(':', 1)[0] == assemblyline_core_image.split('@')[0].rsplit(':', 1)[0]
+          - assemblyline_target_images.rust.split('@')[0].rsplit(':', 1)[0] == assemblyline_rust_image.split('@')[0].rsplit(':', 1)[0]
+          - assemblyline_target_images.ui.split('@')[0].rsplit(':', 1)[0] == assemblyline_ui_image.split('@')[0].rsplit(':', 1)[0]
+          - assemblyline_target_images.socketio.split('@')[0].rsplit(':', 1)[0] == assemblyline_socketio_image.split('@')[0].rsplit(':', 1)[0]
+          - assemblyline_target_images.frontend.split('@')[0].rsplit(':', 1)[0] == assemblyline_frontend_image.split('@')[0].rsplit(':', 1)[0]
+        fail_msg: >-
+          assemblyline: name core, rust, ui, socketio and frontend as repository:X.Y.Z.stableN@sha256:<64 hex>,
+          one tag for all five and the repositories of the running set
+    - name: Refuse a release older than the one running
+      vars:
+        _t: "{{ assemblyline_target_images.core.split('@')[0].rsplit(':', 1)[1] | regex_findall('[0-9]+') | map('int') | list }}"
+        _r: "{{ assemblyline_release_tag | regex_findall('[0-9]+') | map('int') | list }}"
+      ansible.builtin.assert:
+        that: _t >= _r
+        fail_msg: "assemblyline: the datastore migrates forward on first start and cannot go back; {{ assemblyline_target_images.core }} is older than {{ assemblyline_release_tag }}"
+  tags: [upgrade]

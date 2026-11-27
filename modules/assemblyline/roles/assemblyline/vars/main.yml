@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+assemblyline_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+assemblyline_release_tag_pattern: '^[0-9]+\.[0-9]+\.[0-9]+\.(stable|dev)[0-9]+\Z'
+assemblyline_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+assemblyline_logical_id_pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z'
+assemblyline_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+# the appliance's own default values: refused wherever a credential resolves to one
+assemblyline_default_passwords: [admin, password_123, password_456, password_789, kb_password_456]
+assemblyline_secret_min_length: 16
+# the images that must share one release tag (the datastore and the broker are not the product's)
+assemblyline_release_images:
+  - "{{ assemblyline_core_image }}"
+  - "{{ assemblyline_rust_image }}"
+  - "{{ assemblyline_ui_image }}"
+  - "{{ assemblyline_socketio_image }}"
+  - "{{ assemblyline_frontend_image }}"
+assemblyline_all_images: "{{ assemblyline_release_images + [assemblyline_elastic_image, assemblyline_redis_image] }}"
+assemblyline_release_tag: "{{ assemblyline_core_image.split('@')[0].rsplit(':', 1)[1] }}"
+assemblyline_refs:
+  - "{{ assemblyline_admin_login_ref }}"
+  - "{{ assemblyline_elastic_login_ref }}"
+  - "{{ assemblyline_filestore_login_ref }}"
+  - "{{ assemblyline_service_key_ref }}"
+# the in-container paths
+assemblyline_container_config: /etc/assemblyline/config.yml
+assemblyline_container_classification: /etc/assemblyline/classification.yml

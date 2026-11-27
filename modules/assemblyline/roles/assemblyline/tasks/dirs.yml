@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root: the datastore's directory belongs to its user; the export directories are 0700.
+# Nothing here is ever removed by the role (a bind-mounted directory taken away under a running
+# container breaks it, and the sample files are quarantined data to delete deliberately).
+- name: Create the data root, the datastore's, the export and the configuration directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ assemblyline_data_root }}", owner: "{{ assemblyline_owner }}", group: "{{ assemblyline_group }}", mode: "0750"}
+    - {path: "{{ assemblyline_data_root }}/datastore", owner: "{{ assemblyline_elastic_uid | int }}", group: "{{ assemblyline_elastic_gid | int }}", mode: "0700"}
+    - {path: "{{ assemblyline_data_root }}/export", owner: "{{ assemblyline_owner }}", group: "{{ assemblyline_group }}", mode: "0700"}
+    - {path: "{{ assemblyline_data_root }}/export/datastore", owner: "{{ assemblyline_elastic_uid | int }}", group: "{{ assemblyline_elastic_gid | int }}", mode: "0700"}
+    - {path: "{{ assemblyline_dir }}", owner: "{{ assemblyline_owner }}", group: "{{ assemblyline_group }}", mode: "0750"}
+    - {path: "{{ assemblyline_dir }}/config", owner: "{{ assemblyline_owner }}", group: "{{ assemblyline_group }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export]
