@@ -35,6 +35,8 @@ source_census_install_unit: false
 source_census_oncalendar: "*-*-* 07:15:00 UTC"
 source_census_lake_query_id: lake-query
 source_census_lake_catalog_id: lake-catalog
+# the notify slot's registry id: the page is published to it (HNX_ENDPOINT_NOTIFY), no SRV record needed
+source_census_notify_id: notify
 source_census_unit_dir: /etc/systemd/system
 source_census_systemctl_cli: systemctl
 # the installed unit reports its runs to the shared last-run record (role last_run)

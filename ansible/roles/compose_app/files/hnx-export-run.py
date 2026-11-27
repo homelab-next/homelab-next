@@ -259,7 +259,7 @@ def run_job(doc, job, stage):
             [
                 "sh",
                 "-c",
-                f'psql -U {PG_USER} -Atc "select datname from pg_database where not datistemplate"',
+                f'psql -U {PG_USER} -d postgres -Atc "select datname from pg_database where not datistemplate"',
             ],
         )
         dbs = [d.strip() for d in listing.splitlines() if NAME.match(d.strip())]

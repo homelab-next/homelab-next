@@ -197,6 +197,10 @@ argument_specs:
         type: bool
         description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
         default: true
+      media_automation_helper_account_manage:
+        type: bool
+        description: Create the system account (hnx-media, the apps' uid and gid) the helper units run as; systemd refuses a numeric User= that has no passwd entry (217/USER).
+        default: true
       media_automation_helper_stall_hours:
         type: int
         description: Hours without progress before a torrent counts as stalled.
@@ -432,6 +436,10 @@ argument_specs:
       media_automation_helper_rename_enabled:
         type: bool
         description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
+        default: true
+      media_automation_helper_account_manage:
+        type: bool
+        description: Create the system account (hnx-media, the apps' uid and gid) the helper units run as; systemd refuses a numeric User= that has no passwd entry (217/USER).
         default: true
       media_automation_helper_stall_hours:
         type: int
@@ -669,6 +677,10 @@ argument_specs:
         type: bool
         description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
         default: true
+      media_automation_helper_account_manage:
+        type: bool
+        description: Create the system account (hnx-media, the apps' uid and gid) the helper units run as; systemd refuses a numeric User= that has no passwd entry (217/USER).
+        default: true
       media_automation_helper_stall_hours:
         type: int
         description: Hours without progress before a torrent counts as stalled.
@@ -904,6 +916,10 @@ argument_specs:
       media_automation_helper_rename_enabled:
         type: bool
         description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
+        default: true
+      media_automation_helper_account_manage:
+        type: bool
+        description: Create the system account (hnx-media, the apps' uid and gid) the helper units run as; systemd refuses a numeric User= that has no passwd entry (217/USER).
         default: true
       media_automation_helper_stall_hours:
         type: int
@@ -1141,6 +1157,10 @@ argument_specs:
         type: bool
         description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
         default: true
+      media_automation_helper_account_manage:
+        type: bool
+        description: Create the system account (hnx-media, the apps' uid and gid) the helper units run as; systemd refuses a numeric User= that has no passwd entry (217/USER).
+        default: true
       media_automation_helper_stall_hours:
         type: int
         description: Hours without progress before a torrent counts as stalled.
@@ -1376,6 +1396,10 @@ argument_specs:
       media_automation_helper_rename_enabled:
         type: bool
         description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
+        default: true
+      media_automation_helper_account_manage:
+        type: bool
+        description: Create the system account (hnx-media, the apps' uid and gid) the helper units run as; systemd refuses a numeric User= that has no passwd entry (217/USER).
         default: true
       media_automation_helper_stall_hours:
         type: int
@@ -1617,6 +1641,10 @@ argument_specs:
         type: bool
         description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
         default: true
+      media_automation_helper_account_manage:
+        type: bool
+        description: Create the system account (hnx-media, the apps' uid and gid) the helper units run as; systemd refuses a numeric User= that has no passwd entry (217/USER).
+        default: true
       media_automation_helper_stall_hours:
         type: int
         description: Hours without progress before a torrent counts as stalled.
@@ -1852,6 +1880,10 @@ argument_specs:
       media_automation_helper_rename_enabled:
         type: bool
         description: Enable the release-name cleanup timer (renames files in the library; the apps are rescanned after).
+        default: true
+      media_automation_helper_account_manage:
+        type: bool
+        description: Create the system account (hnx-media, the apps' uid and gid) the helper units run as; systemd refuses a numeric User= that has no passwd entry (217/USER).
         default: true
       media_automation_helper_stall_hours:
         type: int

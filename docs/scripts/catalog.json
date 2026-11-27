@@ -396,6 +396,24 @@
     },
     {
       "exit": {
+        "0": "stopped, or --healthcheck answered",
+        "1": "--healthcheck did not get 200"
+      },
+      "id": "concierge-shim",
+      "inputs": "CONCIERGE_CONFIG (a JSON settings file); the gateway key, the shim's token and optionally the context token from the environment",
+      "kind": "service",
+      "language": "python",
+      "outputs": "an OpenAI-compatible HTTP endpoint on the settings' port; one request-line per call on stderr, never prompt text",
+      "owner": "platform",
+      "path": "modules/openwebui/roles/openwebui/files/concierge_shim.py",
+      "purpose": "Front the lab's gateway for the chat app with named model tiers mapped to gateway roles (listed only while the role is live), a persona, bounded history and optional retrieval from the context service.",
+      "status": "active",
+      "trigger": [
+        "role:openwebui"
+      ]
+    },
+    {
+      "exit": {
         "0": "all capabilities pass",
         "1": "some capability lacks a passing test",
         "2": "the report could not be produced"

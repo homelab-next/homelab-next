@@ -169,3 +169,23 @@ prometheus_llm_probe_interval: 5m
 prometheus_llm_probe_timeout: 90s
 prometheus_alert_llm_probe_failed_for: 10m
 prometheus_alert_llm_probe_slow_seconds: 60
+
+# Reliability alerts (README "Reliability alerts"). Regexes are RE2, matched whole against the unit name.
+# SystemdUnitFailed (warning): a unit failed for most of this window; the units matching the critical list
+# page as CriticalUnitFailed instead, over the shorter window. The default names only this module set's own
+# units; a site lists the agents and servers it cannot lose (the overlay's value).
+prometheus_alert_unit_failed_for: 15m
+prometheus_alert_unit_failed_ignore: ""
+prometheus_alert_critical_units: 'hnx-lake-writer@.+\.service'
+prometheus_alert_critical_unit_failed_for: 5m
+# TimerJobNotSucceeding: a timer-driven oneshot failed on every run for this long (1h for a 10-minute timer)
+prometheus_alert_timer_job_failing_for: 1h
+# HostOomKill: any kernel OOM kill in this window
+prometheus_alert_oom_window: 10m
+# FilesystemFillPredicted: the trend of the last lookback says the free space ends within the horizon
+prometheus_alert_fill_lookback: 6h
+prometheus_alert_fill_horizon_hours: 24
+prometheus_alert_fill_ignore_fstypes: 'tmpfs|overlay|squashfs|ramfs|devtmpfs|fuse.*|nsfs|proc|sysfs'
+# CertExpiringSoon / CertExpiryCritical (with probes): days left on a certificate a probe sees
+prometheus_alert_cert_warning_days: 14
+prometheus_alert_cert_critical_days: 3

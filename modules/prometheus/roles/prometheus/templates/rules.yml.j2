@@ -102,6 +102,63 @@ groups:
 {% raw %}
           summary: "{{ $labels.instance }} the UPS check has not written metrics for over 5 minutes"
 {% endraw %}
+  # Reliability families the old lab had (README "Reliability alerts"): a failed unit, a timer job that keeps
+  # failing, an OOM kill and a filesystem that will fill. They read the host exporter's systemd collector
+  # (node_systemd_*), node_vmstat_oom_kill and node_filesystem_*; a host without the series never fires them.
+  - name: hnx-reliability
+    rules:
+      # a unit in the failed state for most of the window. A oneshot a timer starts stays "failed" until its next
+      # run succeeds, and flips to activating for seconds at each run, so the window is averaged, not "for"-ed.
+      - alert: SystemdUnitFailed
+        expr: avg_over_time(node_systemd_unit_state{state="failed", name!~`{{ prometheus_alert_critical_units }}`{% if prometheus_alert_unit_failed_ignore != '' %}, name!~`{{ prometheus_alert_unit_failed_ignore }}`{% endif %}}[{{ prometheus_alert_unit_failed_for }}]) > 0.7
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} unit {{ $labels.name }} has been failed for most of {% endraw %}{{ prometheus_alert_unit_failed_for }}{% raw %} (systemctl status; journalctl -u)"
+{% endraw %}
+      # the units that matter (a variable list: the agents, the lake writers, the shippers, the model servers)
+      - alert: CriticalUnitFailed
+        expr: avg_over_time(node_systemd_unit_state{state="failed", name=~`{{ prometheus_alert_critical_units }}`}[{{ prometheus_alert_critical_unit_failed_for }}]) > 0.7
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} critical unit {{ $labels.name }} has been failed for most of {% endraw %}{{ prometheus_alert_critical_unit_failed_for }}{% raw %}: a blind spot or a stopped pipeline (systemctl status; journalctl -u)"
+{% endraw %}
+      # a timer-driven oneshot that is inactive between runs shows no long failure; but it stays failed until a
+      # run succeeds, so "failed for the whole window while its timer fired inside it" is "the last runs all failed"
+      - alert: TimerJobNotSucceeding
+        expr: >-
+          avg_over_time(node_systemd_unit_state{state="failed", type="oneshot"}[{{ prometheus_alert_timer_job_failing_for }}]) > 0.9
+          and on (instance, name)
+          label_replace(changes(node_systemd_timer_last_trigger_seconds[{{ prometheus_alert_timer_job_failing_for }}]) >= 1, "name", "$1.service", "name", "(.+)\\.timer")
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} timer job {{ $labels.name }} has failed on every run for {% endraw %}{{ prometheus_alert_timer_job_failing_for }}{% raw %}: nothing it feeds is being updated (journalctl -u)"
+{% endraw %}
+      - alert: HostOomKill
+        expr: increase(node_vmstat_oom_kill[{{ prometheus_alert_oom_window }}]) > 0
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} the kernel OOM-killed {{ $value | printf \"%.0f\" }} process(es) in the last {% endraw %}{{ prometheus_alert_oom_window }}{% raw %} (journalctl -k | grep -i oom): the host or its cgroup is short of memory"
+{% endraw %}
+      - alert: FilesystemFillPredicted
+        expr: >-
+          predict_linear(node_filesystem_avail_bytes{fstype!~`{{ prometheus_alert_fill_ignore_fstypes }}`}[{{ prometheus_alert_fill_lookback }}], {{ prometheus_alert_fill_horizon_hours | int * 3600 }}) < 0
+          and node_filesystem_size_bytes > 0
+          and node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.5
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} {{ $labels.mountpoint }} is filling at its recent rate and will be full within {% endraw %}{{ prometheus_alert_fill_horizon_hours | int }}{% raw %} h ({{ $value | humanize1024 }}B projected)"
+{% endraw %}
   # SIEM liveness (module wazuh, textfile metrics siem_*): a manager that is up but whose daemons are not
   # running, or whose alert stream has gone quiet, is a blind SIEM that nothing else announces. A host with
   # no SIEM manager exposes none of these, so none of them fires there.
@@ -390,6 +447,21 @@ groups:
 {% raw %}
           summary: "{{ $labels.service }} is down: the probe of {{ $labels.instance }} has failed"
 {% endraw %}
+      # a certificate a probe sees, by days left (negative = expired): the critical band is excluded from the warning
+      - alert: CertExpiringSoon
+        expr: probe_ssl_earliest_cert_expiry{job="probe"} - time() < {{ prometheus_alert_cert_warning_days | int * 86400 }} and probe_ssl_earliest_cert_expiry{job="probe"} - time() >= {{ prometheus_alert_cert_critical_days | int * 86400 }} and probe_ssl_earliest_cert_expiry{job="probe"} > 0
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.service }} ({{ $labels.instance }}) certificate expires in {{ $value | humanizeDuration }}{% endraw %}: under {{ prometheus_alert_cert_warning_days | int }} days, renewal is not happening"
+      - alert: CertExpiryCritical
+        expr: probe_ssl_earliest_cert_expiry{job="probe"} - time() < {{ prometheus_alert_cert_critical_days | int * 86400 }} and probe_ssl_earliest_cert_expiry{job="probe"} > 0
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.service }} ({{ $labels.instance }}) certificate expires in {{ $value | humanizeDuration }} (or has expired){% endraw %}: under {{ prometheus_alert_cert_critical_days | int }} days"
 {% endif %}
 {% if prometheus_snmp_enabled | bool %}
   # SNMP-polled network gear and storage (README "SNMP polling"): an interface is watched when its job's

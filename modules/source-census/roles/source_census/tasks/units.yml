@@ -9,6 +9,7 @@
       # Managed by homelabnext (module source-census); the endpoints the census reaches.
       HNX_ENDPOINT_LAKE_QUERY={{ lookup('hnx_registry', source_census_lake_query_id, field='url') }}
       HNX_ENDPOINT_LAKE_CATALOG={{ lookup('hnx_registry', source_census_lake_catalog_id, field='url') }}
+      HNX_ENDPOINT_NOTIFY={{ lookup('hnx_registry', source_census_notify_id, field='url') }}
     owner: "{{ source_census_root_owner }}"
     group: "{{ source_census_group }}"
     mode: "0644"
