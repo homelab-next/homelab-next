@@ -97,6 +97,16 @@
       - prometheus_llm_probe_timeout is match('^[1-9][0-9]{1,2}s\Z')
       - prometheus_llm_probe_timeout[:-1] | int >= 15 and prometheus_llm_probe_timeout[:-1] | int <= (prometheus_llm_probe_interval[:-1] | int * 60)
       - prometheus_alert_llm_probe_slow_seconds | int >= 1
+      # reliability alerts
+      - >-
+        [prometheus_alert_unit_failed_for, prometheus_alert_critical_unit_failed_for, prometheus_alert_timer_job_failing_for,
+         prometheus_alert_oom_window, prometheus_alert_fill_lookback] | reject('match', prometheus_duration_pattern) | list | length == 0
+      - prometheus_alert_critical_units is match('^[A-Za-z0-9_.@:*+?|()\\\\-]+\Z')
+      - prometheus_alert_unit_failed_ignore is match('^[A-Za-z0-9_.@:*+?|()\\\\-]*\Z')
+      - prometheus_alert_fill_ignore_fstypes is match('^[A-Za-z0-9_.*|]+\Z')
+      - prometheus_alert_fill_horizon_hours | int >= 1
+      - prometheus_alert_cert_warning_days | int > prometheus_alert_cert_critical_days | int
+      - prometheus_alert_cert_critical_days | int >= 1
     fail_msg: >-
       prometheus: a registry id, an image pinned by tag and digest, the guest's IPv4 address to
       publish on (not all interfaces), ports, a container uid and gid of 1000 or more, absolute
