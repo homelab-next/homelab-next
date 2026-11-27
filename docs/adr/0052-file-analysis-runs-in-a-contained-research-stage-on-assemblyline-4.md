@@ -1,14 +1,18 @@
 ---
-summary: File analysis is a contained research stage on AssemblyLine 4 in its own guest, no egress, pull-only results; verdicts reach the lake, MISP and IRIS.
+summary: File analysis is a contained AssemblyLine 4 stage in the VLAN 40 research zone on pm200, no egress, staged updates, pull-only results to lake, MISP, IRIS.
 summary_of: outline:sha256:45c4a04f0fa446ac
 ---
 # ADR-0052: File analysis runs in a contained research stage on AssemblyLine 4
 
-- **Status:** proposed
-- **Date:** 2026-11-26
+- **Status:** proposed (placement revised 2026-11-27: VLAN 40 on pm200, operator decision; supersedes the
+  pm205 core-VLAN placement this ADR first recommended)
+- **Date:** 2026-11-26 (revised 2026-11-27)
 - **Related:** ADR-0008 (export hooks), ADR-0012 (the hypervisor is not modular), ADR-0049 (the SOC
   data plane), `docs/network-model.md` (one-way zones), `docs/modules/egress.md`,
-  `modules/assemblyline/README.md`
+  `modules/assemblyline/README.md`; the old lab's malware-zone design (homelab-infra
+  `dev/architecture.md` section 6 "Malware lab in/out data contract", `ansible/roles/pve_vm_firewall`,
+  `ansible/unifi_vlan40_firewall*.yml`, `scripts/cape_maintenance_window.sh`,
+  `ansible/roles/cape_update_proxy`) and the pipeline plan `~/hnx-deploy/plans/2026-11-27-research-pipeline-vlan40.md`
 - **Operator decisions owed:** section "Decisions the operator owns" below; nothing in this ADR is
   deployed and the overlay's guest record is a proposal.
 
@@ -76,11 +80,13 @@ default branch on 2026-11-26, and the AL4 documentation site), and what it says:
   the lab uses it unmodified and does not offer it as a service), MinIO is AGPL-3.0, and Redis from
   7.4 on is not BSD (the lab pins the 7.2 line, BSD, as `modules/intelowl` does).
 
-The lab's facts this rests on: the new lab runs on a single hypervisor (pm205: 256 threads, about 1
-TiB of RAM, of which a few hundred GiB are unallocated at the time of writing) with guests on the
-core VLAN; the old lab's malware-analysis zone (VLAN 40, a one-way zone in the site model, its sandbox
-guest's own firewall at `policy_out DROP`) is on another hypervisor that is being decommissioned; the
-network model's **one-way zone** (`egress.one_way`) forbids any rule that lets traffic into it from
+The lab's facts this rests on: the operator decided on 2026-11-27 that the **whole research pipeline
+(the CAPE sandbox, Ghidra and this AL4 stage) lives on VLAN 40 on pm200**, under the old lab's tight
+controls and its staged update process, so AL4 is one more guest of the existing malware-analysis zone
+(a one-way zone in the site model; the sandbox guest's own firewall is at `policy_out DROP`). The old
+lab ran that zone on a separate hypervisor (pm203, now out of the fleet and unreachable); the
+controls were built and live-verified there (Proxmox per-VM firewall as the primary layer, UDR7 rules
+as the second) and are the design this ADR reuses. The network model's **one-way zone** (`egress.one_way`) forbids any rule that lets traffic into it from
 elsewhere except an explicit, listed flow; the per-guest hypervisor firewall (`policy_in`/`policy_out`
 with `inbound_allow` and `outbound_allow`) is enforced outside the guest, so a compromised guest cannot
 edit it, and Docker's published ports bypass the guest's own chains (so the hypervisor-level rule is the
@@ -94,17 +100,32 @@ only filter that counts, as other lab guests already note).
    add a control plane that is another thing to contain. The docker socket held by `scaler` and
    `updater` is accepted **only** because of decisions 2 to 4: the VM, not the container, is the
    boundary. The module refuses to place beside another module on the same guest.
-2. **Placement (recommended now): a dedicated guest on pm205 on the core VLAN, `policy_in DROP` and
-   `policy_out DROP`, no route to any lab service.** Inbound is an allow list of exactly: SSH from the
-   deploy workstation, the metrics scrape (9100) from the metrics guest, HTTPS (443) from the submitters
-   (the pipeline guest, the honeypot receiver's guest, the research workstation) and from the edge guest
-   (the UI), nothing else. Outbound is **empty**: not DNS, not NTP, not the secret store, not the lab
-   resolver; secrets and the image set are delivered in (decisions 5 and 7), and results are pulled out
-   (decision 4). One optional outbound allow is permitted only by a recorded decision: the SIEM agent's
-   port to the SIEM guest's one address (the same single exception the old lab's analysis guest
-   carries). The ADR's gate: **no file is submitted until a test from the guest shows an outbound
-   connection to an internet address and to a lab address both fail**; the module's health hook
-   asserts it (decision 9).
+2. **Placement (operator decision 2026-11-27): a dedicated guest on VLAN 40 on pm200, next to the CAPE
+   sandbox and Ghidra, under the zone's existing containment.** The zone's contract is the old lab's
+   (homelab-infra `dev/architecture.md` section 6): a per-VM hypervisor firewall at `policy_in DROP` and
+   `policy_out DROP` is the primary layer (enforced outside the guest), the router's VLAN 40 rules
+   (allow established/related, scoped allow of the SIEM agent port, deny-all at an index below the broad
+   allow rules) are the second, and two separate one-way channels are never crossed: the trusted side
+   initiates everything that goes in, the zone never initiates anything that goes out. For this guest:
+   - *Inbound allow list, exactly:* SSH from the deploy workstation, the metrics scrape (9100) from the
+     metrics guest, HTTPS (443) from the submitters (decision 4), nothing else. The UI is not exposed to
+     the edge guest; analysts reach it through the workstation (or the edge's sign-in only if the operator
+     later decides so, see O1).
+   - *Outbound list: empty.* Not DNS, not NTP, not the secret store, not the lab resolver. Secrets and the
+     image set arrive in (decisions 5 and 7); results are pulled out (decision 4). The zone's only
+     standing outbound exception is the SIEM agent (port 1514 to the SIEM guest's one address, the
+     router's scoped allow plus the guest's one `outbound_allow`), kept as the old lab's sandbox kept it
+     (decision O3, now the default).
+   - *Zone mechanics:* the guest takes a 192.168.40.x address and the VLAN 40 tag on pm200's bridge. The
+     router has `internet_access_enabled` on this network and relies on the guest's own `policy_out DROP`
+     for the internet block (a known gap in the old lab's site model), so the guest firewall file is
+     mandatory, not optional, and is checked by the health hook (decision 9). Test every reachability
+     claim **from the one authorised source**, never from the hypervisor (the old lab's LL-102 lesson).
+   - *Gate:* **no file is submitted until a test from the guest shows an outbound connection to an
+     internet address and to a lab address both fail**; the module's health hook asserts it.
+   - *Not co-located with trusted services:* the research guests share pm200 with nothing that holds
+     production secrets once the old lab's guests are retired; until then the VLAN 40 bridge and the
+     per-VM firewall are the separation, and the plan's host-neighbour caveat applies (see the plan).
 3. **Defence in depth inside the guest.** The appliance's `core` and `registration` networks stay
    `internal: true`; service containers are not given internet access (the module's service
    manifest rewrite sets it to off and the health hook lists any service with it on); the UI's
@@ -113,11 +134,21 @@ only filter that counts, as other lab guests already note).
    network behaviour is installed here; if a dynamic-analysis service is wanted later it is a separate
    decision and uses the lab's existing isolated-zone sandbox rather than a second one.
 4. **One-way data flow: files go in, results are pulled out, the stage never calls out.**
-   - *In:* a submitter (the CTI pipeline's file step, the honeypot payload hand-over, a researcher
-     through the UI or the client) calls the AL4 API on 443 with its own API key (`submit` for one
-     file, `ingest` with a notification queue for a stream) and the file's origin, TLP and source id as
-     submission metadata. Files stay under the lab's TLP rules (default `amber`).
-   - *Out:* a **result puller** (a feature module, `file-analysis-export`, PR 3) on a lake-side guest
+   - *In:* the trusted side initiates, the zone never reaches out. A submitter (the CTI pipeline's file
+     step, the honeypot payload hand-over, a researcher through the client) calls the AL4 API on 443
+     with its own API key (`submit` for one file, `ingest` with a notification queue for a stream) and
+     the file's origin, TLP and source id as submission metadata. Files stay under the lab's TLP rules
+     (default `amber`). **This is a documented exception to the one-way contract**, the same shape as
+     the old lab's one inbound allow for the sample intake (workstation to the sandbox on 22): each
+     submitter is one allow, **source = that one address, destination = this guest's one address, port
+     443**, listed in the site model's `service_exceptions` and in the guest's `inbound_allow`, never a
+     zone or a range. **Move bytes, never execute**, and screen first: a submitter hashes the file
+     and applies the lab's existing gates (hash lookup, TLP) before the upload, as the old lab's intake
+     did for the sandbox. Files that live on other hosts reach a submitter by the old lab's one auditable
+     path (DFIR collection to the collection server, then submission), not by an arbitrary host pushing
+     to the zone. Raw hostile content is never returned to a submitter except as the normalised row.
+   - *Out:* the SOC pulls, the zone never pushes (the old lab's egress rule: the zone is write-only to
+     its outbox, the trusted side is read-only). A **result puller** (a feature module, `file-analysis-export`, PR 3) on a lake-side guest
      calls `search.stream.submission` with a high-water mark and writes one row per finished
      submission to a fresh lake table `soc.file_analysis` through the lake-writer pattern
      (`LakeClient.write_batch`, commit then checkpoint, `uid` = submission id + file sha256, a `tlp`
@@ -127,7 +158,9 @@ only filter that counts, as other lab guests already note).
      (so a verdict is reproducible), and the submitter. The row is the OCSF file-activity class where it
      fits and the table's own columns where it does not.
    - *Onward:* indicators above a stated score and TLP go to MISP as attributes on an event for the
-     submission (the MISP module's existing API, TLP carried), and a case in the case manager gets
+     submission (the MISP module's existing API, TLP carried; the puller is the old lab's "disposable
+     normalizer" pattern: strict schema validation, typed fields only, no raw blobs, because *direction
+     is not sanitisation*), and a case in the case manager gets
      the submission link and verdict on request, never automatically. AL4's own alerter is off.
    - *Never:* AL4 does not push, notify, fetch URLs (the `URLDownloader` service is not installed)
      or enrich from outside. Indicators it extracts are looked up afterwards by the existing
@@ -145,18 +178,33 @@ only filter that counts, as other lab guests already note).
    comes next (PR 2): `auth.oauth` with `auto_create: false`, roles mapped from a group claim, the
    local admin kept as break-glass. Auto-create against a provider the lab does not control is
    refused by the module.
-7. **Offline by design.** Image set: the module takes images **by digest** and the deploy imports
-   them from an archive built on the workstation (`docker save`; the pattern `llamacpp_image_archive`
-   already sets) or from a lab-internal registry, then sets `REGISTRY` so the scaler resolves service
-   images there. Services are installed from a reviewed allow list (not "Install All"), their
-   container images imported in the same way. Rule and signature sources are mirrored into the lab (a
-   Git mirror the updater reads over the lab network is **not** reachable from a no-egress guest, so
-   the mirror is *pushed in*: the deploy renders each source as a local file or directory the updater
-   reads); the default MalwareBazaar file source is removed. The first set of services is the
-   offline-capable static set (type identification, YARA with a pinned local ruleset, document and
-   archive extraction, string and PE/ELF/script static analysis, entropy, safelisting); the list is
-   fixed in PR 2 after reading each manifest and licence.
-8. **Sizing on pm205 (starting point, to be re-measured after a week).** One VM: **16 vCPU, 48 GiB
+7. **Offline by design, with the old lab's staged update process.** The zone has no internet and no
+   standing route to anything that has. Updates are staged on the trusted side and cross in under one of
+   the two mechanisms the old lab already ran; nothing is pulled by the guest on its own schedule.
+   - *Big and rare (the container image set, service images, a golden image): pushed in through the
+     intake channel.* The deploy imports images **by digest** from an archive built on the workstation
+     (`docker save`; the pattern `llamacpp_image_archive` already sets), over the same inbound SSH the
+     samples use, then sets `REGISTRY` so the scaler resolves service images locally. Digest, size and
+     sha256 are recorded; the guest checks the digest before `docker load`.
+   - *Small and frequent (OS packages and the updater's rule and signature sources): the supervised
+     maintenance window.* The old lab's gated window (`scripts/cape_maintenance_window.sh`): steady
+     state is deny; an operator-present script saves the guest's firewall file, opens a scoped,
+     temporary outbound to **one pull-through proxy on a trusted host** (the old lab's squid with a
+     destination allowlist and a source pinned to the client address, two independent layers agreeing),
+     verifies reachability, does the work, and **restores the saved file byte for byte** in the same run
+     (trap on exit; the next config-management run re-asserts the canonical file if the script is killed).
+     The proxy's allowlist is exactly the package index and the named rule sources, reviewed per change;
+     it is not a general internet route and not a place a payload can phone home to. Where a rule source
+     can be fetched on the trusted side instead, it is staged there and pushed in with the images (no
+     window needed). The old lab's update proxy ran on a guest that is being decommissioned, so the
+     proxy needs a new home (decision O2).
+   - Services are installed from a reviewed allow list (not "Install All"); the default MalwareBazaar
+     file source is removed; the first set is the offline-capable static set (type identification, YARA
+     with a pinned local ruleset, document and archive extraction, string and PE/ELF/script static
+     analysis, entropy, safelisting), fixed in PR 2 after reading each manifest and licence. Each source
+     the updater reads is rendered as a local file or directory or as a proxy-allowlisted URL, and is
+     listed so a window can be audited afterwards.
+8. **Sizing on pm200 (starting point, to be re-measured after a week; pm200's free RAM and pool space must be read before the guest is created, the numbers below were written against pm205).** One VM: **16 vCPU, 48 GiB
    RAM, 600 GB disk** on the VM pool (`vmdata`), type `host`. Budget: Elasticsearch heap 8 GiB
    (`ELASTIC_MEM=8192`, the OS keeps as much again for page cache), Redis 1 GiB, MinIO and core
    processes about 8 GiB, service containers about 16 GiB at the scaler's default scale-from-zero.
@@ -194,33 +242,28 @@ only filter that counts, as other lab guests already note).
 
 ### Decisions the operator owns
 
-- **O1. Placement.** (a) *Recommended for now:* a dedicated VM on the core VLAN under the hypervisor
-  firewall described in decision 2 (`policy_out DROP`, empty outbound list). (b) A dedicated VM on a
-  segment of its own, which adds a second, router-level layer. The old lab's isolated VLAN 40 is the
-  obvious candidate but its site model is a **one-way** zone (nothing may be admitted into it), the opposite
-  of what a submitted-to service needs, so either VLAN 40 gets a documented exception (the submitters'
-  HTTPS and the metrics scrape in, nothing out) or a new research zone is added to the site model. The
-  lab already runs an untrusted-workload guest on a non-core VLAN of this hypervisor (the CI runner pool),
-  so the bridge carries other VLANs; the switch port's trunk for the chosen VLAN was not verified. (c) Wait
-  for the isolated network on the old hypervisor, the lab's stated long-term home, which is being
-  decommissioned. This ADR recommends (a) now and (b) once the VLAN, its switch trunk and its router rules
-  exist, and does not recommend (c): waiting leaves the pipeline without the stage.
-- **O2. Image and rule delivery.** Archive import by hand (no window, one operator step per release),
-  or a short supervised bring-up window with outbound open (as the GPU guests had) before the guest
-  is locked. Recommended: archive import; it needs no window.
-- **O3. Is the SIEM agent port an allowed outbound?** Recommended yes, one address, one port, so the
-  guest is monitored like the rest; otherwise the host's own logs are pulled.
-- **O4. Which submitters are admitted** at go-live (default: the pipeline guest, the honeypot
-  receiver's guest, the research workstation).
+- **O1. Placement: DECIDED 2026-11-27 (operator).** VLAN 40 on pm200, with CAPE and Ghidra, under the
+  zone's existing controls (decision 2). Still open under it: (i) does pm200's bridge carry VLAN 40 and
+  does the switch port trunk it (the old lab's lesson: the bridge must be VLAN-aware and the trunk is
+  not assumed; verify, do not trust); (ii) analyst access to the UI: through the workstation only
+  (default) or also through the edge's sign-in; (iii) sequencing against pm200's decommission (the
+  research guests need pm200 up, so they are a reason it is not switched off).
+- **O2. Image and rule delivery: DECIDED in shape.** The staged process of decision 7 (archive push for
+  images, supervised window through the pull-through proxy for packages and rule sources). Still open:
+  where the proxy lives now that infra-core is being retired (an existing guest of the new lab or a
+  small dedicated one), and whether rule sources are staged on the trusted side instead of through the
+  proxy.
+- **O3. The SIEM agent port as the one allowed outbound: now the default** (it is the zone's one
+  standing exception, as for the sandbox); the operator only needs to object.
+- **O4. Which submitters are admitted** at go-live, each as a named one-address exception to the
+  one-way zone (default: the pipeline guest, the honeypot receiver's guest, the research workstation).
+  Each is a deliberate hole in the contract, so the list is the operator's.
 - **O5. Backup scope:** include the sample filestore in the VM backup or exclude it (verdicts only).
-- **O6. Sizing and the pool's declared capacity:** accept 16 vCPU / 48 GiB / 600 GB, or a smaller start.
-  The lab's node record declares the guest-disk pool at 3000 GB and the guests already declare 2990 GB of it
-  (the pool's real use on 2026-11-26 was about 0.5 TB, so the figure is a declared total, not a reservation),
-  so any disk of this size fails the overlay's declared-capacity check: the operator either raises the declared
-  figure to what the pool really holds (about 3.1 TB, still too small for 600 GB on top of 2990), accepts the
-  overcommit explicitly, or trims another guest.
-- **O7. A dynamic-analysis (sandbox) service:** none now. Revisit only with the lab's existing
-  isolated-zone sandbox, never a second one with network behaviour.
+- **O6. Sizing and the pool's declared capacity:** accept 16 vCPU / 48 GiB / 600 GB, or a smaller start,
+  against **pm200's** free RAM and pool space (read them first). The pm205 declared-capacity problem found
+  on 2026-11-26 (3000 GB declared, 2990 GB already declared) no longer applies to this guest.
+- **O7. A dynamic-analysis (sandbox) service:** none now. CAPE is in the same zone; if AL4 should hand
+  files to it, that is a zone-internal flow to design later, never a second sandbox with network behaviour.
 - **O8. Sign-in:** local accounts and API keys now, the lab's identity provider in PR 2 (default yes).
 
 ## Consequences
@@ -228,8 +271,8 @@ only filter that counts, as other lab guests already note).
 - A new, contained stage exists for files; the rest of the lab gains verdicts, indicators and a
   reproducible record without any other guest receiving a sample.
 - The guest is **not** a general-purpose host: it cannot be updated from the internet, its package
-  repositories and its container registry must be fed in, and its upgrades are an operator-paced
-  import. That is the price of containment and it is deliberate.
+  repositories and its container registry must be fed in (staged push or a supervised window), and its
+  upgrades are an operator-paced import. That is the price of containment and it is deliberate.
 - The docker socket's root-equivalence is accepted for two containers; the VM and its firewall
   carry the risk, so the firewall rules and the guest's single-purpose rule are load-bearing and
   are checked by the health hook rather than trusted.
@@ -251,7 +294,12 @@ only filter that counts, as other lab guests already note).
   socket makes any co-tenant's secrets one container escape away.
 - **Place it in an LXC.** Rejected: nested container-runtime privileges and a shared kernel are the
   wrong shape for the stage that handles hostile files.
-- **The isolated VLAN 40 now.** Stronger (a router layer on top of the guest firewall), not available today: its one-way contract forbids the inbound submissions (decision O1b).
+- **A dedicated guest on pm205's core VLAN** (this ADR's first recommendation, 2026-11-26, VM 148).
+  Superseded by the operator's 2026-11-27 decision to run the whole research pipeline in one contained
+  zone; it had one router-less layer (the per-guest firewall) where VLAN 40 adds the router's rules, and
+  it split the pipeline across two hypervisors.
+- **A new research zone instead of VLAN 40.** Not needed: VLAN 40 already exists as the research
+  network; the one-way contract gets named per-submitter exceptions instead.
 - **Another analysis product** (the lab's sandbox alone, an enrichment-only service, a hash-lookup
   pipeline). The sandbox answers a different question (dynamic behaviour of one sample) and the
   enrichment product looks up observables it is given; neither unpacks, extracts and scores
