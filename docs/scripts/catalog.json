@@ -1431,6 +1431,7 @@
         "timer:status_hub/hnx-hub-pull",
         "timer:trino/lake-maintenance",
         "timer:trivy/scan",
+        "timer:vector/hnx-vector-liveness",
         "timer:velociraptor_server/cycle",
         "timer:wazuh/hnx-wazuh-liveness"
       ]
@@ -2415,6 +2416,26 @@
       "trigger": [
         "timer:trivy/scan",
         "role:trivy"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the metrics were written (a dead container is a metric, not a failure)",
+        "2": "usage error or an unsafe output path"
+      },
+      "id": "vector-liveness",
+      "inputs": "--compose-file FILE --status-file FILE --out FILE [--owner USER]; runs docker compose ps and docker inspect for the container check",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-vector-liveness",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the metrics file (atomic rename, 0600); one line on stdout with the same numbers",
+      "owner": "platform",
+      "path": "modules/vector/roles/vector/files/hnx_modules/vector/liveness.py",
+      "purpose": "Write the log pipeline's liveness as node-exporter textfile metrics - whether its two containers run, how often they restarted, how old the sidecar's status is and how many rows each route has moved - so a pipeline that is up but delivers nothing is loud.",
+      "status": "active",
+      "trigger": [
+        "timer:vector/hnx-vector-liveness",
+        "role:vector"
       ]
     },
     {

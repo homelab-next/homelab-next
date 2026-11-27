@@ -1,0 +1,11 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role vector); local changes are overwritten.
+[Unit]
+Description=homelabnext log pipeline liveness metrics every minute (role vector)
+
+[Timer]
+OnCalendar={{ vector_liveness_interval }}
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

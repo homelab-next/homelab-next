@@ -5,7 +5,7 @@ argument_specs:
     description:
     - 'Typed application spec. services: mapping of service name to {image (repository, no tag), tag (not
       ''latest''), digest (sha256:<64 hex>), healthcheck {test: list, interval, timeout, retries, start_period}
-      (required), optional command, user, env_file, environment, ports (host_ip:host_port:container_port),
+      (required), optional command, entrypoint (a list of words), user, env_file, environment, ports (host_ip:host_port:container_port),
       volumes, depends_on, restart, cap_add, read_only, mem_limit, privileged, devices (DRM render nodes, CDI GPU names or /dev/net/tun), network_mode (service:<another service>), init,
       group_add (group numbers), ulimits ({memlock: -1 or bytes}, the only limit accepted), tmpfs (list of {target, size_bytes, mode, uid, gid, exec}, RAM-backed mounts, uid and gid only the own user of the service, /run only with them)}. No other key is accepted.'
     - Every service gets security_opt no-new-privileges and cap_drop ALL. Secrets go in

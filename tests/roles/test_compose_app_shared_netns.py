@@ -146,3 +146,21 @@ def test_init_renders_and_must_be_boolean(tmp_path):
     )
     s["services"]["vpn"]["init"] = "yes"
     assert run(tmp_path, s).returncode != 0
+
+
+def test_an_entrypoint_is_a_list_of_words_rendered_with_its_dollars_escaped(tmp_path):
+    s = {
+        "services": {
+            "app": svc(entrypoint=["/bin/sh", "-c", 'rm -f -- "$1" && exec app "$@"', "x"])
+        }
+    }
+    r = run(tmp_path, s)
+    assert r.returncode == 0, r.stdout + r.stderr
+    doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]["app"]
+    assert doc["entrypoint"] == ["/bin/sh", "-c", 'rm -f -- "$$1" && exec app "$$@"', "x"]
+
+
+@pytest.mark.parametrize("bad", ["/bin/sh -c true", [], [1, 2], {"a": "b"}])
+def test_an_entrypoint_that_is_not_a_non_empty_list_of_strings_is_refused(tmp_path, bad):
+    r = run(tmp_path, {"services": {"app": svc(entrypoint=bad)}})
+    assert r.returncode != 0 and not (tmp_path / "app" / "docker-compose.yml").exists()

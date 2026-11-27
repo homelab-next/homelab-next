@@ -83,6 +83,8 @@
       - item.value.cap_add | default([]) | reject('match', '^[A-Z][A-Z_]*\Z') | list | length == 0
       - item.value.cap_add | default([]) | map('regex_replace', '^CAP_', '') | intersect(compose_app_dangerous_caps | difference(['NET_ADMIN'] if compose_app_allow_net_admin | bool else [])) | length == 0 or compose_app_allow_privileged | bool
       - item.value.init is not defined or item.value.init is boolean
+      # an entrypoint is a list of words (never one string a shell would split), each a non-empty string
+      - item.value.entrypoint is not defined or (item.value.entrypoint is sequence and item.value.entrypoint is not string and item.value.entrypoint is not mapping and item.value.entrypoint | length > 0 and item.value.entrypoint | reject('string') | list | length == 0)
       - item.value.user is not defined or (item.value.user | string) is match('^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?\Z')
       # root in any spelling: the runtime reads a numeric user or group as a number (00, 000:0),
       # so a zero or the name root is refused as the user (compose_app_allow_root) and as the group

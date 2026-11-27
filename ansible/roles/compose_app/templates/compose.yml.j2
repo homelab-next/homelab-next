@@ -17,6 +17,9 @@ services:
 {% if svc.command is defined %}
     command: {{ ql(svc.command) if svc.command is sequence and svc.command is not string else q(svc.command) }}
 {% endif %}
+{% if svc.entrypoint is defined %}
+    entrypoint: {{ ql(svc.entrypoint) }}
+{% endif %}
 {% if svc.user is defined %}
     user: {{ q(svc.user) }}
 {% endif %}
