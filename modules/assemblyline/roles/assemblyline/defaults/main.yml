@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# AssemblyLine 4 (modules/assemblyline, ADR-0052). Required, with no default (the site's):
+# assemblyline_logical_id (the registry row's name). Nothing here holds a secret: every password
+# is a reference read at deploy time. Release 4.8.0.stable4 is the compose repository's pin on
+# 2026-11-26; every assemblyline image moves with it (one tag, the upgrade hook refuses a mixed set).
+assemblyline_core_image: "docker.io/cccs/assemblyline-core:4.8.0.stable4@sha256:4c309a7aa82792966c0cce8fbb7db436301b979525d3de351dd37f550c5f8a86"
+assemblyline_rust_image: "docker.io/cccs/assemblyline-rust:4.8.0.stable4@sha256:e2107f53d0ee2e08bb497202ced436cd6384981fbf3f9421891f8d1694a23f6e"
+assemblyline_ui_image: "docker.io/cccs/assemblyline-ui:4.8.0.stable4@sha256:8134f772e07ac81d044c65419e0b59f953b6fa15e4cc50392524bbf5926cb3c3"
+assemblyline_socketio_image: "docker.io/cccs/assemblyline-socketio:4.8.0.stable4@sha256:9c4ba43fa3e8c45771627ddae8878e2d839a00e0718114150abc21f3033b3409"
+assemblyline_frontend_image: "docker.io/cccs/assemblyline-ui-frontend:4.8.0.stable4@sha256:8db2759242bfd12cc88b414b58d50c9014d2e8b3a4e7761a30a679e263af6437"
+# the datastore the release is built against (the compose repository pins 8.10.2); it moves only within
+# the major version the release supports
+assemblyline_elastic_image: "docker.elastic.co/elasticsearch/elasticsearch:8.10.2@sha256:d118fc05cfa714a4577731384ec8b08fe7e70c203a6949b0581e0f6ebe54b0af"
+# the 7.2 line is BSD-licensed (the broker holds queued tasks only, as in modules/intelowl)
+assemblyline_redis_image: "docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3"
+# The object store and the TLS front: the project's own images (cccs/minio, cccs/nginx-ssl-frontend)
+# publish only a `latest` tag, which compose_app refuses. NEXT CHANGE: pick pinned releases (README
+# "What PR 2 needs"); until then they are not rendered and assemblyline_start stays false.
+assemblyline_bind: "{{ ansible_host }}"
+assemblyline_port: 443
+assemblyline_dir: /opt/compose/assemblyline
+assemblyline_data_root: /var/lib/assemblyline
+assemblyline_owner: root
+assemblyline_group: root
+# ELASTIC_MEM in MB; the JVM heap, the guest keeps as much again for the page cache (ADR-0052 decision 8)
+assemblyline_elastic_mem_mb: 8192
+assemblyline_elastic_mem_limit: 16g
+assemblyline_elastic_uid: 1000
+assemblyline_elastic_gid: 0
+assemblyline_redis_uid: 61052
+assemblyline_redis_gid: 61052
+assemblyline_redis_mem_limit: 1g
+assemblyline_core_mem_limit: 1g
+assemblyline_ui_mem_limit: 2g
+# how long a submission and its files are kept (days), the expiry the config.yml carries (next change)
+assemblyline_submission_ttl_days: 90
+# credentials, by secret name (ADR-0052 decision 5)
+assemblyline_admin_login_ref: secret:assemblyline/admin-password
+assemblyline_elastic_login_ref: secret:assemblyline/elastic-password
+assemblyline_filestore_login_ref: secret:assemblyline/filestore-password
+assemblyline_service_key_ref: secret:assemblyline/service-api-key
+# the guest's image archive (a docker save, imported before the first start): the offline delivery of ADR-0052 decision 7
+assemblyline_image_archive: ""
+assemblyline_export_dir: /var/backups/compose/assemblyline/export
+assemblyline_start: false
+assemblyline_validate_with_docker: true
+assemblyline_health_timeout: 10
+assemblyline_ready_timeout: 300

@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned release bump (assemblyline_target_images: core, rust, ui, socketio
+# and frontend as repository:tag@sha256:<digest>, one tag for all five), export the datastore and files first (the
+# datastore migrates forward on the first start and cannot go back), then converge.
+#   ansible-playbook -i <inventory> modules/assemblyline/playbooks/upgrade.yml -e @target-images.yml
+- name: Upgrade the file-analysis provider
+  hosts: mod_assemblyline_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: assemblyline
+        tasks_from: upgrade
+    - name: Export the datastore and files before the new release opens them
+      ansible.builtin.include_role:
+        name: assemblyline
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: assemblyline
+      vars:
+        assemblyline_core_image: "{{ assemblyline_target_images.core }}"
+        assemblyline_rust_image: "{{ assemblyline_target_images.rust }}"
+        assemblyline_ui_image: "{{ assemblyline_target_images.ui }}"
+        assemblyline_socketio_image: "{{ assemblyline_target_images.socketio }}"
+        assemblyline_frontend_image: "{{ assemblyline_target_images.frontend }}"

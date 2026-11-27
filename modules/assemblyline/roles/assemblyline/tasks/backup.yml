@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# NOT IMPLEMENTED in the scaffold (README "What PR 2 needs"): the exit copy is an Elasticsearch snapshot
+# into export/datastore plus a copy of the object store's buckets, with a sha256 listing (ADR-0052
+# decision 10). It fails closed rather than report a copy that was not taken, so remove.yml and upgrade.yml
+# (which export first) stop here on a host that has data.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The export of the datastore and files is the next change
+      ansible.builtin.fail:
+        msg: "assemblyline: the backup hook is not implemented yet (snapshot and bucket copy); take a VM backup before changing a host that has data"
+  tags: [backup]

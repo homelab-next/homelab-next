@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the datastore and files first (export_first), stop and remove the containers and
+# delete the env files that hold the passwords. The data root (with the export) is kept for the
+# operator to archive or delete; the decommission audit (module.yml lifecycle.remove.audit) checks
+# nothing still names the service. The sample files are quarantined data: delete them deliberately.
+- name: Remove the file-analysis provider
+  hosts: mod_assemblyline_server
+  become: true
+  tasks:
+    - name: Export the datastore and files first
+      ansible.builtin.include_role:
+        name: assemblyline
+        tasks_from: export
+    - name: Stop and remove the containers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ assemblyline_dir | default('/opt/compose/assemblyline') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credentials the containers were given
+      ansible.builtin.file:
+        path: "{{ assemblyline_dir | default('/opt/compose/assemblyline') }}/secrets"
+        state: absent

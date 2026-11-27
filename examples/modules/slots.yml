@@ -44,6 +44,7 @@ slots:
   media:               {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   documents:           {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   enrichment:          {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
+  file-analysis:       {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   feed-reader:         {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   web-search:          {stage: null, contract: null, stateful: false}
   threat-intel:        {stage: null, contract: null, stateful: true, export_formats: [object-tree]}

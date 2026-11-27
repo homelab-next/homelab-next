@@ -1,0 +1,979 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: 'Render the datastore, the broker and the product''s containers (scaffold: not started).'
+    options:
+      assemblyline_logical_id:
+        type: str
+        description: The instance's registry id (the file-analysis row the site binds). Required.
+        required: true
+      assemblyline_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the core processes image (one release tag for all five product images).
+        default: docker.io/cccs/assemblyline-core:4.8.0.stable4@sha256:4c309a7aa82792966c0cce8fbb7db436301b979525d3de351dd37f550c5f8a86
+      assemblyline_rust_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dispatcher, ingester, plumber and service server image.
+        default: docker.io/cccs/assemblyline-rust:4.8.0.stable4@sha256:e2107f53d0ee2e08bb497202ced436cd6384981fbf3f9421891f8d1694a23f6e
+      assemblyline_ui_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the API and UI server image.
+        default: docker.io/cccs/assemblyline-ui:4.8.0.stable4@sha256:8134f772e07ac81d044c65419e0b59f953b6fa15e4cc50392524bbf5926cb3c3
+      assemblyline_socketio_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the socket server image.
+        default: docker.io/cccs/assemblyline-socketio:4.8.0.stable4@sha256:9c4ba43fa3e8c45771627ddae8878e2d839a00e0718114150abc21f3033b3409
+      assemblyline_frontend_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web frontend image (not rendered until the next change).
+        default: docker.io/cccs/assemblyline-ui-frontend:4.8.0.stable4@sha256:8db2759242bfd12cc88b414b58d50c9014d2e8b3a4e7761a30a679e263af6437
+      assemblyline_elastic_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the datastore image (the release is built against 8.10.2).
+        default: docker.elastic.co/elasticsearch/elasticsearch:8.10.2@sha256:d118fc05cfa714a4577731384ec8b08fe7e70c203a6949b0581e0f6ebe54b0af
+      assemblyline_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image (the 7.2 line, BSD).
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      assemblyline_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      assemblyline_port:
+        type: int
+        description: The front's port.
+        default: 443
+      assemblyline_dir:
+        type: str
+        description: The compose project directory.
+        default: /opt/compose/assemblyline
+      assemblyline_data_root:
+        type: str
+        description: 'The data root: the datastore, the object store and export/.'
+        default: /var/lib/assemblyline
+      assemblyline_owner:
+        type: str
+        description: Owner of the project directory and the data root.
+        default: root
+      assemblyline_group:
+        type: str
+        description: Group of the project directory and the data root.
+        default: root
+      assemblyline_elastic_mem_mb:
+        type: int
+        description: The datastore JVM heap in MB (the guest keeps as much again for the page cache).
+        default: 8192
+      assemblyline_elastic_mem_limit:
+        type: str
+        description: The datastore container memory limit.
+        default: 16g
+      assemblyline_elastic_uid:
+        type: int
+        description: The datastore user id.
+        default: 1000
+      assemblyline_elastic_gid:
+        type: int
+        description: The datastore group id.
+        default: 0
+      assemblyline_redis_uid:
+        type: int
+        description: The broker user id.
+        default: 61052
+      assemblyline_redis_gid:
+        type: int
+        description: The broker group id.
+        default: 61052
+      assemblyline_redis_mem_limit:
+        type: str
+        description: The broker container memory limit.
+        default: 1g
+      assemblyline_core_mem_limit:
+        type: str
+        description: The memory limit of each core process container.
+        default: 1g
+      assemblyline_ui_mem_limit:
+        type: str
+        description: The API and UI container memory limit.
+        default: 2g
+      assemblyline_submission_ttl_days:
+        type: int
+        description: Days a submission and its files are kept (the expiry the configuration file carries).
+        default: 90
+      assemblyline_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password.
+        default: secret:assemblyline/admin-password
+      assemblyline_elastic_login_ref:
+        type: str
+        description: secret:<name> of the datastore's superuser password.
+        default: secret:assemblyline/elastic-password
+      assemblyline_filestore_login_ref:
+        type: str
+        description: secret:<name> of the object store's root password.
+        default: secret:assemblyline/filestore-password
+      assemblyline_service_key_ref:
+        type: str
+        description: secret:<name> of the key the analysis services use at the service server.
+        default: secret:assemblyline/service-api-key
+      assemblyline_image_archive:
+        type: str
+        description: 'Absolute path of a docker save archive on the guest, loaded before the first start (empty: the images are already present or a registry mirror serves them).'
+        default: ''
+      assemblyline_export_dir:
+        type: str
+        description: Open-format export target.
+        default: /var/backups/compose/assemblyline/export
+      assemblyline_start:
+        type: bool
+        description: Run docker compose up -d after rendering (refused in the scaffold).
+        default: false
+      assemblyline_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      assemblyline_health_timeout:
+        type: int
+        description: Seconds to wait for a probe.
+        default: 10
+      assemblyline_ready_timeout:
+        type: int
+        description: Seconds to wait for the appliance to answer after a start.
+        default: 300
+  readiness:
+    short_description: Check the container engine, the inputs, the credentials and the image archive.
+    options:
+      assemblyline_logical_id:
+        type: str
+        description: The instance's registry id (the file-analysis row the site binds). Required.
+        required: true
+      assemblyline_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the core processes image (one release tag for all five product images).
+        default: docker.io/cccs/assemblyline-core:4.8.0.stable4@sha256:4c309a7aa82792966c0cce8fbb7db436301b979525d3de351dd37f550c5f8a86
+      assemblyline_rust_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dispatcher, ingester, plumber and service server image.
+        default: docker.io/cccs/assemblyline-rust:4.8.0.stable4@sha256:e2107f53d0ee2e08bb497202ced436cd6384981fbf3f9421891f8d1694a23f6e
+      assemblyline_ui_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the API and UI server image.
+        default: docker.io/cccs/assemblyline-ui:4.8.0.stable4@sha256:8134f772e07ac81d044c65419e0b59f953b6fa15e4cc50392524bbf5926cb3c3
+      assemblyline_socketio_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the socket server image.
+        default: docker.io/cccs/assemblyline-socketio:4.8.0.stable4@sha256:9c4ba43fa3e8c45771627ddae8878e2d839a00e0718114150abc21f3033b3409
+      assemblyline_frontend_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web frontend image (not rendered until the next change).
+        default: docker.io/cccs/assemblyline-ui-frontend:4.8.0.stable4@sha256:8db2759242bfd12cc88b414b58d50c9014d2e8b3a4e7761a30a679e263af6437
+      assemblyline_elastic_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the datastore image (the release is built against 8.10.2).
+        default: docker.elastic.co/elasticsearch/elasticsearch:8.10.2@sha256:d118fc05cfa714a4577731384ec8b08fe7e70c203a6949b0581e0f6ebe54b0af
+      assemblyline_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image (the 7.2 line, BSD).
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      assemblyline_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      assemblyline_port:
+        type: int
+        description: The front's port.
+        default: 443
+      assemblyline_dir:
+        type: str
+        description: The compose project directory.
+        default: /opt/compose/assemblyline
+      assemblyline_data_root:
+        type: str
+        description: 'The data root: the datastore, the object store and export/.'
+        default: /var/lib/assemblyline
+      assemblyline_owner:
+        type: str
+        description: Owner of the project directory and the data root.
+        default: root
+      assemblyline_group:
+        type: str
+        description: Group of the project directory and the data root.
+        default: root
+      assemblyline_elastic_mem_mb:
+        type: int
+        description: The datastore JVM heap in MB (the guest keeps as much again for the page cache).
+        default: 8192
+      assemblyline_elastic_mem_limit:
+        type: str
+        description: The datastore container memory limit.
+        default: 16g
+      assemblyline_elastic_uid:
+        type: int
+        description: The datastore user id.
+        default: 1000
+      assemblyline_elastic_gid:
+        type: int
+        description: The datastore group id.
+        default: 0
+      assemblyline_redis_uid:
+        type: int
+        description: The broker user id.
+        default: 61052
+      assemblyline_redis_gid:
+        type: int
+        description: The broker group id.
+        default: 61052
+      assemblyline_redis_mem_limit:
+        type: str
+        description: The broker container memory limit.
+        default: 1g
+      assemblyline_core_mem_limit:
+        type: str
+        description: The memory limit of each core process container.
+        default: 1g
+      assemblyline_ui_mem_limit:
+        type: str
+        description: The API and UI container memory limit.
+        default: 2g
+      assemblyline_submission_ttl_days:
+        type: int
+        description: Days a submission and its files are kept (the expiry the configuration file carries).
+        default: 90
+      assemblyline_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password.
+        default: secret:assemblyline/admin-password
+      assemblyline_elastic_login_ref:
+        type: str
+        description: secret:<name> of the datastore's superuser password.
+        default: secret:assemblyline/elastic-password
+      assemblyline_filestore_login_ref:
+        type: str
+        description: secret:<name> of the object store's root password.
+        default: secret:assemblyline/filestore-password
+      assemblyline_service_key_ref:
+        type: str
+        description: secret:<name> of the key the analysis services use at the service server.
+        default: secret:assemblyline/service-api-key
+      assemblyline_image_archive:
+        type: str
+        description: 'Absolute path of a docker save archive on the guest, loaded before the first start (empty: the images are already present or a registry mirror serves them).'
+        default: ''
+      assemblyline_export_dir:
+        type: str
+        description: Open-format export target.
+        default: /var/backups/compose/assemblyline/export
+      assemblyline_start:
+        type: bool
+        description: Run docker compose up -d after rendering (refused in the scaffold).
+        default: false
+      assemblyline_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      assemblyline_health_timeout:
+        type: int
+        description: Seconds to wait for a probe.
+        default: 10
+      assemblyline_ready_timeout:
+        type: int
+        description: Seconds to wait for the appliance to answer after a start.
+        default: 300
+  health:
+    short_description: 'Read only: every container healthy; only scaler and updater privileged or holding the docker socket.'
+    options:
+      assemblyline_logical_id:
+        type: str
+        description: The instance's registry id (the file-analysis row the site binds). Required.
+        required: true
+      assemblyline_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the core processes image (one release tag for all five product images).
+        default: docker.io/cccs/assemblyline-core:4.8.0.stable4@sha256:4c309a7aa82792966c0cce8fbb7db436301b979525d3de351dd37f550c5f8a86
+      assemblyline_rust_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dispatcher, ingester, plumber and service server image.
+        default: docker.io/cccs/assemblyline-rust:4.8.0.stable4@sha256:e2107f53d0ee2e08bb497202ced436cd6384981fbf3f9421891f8d1694a23f6e
+      assemblyline_ui_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the API and UI server image.
+        default: docker.io/cccs/assemblyline-ui:4.8.0.stable4@sha256:8134f772e07ac81d044c65419e0b59f953b6fa15e4cc50392524bbf5926cb3c3
+      assemblyline_socketio_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the socket server image.
+        default: docker.io/cccs/assemblyline-socketio:4.8.0.stable4@sha256:9c4ba43fa3e8c45771627ddae8878e2d839a00e0718114150abc21f3033b3409
+      assemblyline_frontend_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web frontend image (not rendered until the next change).
+        default: docker.io/cccs/assemblyline-ui-frontend:4.8.0.stable4@sha256:8db2759242bfd12cc88b414b58d50c9014d2e8b3a4e7761a30a679e263af6437
+      assemblyline_elastic_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the datastore image (the release is built against 8.10.2).
+        default: docker.elastic.co/elasticsearch/elasticsearch:8.10.2@sha256:d118fc05cfa714a4577731384ec8b08fe7e70c203a6949b0581e0f6ebe54b0af
+      assemblyline_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image (the 7.2 line, BSD).
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      assemblyline_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      assemblyline_port:
+        type: int
+        description: The front's port.
+        default: 443
+      assemblyline_dir:
+        type: str
+        description: The compose project directory.
+        default: /opt/compose/assemblyline
+      assemblyline_data_root:
+        type: str
+        description: 'The data root: the datastore, the object store and export/.'
+        default: /var/lib/assemblyline
+      assemblyline_owner:
+        type: str
+        description: Owner of the project directory and the data root.
+        default: root
+      assemblyline_group:
+        type: str
+        description: Group of the project directory and the data root.
+        default: root
+      assemblyline_elastic_mem_mb:
+        type: int
+        description: The datastore JVM heap in MB (the guest keeps as much again for the page cache).
+        default: 8192
+      assemblyline_elastic_mem_limit:
+        type: str
+        description: The datastore container memory limit.
+        default: 16g
+      assemblyline_elastic_uid:
+        type: int
+        description: The datastore user id.
+        default: 1000
+      assemblyline_elastic_gid:
+        type: int
+        description: The datastore group id.
+        default: 0
+      assemblyline_redis_uid:
+        type: int
+        description: The broker user id.
+        default: 61052
+      assemblyline_redis_gid:
+        type: int
+        description: The broker group id.
+        default: 61052
+      assemblyline_redis_mem_limit:
+        type: str
+        description: The broker container memory limit.
+        default: 1g
+      assemblyline_core_mem_limit:
+        type: str
+        description: The memory limit of each core process container.
+        default: 1g
+      assemblyline_ui_mem_limit:
+        type: str
+        description: The API and UI container memory limit.
+        default: 2g
+      assemblyline_submission_ttl_days:
+        type: int
+        description: Days a submission and its files are kept (the expiry the configuration file carries).
+        default: 90
+      assemblyline_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password.
+        default: secret:assemblyline/admin-password
+      assemblyline_elastic_login_ref:
+        type: str
+        description: secret:<name> of the datastore's superuser password.
+        default: secret:assemblyline/elastic-password
+      assemblyline_filestore_login_ref:
+        type: str
+        description: secret:<name> of the object store's root password.
+        default: secret:assemblyline/filestore-password
+      assemblyline_service_key_ref:
+        type: str
+        description: secret:<name> of the key the analysis services use at the service server.
+        default: secret:assemblyline/service-api-key
+      assemblyline_image_archive:
+        type: str
+        description: 'Absolute path of a docker save archive on the guest, loaded before the first start (empty: the images are already present or a registry mirror serves them).'
+        default: ''
+      assemblyline_export_dir:
+        type: str
+        description: Open-format export target.
+        default: /var/backups/compose/assemblyline/export
+      assemblyline_start:
+        type: bool
+        description: Run docker compose up -d after rendering (refused in the scaffold).
+        default: false
+      assemblyline_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      assemblyline_health_timeout:
+        type: int
+        description: Seconds to wait for a probe.
+        default: 10
+      assemblyline_ready_timeout:
+        type: int
+        description: Seconds to wait for the appliance to answer after a start.
+        default: 300
+  backup:
+    short_description: Not implemented yet (fails closed).
+    options:
+      assemblyline_logical_id:
+        type: str
+        description: The instance's registry id (the file-analysis row the site binds). Required.
+        required: true
+      assemblyline_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the core processes image (one release tag for all five product images).
+        default: docker.io/cccs/assemblyline-core:4.8.0.stable4@sha256:4c309a7aa82792966c0cce8fbb7db436301b979525d3de351dd37f550c5f8a86
+      assemblyline_rust_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dispatcher, ingester, plumber and service server image.
+        default: docker.io/cccs/assemblyline-rust:4.8.0.stable4@sha256:e2107f53d0ee2e08bb497202ced436cd6384981fbf3f9421891f8d1694a23f6e
+      assemblyline_ui_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the API and UI server image.
+        default: docker.io/cccs/assemblyline-ui:4.8.0.stable4@sha256:8134f772e07ac81d044c65419e0b59f953b6fa15e4cc50392524bbf5926cb3c3
+      assemblyline_socketio_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the socket server image.
+        default: docker.io/cccs/assemblyline-socketio:4.8.0.stable4@sha256:9c4ba43fa3e8c45771627ddae8878e2d839a00e0718114150abc21f3033b3409
+      assemblyline_frontend_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web frontend image (not rendered until the next change).
+        default: docker.io/cccs/assemblyline-ui-frontend:4.8.0.stable4@sha256:8db2759242bfd12cc88b414b58d50c9014d2e8b3a4e7761a30a679e263af6437
+      assemblyline_elastic_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the datastore image (the release is built against 8.10.2).
+        default: docker.elastic.co/elasticsearch/elasticsearch:8.10.2@sha256:d118fc05cfa714a4577731384ec8b08fe7e70c203a6949b0581e0f6ebe54b0af
+      assemblyline_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image (the 7.2 line, BSD).
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      assemblyline_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      assemblyline_port:
+        type: int
+        description: The front's port.
+        default: 443
+      assemblyline_dir:
+        type: str
+        description: The compose project directory.
+        default: /opt/compose/assemblyline
+      assemblyline_data_root:
+        type: str
+        description: 'The data root: the datastore, the object store and export/.'
+        default: /var/lib/assemblyline
+      assemblyline_owner:
+        type: str
+        description: Owner of the project directory and the data root.
+        default: root
+      assemblyline_group:
+        type: str
+        description: Group of the project directory and the data root.
+        default: root
+      assemblyline_elastic_mem_mb:
+        type: int
+        description: The datastore JVM heap in MB (the guest keeps as much again for the page cache).
+        default: 8192
+      assemblyline_elastic_mem_limit:
+        type: str
+        description: The datastore container memory limit.
+        default: 16g
+      assemblyline_elastic_uid:
+        type: int
+        description: The datastore user id.
+        default: 1000
+      assemblyline_elastic_gid:
+        type: int
+        description: The datastore group id.
+        default: 0
+      assemblyline_redis_uid:
+        type: int
+        description: The broker user id.
+        default: 61052
+      assemblyline_redis_gid:
+        type: int
+        description: The broker group id.
+        default: 61052
+      assemblyline_redis_mem_limit:
+        type: str
+        description: The broker container memory limit.
+        default: 1g
+      assemblyline_core_mem_limit:
+        type: str
+        description: The memory limit of each core process container.
+        default: 1g
+      assemblyline_ui_mem_limit:
+        type: str
+        description: The API and UI container memory limit.
+        default: 2g
+      assemblyline_submission_ttl_days:
+        type: int
+        description: Days a submission and its files are kept (the expiry the configuration file carries).
+        default: 90
+      assemblyline_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password.
+        default: secret:assemblyline/admin-password
+      assemblyline_elastic_login_ref:
+        type: str
+        description: secret:<name> of the datastore's superuser password.
+        default: secret:assemblyline/elastic-password
+      assemblyline_filestore_login_ref:
+        type: str
+        description: secret:<name> of the object store's root password.
+        default: secret:assemblyline/filestore-password
+      assemblyline_service_key_ref:
+        type: str
+        description: secret:<name> of the key the analysis services use at the service server.
+        default: secret:assemblyline/service-api-key
+      assemblyline_image_archive:
+        type: str
+        description: 'Absolute path of a docker save archive on the guest, loaded before the first start (empty: the images are already present or a registry mirror serves them).'
+        default: ''
+      assemblyline_export_dir:
+        type: str
+        description: Open-format export target.
+        default: /var/backups/compose/assemblyline/export
+      assemblyline_start:
+        type: bool
+        description: Run docker compose up -d after rendering (refused in the scaffold).
+        default: false
+      assemblyline_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      assemblyline_health_timeout:
+        type: int
+        description: Seconds to wait for a probe.
+        default: 10
+      assemblyline_ready_timeout:
+        type: int
+        description: Seconds to wait for the appliance to answer after a start.
+        default: 300
+  export:
+    short_description: Not implemented yet (fails closed).
+    options:
+      assemblyline_logical_id:
+        type: str
+        description: The instance's registry id (the file-analysis row the site binds). Required.
+        required: true
+      assemblyline_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the core processes image (one release tag for all five product images).
+        default: docker.io/cccs/assemblyline-core:4.8.0.stable4@sha256:4c309a7aa82792966c0cce8fbb7db436301b979525d3de351dd37f550c5f8a86
+      assemblyline_rust_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dispatcher, ingester, plumber and service server image.
+        default: docker.io/cccs/assemblyline-rust:4.8.0.stable4@sha256:e2107f53d0ee2e08bb497202ced436cd6384981fbf3f9421891f8d1694a23f6e
+      assemblyline_ui_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the API and UI server image.
+        default: docker.io/cccs/assemblyline-ui:4.8.0.stable4@sha256:8134f772e07ac81d044c65419e0b59f953b6fa15e4cc50392524bbf5926cb3c3
+      assemblyline_socketio_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the socket server image.
+        default: docker.io/cccs/assemblyline-socketio:4.8.0.stable4@sha256:9c4ba43fa3e8c45771627ddae8878e2d839a00e0718114150abc21f3033b3409
+      assemblyline_frontend_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web frontend image (not rendered until the next change).
+        default: docker.io/cccs/assemblyline-ui-frontend:4.8.0.stable4@sha256:8db2759242bfd12cc88b414b58d50c9014d2e8b3a4e7761a30a679e263af6437
+      assemblyline_elastic_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the datastore image (the release is built against 8.10.2).
+        default: docker.elastic.co/elasticsearch/elasticsearch:8.10.2@sha256:d118fc05cfa714a4577731384ec8b08fe7e70c203a6949b0581e0f6ebe54b0af
+      assemblyline_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image (the 7.2 line, BSD).
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      assemblyline_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      assemblyline_port:
+        type: int
+        description: The front's port.
+        default: 443
+      assemblyline_dir:
+        type: str
+        description: The compose project directory.
+        default: /opt/compose/assemblyline
+      assemblyline_data_root:
+        type: str
+        description: 'The data root: the datastore, the object store and export/.'
+        default: /var/lib/assemblyline
+      assemblyline_owner:
+        type: str
+        description: Owner of the project directory and the data root.
+        default: root
+      assemblyline_group:
+        type: str
+        description: Group of the project directory and the data root.
+        default: root
+      assemblyline_elastic_mem_mb:
+        type: int
+        description: The datastore JVM heap in MB (the guest keeps as much again for the page cache).
+        default: 8192
+      assemblyline_elastic_mem_limit:
+        type: str
+        description: The datastore container memory limit.
+        default: 16g
+      assemblyline_elastic_uid:
+        type: int
+        description: The datastore user id.
+        default: 1000
+      assemblyline_elastic_gid:
+        type: int
+        description: The datastore group id.
+        default: 0
+      assemblyline_redis_uid:
+        type: int
+        description: The broker user id.
+        default: 61052
+      assemblyline_redis_gid:
+        type: int
+        description: The broker group id.
+        default: 61052
+      assemblyline_redis_mem_limit:
+        type: str
+        description: The broker container memory limit.
+        default: 1g
+      assemblyline_core_mem_limit:
+        type: str
+        description: The memory limit of each core process container.
+        default: 1g
+      assemblyline_ui_mem_limit:
+        type: str
+        description: The API and UI container memory limit.
+        default: 2g
+      assemblyline_submission_ttl_days:
+        type: int
+        description: Days a submission and its files are kept (the expiry the configuration file carries).
+        default: 90
+      assemblyline_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password.
+        default: secret:assemblyline/admin-password
+      assemblyline_elastic_login_ref:
+        type: str
+        description: secret:<name> of the datastore's superuser password.
+        default: secret:assemblyline/elastic-password
+      assemblyline_filestore_login_ref:
+        type: str
+        description: secret:<name> of the object store's root password.
+        default: secret:assemblyline/filestore-password
+      assemblyline_service_key_ref:
+        type: str
+        description: secret:<name> of the key the analysis services use at the service server.
+        default: secret:assemblyline/service-api-key
+      assemblyline_image_archive:
+        type: str
+        description: 'Absolute path of a docker save archive on the guest, loaded before the first start (empty: the images are already present or a registry mirror serves them).'
+        default: ''
+      assemblyline_export_dir:
+        type: str
+        description: Open-format export target.
+        default: /var/backups/compose/assemblyline/export
+      assemblyline_start:
+        type: bool
+        description: Run docker compose up -d after rendering (refused in the scaffold).
+        default: false
+      assemblyline_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      assemblyline_health_timeout:
+        type: int
+        description: Seconds to wait for a probe.
+        default: 10
+      assemblyline_ready_timeout:
+        type: int
+        description: Seconds to wait for the appliance to answer after a start.
+        default: 300
+  upgrade:
+    short_description: Validate and record a release bump (one tag for five images, never older).
+    options:
+      assemblyline_logical_id:
+        type: str
+        description: The instance's registry id (the file-analysis row the site binds). Required.
+        required: true
+      assemblyline_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the core processes image (one release tag for all five product images).
+        default: docker.io/cccs/assemblyline-core:4.8.0.stable4@sha256:4c309a7aa82792966c0cce8fbb7db436301b979525d3de351dd37f550c5f8a86
+      assemblyline_rust_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dispatcher, ingester, plumber and service server image.
+        default: docker.io/cccs/assemblyline-rust:4.8.0.stable4@sha256:e2107f53d0ee2e08bb497202ced436cd6384981fbf3f9421891f8d1694a23f6e
+      assemblyline_ui_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the API and UI server image.
+        default: docker.io/cccs/assemblyline-ui:4.8.0.stable4@sha256:8134f772e07ac81d044c65419e0b59f953b6fa15e4cc50392524bbf5926cb3c3
+      assemblyline_socketio_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the socket server image.
+        default: docker.io/cccs/assemblyline-socketio:4.8.0.stable4@sha256:9c4ba43fa3e8c45771627ddae8878e2d839a00e0718114150abc21f3033b3409
+      assemblyline_frontend_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web frontend image (not rendered until the next change).
+        default: docker.io/cccs/assemblyline-ui-frontend:4.8.0.stable4@sha256:8db2759242bfd12cc88b414b58d50c9014d2e8b3a4e7761a30a679e263af6437
+      assemblyline_elastic_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the datastore image (the release is built against 8.10.2).
+        default: docker.elastic.co/elasticsearch/elasticsearch:8.10.2@sha256:d118fc05cfa714a4577731384ec8b08fe7e70c203a6949b0581e0f6ebe54b0af
+      assemblyline_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image (the 7.2 line, BSD).
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      assemblyline_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      assemblyline_port:
+        type: int
+        description: The front's port.
+        default: 443
+      assemblyline_dir:
+        type: str
+        description: The compose project directory.
+        default: /opt/compose/assemblyline
+      assemblyline_data_root:
+        type: str
+        description: 'The data root: the datastore, the object store and export/.'
+        default: /var/lib/assemblyline
+      assemblyline_owner:
+        type: str
+        description: Owner of the project directory and the data root.
+        default: root
+      assemblyline_group:
+        type: str
+        description: Group of the project directory and the data root.
+        default: root
+      assemblyline_elastic_mem_mb:
+        type: int
+        description: The datastore JVM heap in MB (the guest keeps as much again for the page cache).
+        default: 8192
+      assemblyline_elastic_mem_limit:
+        type: str
+        description: The datastore container memory limit.
+        default: 16g
+      assemblyline_elastic_uid:
+        type: int
+        description: The datastore user id.
+        default: 1000
+      assemblyline_elastic_gid:
+        type: int
+        description: The datastore group id.
+        default: 0
+      assemblyline_redis_uid:
+        type: int
+        description: The broker user id.
+        default: 61052
+      assemblyline_redis_gid:
+        type: int
+        description: The broker group id.
+        default: 61052
+      assemblyline_redis_mem_limit:
+        type: str
+        description: The broker container memory limit.
+        default: 1g
+      assemblyline_core_mem_limit:
+        type: str
+        description: The memory limit of each core process container.
+        default: 1g
+      assemblyline_ui_mem_limit:
+        type: str
+        description: The API and UI container memory limit.
+        default: 2g
+      assemblyline_submission_ttl_days:
+        type: int
+        description: Days a submission and its files are kept (the expiry the configuration file carries).
+        default: 90
+      assemblyline_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password.
+        default: secret:assemblyline/admin-password
+      assemblyline_elastic_login_ref:
+        type: str
+        description: secret:<name> of the datastore's superuser password.
+        default: secret:assemblyline/elastic-password
+      assemblyline_filestore_login_ref:
+        type: str
+        description: secret:<name> of the object store's root password.
+        default: secret:assemblyline/filestore-password
+      assemblyline_service_key_ref:
+        type: str
+        description: secret:<name> of the key the analysis services use at the service server.
+        default: secret:assemblyline/service-api-key
+      assemblyline_image_archive:
+        type: str
+        description: 'Absolute path of a docker save archive on the guest, loaded before the first start (empty: the images are already present or a registry mirror serves them).'
+        default: ''
+      assemblyline_export_dir:
+        type: str
+        description: Open-format export target.
+        default: /var/backups/compose/assemblyline/export
+      assemblyline_start:
+        type: bool
+        description: Run docker compose up -d after rendering (refused in the scaffold).
+        default: false
+      assemblyline_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      assemblyline_health_timeout:
+        type: int
+        description: Seconds to wait for a probe.
+        default: 10
+      assemblyline_ready_timeout:
+        type: int
+        description: Seconds to wait for the appliance to answer after a start.
+        default: 300
+      assemblyline_target_images:
+        type: dict
+        description: core, rust, ui, socketio and frontend as repository:tag@sha256:<digest>, one release tag for all five.
+        required: true
+  restore:
+    short_description: Not implemented yet (fails closed).
+    options:
+      assemblyline_logical_id:
+        type: str
+        description: The instance's registry id (the file-analysis row the site binds). Required.
+        required: true
+      assemblyline_core_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the core processes image (one release tag for all five product images).
+        default: docker.io/cccs/assemblyline-core:4.8.0.stable4@sha256:4c309a7aa82792966c0cce8fbb7db436301b979525d3de351dd37f550c5f8a86
+      assemblyline_rust_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the dispatcher, ingester, plumber and service server image.
+        default: docker.io/cccs/assemblyline-rust:4.8.0.stable4@sha256:e2107f53d0ee2e08bb497202ced436cd6384981fbf3f9421891f8d1694a23f6e
+      assemblyline_ui_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the API and UI server image.
+        default: docker.io/cccs/assemblyline-ui:4.8.0.stable4@sha256:8134f772e07ac81d044c65419e0b59f953b6fa15e4cc50392524bbf5926cb3c3
+      assemblyline_socketio_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the socket server image.
+        default: docker.io/cccs/assemblyline-socketio:4.8.0.stable4@sha256:9c4ba43fa3e8c45771627ddae8878e2d839a00e0718114150abc21f3033b3409
+      assemblyline_frontend_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the web frontend image (not rendered until the next change).
+        default: docker.io/cccs/assemblyline-ui-frontend:4.8.0.stable4@sha256:8db2759242bfd12cc88b414b58d50c9014d2e8b3a4e7761a30a679e263af6437
+      assemblyline_elastic_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the datastore image (the release is built against 8.10.2).
+        default: docker.elastic.co/elasticsearch/elasticsearch:8.10.2@sha256:d118fc05cfa714a4577731384ec8b08fe7e70c203a6949b0581e0f6ebe54b0af
+      assemblyline_redis_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the broker image (the 7.2 line, BSD).
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      assemblyline_bind:
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      assemblyline_port:
+        type: int
+        description: The front's port.
+        default: 443
+      assemblyline_dir:
+        type: str
+        description: The compose project directory.
+        default: /opt/compose/assemblyline
+      assemblyline_data_root:
+        type: str
+        description: 'The data root: the datastore, the object store and export/.'
+        default: /var/lib/assemblyline
+      assemblyline_owner:
+        type: str
+        description: Owner of the project directory and the data root.
+        default: root
+      assemblyline_group:
+        type: str
+        description: Group of the project directory and the data root.
+        default: root
+      assemblyline_elastic_mem_mb:
+        type: int
+        description: The datastore JVM heap in MB (the guest keeps as much again for the page cache).
+        default: 8192
+      assemblyline_elastic_mem_limit:
+        type: str
+        description: The datastore container memory limit.
+        default: 16g
+      assemblyline_elastic_uid:
+        type: int
+        description: The datastore user id.
+        default: 1000
+      assemblyline_elastic_gid:
+        type: int
+        description: The datastore group id.
+        default: 0
+      assemblyline_redis_uid:
+        type: int
+        description: The broker user id.
+        default: 61052
+      assemblyline_redis_gid:
+        type: int
+        description: The broker group id.
+        default: 61052
+      assemblyline_redis_mem_limit:
+        type: str
+        description: The broker container memory limit.
+        default: 1g
+      assemblyline_core_mem_limit:
+        type: str
+        description: The memory limit of each core process container.
+        default: 1g
+      assemblyline_ui_mem_limit:
+        type: str
+        description: The API and UI container memory limit.
+        default: 2g
+      assemblyline_submission_ttl_days:
+        type: int
+        description: Days a submission and its files are kept (the expiry the configuration file carries).
+        default: 90
+      assemblyline_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password.
+        default: secret:assemblyline/admin-password
+      assemblyline_elastic_login_ref:
+        type: str
+        description: secret:<name> of the datastore's superuser password.
+        default: secret:assemblyline/elastic-password
+      assemblyline_filestore_login_ref:
+        type: str
+        description: secret:<name> of the object store's root password.
+        default: secret:assemblyline/filestore-password
+      assemblyline_service_key_ref:
+        type: str
+        description: secret:<name> of the key the analysis services use at the service server.
+        default: secret:assemblyline/service-api-key
+      assemblyline_image_archive:
+        type: str
+        description: 'Absolute path of a docker save archive on the guest, loaded before the first start (empty: the images are already present or a registry mirror serves them).'
+        default: ''
+      assemblyline_export_dir:
+        type: str
+        description: Open-format export target.
+        default: /var/backups/compose/assemblyline/export
+      assemblyline_start:
+        type: bool
+        description: Run docker compose up -d after rendering (refused in the scaffold).
+        default: false
+      assemblyline_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      assemblyline_health_timeout:
+        type: int
+        description: Seconds to wait for a probe.
+        default: 10
+      assemblyline_ready_timeout:
+        type: int
+        description: Seconds to wait for the appliance to answer after a start.
+        default: 300

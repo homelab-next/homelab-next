@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: Apache-2.0
+# The file-analysis provider on AssemblyLine 4 (docs/modules.md; README.md beside this file; ADR-0052).
+# SCAFFOLD (PR 1): the manifest, the role's inputs and checks, the data tier and the core processes
+# as compose_app containers. The privileged pair (scaler, updater), config.yml and the offline
+# service set are PR 2 (README "What PR 2 needs"). The product's containers hold hostile files:
+# the guest is dedicated and its egress is closed by the site's guest firewall (ADR-0052).
+# Every real value (the guest, its address, the submitters, the secret values) is the site's:
+# the overlay's lab/modules.yml, lab/services.yml, group variables and secret store.
+manifest_version: "1.0"
+id: assemblyline
+kind: provider
+title: File analysis on AssemblyLine 4
+description: Fills the file-analysis slot with AssemblyLine 4 as compose_app containers on a dedicated
+  guest with no egress; images by digest imported from an archive, offline service set, API-key
+  submitters, results pulled out by the consumers (never pushed); the datastore and filestore are
+  exportable.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: assemblyline
+  version: 4.8.0
+licence:
+  kind: open-source
+  # AssemblyLine 4 core is MIT. The data tier it runs on is not: Elasticsearch 8.10.2 (Elastic
+  # licence), MinIO (AGPL-3.0). Each analysis service has its own manifest and licence and is read
+  # before it is installed (ADR-0052 decision 7).
+  spdx: MIT
+credentials:
+  - secret: secret:assemblyline/admin-password
+    identity: password
+    holder: provider
+    purpose: the first administrator's password, read only at bootstrap (12 characters or more, never the appliance's default)
+  - secret: secret:assemblyline/elastic-password
+    identity: password
+    holder: provider
+    purpose: the datastore's superuser password (it reaches only the containers' env files)
+  - secret: secret:assemblyline/filestore-password
+    identity: password
+    holder: provider
+    purpose: the object store's root password for the files the product stores
+  - secret: secret:assemblyline/service-api-key
+    identity: key
+    holder: provider
+    purpose: the key analysis-service containers use to reach the service server
+  - secret: secret:assemblyline/apikey-submitter
+    identity: api-key
+    holder: granted
+    purpose: a submitter's API key (submit and read its own submissions); one such secret per consumer, named apikey-<consumer> by the site
+  - secret: secret:assemblyline/apikey-puller
+    identity: api-key
+    holder: granted
+    purpose: the result puller's API key (search and read submissions), granted to the export stage that writes the lake table
+identifiers:
+  - {kind: secret-name, name: assemblyline, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: every password and key is read by name at deploy time; the guest holds no secret-store credential
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 16, memory_mb: 49152, disk_gb: 600}
+      guest:
+        baselines: [base]
+      roles: [role:assemblyline]
+      purpose: runs the whole appliance (docker_engine applied first, compose_app renders it); a dedicated guest, nothing else is placed on it, and its firewall closes every outbound path
+provides:
+  slots:
+    file-analysis:
+      adapter: homelabnext.conform.adapters.file_analysis:make
+      provisional: true
+      reason: file analysis has no contract yet; the obvious standard is the front answering its liveness and refusing an anonymous call to the API, which is what the adapter probes
+      migration: {formats: [object-tree], export: role:assemblyline, import: role:assemblyline}
+egress: none
+contributes:
+  roles:
+    - file: roles/assemblyline
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:assemblyline, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: datastore-and-files
+    kind: database
+    description: The Elasticsearch datastore (accounts, API keys, submissions, results, service and signature configuration) and the object store's buckets (the submitted files and their extractions), as a snapshot and a copy with a sha256 listing.
+    export: {formats: [object-tree], via: role:assemblyline}
+    import: {formats: [object-tree], via: role:assemblyline}
+    retention: {days: 90}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned release bump (every assemblyline image, tag and digest together): validated and recorded, the datastore and files exported, then converged; the datastore migrates on first start and cannot go back"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

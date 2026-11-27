@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The file-analysis provider on AssemblyLine 4: the datastore, broker and the core processes as compose_app containers on a dedicated guest with no egress, checked secrets, an export of the datastore and files. Scaffold: the privileged scaler and updater, the configuration file and the offline service set are the next change."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []
