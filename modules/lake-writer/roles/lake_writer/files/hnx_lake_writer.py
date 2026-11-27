@@ -117,10 +117,10 @@ def staging_key(prefix, table, when, name, gz=True):
 
 #: one commit carries at most this many rows (the staged objects of a run are committed together,
 #: in as few Iceberg snapshots as this allows; the cap bounds the writer's memory)
-DEFAULT_MAX_COMMIT_ROWS = 100_000
+DEFAULT_MAX_COMMIT_ROWS = 25_000
 #: snapshot retention defaults: the newest N and the age in hours (0 turns a limit off)
 DEFAULT_SNAPSHOT_KEEP = 500
-DEFAULT_SNAPSHOT_MAX_AGE_HOURS = 72
+DEFAULT_SNAPSHOT_MAX_AGE_HOURS = 168
 #: the catalog reply cap (a table's metadata grows with its snapshots)
 DEFAULT_CATALOG_MAX_BYTES = 64 * 1024 * 1024
 
@@ -375,7 +375,12 @@ class Writer:
         for key in keys:
             if self._before_delete is not None:
                 self._before_delete()  # test seam: raise here to simulate a crash after the checkpoint
-            self.store.delete(self.bucket, key)
+            try:
+                self.store.delete(self.bucket, key)
+            except Exception as exc:  # the store: this object stays staged and replays next run
+                res["failed"].append(key)
+                res["error"] = _cut(f"{type(exc).__name__}: {exc} (delete)", 400)
+                continue
             res["batches"] += 1
 
     def _expire(self, res):
@@ -458,7 +463,7 @@ class Writer:
             return True
         except LakeError as exc:
             # the lake refused after its retries, or the batch cannot be accepted as is
-            res["failed"].append(group[0])
+            res["failed"].extend(group)
             res["error"] = _cut(
                 f"{type(exc).__name__}: {exc} (commit of {len(group)} objects)", 400
             )

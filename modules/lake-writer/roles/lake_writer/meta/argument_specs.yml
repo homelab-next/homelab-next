@@ -150,7 +150,7 @@ argument_specs:
         type: int
         description: Rows one commit carries at most; a run's staged objects are committed together, in as
           few Iceberg snapshots as this allows.
-        default: 100000
+        default: 25000
       lake_writer_snapshot_keep:
         type: int
         description: Snapshot retention, count; snapshots beyond the newest N are expired after a successful
@@ -160,7 +160,7 @@ argument_specs:
         type: float
         description: Snapshot retention, age; snapshots older than this many hours are expired after a
           successful run (0 - no age limit).
-        default: 72
+        default: 168
       lake_writer_catalog_max_bytes:
         type: int
         description: The largest catalog reply the writer reads, in bytes.

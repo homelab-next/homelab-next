@@ -68,12 +68,12 @@ lake_writer_max_attempts: 5
 lake_writer_max_batches: 500
 # one commit carries at most this many rows: a run's staged objects are committed together (one Iceberg
 # snapshot per commit, not one per object)
-lake_writer_max_commit_rows: 100000
+lake_writer_max_commit_rows: 25000
 # snapshot retention (README, "Snapshot retention"): after a run whose commits all succeeded, snapshots
 # beyond the newest N, or older than H hours, are expired through the catalog (metadata only; main's
 # snapshot is never expired, and a table with a tag or branch is never touched). 0 turns a limit off.
 lake_writer_snapshot_keep: 500
-lake_writer_snapshot_max_age_hours: 72
+lake_writer_snapshot_max_age_hours: 168
 # the largest catalog reply the writer reads (a table's metadata grows with its snapshots)
 lake_writer_catalog_max_bytes: 67108864
 # health: a table's last run must be this recent and its backlog this small

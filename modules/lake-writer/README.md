@@ -58,7 +58,9 @@ whole.
    canonical label**) is written with its reason under `<prefix>T/_rejected/` and counted; it never
    blocks the rest of its batch and is never given a label.
 3. Commit the good rows of **all the run's objects in one `write_batch`** (up to
-   `lake_writer_max_commit_rows`; one Iceberg snapshot per commit, not one per object), with
+   `lake_writer_max_commit_rows`, default 25000: one Iceberg snapshot per INSERT, and `write_batch`
+   splits a large group into several INSERTs by the engine's query-length limit, so a small group is
+   one snapshot and a large one a few, never one per object), with
    `idempotency_key=<the object key>` for a single object or `<first key>+<n>:<digest of the key set>`
    for several, `source=lake-writer/T`, `high_water=<the last key>`, **then** save the checkpoint
    (`Ingestor`), **then** delete the objects. A replay of the same set is answered `replayed`; a replay
@@ -102,7 +104,7 @@ the catalog ran out of memory). After a run whose every commit succeeded (never 
 when nothing was committed) the writer expires, through the catalog's REST `remove-snapshots`:
 
 * snapshots beyond the newest `lake_writer_snapshot_keep` (default 500; 0: no count limit), and
-* snapshots older than `lake_writer_snapshot_max_age_hours` (default 72; 0: no age limit).
+* snapshots older than `lake_writer_snapshot_max_age_hours` (default 168, seven days of rollback points; 0: no age limit).
 
 Guards: the snapshot `main` points at is never expired; only a table whose refs are exactly `{main}` is
 touched (a tag or branch pins history the writer does not judge: the run says `expire_skipped`); the
@@ -110,6 +112,10 @@ commit asserts the table's uuid and that `main` is unchanged, and retries on fre
 It is **metadata only**: no data, manifest or metadata file is deleted (orphan-file cleanup is the lake
 maintenance's job, not this writer's), and expired snapshots can no longer be time-travelled to. An
 expiry that fails is recorded (`expire_error`) and never fails the run; the next run tries again.
+
+The first run on a table that already holds thousands of snapshots expires most of them at once (one
+commit). Verified on the live catalog (Lakekeeper 0.15.1): `remove-snapshots` commits queued no
+file-deletion task, so on that catalog the expiry is metadata only; recheck after a catalog upgrade.
 
 The run's JSON line carries `expired` (snapshots removed this run), `snapshots` (left afterwards, `null`
 when no expiry ran) and, when they apply, `expire_skipped` / `expire_error`.
