@@ -35,8 +35,9 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Mapping
+from typing import Any
 
 TLP_ORDER = ["clear", "green", "amber", "amber+strict", "red"]
 MODEL_CACHE_S = 30.0
@@ -60,7 +61,9 @@ def message_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "\n".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+        return "\n".join(
+            p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
+        )
     return ""
 
 
@@ -95,7 +98,9 @@ def format_passages(hits: list[dict], ceiling: str, max_chars: int) -> str:
 
 
 class Shim:
-    def __init__(self, cfg: Mapping[str, Any], gateway_key: str, token: str, context_token: str = "") -> None:
+    def __init__(
+        self, cfg: Mapping[str, Any], gateway_key: str, token: str, context_token: str = ""
+    ) -> None:
         self.cfg = cfg
         self.gateway_url = cfg["gateway_url"].rstrip("/")
         self.gateway_key, self.token, self.context_token = gateway_key, token, context_token
@@ -106,10 +111,15 @@ class Shim:
 
     # -- the gateway ----------------------------------------------------------------------------
     def _request(self, path: str, body: dict | None, headers: Mapping[str, str], timeout: float):
-        h = {"Authorization": "Bearer " + self.gateway_key, "Content-Type": "application/json", **headers}
+        h = {
+            "Authorization": "Bearer " + self.gateway_key,
+            "Content-Type": "application/json",
+            **headers,
+        }
         data = None if body is None else json.dumps(body).encode()
         return urllib.request.urlopen(
-            urllib.request.Request(self.gateway_url + path, data=data, headers=h), timeout=timeout)
+            urllib.request.Request(self.gateway_url + path, data=data, headers=h), timeout=timeout
+        )
 
     def live_roles(self, force: bool = False) -> set[str]:
         with self._lock:
@@ -143,19 +153,32 @@ class Shim:
         model = self.models.get(requested)
         live_ids = [m["id"] for m in self.visible_models()]
         if model is None or model["id"] not in live_ids:
-            raise ShimError(404, f"unknown or not-yet-live model {requested!r}; live models: {', '.join(live_ids)}",
-                            "model_not_found")
+            raise ShimError(
+                404,
+                f"unknown or not-yet-live model {requested!r}; live models: {', '.join(live_ids)}",
+                "model_not_found",
+            )
         return model, self.tiers[model["tier"]]
 
     def retrieve(self, query: str) -> str:
         ctx = self.cfg.get("context") or {}
         if not ctx.get("url") or not query.strip():
             return ""
-        body = {"text": query[:2000], "allowed": ctx["allowed"], "budget": ctx.get("top_k", 4), "ceiling": ctx["ceiling"]}
+        body = {
+            "text": query[:2000],
+            "allowed": ctx["allowed"],
+            "budget": ctx.get("top_k", 4),
+            "ceiling": ctx["ceiling"],
+        }
         try:
             req = urllib.request.Request(
-                ctx["url"].rstrip("/") + "/v1/query", data=json.dumps(body).encode(),
-                headers={"Authorization": "Bearer " + self.context_token, "Content-Type": "application/json"})
+                ctx["url"].rstrip("/") + "/v1/query",
+                data=json.dumps(body).encode(),
+                headers={
+                    "Authorization": "Bearer " + self.context_token,
+                    "Content-Type": "application/json",
+                },
+            )
             with urllib.request.urlopen(req, timeout=ctx.get("timeout_s", 8)) as r:
                 hits = json.loads(r.read()).get("hits", [])
         except (urllib.error.URLError, OSError, ValueError):
@@ -164,7 +187,11 @@ class Shim:
 
     def shape(self, body: dict, model: dict, role: str) -> dict:
         msgs = [dict(m) for m in body.get("messages") or []]
-        if not msgs or msgs[-1].get("role") != "user" or not message_text(msgs[-1].get("content")).strip():
+        if (
+            not msgs
+            or msgs[-1].get("role") != "user"
+            or not message_text(msgs[-1].get("content")).strip()
+        ):
             raise ShimError(400, "the last message must be a non-empty user message")
         msgs, _ = trim_history(msgs, int(self.cfg["history_chars"]))
         extra: list[dict] = []
@@ -174,8 +201,13 @@ class Shim:
         if model.get("context", False):
             passages = self.retrieve(message_text(msgs[-1]["content"]))
             if passages:
-                extra.append({"role": "system", "content":
-                              "Passages from the lab's own records (cite the id in brackets when you use one):\n\n" + passages})
+                extra.append(
+                    {
+                        "role": "system",
+                        "content": "Passages from the lab's own records (cite the id in brackets when you use one):\n\n"
+                        + passages,
+                    }
+                )
         out = dict(body)
         out["model"] = role
         out["messages"] = extra + msgs
@@ -184,7 +216,9 @@ class Shim:
     def upstream_headers(self, inbound: Mapping[str, str]) -> dict[str, str]:
         tlp = inbound.get("X-HNX-TLP") or self.cfg["default_tlp"]
         if tlp_rank(tlp) > tlp_rank(self.cfg["max_tlp"]):
-            raise ShimError(400, f"X-HNX-TLP {tlp!r} is above this front's ceiling {self.cfg['max_tlp']!r}")
+            raise ShimError(
+                400, f"X-HNX-TLP {tlp!r} is above this front's ceiling {self.cfg['max_tlp']!r}"
+            )
         return {"X-HNX-TLP": tlp, "X-HNX-Tag": inbound.get("X-HNX-Tag") or self.cfg["default_tag"]}
 
 
@@ -194,7 +228,7 @@ def make_handler(shim: Shim):
         protocol_version = "HTTP/1.1"
 
         def log_message(self, fmt: str, *args: Any) -> None:  # no prompt text in the log
-            sys.stderr.write("%s %s\n" % (self.command, self.path.split("?")[0]))
+            sys.stderr.write("{} {}\n".format(self.command, self.path.split("?")[0]))
 
         def _json(self, status: int, doc: dict) -> None:
             data = json.dumps(doc).encode()
@@ -205,7 +239,10 @@ def make_handler(shim: Shim):
             self.wfile.write(data)
 
         def _error(self, e: ShimError) -> None:
-            self._json(e.status, {"error": {"message": e.message, "type": "invalid_request_error", "code": e.code}})
+            self._json(
+                e.status,
+                {"error": {"message": e.message, "type": "invalid_request_error", "code": e.code}},
+            )
 
         def do_GET(self) -> None:
             try:
@@ -214,9 +251,21 @@ def make_handler(shim: Shim):
                 shim.authorize(self.headers.get("Authorization"))
                 if self.path == "/v1/models":
                     now = int(time.time())
-                    return self._json(200, {"object": "list", "data": [
-                        {"id": m["id"], "object": "model", "created": now, "owned_by": "concierge"}
-                        for m in shim.visible_models()]})
+                    return self._json(
+                        200,
+                        {
+                            "object": "list",
+                            "data": [
+                                {
+                                    "id": m["id"],
+                                    "object": "model",
+                                    "created": now,
+                                    "owned_by": "concierge",
+                                }
+                                for m in shim.visible_models()
+                            ],
+                        },
+                    )
                 raise ShimError(404, "not found", "not_found")
             except ShimError as e:
                 self._error(e)
@@ -232,18 +281,24 @@ def make_handler(shim: Shim):
                 try:
                     body = json.loads(self.rfile.read(n))
                 except ValueError:
-                    raise ShimError(400, "the body is not JSON")
+                    raise ShimError(400, "the body is not JSON") from None
                 model, role = shim.resolve(str(body.get("model") or ""))
                 up_body = shim.shape(body, model, role)
-                headers = shim.upstream_headers({"X-HNX-TLP": self.headers.get("X-HNX-TLP", ""),
-                                                 "X-HNX-Tag": self.headers.get("X-HNX-Tag", "")})
+                headers = shim.upstream_headers(
+                    {
+                        "X-HNX-TLP": self.headers.get("X-HNX-TLP", ""),
+                        "X-HNX-Tag": self.headers.get("X-HNX-Tag", ""),
+                    }
+                )
                 self._forward(up_body, headers, bool(body.get("stream")), model["id"])
             except ShimError as e:
                 self._error(e)
 
         def _forward(self, up_body: dict, headers: dict, stream: bool, model_id: str) -> None:
             try:
-                resp = shim._request("/v1/chat/completions", up_body, headers, float(shim.cfg["timeout_s"]))
+                resp = shim._request(
+                    "/v1/chat/completions", up_body, headers, float(shim.cfg["timeout_s"])
+                )
             except urllib.error.HTTPError as e:
                 # the gateway's own refusal (a limit, a ceiling, a role) is passed on as it is
                 data = e.read()
@@ -254,7 +309,7 @@ def make_handler(shim: Shim):
                 self.wfile.write(data)
                 return
             except (urllib.error.URLError, OSError):
-                raise ShimError(502, "the gateway did not answer", "upstream_unavailable")
+                raise ShimError(502, "the gateway did not answer", "upstream_unavailable") from None
             with resp:
                 if not stream:
                     doc = json.loads(resp.read())
@@ -281,8 +336,15 @@ def load(path: str) -> Shim:
         if not env.get(need):
             raise SystemExit(f"concierge: {need} is not set")
     if cfg.get("context", {}).get("url") and not env.get("CONCIERGE_CONTEXT_TOKEN"):
-        raise SystemExit("concierge: a context service is configured but CONCIERGE_CONTEXT_TOKEN is not set")
-    return Shim(cfg, env["CONCIERGE_GATEWAY_KEY"], env["CONCIERGE_TOKEN"], env.get("CONCIERGE_CONTEXT_TOKEN", ""))
+        raise SystemExit(
+            "concierge: a context service is configured but CONCIERGE_CONTEXT_TOKEN is not set"
+        )
+    return Shim(
+        cfg,
+        env["CONCIERGE_GATEWAY_KEY"],
+        env["CONCIERGE_TOKEN"],
+        env.get("CONCIERGE_CONTEXT_TOKEN", ""),
+    )
 
 
 def healthcheck(port: int) -> int:
@@ -298,7 +360,9 @@ def main(argv: list[str]) -> int:
     if "--healthcheck" in argv:
         return healthcheck(int(json.load(open(path))["port"]))
     shim = load(path)
-    server = ThreadingHTTPServer((shim.cfg.get("bind", "0.0.0.0"), int(shim.cfg["port"])), make_handler(shim))
+    server = ThreadingHTTPServer(
+        (shim.cfg.get("bind", "0.0.0.0"), int(shim.cfg["port"])), make_handler(shim)
+    )
     server.daemon_threads = True
     server.serve_forever()
     return 0

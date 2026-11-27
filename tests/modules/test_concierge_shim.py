@@ -21,6 +21,7 @@ import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -34,10 +35,10 @@ TOKEN, GWKEY, CTXTOKEN = "shim-token-" + "t" * 30, "gw-key-" + "g" * 30, "ctx-" 
 
 
 class _Fake(http.server.BaseHTTPRequestHandler):
-    seen: list[dict] = []
-    roles: list[str] = ["main-reasoner"]
+    seen: ClassVar[list[dict]] = []
+    roles: ClassVar[list[str]] = ["main-reasoner"]
     refuse = False
-    hits: list[dict] = []
+    hits: ClassVar[list[dict]] = []
 
     def log_message(self, *a):  # quiet
         pass
@@ -60,28 +61,53 @@ class _Fake(http.server.BaseHTTPRequestHandler):
             assert self.headers["Authorization"] == "Bearer " + CTXTOKEN
             _Fake.seen.append({"path": "query", "body": body})
             return self._send(200, {"hits": self.hits})
-        _Fake.seen.append({"path": "chat", "body": body, "tlp": self.headers.get("X-HNX-TLP"),
-                           "tag": self.headers.get("X-HNX-Tag"), "auth": self.headers["Authorization"]})
+        _Fake.seen.append(
+            {
+                "path": "chat",
+                "body": body,
+                "tlp": self.headers.get("X-HNX-TLP"),
+                "tag": self.headers.get("X-HNX-Tag"),
+                "auth": self.headers["Authorization"],
+            }
+        )
         if self.refuse:
             return self._send(429, {"error": {"message": "rate limited"}})
         if body.get("stream"):
             return self._send(200, b'data: {"x":1}\n\ndata: [DONE]\n\n', "text/event-stream")
-        self._send(200, {"model": body["model"], "choices": [{"message": {"role": "assistant", "content": "pong"}}]})
+        self._send(
+            200,
+            {
+                "model": body["model"],
+                "choices": [{"message": {"role": "assistant", "content": "pong"}}],
+            },
+        )
 
 
-@pytest.fixture()
+@pytest.fixture
 def stack(monkeypatch):
     _Fake.seen, _Fake.roles, _Fake.refuse, _Fake.hits = [], ["main-reasoner"], False, []
     fake = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Fake)
     threading.Thread(target=fake.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{fake.server_port}"
-    cfg = {"port": 0, "gateway_url": base, "default_tlp": "amber", "max_tlp": "amber", "default_tag": "openwebui",
-           "history_chars": 100, "max_body_bytes": 100000, "timeout_s": 10, "always_on_tier": "main",
-           "tiers": {"fast": "fast", "main": "main-reasoner", "deep": "deep"},
-           "models": [{"id": "concierge-fast", "tier": "fast"}, {"id": "concierge", "tier": "main", "context": True},
-                      {"id": "concierge-deep", "tier": "deep"}],
-           "persona": "You are the concierge.",
-           "context": {"url": base, "allowed": ["lab"], "ceiling": "amber", "top_k": 3}}
+    cfg = {
+        "port": 0,
+        "gateway_url": base,
+        "default_tlp": "amber",
+        "max_tlp": "amber",
+        "default_tag": "openwebui",
+        "history_chars": 100,
+        "max_body_bytes": 100000,
+        "timeout_s": 10,
+        "always_on_tier": "main",
+        "tiers": {"fast": "fast", "main": "main-reasoner", "deep": "deep"},
+        "models": [
+            {"id": "concierge-fast", "tier": "fast"},
+            {"id": "concierge", "tier": "main", "context": True},
+            {"id": "concierge-deep", "tier": "deep"},
+        ],
+        "persona": "You are the concierge.",
+        "context": {"url": base, "allowed": ["lab"], "ceiling": "amber", "top_k": 3},
+    }
     shim = cs.Shim(cfg, GWKEY, TOKEN, CTXTOKEN)
     front = http.server.ThreadingHTTPServer(("127.0.0.1", 0), cs.make_handler(shim))
     front.daemon_threads = True
@@ -92,8 +118,15 @@ def stack(monkeypatch):
 
 
 def call(url, path, body=None, token=TOKEN, headers=None):
-    req = urllib.request.Request(url + path, data=None if body is None else json.dumps(body).encode(),
-                                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json", **(headers or {})})
+    req = urllib.request.Request(
+        url + path,
+        data=None if body is None else json.dumps(body).encode(),
+        headers={
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+            **(headers or {}),
+        },
+    )
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return r.status, r.read()
@@ -102,7 +135,12 @@ def call(url, path, body=None, token=TOKEN, headers=None):
 
 
 def chat(url, model="concierge", content="hello", **kw):
-    return call(url, "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": content}]}, **kw)
+    return call(
+        url,
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": content}]},
+        **kw,
+    )
 
 
 def test_a_tier_is_listed_only_while_its_role_is_live(stack):
@@ -127,7 +165,7 @@ def test_the_token_is_required_and_the_gateway_key_stays_the_shims(stack):
     assert call(url, "/v1/models", token="")[0] == 401
     code, body = chat(url)
     assert code == 200 and json.loads(body)["model"] == "concierge"
-    seen = [s for s in _Fake.seen if s["path"] == "chat"][0]
+    seen = next(s for s in _Fake.seen if s["path"] == "chat")
     assert seen["auth"] == "Bearer " + GWKEY and seen["body"]["model"] == "main-reasoner"
 
 
@@ -145,24 +183,31 @@ def test_persona_added_history_trimmed_and_the_last_turn_kept(stack):
     _, url = stack
     msgs = [{"role": "system", "content": "s"}]
     for i in range(6):
-        msgs += [{"role": "user", "content": f"q{i}" + "x" * 30}, {"role": "assistant", "content": f"a{i}" + "y" * 30}]
+        msgs += [
+            {"role": "user", "content": f"q{i}" + "x" * 30},
+            {"role": "assistant", "content": f"a{i}" + "y" * 30},
+        ]
     msgs.append({"role": "user", "content": "the question"})
     assert call(url, "/v1/chat/completions", {"model": "concierge", "messages": msgs})[0] == 200
-    sent = [s for s in _Fake.seen if s["path"] == "chat"][0]["body"]["messages"]
+    sent = next(s for s in _Fake.seen if s["path"] == "chat")["body"]["messages"]
     assert sent[0] == {"role": "system", "content": "You are the concierge."}
     assert sent[-1]["content"] == "the question" and {"role": "system", "content": "s"} in sent
-    assert sum(len(cs.message_text(m["content"])) for m in sent if m["role"] != "system") <= 100 + 80
+    assert (
+        sum(len(cs.message_text(m["content"])) for m in sent if m["role"] != "system") <= 100 + 80
+    )
     assert len(sent) < len(msgs) + 1
 
 
 def test_retrieved_passages_above_the_ceiling_are_never_sent(stack):
     _, url = stack
-    _Fake.hits = [{"id": "lesson:LL-1", "tlp": "amber", "content": "AMBERTEXT"},
-                  {"id": "lesson:LL-2", "tlp": "red", "content": "REDTEXT"}]
+    _Fake.hits = [
+        {"id": "lesson:LL-1", "tlp": "amber", "content": "AMBERTEXT"},
+        {"id": "lesson:LL-2", "tlp": "red", "content": "REDTEXT"},
+    ]
     assert chat(url, content="what is LL-1")[0] == 200
-    sent = json.dumps([s for s in _Fake.seen if s["path"] == "chat"][0]["body"]["messages"])
+    sent = json.dumps(next(s for s in _Fake.seen if s["path"] == "chat")["body"]["messages"])
     assert "AMBERTEXT" in sent and "lesson:LL-1" in sent and "REDTEXT" not in sent
-    q = [s for s in _Fake.seen if s["path"] == "query"][0]["body"]
+    q = next(s for s in _Fake.seen if s["path"] == "query")["body"]
     assert q["allowed"] == ["lab"] and q["ceiling"] == "amber"
 
 
@@ -172,8 +217,13 @@ def test_a_gateway_refusal_is_passed_on_and_streaming_passes_through(stack):
     code, body = chat(url)
     assert code == 429 and b"rate limited" in body
     _Fake.refuse = False
-    req = urllib.request.Request(url + "/v1/chat/completions", headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"},
-                                 data=json.dumps({"model": "concierge", "stream": True, "messages": [{"role": "user", "content": "hi"}]}).encode())
+    req = urllib.request.Request(
+        url + "/v1/chat/completions",
+        headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"},
+        data=json.dumps(
+            {"model": "concierge", "stream": True, "messages": [{"role": "user", "content": "hi"}]}
+        ).encode(),
+    )
     with urllib.request.urlopen(req, timeout=10) as r:
         assert r.headers["Content-Type"] == "text/event-stream" and b"[DONE]" in r.read()
 
