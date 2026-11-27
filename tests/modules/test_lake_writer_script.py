@@ -941,3 +941,84 @@ def test_retention_and_catalog_cap_settings_come_from_the_environment(tmp_path):
     assert (cfg.snapshot_keep, cfg.snapshot_max_age_hours) == (0, 0.5)
     with pytest.raises(lw.Refused):
         lw.Config(_env(tmp_path, HNX_LW_SNAPSHOT_KEEP="-1"))
+
+
+# ------------------------------------------------------------------ expiry through the real client
+
+
+def _seed(lab, ages_h, refs=None, now_ms=None):
+    """The table's snapshots as ``ages_h`` hours old (oldest first); main on the newest."""
+    import time
+
+    now = int(time.time() * 1000) if now_ms is None else now_ms
+    meta = lab.tables[("soc", "dns_activity")]
+    meta["snapshots"] = [
+        {"snapshot-id": i, "timestamp-ms": now - int(h * 3600_000), "manifest-list": f"m{i}"}
+        for i, h in enumerate(ages_h, 1)
+    ]
+    meta["refs"] = {"main": {"snapshot-id": len(ages_h)}} if refs is None else refs
+
+
+def _ids(lab):
+    return [s["snapshot-id"] for s in lab.tables[("soc", "dns_activity")]["snapshots"]]
+
+
+def test_expiry_keeps_main_and_the_newest_n(lab, schemas, tmp_path):
+    lake = lw.open_lake(_real_cfg(tmp_path), schemas, ensure=True)
+    # snapshot 1 is the oldest but main points at it: it survives any count
+    _seed(lab, [9, 8, 7, 6, 5, 4, 3, 2], refs={"main": {"snapshot-id": 1}})
+    out = lake.expire_snapshots("dns_activity", keep=3)
+    assert _ids(lab) == [1, 6, 7, 8] and out["expired"] == 4 and out["kept"] == 4
+
+
+def test_expiry_by_age_never_takes_main_and_no_op_sends_nothing(lab, schemas, tmp_path):
+    lake = lw.open_lake(_real_cfg(tmp_path), schemas, ensure=True)
+    _seed(lab, [100, 80, 10, 1])
+    assert lake.expire_snapshots("dns_activity", max_age_ms=72 * 3600_000)["expired"] == 2
+    assert _ids(lab) == [3, 4]
+    assert lake.expire_snapshots("dns_activity", keep=500)["expired"] == 0 and _ids(lab) == [3, 4]
+    _seed(lab, [100, 99], refs={"main": {"snapshot-id": 1}})
+    lake.expire_snapshots("dns_activity", max_age_ms=3600_000)
+    assert _ids(lab) == [1]
+
+
+@pytest.mark.parametrize(
+    "refs",
+    [
+        {"main": {"snapshot-id": 4}, "release": {"snapshot-id": 2}},
+        {"main": {"snapshot-id": 4}, "audit": {"snapshot-id": 1}},
+        {},
+    ],
+)
+def test_expiry_refuses_a_table_with_any_ref_but_main(refs, lab, schemas, tmp_path):
+    lake = lw.open_lake(_real_cfg(tmp_path), schemas, ensure=True)
+    _seed(lab, [4, 3, 2, 1], refs=refs)
+    out = lake.expire_snapshots("dns_activity", keep=1)
+    assert out["expired"] == 0 and "skipped" in out and len(_ids(lab)) == 4
+
+
+def test_expiry_retries_a_raced_commit_on_fresh_metadata_then_gives_up(lab, schemas, tmp_path):
+    lake = lw.open_lake(_real_cfg(tmp_path), schemas, ensure=True)
+    _seed(lab, [5, 4, 3, 2, 1])
+    lab.conflicts = 1
+    assert lake.expire_snapshots("dns_activity", keep=2)["expired"] == 3
+    _seed(lab, [5, 4, 3, 2, 1])
+    lab.conflicts = 9
+    with pytest.raises(LakeError):
+        lake.expire_snapshots("dns_activity", keep=2)
+    assert len(_ids(lab)) == 5
+    with pytest.raises(LakeError, match="keep or max_age_ms"):
+        lake.expire_snapshots("dns_activity")
+
+
+def test_a_run_through_the_real_client_expires_and_reports(lab, store, schemas, tmp_path):
+    lake = lw.open_lake(_real_cfg(tmp_path), schemas, ensure=True)
+    stage(store, "dns_activity", "b1.jsonl", [event("dns_activity", 1)])
+    res = make(lake, store, schemas, tmp_path, snapshot_keep=2).run()
+    assert res["ok"] and res["commits"] == 1 and "expire_error" not in res
+    stage(store, "dns_activity", "b2.jsonl", [event("dns_activity", 2)])
+    _seed(lab, [5, 4, 3, 2, 1])
+    lab.tables[("soc", "dns_activity")]["refs"] = {"main": {"snapshot-id": 5}}
+    res = make(lake, store, schemas, tmp_path, snapshot_keep=2).run()
+    # the seeded five plus the run's own commit, newest two kept (main is among them)
+    assert res["ok"] and res["expired"] == 4 and res["snapshots"] == 2 and len(_ids(lab)) == 2

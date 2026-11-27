@@ -284,7 +284,13 @@ class TrinoRestLake(AdapterBase):
                 out["skipped"] = f"refs other than main only: {sorted(refs) or 'no main'}"
                 return out
             main = refs["main"].get("snapshot-id")
-            order = sorted(snaps, key=lambda x: x["timestamp-ms"], reverse=True)
+
+            def stamp(
+                x: Mapping[str, Any],
+            ) -> int:  # a snapshot without a time reads as new: never aged out
+                return int(x.get("timestamp-ms", now))
+
+            order = sorted(snaps, key=stamp, reverse=True)
             newest = {x["snapshot-id"] for x in order[:keep]}
             drop = [
                 x["snapshot-id"]
@@ -292,7 +298,7 @@ class TrinoRestLake(AdapterBase):
                 if x["snapshot-id"] != main
                 and (
                     (keep and x["snapshot-id"] not in newest)
-                    or (max_age_ms and now - x["timestamp-ms"] > max_age_ms)
+                    or (max_age_ms and now - stamp(x) > max_age_ms)
                 )
             ]
             if not drop:
