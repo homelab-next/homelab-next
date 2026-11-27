@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# The pinned source tag, shallow, with its plugin submodules. force resets local drift in tracked
+# files; conf/local.yml, data/ and logs/ are gitignored upstream and so survive a re-clone.
+- name: Clone the source at the pinned release tag (force resets drift in tracked files)
+  ansible.builtin.git:
+    repo: "{{ caldera_source_repository }}"
+    dest: "{{ caldera_src }}"
+    version: "{{ caldera_version }}"
+    depth: 1
+    force: true
+    recursive: true
+  register: caldera_clone
+
+- name: Read the commit that was checked out
+  ansible.builtin.command:
+    argv: [git, -C, "{{ caldera_src }}", rev-parse, "HEAD"]
+  register: caldera_head
+  changed_when: false
+  check_mode: false
+
+- name: Refuse a tag that no longer points at the pinned commit
+  ansible.builtin.assert:
+    that: caldera_head.stdout | trim == caldera_source_commit
+    fail_msg: >-
+      caldera: release {{ caldera_version }} is at {{ caldera_head.stdout | trim }}, not the pinned
+      {{ caldera_source_commit }}: the tag moved or the pin is wrong; nothing was built from it
+
+- name: Ensure the logs directory exists (mounted in the container, not always in a fresh clone)
+  ansible.builtin.file:
+    path: "{{ caldera_src }}/logs"
+    state: directory
+    owner: "{{ caldera_owner }}"
+    group: "{{ caldera_group }}"
+    mode: "0755"

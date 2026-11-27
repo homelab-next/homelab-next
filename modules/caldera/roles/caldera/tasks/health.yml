@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy, the server answers its authenticated health
+# endpoint with the pinned release (it is signed in to with the API key this host generated), the
+# admin account signs in with the password in the secret store (so a configuration the container
+# did not pick up, or a rotated password nobody restarted for, shows red), the red account signs in
+# likewise, and the port is published on the guest's own address and nowhere else. Read-only: a
+# sign-in opens a session cookie and changes nothing else.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: caldera
+        compose_app_dir: "{{ caldera_app.compose_app_dir }}"
+        compose_app_spec: "{{ caldera_app.compose_app_spec }}"
+    - name: Read the generated API key
+      ansible.builtin.slurp:
+        src: "{{ caldera_seed_dir }}/api_key_red"
+      register: caldera_health_key
+      no_log: true
+    - name: The server answers its health endpoint (authenticated) with the pinned release
+      ansible.builtin.uri:
+        url: "http://{{ caldera_bind }}:{{ caldera_port | int }}/api/v2/health"
+        headers:
+          KEY: "{{ caldera_health_key.content | b64decode | trim }}"
+        status_code: 200
+        return_content: true
+        timeout: "{{ caldera_health_timeout | int }}"
+      register: caldera_health
+      changed_when: false
+      no_log: true
+    - name: The answer is the server of the pinned release
+      ansible.builtin.assert:
+        that:
+          - caldera_health.json.application | default('') | lower == 'caldera'
+          - caldera_health.json.version | default('') == caldera_version
+        fail_msg: >-
+          caldera: the health endpoint reports {{ caldera_health.json.application | default('?') }}
+          {{ caldera_health.json.version | default('?') }}, not release {{ caldera_version }}
+    - name: Each configured account signs in with the password in the secret store
+      ansible.builtin.uri:
+        url: "http://{{ caldera_bind }}:{{ caldera_port | int }}/enter"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          username: "{{ item.user }}"
+          password: "{{ lookup('hnx_secret', item.ref) }}"
+        follow_redirects: none
+        status_code: [302]
+        timeout: "{{ caldera_health_timeout | int }}"
+      loop:
+        - {user: "{{ caldera_admin_user }}", ref: "{{ caldera_admin_login_ref }}"}
+        - {user: "{{ caldera_red_user }}", ref: "{{ caldera_red_login_ref }}"}
+      loop_control:
+        label: "{{ item.user }}"
+      changed_when: false
+      no_log: true
+  tags: [health]

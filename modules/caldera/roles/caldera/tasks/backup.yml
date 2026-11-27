@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the guest's backup job, or a file backup of the manifest's
+# paths): the source tree with conf/ and data/ (the operations, adversaries and agents), the
+# seeds that the stored data is encrypted with, and export/. The export first writes a fresh
+# open-format copy into it, so a restore never depends on the live files being caught mid-write.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Write the exit copy
+      ansible.builtin.include_tasks: copy_out.yml
+    - name: Delegate to compose_app (the backup manifest names the data root)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: backup
+      vars:
+        compose_app_name: caldera
+        compose_app_dir: "{{ caldera_app.compose_app_dir }}"
+        compose_app_data_dir: "{{ caldera_app.compose_app_data_dir }}"
+        compose_app_export_dir: "{{ caldera_app.compose_app_export_dir }}"
+        compose_app_owner: "{{ caldera_app.compose_app_owner }}"
+        compose_app_group: "{{ caldera_app.compose_app_group }}"
+        compose_app_spec: "{{ caldera_app.compose_app_spec }}"
+  tags: [backup]

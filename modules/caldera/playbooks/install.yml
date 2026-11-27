@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the adversary-emulation server on the isolated guest the site placed the
+# module's `server` role on. The apply path (docs/modules/apply.md) renders its own modules.yml
+# from the selection and does not import this file; it is the module's own entry point:
+#   ansible-playbook -i <inventory with --selection> modules/caldera/playbooks/install.yml
+# docker_engine is applied to the guest first (a compose_app module's host); the role's readiness
+# hook refuses to go on without it. The first run builds the image from source and needs the
+# install-time egress (README, "Egress").
+- name: Install the adversary-emulation server
+  hosts: mod_caldera_server
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: caldera
+        tasks_from: readiness
+      tags: [mod_caldera]
+  roles:
+    - role: caldera
+      tags: [mod_caldera]

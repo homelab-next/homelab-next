@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse credentials that are not in their form before anything is built
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Clone the pinned source
+  ansible.builtin.include_tasks: source.yml
+
+- name: Build the image from the source (only when this tag and commit is not built yet)
+  ansible.builtin.include_tasks: image.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Write the server's configuration
+  ansible.builtin.include_tasks: config.yml
+
+- name: Render and start the server
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ caldera_app.compose_app_name }}"
+    compose_app_dir: "{{ caldera_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ caldera_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ caldera_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ caldera_app.compose_app_owner }}"
+    compose_app_group: "{{ caldera_app.compose_app_group }}"
+    compose_app_start: "{{ caldera_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ caldera_app.compose_app_validate_with_docker }}"
+    compose_app_allow_placeholder_digest: "{{ caldera_app.compose_app_allow_placeholder_digest }}"
+    compose_app_spec: "{{ caldera_app.compose_app_spec }}"
+
+# The server reads its configuration once, at start, and the file is mounted: a rewritten file
+# (a rotated password) takes effect only on a restart. compose's up -d does not see a changed
+# mount source, so a change of the file restarts the container.
+- name: Restart the server when its configuration changed
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ caldera_dir }}/docker-compose.yml", restart]
+  changed_when: true
+  when: caldera_start | bool and caldera_config is changed

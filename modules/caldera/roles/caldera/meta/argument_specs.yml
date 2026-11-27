@@ -1,0 +1,287 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Build the adversary-emulation server from a pinned source tag and run it as a compose_app on the guest's own address.
+    options:
+      caldera_logical_id: &logical
+        type: str
+        description: "The instance's id (e.g. emulation)."
+        required: true
+      caldera_version: &version
+        type: str
+        description: "The pinned upstream release tag (x.y.z) the image is built from."
+        default: "5.3.0"
+      caldera_source_commit: &commit
+        type: str
+        description: "The 40-hex commit the release tag points at; a clone at any other commit is refused."
+        default: "b24f6e7a99cab19cbf417009bda9b9c6c81abc31"
+      caldera_source_repository: &srcrepo
+        type: str
+        description: "https clone address of the source (ending .git)."
+        default: "https://github.com/apache/caldera.git"
+      caldera_built_name: &imgrepo
+        type: str
+        description: "The local repository the built image is tagged with."
+        default: "localhost/hnx-caldera"
+      caldera_build_variant: &variant
+        type: str
+        description: "Image variant: full (offline libraries baked in) or slim."
+        default: "full"
+      caldera_build_timezone: &tz
+        type: str
+        description: "The image's timezone (a tz database name)."
+        default: "UTC"
+      caldera_rebuild: &rebuild
+        type: bool
+        description: "Build the image again even when one of this tag and commit exists."
+        default: false
+      caldera_bind: &bind
+        type: str
+        description: "The guest's own IPv4 address the port is published on (never all interfaces)."
+        default: "{{ ansible_host }}"
+      caldera_port: &port
+        type: int
+        description: "Host port of the UI and HTTP agent contact."
+        default: 8888
+      caldera_extra_ports: &extra
+        type: list
+        elements: str
+        description: "Further agent contact ports to publish, each <port>/tcp or <port>/udp (empty: only the UI port)."
+        default: []
+      caldera_log_level: &loglevel
+        type: str
+        description: "The server's log level."
+        default: "INFO"
+      caldera_mem_limit: &mem
+        type: str
+        description: "Container memory limit."
+        default: "4g"
+      caldera_dir: &dir
+        type: path
+        description: "The compose project directory."
+        default: "/opt/compose/caldera"
+      caldera_data_root: &root
+        type: path
+        description: "The module's data root on the host: src/ (conf, data, logs), seed/ and export/."
+        default: "/var/lib/hnx-modules/caldera"
+      caldera_owner: &owner
+        type: str
+        description: "Owner of the compose project and the data root."
+        default: "root"
+      caldera_group: &group
+        type: str
+        description: "Group of the compose project and the data root."
+        default: "root"
+      caldera_admin_user: &admin
+        type: str
+        description: "The admin account's name."
+        default: "admin"
+      caldera_admin_login_ref: &adminpw
+        type: str
+        description: "secret:<name> of the admin password (written into the generated configuration, used by the health hook)."
+        default: "secret:caldera/admin-password"
+      caldera_red_user: &red
+        type: str
+        description: "The research account's name."
+        default: "red"
+      caldera_red_login_ref: &redpw
+        type: str
+        description: "secret:<name> of the research account's password."
+        default: "secret:caldera/red-password"
+      caldera_plugins: &plugins
+        type: list
+        elements: str
+        description: "Plugins the server loads (directory names under plugins/)."
+        default: ["access", "atomic", "compass", "debrief", "fieldmanual", "manx", "response", "sandcat", "stockpile", "training"]
+      caldera_start: &start
+        type: bool
+        description: "Run docker compose up after rendering."
+        default: true
+      caldera_validate_with_docker: &validate
+        type: bool
+        description: "Run docker compose config on the rendered file."
+        default: true
+      caldera_health_timeout: &htimeout
+        type: int
+        description: "Seconds for each health request."
+        default: 10
+  health:
+    short_description: "Fail unless the container is healthy, the authenticated health endpoint reports the pinned release and each configured account signs in with the password in the secret store."
+    options:
+      caldera_logical_id: *logical
+      caldera_version: *version
+      caldera_source_commit: *commit
+      caldera_source_repository: *srcrepo
+      caldera_built_name: *imgrepo
+      caldera_build_variant: *variant
+      caldera_build_timezone: *tz
+      caldera_rebuild: *rebuild
+      caldera_bind: *bind
+      caldera_port: *port
+      caldera_extra_ports: *extra
+      caldera_log_level: *loglevel
+      caldera_mem_limit: *mem
+      caldera_dir: *dir
+      caldera_data_root: *root
+      caldera_owner: *owner
+      caldera_group: *group
+      caldera_admin_user: *admin
+      caldera_admin_login_ref: *adminpw
+      caldera_red_user: *red
+      caldera_red_login_ref: *redpw
+      caldera_plugins: *plugins
+      caldera_start: *start
+      caldera_validate_with_docker: *validate
+      caldera_health_timeout: *htimeout
+  readiness:
+    short_description: "Fail unless the container engine is ready and both credentials resolve in their form."
+    options:
+      caldera_logical_id: *logical
+      caldera_version: *version
+      caldera_source_commit: *commit
+      caldera_source_repository: *srcrepo
+      caldera_built_name: *imgrepo
+      caldera_build_variant: *variant
+      caldera_build_timezone: *tz
+      caldera_rebuild: *rebuild
+      caldera_bind: *bind
+      caldera_port: *port
+      caldera_extra_ports: *extra
+      caldera_log_level: *loglevel
+      caldera_mem_limit: *mem
+      caldera_dir: *dir
+      caldera_data_root: *root
+      caldera_owner: *owner
+      caldera_group: *group
+      caldera_admin_user: *admin
+      caldera_admin_login_ref: *adminpw
+      caldera_red_user: *red
+      caldera_red_login_ref: *redpw
+      caldera_plugins: *plugins
+      caldera_start: *start
+      caldera_validate_with_docker: *validate
+      caldera_health_timeout: *htimeout
+  backup:
+    short_description: "Write a fresh open-format copy of the data, then name the data root for the backup."
+    options:
+      caldera_logical_id: *logical
+      caldera_version: *version
+      caldera_source_commit: *commit
+      caldera_source_repository: *srcrepo
+      caldera_built_name: *imgrepo
+      caldera_build_variant: *variant
+      caldera_build_timezone: *tz
+      caldera_rebuild: *rebuild
+      caldera_bind: *bind
+      caldera_port: *port
+      caldera_extra_ports: *extra
+      caldera_log_level: *loglevel
+      caldera_mem_limit: *mem
+      caldera_dir: *dir
+      caldera_data_root: *root
+      caldera_owner: *owner
+      caldera_group: *group
+      caldera_admin_user: *admin
+      caldera_admin_login_ref: *adminpw
+      caldera_red_user: *red
+      caldera_red_login_ref: *redpw
+      caldera_plugins: *plugins
+      caldera_start: *start
+      caldera_validate_with_docker: *validate
+      caldera_health_timeout: *htimeout
+  restore:
+    short_description: "Check an export snapshot and restore it into the source tree with the server stopped."
+    options:
+      caldera_logical_id: *logical
+      caldera_version: *version
+      caldera_source_commit: *commit
+      caldera_source_repository: *srcrepo
+      caldera_built_name: *imgrepo
+      caldera_build_variant: *variant
+      caldera_build_timezone: *tz
+      caldera_rebuild: *rebuild
+      caldera_bind: *bind
+      caldera_port: *port
+      caldera_extra_ports: *extra
+      caldera_log_level: *loglevel
+      caldera_mem_limit: *mem
+      caldera_dir: *dir
+      caldera_data_root: *root
+      caldera_owner: *owner
+      caldera_group: *group
+      caldera_admin_user: *admin
+      caldera_admin_login_ref: *adminpw
+      caldera_red_user: *red
+      caldera_red_login_ref: *redpw
+      caldera_plugins: *plugins
+      caldera_start: *start
+      caldera_validate_with_docker: *validate
+      caldera_health_timeout: *htimeout
+      caldera_restore_source:
+        type: path
+        description: "A snapshot directory (<export root>/<stamp>) holding listing.jsonl and files/."
+        required: true
+  upgrade:
+    short_description: "Validate a release bump (release and commit) and record it as pending."
+    options:
+      caldera_logical_id: *logical
+      caldera_version: *version
+      caldera_source_commit: *commit
+      caldera_source_repository: *srcrepo
+      caldera_built_name: *imgrepo
+      caldera_build_variant: *variant
+      caldera_build_timezone: *tz
+      caldera_rebuild: *rebuild
+      caldera_bind: *bind
+      caldera_port: *port
+      caldera_extra_ports: *extra
+      caldera_log_level: *loglevel
+      caldera_mem_limit: *mem
+      caldera_dir: *dir
+      caldera_data_root: *root
+      caldera_owner: *owner
+      caldera_group: *group
+      caldera_admin_user: *admin
+      caldera_admin_login_ref: *adminpw
+      caldera_red_user: *red
+      caldera_red_login_ref: *redpw
+      caldera_plugins: *plugins
+      caldera_start: *start
+      caldera_validate_with_docker: *validate
+      caldera_health_timeout: *htimeout
+      caldera_target_version:
+        type: str
+        description: "The release x.y.z to move to (newer than caldera_version)."
+        required: true
+      caldera_target_commit:
+        type: str
+        description: "The 40-hex commit of that release's tag."
+        required: true
+  export:
+    short_description: "Write the open-format exit copy (object tree) of the operations, adversaries, agents and artifacts to <data root>/export/<stamp>."
+    options:
+      caldera_logical_id: *logical
+      caldera_version: *version
+      caldera_source_commit: *commit
+      caldera_source_repository: *srcrepo
+      caldera_built_name: *imgrepo
+      caldera_build_variant: *variant
+      caldera_build_timezone: *tz
+      caldera_rebuild: *rebuild
+      caldera_bind: *bind
+      caldera_port: *port
+      caldera_extra_ports: *extra
+      caldera_log_level: *loglevel
+      caldera_mem_limit: *mem
+      caldera_dir: *dir
+      caldera_data_root: *root
+      caldera_owner: *owner
+      caldera_group: *group
+      caldera_admin_user: *admin
+      caldera_admin_login_ref: *adminpw
+      caldera_red_user: *red
+      caldera_red_login_ref: *redpw
+      caldera_plugins: *plugins
+      caldera_start: *start
+      caldera_validate_with_docker: *validate
+      caldera_health_timeout: *htimeout

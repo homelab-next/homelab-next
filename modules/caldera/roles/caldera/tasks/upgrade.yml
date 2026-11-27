@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate a release bump (a release and its commit, both pinned) and record it as pending. The
+# bump itself is the converge that follows (the playbook exports first): it re-clones the tag,
+# refuses it if the tag's commit is not the one named here, and builds the new image.
+- block:
+    - name: Refuse a target that is not a newer release with a 40-hex commit
+      ansible.builtin.assert:
+        that:
+          - caldera_target_version is match(caldera_version_pattern)
+          - caldera_target_commit is match(caldera_commit_pattern)
+          - caldera_target_version is version(caldera_version, '>')
+        fail_msg: >-
+          caldera: the target must be a release x.y.z newer than {{ caldera_version }} and its 40-hex
+          commit (git rev-parse <tag>^{commit}); got {{ caldera_target_version | default('?') }}
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Record the pending bump
+      ansible.builtin.copy:
+        dest: "{{ caldera_dir }}/upgrade-pending.json"
+        content: "{{ {'from': caldera_version, 'to': caldera_target_version, 'commit': caldera_target_commit} | to_nice_json }}\n"
+        owner: "{{ caldera_owner }}"
+        group: "{{ caldera_group }}"
+        mode: "0644"
+  tags: [upgrade]

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's; the seeds directory is 0700 (it holds the generated values).
+- name: Create the data root, the seed directory and the export directory
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ caldera_owner }}"
+    group: "{{ caldera_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ caldera_data_root }}", mode: "0750"}
+    - {path: "{{ caldera_seed_dir }}", mode: "0700"}
+    - {path: "{{ caldera_export_dir }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

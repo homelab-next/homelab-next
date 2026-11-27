@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the data (export_first), stop and remove the container, and delete the generated
+# configuration that holds the passwords. The data root (with the export, the source tree and the
+# seeds) and the compose project are kept for the operator to archive or delete; the
+# decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the service.
+- name: Remove the adversary-emulation server
+  hosts: mod_caldera_server
+  become: true
+  tasks:
+    - name: Export the data first
+      ansible.builtin.include_role:
+        name: caldera
+        tasks_from: export
+    - name: Stop and remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ caldera_dir | default('/opt/compose/caldera') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the generated configuration the container was given (the passwords)
+      ansible.builtin.file:
+        path: "{{ caldera_data_root | default('/var/lib/hnx-modules/caldera') }}/src/conf/local.yml"
+        state: absent

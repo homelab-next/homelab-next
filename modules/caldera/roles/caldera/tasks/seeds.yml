@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# The server wants more random values in its configuration than the two passwords: API keys, the
+# salt and key its stored data is encrypted with, two contact passwords. They are generated once
+# on the host (force false: an existing seed is never replaced, so the encryption key stays the
+# same for as long as the data root does), kept 0600, and read back for the configuration. They are
+# not secret refs: nothing outside this host needs them. The data root's backup carries them; the
+# open-format export does not (README, "Data").
+- name: Generate each seed once
+  ansible.builtin.copy:
+    dest: "{{ caldera_seed_dir }}/{{ item }}"
+    content: "{{ lookup('ansible.builtin.password', '/dev/null', chars=['hexdigits'], length=48) }}\n"
+    owner: "{{ caldera_owner }}"
+    group: "{{ caldera_group }}"
+    mode: "0600"
+    force: false
+  loop: "{{ caldera_seed_names }}"
+  no_log: true
+
+- name: Read the seeds
+  ansible.builtin.slurp:
+    src: "{{ caldera_seed_dir }}/{{ item }}"
+  loop: "{{ caldera_seed_names }}"
+  register: caldera_seed_read
+  no_log: true
+  check_mode: false
+
+- name: Name the seeds
+  ansible.builtin.set_fact:
+    caldera_seed: >-
+      {{ dict(caldera_seed_read.results | map(attribute='item') | zip(
+              caldera_seed_read.results | map(attribute='content') | map('b64decode') | map('trim'))) }}
+  no_log: true

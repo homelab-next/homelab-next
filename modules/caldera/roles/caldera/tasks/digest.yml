@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# The digest of the image built for this tag (image.yml builds it; the hooks only read it):
+# compose_app pins by digest, and the digest of a local build is known only after it. The daemon
+# must keep image digests (the containerd image store, the default of current Docker): a hook
+# refuses to go on if the digest it read does not resolve.
+- name: Read the image's digest
+  ansible.builtin.command:
+    argv: [docker, image, inspect, --format, "{{ '{{.Id}}' }}", "{{ caldera_image_tagged }}"]
+  register: caldera_image_id
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Check that the digest resolves as a reference (the daemon keeps digests)
+  ansible.builtin.command:
+    argv: [docker, image, inspect, --format, "{{ '{{.Id}}' }}", "{{ caldera_built_name }}@{{ caldera_image_id.stdout | trim }}"]
+  register: caldera_image_ref
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: caldera_image_id.rc == 0
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Name the digest the container is pinned to
+  ansible.builtin.set_fact:
+    caldera_image_digest: "{{ (caldera_image_id.stdout | trim) if caldera_image_id.rc == 0 else ('sha256:' ~ ('0' * 64)) }}"
+    caldera_image_absent: "{{ caldera_image_id.rc != 0 }}"
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Refuse a missing image or a digest the daemon cannot resolve (outside a dry run)
+  ansible.builtin.assert:
+    that:
+      - caldera_image_id.rc == 0
+      - caldera_image_ref.rc == 0
+      - caldera_image_digest is match('^sha256:[0-9a-f]{64}\Z')
+    fail_msg: >-
+      caldera: there is no image {{ caldera_image_tagged }} whose digest resolves (the daemon must use the
+      containerd image store so a local build keeps a digest); run the install first
+  when: not ansible_check_mode
+  tags: [readiness, health, backup, restore, export, upgrade]

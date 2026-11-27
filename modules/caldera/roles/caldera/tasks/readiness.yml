@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# The server's dependencies are the container engine (docker_engine, applied to the guest before
+# this module) and its two credentials in the secret store; it calls no other service. The first
+# converge also needs the install-time egress (the source and the build's fetches), which a
+# readiness check cannot prove without making the connection: the clone and the build say so.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+  tags: [readiness]

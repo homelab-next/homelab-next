@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Regenerate conf/local.yml at every converge: the two passwords from the secret store, the other
+# generated values from the seeds. It is gitignored upstream, so the clone's reset never touches it,
+# and it is the only file there that holds a credential (0600).
+- name: Read the generated values
+  ansible.builtin.include_tasks: seeds.yml
+
+- name: Write the server's configuration (passwords from the secret store)
+  ansible.builtin.template:
+    src: local.yml.j2
+    dest: "{{ caldera_src }}/conf/local.yml"
+    owner: "{{ caldera_owner }}"
+    group: "{{ caldera_group }}"
+    mode: "0600"
+  register: caldera_config
+  no_log: true

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Write one export snapshot with the role's script (files/caldera_tree.py): staged in a sibling
+# directory and renamed into place, regular files only (a link or special file is skipped and
+# counted), sha256 of every file in the listing. A snapshot is never overwritten or deleted.
+- name: Install the export script
+  ansible.builtin.copy:
+    src: caldera_tree.py
+    dest: "{{ caldera_data_root }}/caldera_tree.py"
+    owner: "{{ caldera_owner }}"
+    group: "{{ caldera_group }}"
+    mode: "0750"
+  tags: [backup, export]
+
+- name: Copy the operations, adversaries, agents and artifacts
+  ansible.builtin.command:
+    argv: [python3, -I, "{{ caldera_data_root }}/caldera_tree.py", export, "{{ caldera_src }}", "{{ caldera_export_dir }}"]
+  register: caldera_export
+  changed_when: true
+  tags: [backup, export]
