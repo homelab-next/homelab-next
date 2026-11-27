@@ -265,7 +265,7 @@ default its slice (`hnx-strata-server.slice`, the container's cgroup parent). Wi
 (`mmap_experts: on`, the card holding every expert) the guest's RAM is the page cache for the reads
 and the engine's own buffers; a site that sets `mmap_experts: off` raises the placement's `memory_mb`
 past the experts' size (about 64 GiB), beside the placement in the site's selection, never in this
-module (docs/modules.md, "footprint per placement"). Set `threads` to at most the placement's `cpu`.
+module. Set `threads` to at most the placement's `cpu`.
 The disk is the image (0.6 GB compressed, about 1.5 GB loaded) and the data directory (small).
 
 ## Not provable without the card, and the first deploy's checks
