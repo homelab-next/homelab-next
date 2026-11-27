@@ -33,6 +33,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _find() -> Path:
+    """The provider this file pins: the first provider of the inference slot that uses the shared
+    adapter, by id. The slot has more than one provider; each one's own role has its own test file."""
     hits = [
         p.parent
         for p in sorted((ROOT / "modules").glob("*/module.yml"))
@@ -42,7 +44,7 @@ def _find() -> Path:
         .get("adapter")
         == "homelabnext.conform.adapters.inference_server:make"
     ]
-    assert len(hits) == 1, hits
+    assert hits, hits
     return hits[0]
 
 

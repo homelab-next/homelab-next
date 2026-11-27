@@ -224,6 +224,12 @@ SOURCES: dict[str, tuple[str, str]] = {
         "some builds have an image: compare with the server-<backend>-bNNNNN tags of "
         "ghcr.io/ggml-org/llama.cpp by hand",
     ),
+    "role:strata/strata_image": (
+        "none",
+        "the lab's own build of a Niko1221/Strata release (modules/strata/image): there is no registry "
+        "tag to age, the pin is the manifest digest the operator built; compare the release with "
+        "Niko1221/Strata's releases by hand",
+    ),
     "role:dfir_iris/dfir_iris_app_image": ("github", "dfir-iris/iris-web"),
     "role:dfir_iris/dfir_iris_db_image": ("github", "dfir-iris/iris-web"),
     "role:dfir_iris/dfir_iris_nginx_image": ("github", "dfir-iris/iris-web"),
@@ -494,6 +500,13 @@ NOTES: dict[str, str] = {
         "product.version in modules/llamacpp/module.yml (0.<build>.0), the lab registry's version "
         "and the three other backends' pins in the README; a build at least 14 days old that has "
         "an image for every backend"
+    ),
+    "role:strata/strata_image": (
+        "an image the lab builds (modules/strata/image): rebuild from the new release tag and commit "
+        "(the Dockerfile's STRATA_TAG and STRATA_COMMIT), then move the tag "
+        "<release>-<commit12> and the manifest digest together with product.version in "
+        "modules/strata/module.yml, the lab registry's version and the README's pins; the archive's "
+        "sha256 is the operator's record of the build"
     ),
     "role:ntfy/ntfy_image": (
         "an image (modules/ntfy): bump the tag and its digest together, with product.version in "

@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# the repositories an image may come from: the lab's own build (a model runtime pulls nothing)
+strata_build_repositories: [localhost/hnx-strata]
+strata_repository: "{{ strata_image.split('@')[0].rsplit(':', 1)[0] }}"
+strata_tag: "{{ strata_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+strata_digest: "{{ strata_image.split('@')[1] | default('') }}"
+# <release>-<first 12 hex of the pinned commit>
+strata_tag_pattern: '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}-[0-9a-f]{12}\Z'
+# where the container sees the weights and its data, and the port inside it
+strata_container_models_dir: /models
+strata_container_data_dir: /data
+strata_container_port: 8080
+strata_unit_name: hnx-strata.service
+# canonical absolute paths: no //, no . or .. component, no trailing /
+strata_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+strata_digest_pattern: '^sha256:[0-9a-f]{64}\Z'
+strata_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+strata_model_dir: "{{ strata_store_root }}/gguf/{{ strata_model_repo }}"
+strata_listing: "{{ strata_store_root }}/manifests/listings/{{ strata_model_store_id }}.sha256"
+# a file name inside the store entry (the entry's directory, no subdirectory): a letter or digit first, never a . or ..
+strata_model_file_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}[.]gguf\Z'
+strata_shard_pattern: '^(.*)-([0-9]{5})-of-([0-9]{5})[.]gguf\Z'
+strata_shards_max: 512
+# [stem, n, total] of the first model file when it is a shard of a split model, or [] for a single file
+strata_split: "{{ strata_model_files[0] | regex_findall(strata_shard_pattern) | map('list') | first | default([]) }}"
+# the files of the series the first model file begins, in order (a split model), else []
+strata_series: "{{ strata_series_json | from_json }}"
+strata_series_json: >-
+  {%- if strata_split | length == 3 and strata_split[2] | int <= strata_shards_max -%}
+  {%- set out = [] -%}
+  {%- for n in range(1, (strata_split[2] | int) + 1) -%}{{ out.append('%s-%05d-of-%s.gguf' | format(strata_split[0], n, strata_split[2])) or '' }}{%- endfor -%}
+  {{ out | to_json }}
+  {%- else -%}
+  []
+  {%- endif -%}
+# the files every one of which the precheck pins besides the first: the other model files and the direction file
+strata_also_files: "{{ strata_model_files[1:] + ([strata_direction_file] if strata_direction_file | string != '' else []) }}"
+# every file the server opens
+strata_all_files: "{{ strata_model_files + ([strata_direction_file] if strata_direction_file | string != '' else []) }}"
+# the cuda card handed to the container, by CDI name
+strata_cuda_device: "nvidia.com/gpu={{ strata_gpu_index | int }}"
+# strata_extra_args: the settings a site may make, by name (never a raw flag)
+strata_extra_keys: [kv_streaming, mmap_experts, pcie_frac, threads, vram_reserve_mib]
+strata_kv_modes: [int8, q4_0, k8v4, fp16]
+strata_drafting_modes: ["off", auto, mtp]
+strata_switch_values: ["on", "off", auto]
+strata_threads_max: 256
+strata_pcie_frac_max: 0.95
+strata_vram_reserve_max_mib: 65536
+strata_spec_depth_max: 8
+strata_parallel_max: 16
+# the values the settings take when the site leaves them unset (kv_streaming and mmap_experts are words, never booleans: auto leaves the choice to the launcher)
+strata_kv_streaming_value: "{{ strata_extra_args.kv_streaming | default('off') }}"
+strata_mmap_experts_value: "{{ strata_extra_args.mmap_experts | default('on') }}"
+strata_pcie_frac_value: "{{ strata_extra_args.pcie_frac | default(0) }}"
+# the environment the image's starter turns into the launcher's command line (image/entrypoint.sh): named settings only
+strata_environment: >-
+  {{ {'HNX_STRATA_MODEL_DIR': strata_container_models_dir,
+      'HNX_STRATA_MODEL_FILE': strata_model_files[0],
+      'HNX_STRATA_SERVED_NAME': strata_served_model_name,
+      'HNX_STRATA_CONTEXT': strata_context_size | int | string,
+      'HNX_STRATA_KV': strata_kv_mode,
+      'HNX_STRATA_PARALLEL': strata_parallel | int | string,
+      'HNX_STRATA_GPU': '0',
+      'HNX_STRATA_SPEC': strata_spec_depth | int | string,
+      'HNX_STRATA_DRAFTING': strata_drafting,
+      'HNX_STRATA_KV_STREAMING': strata_kv_streaming_value,
+      'HNX_STRATA_MMAP_EXPERTS': '1' if strata_mmap_experts_value == 'on' else '0',
+      'HNX_STRATA_PCIE_FRAC': strata_pcie_frac_value | string,
+      'HOME': strata_container_data_dir ~ '/home',
+      'PORT': strata_container_port | string}
+     | combine({'HNX_STRATA_POOL_WORKERS': strata_extra_args.threads | string} if strata_extra_args.threads is defined else {})
+     | combine({'HNX_STRATA_VRAM_RESERVE_MIB': strata_extra_args.vram_reserve_mib | string} if strata_extra_args.vram_reserve_mib is defined else {})
+     | combine({'HNX_STRATA_DIRECTION': strata_direction_file,
+                'HNX_STRATA_DIRECTION_SCALE': strata_direction_scale | float | string,
+                'HNX_STRATA_DIRECTION_LAYERS': strata_direction_layers | map('int') | map('string') | join(',')} if strata_direction_file | string != '' else {}) }}
+# the precheck's arguments: the card rule alone (the health hook), and with the weights (the unit)
+strata_precheck_power: >-
+  {{ ['--max-watts', strata_power_cap_max_watts | string, '--gpu-index', strata_gpu_index | int | string,
+      '--expect-gpus', strata_expected_gpus | int | string,
+      '--proc-root', strata_proc_root, '--dev-root', strata_dev_root, '--cdi-spec', strata_cdi_spec] }}
+strata_precheck_full: >-
+  {{ strata_precheck_power + ['--model-file', strata_model_files[0], '--listing', strata_listing, '--digest', strata_model_digest, '--model-dir', strata_model_dir]
+     + (strata_also_files | map('regex_replace', '^', '--also-file ') | map('split', ' ') | flatten | list) }}
+# the CDI spec the container's device comes from (the precheck compares its device majors with the live nodes)
+strata_cdi_spec: /etc/cdi/nvidia.yaml
+# Test seams only: a role var, so no inventory or group variable can point the card check at another tree (only an extra variable, which a test passes).
+strata_dev_root: /dev
+strata_proc_root: /proc
+# the operator's power rule: no setting raises it above this many watts
+strata_power_cap_ceiling_watts: 200
+strata_gid_max: 4294967295

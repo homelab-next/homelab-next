@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# Strata (modules/strata), the inference provider that serves one MoE GGUF model on ONE NVIDIA GA100 card (the CMP
+# 170HX, sm_80, 64 GiB after the in-guest driver unlock): one compose_app container started by a systemd unit, so a
+# power-cap, GPU-count, CDI and byte check run before every start. The weights come from the model store (role
+# model_store, a pinned sha256 per file) and are mounted read-only; nothing is downloaded at start.
+# strata_logical_id (required): the instance's registry id, e.g. inference-moe
+# strata_model_digest (required): the store entry's digest (hnx models store list prints it)
+
+# the image the lab builds from the pinned release (modules/strata/README.md, "The image"): a tag of this module's own
+# repository, <release>-<commit12>, and the digest of the OCI manifest the recipe produces
+strata_image: "localhost/hnx-strata:0.2.22-b28ca95e3e68@sha256:5fa487d5345b04ee7022b27d18f0f8c228d531c0b8c8fab21f1797b040e3be41"
+# the `docker save` / OCI archive of that image (guest path, checked with sha256sum before the deploy), loaded when the
+# daemon lacks the digest: a model runtime's egress is default-deny, so it cannot build or pull; empty: the daemon has it
+strata_image_archive: ""
+# the sha256 of that archive file (required with it): checked before anything is loaded, so a swapped or truncated archive is refused
+strata_image_archive_sha256: ""
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the guest firewall admits
+# the gateway and the metrics scraper only
+strata_bind: "{{ ansible_host }}"
+strata_port: 8001
+strata_dir: /opt/compose/strata
+# the module's data root: data/ (the launcher's settings and log, the tokenizer it builds), the container's only writable path
+strata_data_root: /var/lib/hnx-modules/strata
+strata_owner: root
+# the container's user: an id no account on the host has, and no more than the group below
+strata_uid: 61001
+strata_gid: 61001
+# the model store (role model_store) and the one GGUF entry served from it: ISTA-DASLab's Qwen3.8-Flash-Next GSQ-RCO
+# IQ3_XXS pack (the first shard 47.0 GB, the n-gram shard 28.8 GB)
+strata_store_root: /srv/models
+strata_model_repo: ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF
+# every file of the model, the first shard first (Strata is given it and opens the others beside it)
+strata_model_files:
+  - Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf
+  - Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00002-of-00002.gguf
+# the refusal-direction (control vector) GGUF in the same entry, applied as Strata's projection; empty: none (the stock model)
+strata_direction_file: ""
+strata_direction_scale: 1.0
+# the layers the projection steers, first and last
+strata_direction_layers: [4, 44]
+strata_model_store_id: qwen3-8-flash-next-iq3-xxs
+# the id the role table and the gateway know the model by; Strata lists the id it derives from the pack and does not
+# match the `model` field of a request against it
+strata_served_model_name: qwen3.8-flash-next
+# the most one request may hold, in tokens (the model is trained to 262,144)
+strata_context_size: 131072
+strata_parallel: 1
+# the draft depth (--spec N): how many tokens the drafter guesses ahead and the model checks in one pass; 0 leaves it to the engine
+strata_spec_depth: 4
+# the KV cache's format: int8 (the engine's default), q4_0, k8v4 (keys 8-bit, values 4-bit: 23% less than int8) or fp16
+strata_kv_mode: k8v4
+# the drafter: off (the suffix and prompt-lookup drafter only, every token still verified), auto or mtp. The MTP draft
+# layer is a separate ~5 GB download that is not in the model store, so off is what runs with no egress
+strata_drafting: "off"
+# the card: its index in the container toolkit's CDI spec, and how many cards the guest must list (exactly)
+strata_gpu_index: 0
+strata_expected_gpus: 1
+# Settings by name; never a raw flag (the launcher's command line is the image's). Allowed keys: kv_streaming (on|off|auto),
+# mmap_experts (on|off|auto), pcie_frac (0 to 0.95), threads (--pool-workers, 1 to 256), vram_reserve_mib (0 to 65536).
+# Unset: kv_streaming off (the KV cache stays in the card's memory), mmap_experts on (the experts are read from the files
+# in place and the card holds them: no second copy in RAM), pcie_frac 0 (no expert crosses the card's narrow link), and the
+# engine's own value for threads and vram_reserve_mib.
+strata_extra_args: {}
+# the model store's group id (read from the model's directory when empty): the container reads the weights through it
+strata_models_gid: ""
+# the operator's rule: the card's power cap must be at or under this many watts before any load starts (and again on every
+# health run). It can only tighten the rule: 1 to 200, never above
+strata_power_cap_max_watts: 200
+strata_precheck_bin: /usr/local/libexec/homelabnext/hnx-strata-precheck
+strata_unit_dir: /etc/systemd/system
+strata_systemctl_cli: systemctl
+# the unit's start timeout: it reads every byte of the weights (minutes per hundred GB) first
+strata_start_timeout_s: 1800
+strata_start: true
+strata_validate_with_docker: true
+strata_health_timeout: 20
+# the one warm-up request health sends before its timed probes (a cold first request is far slower than a warm one)
+strata_first_request_timeout: 300
+# health waits for readiness before it probes: the unit is active once the precheck ends and the container starts, but
+# the model then loads for a long while (~76 GB through the card's link). /health and the container's health are each
+# retried every strata_load_poll_s seconds for up to strata_load_timeout seconds
+strata_load_timeout: 3600
+strata_load_poll_s: 10

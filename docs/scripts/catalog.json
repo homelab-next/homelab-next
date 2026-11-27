@@ -2262,6 +2262,66 @@
     },
     {
       "exit": {
+        "0": "stopped on SIGTERM or SIGINT",
+        "1": "the server went away",
+        "2": "a setting or a file is missing",
+        "3": "the engine in the image does not match the card, or no card is visible"
+      },
+      "id": "strata-entrypoint",
+      "inputs": "the HNX_STRATA_* environment variables the role renders (listed below) and PORT",
+      "installs_to": "/opt/strata/entrypoint.sh",
+      "kind": "service",
+      "language": "shell",
+      "outputs": "the launcher's log on stdout and stderr",
+      "owner": "platform",
+      "path": "modules/strata/roles/strata/files/image/entrypoint.sh",
+      "purpose": "Start Strata for one model whose files are on disk, from named HNX_STRATA_* settings, and keep the container up while the server is.",
+      "status": "active",
+      "trigger": [
+        "role:strata"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the server answered 200 with the model loaded",
+        "1": "it did not answer, or the model is not loaded yet"
+      },
+      "id": "strata-healthcheck",
+      "inputs": "the PORT environment variable (default 8080)",
+      "installs_to": "/opt/strata/healthcheck.py",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the reason on stderr when it is not healthy",
+      "owner": "platform",
+      "path": "modules/strata/roles/strata/files/image/healthcheck.py",
+      "purpose": "Report whether the Strata server in the container answers /health with its model loaded.",
+      "status": "active",
+      "trigger": [
+        "role:strata"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the card's power cap is within the limit, the GPU count is the expected one, the CDI spec is current and the bytes are the pinned ones",
+        "1": "a refusal - a cap is above the limit, unset or unreadable, the GPU count differs, the CDI spec is stale, or a file is not the pinned bytes",
+        "2": "usage error"
+      },
+      "id": "strata-precheck",
+      "inputs": "the power limit in watts, the NVIDIA card index, the expected GPU count, the CDI spec, the model store's listing, the pinned digest, the model directory, the served file and any other listed files",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-strata-precheck",
+      "kind": "job",
+      "language": "shell",
+      "outputs": "one line on stdout per check that passed; the refusal on stderr",
+      "owner": "platform",
+      "path": "modules/strata/roles/strata/files/hnx-strata-precheck",
+      "purpose": "Refuse to start the Strata inference server unless the GPU's power cap is at or under the limit, the guest has exactly the expected number of GPUs, the CDI spec is fresh and every model file is the pinned bytes.",
+      "status": "active",
+      "trigger": [
+        "role:strata"
+      ]
+    },
+    {
+      "exit": {
         "0": "sealed, checked, staged or pruned",
         "1": "the backup, the destination or the request is refused (the reason on stderr)",
         "2": "usage error"

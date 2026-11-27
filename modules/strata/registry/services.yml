@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes. It is keyed by the slot and
+# renamed to the instance the site selects (the model gateway's backend is that service: its
+# host and port, held to the serving plan's); version is product.version (never repeated here),
+# and host is the module's host role, which the site places on a guest. The lab registry
+# (lab/services.yml) must carry it exactly as bound (hnx modules check, docs/modules/registry-rows.md).
+# Internal only: no public_hostname and no public route. The server has no key of its own (it
+# answers anyone the guest firewall lets in: the gateway and the metrics scraper), so auth: none says
+# what the network is doing. A scraper's Accept header makes /metrics answer in the text exposition format.
+services:
+  inference:
+    capability: inference
+    impl: strata
+    host: server
+    protocol: http
+    port: 8001
+    health: {kind: http, path: /health, expect_status: 200}
+    metrics: {path: /metrics}
+    owner: operator
+    tls: none
+    auth: none
+    tags: [compute, inference]
+    description: Strata on the placement's GPU, one MoE GGUF model, OpenAI-compatible /v1 for the model gateway. No public route, no egress.

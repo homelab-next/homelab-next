@@ -1,0 +1,309 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run Strata for one MoE GGUF model as a compose_app container behind a unit that checks the GPU power cap, the GPU count, the CDI spec and the weights before every start.
+    options:
+      strata_logical_id: &a_logical_id
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. inference-moe).
+        required: true
+      strata_model_digest: &a_model_digest
+        type: str
+        description: 'The store entry''s digest, sha256: of its sha256sum listing (hnx models store list); the unit checks the bytes against it before every start.'
+        required: true
+      strata_image: &a_image
+        type: str
+        description: 'localhost/hnx-strata:<release>-<commit12>@sha256:<digest>: the lab''s own build of the pinned Strata release (README.md, The image).'
+        default: localhost/hnx-strata:0.2.22-b28ca95e3e68@sha256:5fa487d5345b04ee7022b27d18f0f8c228d531c0b8c8fab21f1797b040e3be41
+      strata_image_archive: &a_image_archive
+        type: path
+        description: 'A local archive of that image (guest path), loaded when the daemon lacks the digest (the guest cannot pull or build: its egress is default-deny); empty: the daemon has it.'
+        default: ''
+      strata_image_archive_sha256: &a_image_archive_sha256
+        type: str
+        description: 'The sha256 of the archive file (required with it): checked before anything is loaded.'
+        default: ''
+      strata_bind: &a_bind
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      strata_port: &a_port
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8001
+      strata_dir: &a_dir
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/strata
+      strata_data_root: &a_data_root
+        type: path
+        description: 'The module''s data root on the host: data/, the container''s only writable path (the launcher''s settings and log, the tokenizer it builds).'
+        default: /var/lib/hnx-modules/strata
+      strata_owner: &a_owner
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      strata_uid: &a_uid
+        type: int
+        description: The container's user id (no account on the host has it); owns data/.
+        default: 61001
+      strata_gid: &a_gid
+        type: int
+        description: The container's group id.
+        default: 61001
+      strata_store_root: &a_store_root
+        type: path
+        description: The model store root (role model_store), mounted read-only (only the entry's directory).
+        default: /srv/models
+      strata_model_repo: &a_model_repo
+        type: str
+        description: 'The GGUF entry''s source repository (org/name): its directory under <store>/gguf/.'
+        default: ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF
+      strata_model_files: &a_model_files
+        type: list
+        description: Every file of the model, the first shard first (<stem>-00001-of-0000M.gguf, which Strata is given and opens the others beside); names inside the entry's directory, never a path with a directory, absolute, . or .. in it. A split model lists exactly the M files of its series.
+        elements: str
+        default: [Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf, Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00002-of-00002.gguf]
+      strata_direction_file: &a_direction_file
+        type: str
+        description: 'The refusal-direction (control vector) GGUF in the same entry, applied as Strata''s projection (--control-vector-scaled, mode project, per layer); empty: none, the stock model.'
+        default: ''
+      strata_direction_scale: &a_direction_scale
+        type: float
+        description: The direction's scale, above 0 and at most 4.
+        default: 1.0
+      strata_direction_layers: &a_direction_layers
+        type: list
+        description: The first and last layer the direction steers (--control-vector-layer-range).
+        elements: int
+        default: [4, 44]
+      strata_model_store_id: &a_model_store_id
+        type: str
+        description: 'The entry''s id in the store manifest: names its listing under manifests/listings/.'
+        default: qwen3-8-flash-next-iq3-xxs
+      strata_served_model_name: &a_served_model_name
+        type: str
+        description: The id the role table and the gateway know the model by; Strata does not match a request's model field against it.
+        default: qwen3.8-flash-next
+      strata_context_size: &a_context_size
+        type: int
+        description: The most one request may hold, in tokens (--context); the model is trained to 262144.
+        default: 131072
+      strata_parallel: &a_parallel
+        type: int
+        description: Requests decoded together (--parallel), 1 to 16.
+        default: 1
+      strata_spec_depth: &a_spec_depth
+        type: int
+        description: The draft depth (--spec N), 0 to 8; 0 leaves it to the engine.
+        default: 4
+      strata_kv_mode: &a_kv_mode
+        type: str
+        description: 'The KV cache''s format (--kv): int8, q4_0, k8v4 or fp16.'
+        default: k8v4
+      strata_drafting: &a_drafting
+        type: str
+        description: 'The drafter (--drafting): off, auto or mtp. The MTP draft layer is a separate download that the model store does not hold, so off is what runs with no egress.'
+        default: 'off'
+      strata_gpu_index: &a_gpu_index
+        type: int
+        description: The card's index in the container toolkit's CDI spec (nvidia.com/gpu=<index>), and nvidia-smi's index.
+        default: 0
+      strata_expected_gpus: &a_expected_gpus
+        type: int
+        description: How many cards nvidia-smi must list on the guest, exactly; the pre-start check refuses any other count.
+        default: 1
+      strata_extra_args: &a_extra_args
+        type: dict
+        description: 'Settings by name, never a raw flag: kv_streaming (on|off|auto, --kv-streaming), mmap_experts (on|off|auto, --mmap-experts), pcie_frac (0 to 0.95, --pcie-frac), threads (1 to 256, --pool-workers) and vram_reserve_mib (0 to 65536, --vram-reserve-mib). Unset: kv_streaming off, mmap_experts on, pcie_frac 0.'
+        default: {}
+      strata_models_gid: &a_models_gid
+        type: str
+        description: 'The model store''s readers'' group id; empty: read from the model''s directory.'
+        default: ''
+      strata_power_cap_max_watts: &a_power_cap_max_watts
+        type: int
+        description: 'The most the card''s power cap may be before any load starts (and at every health run): the operator''s rule, 200 W.'
+        default: 200
+      strata_precheck_bin: &a_precheck_bin
+        type: path
+        description: Where the pre-start check (power cap, GPU count, CDI spec, then the weights' sha256) is installed.
+        default: /usr/local/libexec/homelabnext/hnx-strata-precheck
+      strata_unit_dir: &a_unit_dir
+        type: path
+        description: Where the systemd unit is written.
+        default: /etc/systemd/system
+      strata_systemctl_cli: &a_systemctl_cli
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      strata_start_timeout_s: &a_start_timeout_s
+        type: int
+        description: 'The unit''s start timeout in seconds: it reads every byte of the weights first.'
+        default: 1800
+      strata_start: &a_start
+        type: bool
+        description: 'Enable, start and restart the unit (false: write it only).'
+        default: true
+      strata_validate_with_docker: &a_validate_with_docker
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      strata_health_timeout: &a_health_timeout
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      strata_first_request_timeout: &a_first_request_timeout
+        type: int
+        description: Seconds the one warm-up request health sends before its timed probes waits (the first request after a cold load is slow).
+        default: 300
+      strata_load_timeout: &a_load_timeout
+        type: int
+        description: Seconds health waits, for /health and for the container each, for the model to finish loading after a (re)start before it fails naming the last status.
+        default: 3600
+      strata_load_poll_s: &a_load_poll_s
+        type: int
+        description: Seconds between the readiness retries (at least 1).
+        default: 10
+  health:
+    short_description: Fail unless the unit is active, the card rules hold, the model is loaded with its context, the metrics answer and one token comes back.
+    options:
+      strata_logical_id: *a_logical_id
+      strata_model_digest: *a_model_digest
+      strata_image: *a_image
+      strata_image_archive: *a_image_archive
+      strata_image_archive_sha256: *a_image_archive_sha256
+      strata_bind: *a_bind
+      strata_port: *a_port
+      strata_dir: *a_dir
+      strata_data_root: *a_data_root
+      strata_owner: *a_owner
+      strata_uid: *a_uid
+      strata_gid: *a_gid
+      strata_store_root: *a_store_root
+      strata_model_repo: *a_model_repo
+      strata_model_files: *a_model_files
+      strata_direction_file: *a_direction_file
+      strata_direction_scale: *a_direction_scale
+      strata_direction_layers: *a_direction_layers
+      strata_model_store_id: *a_model_store_id
+      strata_served_model_name: *a_served_model_name
+      strata_context_size: *a_context_size
+      strata_parallel: *a_parallel
+      strata_spec_depth: *a_spec_depth
+      strata_kv_mode: *a_kv_mode
+      strata_drafting: *a_drafting
+      strata_gpu_index: *a_gpu_index
+      strata_expected_gpus: *a_expected_gpus
+      strata_extra_args: *a_extra_args
+      strata_models_gid: *a_models_gid
+      strata_power_cap_max_watts: *a_power_cap_max_watts
+      strata_precheck_bin: *a_precheck_bin
+      strata_unit_dir: *a_unit_dir
+      strata_systemctl_cli: *a_systemctl_cli
+      strata_start_timeout_s: *a_start_timeout_s
+      strata_start: *a_start
+      strata_validate_with_docker: *a_validate_with_docker
+      strata_health_timeout: *a_health_timeout
+      strata_first_request_timeout: *a_first_request_timeout
+      strata_load_timeout: *a_load_timeout
+      strata_load_poll_s: *a_load_poll_s
+  readiness:
+    short_description: Fail unless the container engine is ready, the weights and their listing are in the store and the CDI spec is written.
+    options:
+      strata_logical_id: *a_logical_id
+      strata_model_digest: *a_model_digest
+      strata_image: *a_image
+      strata_image_archive: *a_image_archive
+      strata_image_archive_sha256: *a_image_archive_sha256
+      strata_bind: *a_bind
+      strata_port: *a_port
+      strata_dir: *a_dir
+      strata_data_root: *a_data_root
+      strata_owner: *a_owner
+      strata_uid: *a_uid
+      strata_gid: *a_gid
+      strata_store_root: *a_store_root
+      strata_model_repo: *a_model_repo
+      strata_model_files: *a_model_files
+      strata_direction_file: *a_direction_file
+      strata_direction_scale: *a_direction_scale
+      strata_direction_layers: *a_direction_layers
+      strata_model_store_id: *a_model_store_id
+      strata_served_model_name: *a_served_model_name
+      strata_context_size: *a_context_size
+      strata_parallel: *a_parallel
+      strata_spec_depth: *a_spec_depth
+      strata_kv_mode: *a_kv_mode
+      strata_drafting: *a_drafting
+      strata_gpu_index: *a_gpu_index
+      strata_expected_gpus: *a_expected_gpus
+      strata_extra_args: *a_extra_args
+      strata_models_gid: *a_models_gid
+      strata_power_cap_max_watts: *a_power_cap_max_watts
+      strata_precheck_bin: *a_precheck_bin
+      strata_unit_dir: *a_unit_dir
+      strata_systemctl_cli: *a_systemctl_cli
+      strata_start_timeout_s: *a_start_timeout_s
+      strata_start: *a_start
+      strata_validate_with_docker: *a_validate_with_docker
+      strata_health_timeout: *a_health_timeout
+      strata_first_request_timeout: *a_first_request_timeout
+      strata_load_timeout: *a_load_timeout
+      strata_load_poll_s: *a_load_poll_s
+  backup:
+    short_description: Nothing to back up; the weights are the model store's.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-run main.
+    options: {}
+  export:
+    short_description: Nothing to export; the model store's manifest is the open-format copy.
+    options: {}
+  upgrade:
+    short_description: Validate a pinned image bump to a newer release and record it as pending.
+    options:
+      strata_logical_id: *a_logical_id
+      strata_model_digest: *a_model_digest
+      strata_image: *a_image
+      strata_image_archive: *a_image_archive
+      strata_image_archive_sha256: *a_image_archive_sha256
+      strata_bind: *a_bind
+      strata_port: *a_port
+      strata_dir: *a_dir
+      strata_data_root: *a_data_root
+      strata_owner: *a_owner
+      strata_uid: *a_uid
+      strata_gid: *a_gid
+      strata_store_root: *a_store_root
+      strata_model_repo: *a_model_repo
+      strata_model_files: *a_model_files
+      strata_direction_file: *a_direction_file
+      strata_direction_scale: *a_direction_scale
+      strata_direction_layers: *a_direction_layers
+      strata_model_store_id: *a_model_store_id
+      strata_served_model_name: *a_served_model_name
+      strata_context_size: *a_context_size
+      strata_parallel: *a_parallel
+      strata_spec_depth: *a_spec_depth
+      strata_kv_mode: *a_kv_mode
+      strata_drafting: *a_drafting
+      strata_gpu_index: *a_gpu_index
+      strata_expected_gpus: *a_expected_gpus
+      strata_extra_args: *a_extra_args
+      strata_models_gid: *a_models_gid
+      strata_power_cap_max_watts: *a_power_cap_max_watts
+      strata_precheck_bin: *a_precheck_bin
+      strata_unit_dir: *a_unit_dir
+      strata_systemctl_cli: *a_systemctl_cli
+      strata_start_timeout_s: *a_start_timeout_s
+      strata_start: *a_start
+      strata_validate_with_docker: *a_validate_with_docker
+      strata_health_timeout: *a_health_timeout
+      strata_first_request_timeout: *a_first_request_timeout
+      strata_load_timeout: *a_load_timeout
+      strata_load_poll_s: *a_load_poll_s
+      strata_target_image:
+        type: str
+        description: "repository:tag@sha256:<digest> of the build to move to (this repository, a newer release)."
+        required: true

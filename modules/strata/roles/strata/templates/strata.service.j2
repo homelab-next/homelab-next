@@ -1,0 +1,27 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role strata). Do not edit.
+# compose file sha256: {{ strata_compose_sum }}
+# Starts {{ strata_served_model_name }} ({{ strata_model_repo }}/{{ strata_model_files[0] }}, {{ strata_model_digest }}) with Strata. The
+# container has no restart policy of its own: this unit is its only starter, so the power-cap, GPU-count and byte
+# checks below run before every start, a reboot and a crash included.
+[Unit]
+Description=Strata {{ strata_logical_id }} ({{ strata_served_model_name }})
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Nothing loads onto the card until its power cap is within the limit, the guest lists the expected cards and the weights
+# are the pinned bytes (minutes per hundred GB: within TimeoutStartSec).
+ExecStartPre={{ strata_precheck_bin }} {{ strata_precheck_full | join(' ') }}
+ExecStart=/usr/bin/docker compose -f {{ strata_dir }}/docker-compose.yml up --no-color --no-log-prefix --abort-on-container-exit
+# the model gets two minutes to unload the card (the image's recipe: docker's default 10 seconds is too short)
+ExecStop=/usr/bin/docker compose -f {{ strata_dir }}/docker-compose.yml stop --timeout 120
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec={{ strata_start_timeout_s | int }}
+TimeoutStopSec=150
+
+[Install]
+WantedBy=multi-user.target

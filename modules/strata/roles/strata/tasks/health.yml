@@ -1,0 +1,141 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the unit is active and its container healthy; the GPU's power cap, the GPU count and the CDI spec still
+# hold (the same rule as before a start); /health says the model is loaded; /v1/models lists one model with its context
+# (K-14: the role table's max_context_tokens); the metrics route answers in the text exposition format; and one real token comes back from a chat completion. The first request after a cold load
+# is slow, so one warm-up request with its own generous strata_first_request_timeout comes first. The completion is the one
+# deviation from role interface v1's "health does not mutate the service": it leaves one short prompt in the conversation
+# cache. Before any of that, health WAITS for readiness: the unit is Type=simple, so it is active as soon as the precheck
+# ends and the container starts, while the model loads for many minutes (~76 GB through the card's link). /health (loaded)
+# and the container's health are retried every strata_load_poll_s seconds for up to strata_load_timeout seconds each, then
+# fail naming the last status. Strata answers /health 200 from the moment its API is up, with "loaded": false until then.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: The unit is active
+      ansible.builtin.command:
+        argv: ["{{ strata_systemctl_cli }}", is-active, "{{ strata_unit_name }}"]
+      register: strata_active
+      changed_when: false
+      failed_when: strata_active.stdout | trim != 'active'
+    - name: The card's power cap, the GPU count and the CDI spec still hold (the same rule as before a start)
+      ansible.builtin.command:
+        argv: "{{ [strata_precheck_bin] + strata_precheck_power + ['--power-only'] }}"
+      changed_when: false
+    - name: Wait for the server to finish loading the model (/health says loaded)
+      ansible.builtin.uri:
+        url: "http://{{ strata_bind }}:{{ strata_port | int }}/health"
+        return_content: true
+        status_code: [-1, 200, 500, 503]
+        timeout: "{{ strata_health_timeout | int }}"
+      register: strata_wait_loaded
+      changed_when: false
+      failed_when: false  # judged by the assert below, with the last status in its message
+      until: >-
+        strata_wait_loaded.status | default(-1) | int == 200
+        and (strata_wait_loaded.json.status | default('')) == 'ok'
+        and strata_wait_loaded.json.loaded | default(false) is sameas true
+      # one attempt under --check: a first install has no server to wait for, and --check must report promptly
+      retries: "{{ 1 if ansible_check_mode else [((strata_load_timeout | int) / (strata_load_poll_s | int)) | round(0, 'ceil') | int, 1] | max }}"
+      delay: "{{ strata_load_poll_s | int }}"
+    - name: The model finished loading within strata_load_timeout
+      when: not ansible_check_mode  # the wait's uri is skipped under --check, so there is no status to judge
+      ansible.builtin.assert:
+        that:
+          - strata_wait_loaded.status | default(-1) | int == 200
+          - (strata_wait_loaded.json.status | default('')) == 'ok'
+          - strata_wait_loaded.json.loaded | default(false) is sameas true
+        fail_msg: >-
+          strata: the server was still loading the model after {{ strata_load_timeout }} s
+          (strata_load_timeout); last /health status {{ strata_wait_loaded.status | default('unknown') }},
+          {{ strata_wait_loaded.msg | default(strata_wait_loaded.content | default('no body')) }}
+    - name: Wait for every container to be running and healthy
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ strata_app.compose_app_dir }}/docker-compose.yml", ps, --all, --format, json]
+      register: strata_wait_containers
+      changed_when: false
+      check_mode: false  # read-only: it runs in --check too
+      failed_when: false  # the strict check after this names what is wrong
+      until: >-
+        strata_wait_containers.rc == 0
+        and strata_wait_containers.stdout is search('"State":\\s*"running"')
+        and strata_wait_containers.stdout is not search('"State":\\s*"(?!running")')
+        and strata_wait_containers.stdout is not search('"Health":\\s*"(?!healthy")')
+      retries: "{{ 1 if ansible_check_mode else [((strata_load_timeout | int) / (strata_load_poll_s | int)) | round(0, 'ceil') | int, 1] | max }}"
+      delay: "{{ strata_load_poll_s | int }}"
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: strata
+        compose_app_dir: "{{ strata_app.compose_app_dir }}"
+        compose_app_spec: "{{ strata_app.compose_app_spec }}"
+    - name: Ask what it serves
+      ansible.builtin.uri:
+        url: "http://{{ strata_bind }}:{{ strata_port | int }}/v1/models"
+        return_content: true
+        status_code: 200
+        timeout: "{{ strata_health_timeout | int }}"
+      register: strata_served
+      changed_when: false
+    - name: It serves exactly one model, with a context of at most strata_context_size tokens
+      ansible.builtin.assert:
+        that:
+          - strata_served.json is mapping and strata_served.json.data is defined
+          - strata_served.json.data | length == 1
+          - (strata_served.json.data[0].meta | default({})).n_ctx | default(0) | int > 0
+          - (strata_served.json.data[0].meta | default({})).n_ctx | default(0) | int <= strata_context_size | int
+        fail_msg: >-
+          strata: should serve one model with at most {{ strata_context_size }} tokens of context but /v1/models says
+          {{ (strata_served.json.data | default([])) | map(attribute='id') | list }} with
+          {{ (strata_served.json.data | default([])) | map(attribute='meta') | map(attribute='n_ctx', default='no n_ctx') | list }}
+    - name: The metrics route answers in the text exposition format when a scraper asks for it
+      ansible.builtin.uri:
+        url: "http://{{ strata_bind }}:{{ strata_port | int }}/metrics"
+        headers:
+          Accept: text/plain
+        return_content: true
+        status_code: 200
+        timeout: "{{ strata_health_timeout | int }}"
+      register: strata_metrics
+      changed_when: false
+      failed_when: "'# TYPE ' not in strata_metrics.content"
+    - name: Warm the server with one request that may take as long as a cold first request does
+      ansible.builtin.uri:
+        url: "http://{{ strata_bind }}:{{ strata_port | int }}/v1/chat/completions"
+        method: POST
+        body_format: json
+        body:
+          model: "{{ strata_served_model_name }}"
+          messages: [{role: user, content: ping}]
+          max_tokens: 1
+          temperature: 0
+          reasoning_effort: none
+        return_content: true
+        status_code: 200
+        timeout: "{{ strata_first_request_timeout | int }}"
+      changed_when: false
+    - name: One token comes back from a chat completion
+      ansible.builtin.uri:
+        url: "http://{{ strata_bind }}:{{ strata_port | int }}/v1/chat/completions"
+        method: POST
+        body_format: json
+        body:
+          model: "{{ strata_served_model_name }}"
+          messages: [{role: user, content: ping}]
+          max_tokens: 1
+          temperature: 0
+          reasoning_effort: none
+        return_content: true
+        status_code: 200
+        timeout: "{{ strata_health_timeout | int }}"
+      register: strata_completion
+      changed_when: false
+      # failed_when replaces the module's own status check, so the status is asserted here too
+      failed_when: >-
+        strata_completion.status != 200
+        or (strata_completion.json.choices | default([])) | length != 1
+        or (strata_completion.json.usage.completion_tokens | default(0)) | int < 1
+  tags: [health]

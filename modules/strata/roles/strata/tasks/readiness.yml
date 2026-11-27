@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# The module's dependencies are the container engine (docker_engine, applied to the guest before it), the weights in the
+# model store (role model_store: every shard, the direction file when there is one, and the listing the unit checks the
+# bytes against) and the card passed through to this guest with the container toolkit's CDI spec. It calls no other
+# service and reads no secret.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Read the weights (every shard and the direction file) and the listing
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+        get_checksum: false
+      loop: >-
+        {{ (strata_all_files | map('regex_replace', '^', strata_model_dir ~ '/') | list)
+           + [strata_listing] }}
+      register: strata_ready
+    - name: Fail unless each is a regular file (run model_store)
+      ansible.builtin.assert:
+        that:
+          - strata_ready.results | map(attribute='stat') | selectattr('isreg', 'defined') | selectattr('isreg') | list | length == strata_all_files | length + 1
+        fail_msg: >-
+          strata: the store lacks one of {{ strata_all_files | join(', ') }} under {{ strata_model_dir }}
+          or {{ strata_listing }} (model_store fetches and lists the entry)
+    - name: Read the container toolkit's CDI spec
+      ansible.builtin.stat:
+        path: "{{ strata_cdi_spec }}"
+        follow: false
+        get_checksum: false
+      register: strata_cdi
+    - name: Fail unless the CDI spec is there (role nvidia_container_toolkit writes it)
+      ansible.builtin.assert:
+        that: strata_cdi.stat.exists and strata_cdi.stat.isreg
+        fail_msg: "strata: no {{ strata_cdi_spec }}: the container toolkit's CDI spec is not written (role nvidia_container_toolkit)"
+  tags: [readiness]

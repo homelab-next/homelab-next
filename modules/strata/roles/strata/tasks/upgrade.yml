@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# A bump moves the engine, never the weights: validate the target image (the lab's own build of a newer release, pinned by
+# tag and digest), record it with compose_app, then converge with strata_image set to it, run health and the inference
+# suite through the gateway.
+- block:
+    - name: Refuse a target that is not the lab's own build, of this repository, a newer release, or not pinned
+      ansible.builtin.assert:
+        that:
+          - strata_target_image is match(strata_ref_pattern)
+          - strata_target_image.split('@')[0].rsplit(':', 1)[0] == strata_repository
+          - strata_target_image.split('@')[0].rsplit(':', 1)[1] is match(strata_tag_pattern)
+          - strata_target_image.split('@')[0].rsplit(':', 1)[1].split('-')[0] is version(strata_tag.split('-')[0], '>')
+        fail_msg: "strata: the target must be {{ strata_repository }}:<release>-<commit12>@sha256:<64 hex>, a release newer than {{ strata_tag }}"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: strata
+        compose_app_dir: "{{ strata_app.compose_app_dir }}"
+        compose_app_owner: "{{ strata_app.compose_app_owner }}"
+        compose_app_group: "{{ strata_app.compose_app_group }}"
+        compose_app_bind_extra: "{{ strata_app.compose_app_bind_extra }}"
+        compose_app_spec: "{{ strata_app.compose_app_spec }}"
+        compose_app_upgrade_service: strata
+        compose_app_upgrade_tag: "{{ strata_target_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ strata_target_image.split('@')[1] }}"
+  tags: [upgrade]

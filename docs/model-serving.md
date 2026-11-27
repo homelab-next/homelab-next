@@ -414,6 +414,10 @@ without the hardware. Each item is a test to run before promising capacity:
   served by the `llamacpp` provider module ([modules/llamacpp](../modules/llamacpp/README.md): one
   GGUF model on its placement's GPU(s), a power-cap and byte check before every start), configured by the
   overlay's group variables to match the plan's port and the role table's model id.
+  The `strata` provider module ([modules/strata](../modules/strata/README.md)) fills the same slot with
+  the Strata engine for one MoE GGUF model (a split series, an optional refusal-direction file) on one
+  NVIDIA GA100 card, with the same checks plus the guest's GPU count; a site picks either provider per
+  instance.
 - The NFS/SMB export of the store to the workstation (the file server's role).
 - vLLM Playground (a launch-settings GUI, test instance only) and benchmarking harnesses.
 - A live run of any of this on a GPU host. CI proves the roles against fakes, and the K-14 probe
