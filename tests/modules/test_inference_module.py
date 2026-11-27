@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import ipaddress
+import os
 import re
 import shutil
 import subprocess
@@ -44,14 +45,23 @@ ADAPTER = "homelabnext.conform.adapters.inference_server:make"
 
 
 def _find() -> Path:
+    """The provider this file pins: the module the environment names (HNX_INFERENCE_MODULE; default
+    the one provider that runs a published image, i.e. has no image/Dockerfile). The slot has more than one
+    provider; each one's own facts have their own test file."""
     hits = [
         p.parent
         for p in sorted((ROOT / "modules").glob("*/module.yml"))
         if ld.load_yaml(p).get("provides", {}).get("slots", {}).get("inference", {}).get("adapter")
         == ADAPTER
     ]
-    assert len(hits) == 1, hits
-    return hits[0]
+    assert hits, hits
+    prebuilt = [h for h in hits if not (h / "image" / "Dockerfile").is_file()]
+    assert len(prebuilt) == 1, (
+        prebuilt
+    )  # the default provider runs a published image; the lab-built one is named by the environment
+    want = os.environ.get("HNX_INFERENCE_MODULE", prebuilt[0].name)
+    (hit,) = [h for h in hits if h.name == want]
+    return hit
 
 
 MODULE = _find()

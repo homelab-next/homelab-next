@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value lands in a compose file, a unit or an argument vector: refuse anything but the shapes
+# the role writes, before a file exists.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - strata_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - strata_image is match(strata_ref_pattern)
+      # the lab's own build of the pinned release: <release>-<commit12> in a repository of this module's
+      - strata_build_repositories is sequence and strata_build_repositories is not string and strata_build_repositories | length > 0
+      - strata_repository in strata_build_repositories
+      - strata_tag is match(strata_tag_pattern)
+      - strata_image_archive == '' or strata_image_archive is match(strata_path_pattern)
+      # the archive is pinned by its own sha256 too
+      - strata_image_archive == '' or strata_image_archive_sha256 is match('^[0-9a-f]{64}\Z')
+      - strata_image_archive_sha256 == '' or strata_image_archive_sha256 is match('^[0-9a-f]{64}\Z')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - strata_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - strata_bind != '0.0.0.0'
+      - strata_port | int >= 1024 and strata_port | int <= 65535
+      - strata_uid | int >= 1000 and strata_gid | int >= 1000
+      - >-
+        [strata_dir, strata_data_root, strata_store_root, strata_precheck_bin, strata_unit_dir,
+        strata_dev_root, strata_proc_root, strata_cdi_spec] | reject('match', strata_path_pattern) | list | length == 0
+      - strata_model_repo is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}\Z')
+      # the model files: a non-empty list of distinct file names inside the entry (no directory, no . or ..), the first being the one the server is given
+      - strata_model_files is sequence and strata_model_files is not string and strata_model_files is not mapping
+      - strata_model_files | length >= 1 and strata_model_files | length <= strata_shards_max
+      - strata_model_files | reject('string') | list | length == 0
+      - strata_model_files | reject('match', strata_model_file_pattern) | list | length == 0
+      - strata_model_files | unique | list | length == strata_model_files | length
+      # one file, or a split model named by its FIRST shard whose series is exactly the files listed, in order
+      - strata_split | length == 0 and strata_model_files | length == 1 or (strata_split | length == 3 and strata_split[1] == '00001' and strata_split[2] | int >= 2 and strata_model_files == strata_series)
+      - strata_direction_file | string == '' or (strata_direction_file is string and strata_direction_file is match(strata_model_file_pattern) and strata_direction_file not in strata_model_files)
+      - (strata_direction_scale is integer or strata_direction_scale is float) and strata_direction_scale is not boolean
+      - strata_direction_scale | float | string is not search('(?i)inf|nan')
+      - strata_direction_scale | float > 0 and strata_direction_scale | float <= 4
+      - >-
+        strata_direction_layers is sequence and strata_direction_layers is not string and strata_direction_layers is not mapping
+        and strata_direction_layers | length == 2 and strata_direction_layers | reject('integer') | list | length == 0
+        and strata_direction_layers | select('lt', 0) | list | length == 0 and strata_direction_layers | select('gt', 255) | list | length == 0
+        and strata_direction_layers[0] <= strata_direction_layers[1]
+      - strata_model_store_id is match('^[a-z][a-z0-9]*([-.][a-z0-9]+)*\Z')
+      - strata_model_digest is match(strata_digest_pattern)
+      - strata_served_model_name is match('^[A-Za-z0-9._:/-]{1,128}\Z')
+      - strata_context_size | int >= 256 and strata_context_size | int <= 1048576
+      - strata_parallel | int >= 1 and strata_parallel | int <= strata_parallel_max
+      - strata_spec_depth | int >= 0 and strata_spec_depth | int <= strata_spec_depth_max
+      - strata_spec_depth is integer and strata_spec_depth is not boolean
+      - strata_kv_mode in strata_kv_modes
+      - strata_drafting in strata_drafting_modes
+      - strata_models_gid | string == '' or strata_models_gid | string is match('^[1-9][0-9]{0,9}\Z')
+      - strata_models_gid | string == '' or strata_models_gid | int <= strata_gid_max
+      - strata_gpu_index | int >= 0 and strata_gpu_index | int <= 15
+      - strata_expected_gpus | int >= 1 and strata_expected_gpus | int <= 16
+      # the card must be one of the cards the guest must list
+      - strata_gpu_index | int < strata_expected_gpus | int
+      - strata_power_cap_max_watts | int >= 1 and strata_power_cap_max_watts | int <= strata_power_cap_ceiling_watts | int
+      - strata_unit_name is match('^[A-Za-z0-9@._-]+[.]service\Z')
+      - strata_start_timeout_s | int >= 60 and strata_start_timeout_s | int <= 86400
+      # the settings, by name of the allow-list only, each of its own type
+      - strata_extra_args is mapping
+      - strata_extra_args.keys() | list | difference(strata_extra_keys) | length == 0
+      - strata_extra_args.kv_streaming is not defined or strata_extra_args.kv_streaming is boolean or (strata_extra_args.kv_streaming is string and strata_extra_args.kv_streaming in strata_switch_values)
+      - strata_extra_args.mmap_experts is not defined or strata_extra_args.mmap_experts is boolean or (strata_extra_args.mmap_experts is string and strata_extra_args.mmap_experts in strata_switch_values)
+      - >-
+        strata_extra_args.pcie_frac is not defined
+        or ((strata_extra_args.pcie_frac is integer or strata_extra_args.pcie_frac is float) and strata_extra_args.pcie_frac is not boolean
+            and strata_extra_args.pcie_frac | float | string is not search('(?i)inf|nan')
+            and strata_extra_args.pcie_frac >= 0 and strata_extra_args.pcie_frac <= strata_pcie_frac_max)
+      - strata_extra_args.threads is not defined or (strata_extra_args.threads is integer and strata_extra_args.threads is not boolean and strata_extra_args.threads >= 1 and strata_extra_args.threads <= strata_threads_max)
+      - strata_extra_args.vram_reserve_mib is not defined or (strata_extra_args.vram_reserve_mib is integer and strata_extra_args.vram_reserve_mib is not boolean and strata_extra_args.vram_reserve_mib >= 0 and strata_extra_args.vram_reserve_mib <= strata_vram_reserve_max_mib)
+    fail_msg: >-
+      strata: a registry id, the lab's own image (localhost/hnx-strata:<release>-<commit12>@sha256:<digest>), the guest's IPv4
+      address to publish on (not all interfaces), an unprivileged port, a container uid and gid of 1000 or more, canonical
+      absolute paths, a model repository, a list of .gguf file names inside the entry (no directory, no . or ..; a split model
+      by its first shard -00001-of-0000M and exactly the M files of the series), an optional refusal-direction .gguf file
+      (a scale above 0 and at most 4, two layer numbers, first at most last), the store entry's id and sha256 digest, a served
+      model id, a context of 256 to 1048576 tokens, 1 to 16 slots, a draft depth 0 to 8, a KV mode (int8, q4_0, k8v4 or fp16),
+      a drafter (off, auto or mtp), a card index below the expected GPU count (1 to 16), a power limit of 200 W at most (the
+      operator's rule: a setting can only tighten it), and strata_extra_args with only kv_streaming and mmap_experts (on, off
+      or auto), pcie_frac (0 to 0.95), threads (1 to 256) and vram_reserve_mib (0 to 65536)
+  tags: [health, backup, restore, export, upgrade]

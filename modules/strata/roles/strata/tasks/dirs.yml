@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's (root); data/ (the launcher's settings, its log and the tokenizer it builds from the
+# weights, /data in the container) belongs to the container's user, the one place it can write.
+- name: Create the data root and the data directory
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ strata_data_root }}", owner: "{{ strata_owner }}", group: "{{ strata_gid | int }}", mode: "0750"}
+    - {path: "{{ strata_data_root }}/data", owner: "{{ strata_uid | int }}", group: "{{ strata_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

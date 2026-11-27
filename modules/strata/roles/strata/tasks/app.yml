@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). The container runs as an id of its
+# own, in the model store's group (the weights are readable, never writable); compose_app hands it no capability and
+# never privileged, and only the GPU device it names. The image's starter (files/image/entrypoint.sh) reads the
+# environment below by name; its health probe is files/image/healthcheck.py.
+- name: Read the model directory's group (the store's readers' group)
+  ansible.builtin.stat:
+    path: "{{ strata_store_root }}/gguf/{{ strata_model_repo }}"
+    follow: false
+  register: strata_model_dir_stat
+  when: strata_models_gid | string == ''
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Hold the group to one that exists and is not root's
+  ansible.builtin.assert:
+    that:
+      - strata_models_gid_value | string is match('^[1-9][0-9]{0,9}\Z')
+    fail_msg: >-
+      strata: the model store's group (the directory {{ strata_store_root }}/gguf/{{ strata_model_repo }}, run model_store first)
+      must exist with a group other than root's, or set strata_models_gid
+  vars:
+    strata_models_gid_value: "{{ strata_models_gid if strata_models_gid | string != '' else (strata_model_dir_stat.stat.gid | default('')) }}"
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    strata_app:
+      compose_app_name: strata
+      compose_app_dir: "{{ strata_dir }}"
+      compose_app_data_dir: "{{ strata_data_root }}"
+      compose_app_export_dir: "{{ strata_data_root }}/export"
+      compose_app_owner: "{{ strata_owner }}"
+      compose_app_group: "{{ strata_gid }}"
+      compose_app_bind_extra:
+        - path: "{{ strata_model_dir }}"
+          reason: the model store's directory of the one GGUF entry served, mounted read-only
+      compose_app_spec:
+        services:
+          strata: "{{ strata_service_base | combine({'devices': [strata_cuda_device], 'group_add': [strata_models_gid_value | int]}) }}"
+  vars:
+    strata_models_gid_value: "{{ strata_models_gid if strata_models_gid | string != '' else (strata_model_dir_stat.stat.gid | default('')) }}"
+    strata_service_base:
+      image: "{{ strata_repository }}"
+      tag: "{{ strata_tag }}"
+      digest: "{{ strata_digest }}"
+      # the unit is the one starter: a restart policy would bring the container back without the
+      # checks that run before every start
+      restart: "no"
+      user: "{{ strata_uid | int }}:{{ strata_gid | int }}"
+      environment: "{{ strata_environment }}"
+      ports: ["{{ strata_bind }}:{{ strata_port | int }}:{{ strata_container_port }}"]
+      volumes:
+        - "{{ strata_model_dir }}:{{ strata_container_models_dir }}:ro"
+        - "{{ strata_data_root }}/data:{{ strata_container_data_dir }}"
+      # Strata pins RAM for the card (its own Docker guide passes --ulimit memlock=-1:-1); compose_app accepts memlock only
+      ulimits: {memlock: -1}
+      # the engine and the server share memory through /dev/shm (docker's default is 64 MiB; the image's own recipe asks for 2 GiB)
+      tmpfs:
+        - {target: /dev/shm, size_bytes: 2147483648}
+      healthcheck:
+        test: [CMD, /opt/strata/healthcheck.py]
+        interval: 30s
+        timeout: 8s
+        retries: 5
+        start_period: 3600s
+  tags: [health, backup, restore, export, upgrade]

@@ -100,6 +100,12 @@
       - item.value.group_add | default([]) is sequence and item.value.group_add | default([]) is not string and item.value.group_add | default([]) is not mapping
       - item.value.group_add | default([]) | map('string') | reject('match', compose_app_group_add_pattern) | list | length == 0
       - item.value.group_add | default([]) | map('string') | select('match', compose_app_group_add_pattern) | map('int') | select('gt', 4294967295) | list | length == 0
+      # ulimits: only memlock, -1 or a non-negative integer (never a string or a boolean)
+      - item.value.ulimits is not defined or item.value.ulimits is mapping
+      - item.value.ulimits | default({}) | list | difference(compose_app_ulimit_names) | length == 0
+      - item.value.ulimits | default({}) | dict2items | map(attribute='value') | reject('integer') | list | length == 0
+      - item.value.ulimits | default({}) | dict2items | map(attribute='value') | select('boolean') | list | length == 0
+      - item.value.ulimits | default({}) | dict2items | map(attribute='value') | select('lt', -1) | list | length == 0
       - item.value.mem_limit is not defined or (item.value.mem_limit | string) is match('^[0-9]+[bkmgBKMG]?\Z')
       - item.value.env_file | default([]) | reject('string') | list | length == 0
       - item.value.env_file | default([]) | select('search', compose_app_interpolated_volume_pattern) | list | length == 0
@@ -112,7 +118,7 @@
       any way) needs compose_app_allow_root, and the root group compose_app_allow_root_group; mem_limit looks like 256m;
       env_file is a list of canonical paths without `$` or a leading `~`; devices is a list of DRM render
       nodes (/dev/dri/renderDNNN) or CDI GPU names (nvidia.com/gpu=N or =all) and group_add a list of
-      group numbers other than 0
+      group numbers other than 0; ulimits only memlock, -1 or a number
   loop: "{{ compose_app_spec.services | dict2items }}"
   loop_control:
     label: "{{ item.key }}"

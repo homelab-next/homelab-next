@@ -1,0 +1,157 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: strata-precheck
+#   kind: job
+#   purpose: Refuse to start the Strata inference server unless the GPU's power cap is at or under the limit, the guest has exactly the expected number of GPUs, the CDI spec is fresh and every model file is the pinned bytes.
+#   owner: platform
+#   trigger: [role:strata]
+#   inputs: the power limit in watts, the NVIDIA card index, the expected GPU count, the CDI spec, the model store's listing, the pinned digest, the model directory, the served file and any other listed files
+#   outputs: one line on stdout per check that passed; the refusal on stderr
+#   installs_to: /usr/local/libexec/homelabnext/hnx-strata-precheck
+#   exit:
+#     "0": the card's power cap is within the limit, the GPU count is the expected one, the CDI spec is current and the bytes are the pinned ones
+#     "1": a refusal - a cap is above the limit, unset or unreadable, the GPU count differs, the CDI spec is stale, or a file is not the pinned bytes
+#     "2": usage error
+# The unit's ExecStartPre (role strata): nothing loads onto the card until all of it holds, also after a restart or a
+# reboot. The same rules as the other inference provider's pre-start check for the NVIDIA backend, which is the only one
+# this role has, plus the GPU count and the files that are not the served file. They are two copies on purpose: a role
+# installs its own files and no module may name another module's path (modules/strata/README.md, "The pre-start check"),
+# so a rule changed in one is changed in the other by hand.
+# Usage:
+#   hnx-strata-precheck --max-watts N --gpu-index N --expect-gpus N [--proc-root DIR] [--dev-root DIR] [--cdi-spec FILE]
+#       [--model-file NAME --listing FILE --digest sha256:HEX --model-dir DIR [--also-file NAME]... | --power-only]
+#  1. power and cards: /proc/modules already lists the nvidia module and /dev/nvidiactl exists (nvidia-smi run as root
+#     would load the module itself, a warm-card load on a guest that must not have one), else it refuses; with --cdi-spec,
+#     every NVIDIA device node the spec records with a major number (nvidia-uvm's is assigned at module load, so it changes
+#     between boots) must exist under --dev-root with that same major (a stale spec gives the container a wrong node,
+#     cuInit fails with CUDA error 999 and the model silently runs on the CPU); nvidia-smi must list EXACTLY --expect-gpus
+#     cards (a card that fell off the bus, or one more than the site placed, refuses), the card --gpu-index must be one of
+#     them, and both its power.limit (the limit set) and its enforced.power.limit (the one the card enforces) must be
+#     numbers above 0 and at most N watts. An unreadable cap refuses: a cap that cannot be read is not a cap that holds.
+#  2. bytes: sha256 of the store's listing is the pinned digest, then every file in it has its sha256 in the model
+#     directory (sha256sum --check --strict). The served file (--model-file, a path relative to the model directory, the
+#     first shard of a split model) and every --also-file (the other shards, the refusal-direction file) must be listed:
+#     an unlisted file is never checked by that, so it refuses. A split model's every shard of the series must be listed.
+#     Every listed file must resolve inside the model directory: a file or a directory on its path that links out of it
+#     refuses.
+#  The limit is the operator's 200 W rule at most: --max-watts above it is a usage error.
+set -eu
+usage() { echo "usage: hnx-strata-precheck --max-watts N --gpu-index N --expect-gpus N [--proc-root DIR] [--dev-root DIR] [--cdi-spec FILE] [--model-file NAME --listing F --digest sha256:HEX --model-dir D [--also-file NAME]... | --power-only]" >&2; exit 2; }
+cdispec=""
+max="" mfile="" idx="" expect="" proc=/proc devroot=/dev listing="" digest="" dir="" power_only=0 also=""
+nl='
+'
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --max-watts) [ "$#" -ge 2 ] || usage; max=$2; shift 2 ;;
+    --gpu-index) [ "$#" -ge 2 ] || usage; idx=$2; shift 2 ;;
+    --expect-gpus) [ "$#" -ge 2 ] || usage; expect=$2; shift 2 ;;
+    --proc-root) [ "$#" -ge 2 ] || usage; proc=$2; shift 2 ;;
+    --dev-root) [ "$#" -ge 2 ] || usage; devroot=$2; shift 2 ;;
+    --cdi-spec) [ "$#" -ge 2 ] || usage; cdispec=$2; shift 2 ;;
+    --model-file) [ "$#" -ge 2 ] || usage; mfile=$2; shift 2 ;;
+    --also-file) [ "$#" -ge 2 ] || usage; also="$also$2$nl"; shift 2 ;;
+    --listing) [ "$#" -ge 2 ] || usage; listing=$2; shift 2 ;;
+    --digest) [ "$#" -ge 2 ] || usage; digest=$2; shift 2 ;;
+    --model-dir) [ "$#" -ge 2 ] || usage; dir=$2; shift 2 ;;
+    --power-only) power_only=1; shift ;;
+    *) usage ;;
+  esac
+done
+case "$max" in ''|*[!0-9]*) usage ;; esac
+if [ "$max" -le 0 ] || [ "$max" -gt 200 ]; then usage; fi
+case "$idx" in ''|*[!0-9]*) usage ;; esac
+case "$expect" in ''|*[!0-9]*) usage ;; esac
+[ "$expect" -ge 1 ] || usage
+refuse() { echo "hnx-strata-precheck: $*; refusing to load the model" >&2; exit 1; }
+
+# nvidia-smi run as root loads the nvidia kernel module when it is absent; on a guest whose cards must never be
+# initialised warm that load is the hazard. So it runs only when the driver is ALREADY up.
+grep -q '^nvidia ' "$proc/modules" 2>/dev/null \
+  || refuse "the nvidia kernel module is not loaded ($proc/modules); nvidia-smi is not run, since as root it would load it"
+[ -e "$devroot/nvidiactl" ] \
+  || refuse "$devroot/nvidiactl is missing: the driver is not up; nvidia-smi is not run, since as root it would load it"
+# a CDI spec records each device node's major number; nvidia-uvm's is dynamic, so a spec written before a reboot can
+# name a major the node no longer has (the container then gets the wrong node)
+if [ -n "$cdispec" ]; then
+  [ -s "$cdispec" ] || refuse "the CDI spec $cdispec is missing or empty"
+  stale=$(awk '/^ *- path: \/dev\/nvidia/ { p = $3; next } /^ *major: / && p != "" { print p, $2; p = "" }' "$cdispec" \
+    | while read -r node want; do
+        live="$devroot/${node##*/}"
+        [ -e "$live" ] || { echo "$node is not on this host (the spec says major $want)"; continue; }
+        have=$(( 0x$(stat -c %t "$live") ))
+        [ "$have" = "$want" ] || echo "$node is major $have here, the spec says $want"
+      done)
+  [ -z "$stale" ] || refuse "the CDI spec $cdispec is stale ($(printf '%s' "$stale" | head -n 1)); regenerate it (systemctl start hnx-nvidia-cdi.service)"
+  echo "hnx-strata-precheck: the CDI spec's device majors match this boot"
+fi
+# every card nvidia-smi lists, one line each: "<index>, <power.limit>, <enforced.power.limit>"
+rows=$(nvidia-smi --query-gpu=index,power.limit,enforced.power.limit --format=csv,noheader,nounits 2>/dev/null) \
+  || refuse "nvidia-smi cannot read the GPUs' power limits"
+rows=$(printf '%s\n' "$rows" | tr -d ' \r' | awk 'NF')
+have_n=$(printf '%s\n' "$rows" | awk 'NF { n++ } END { print n + 0 }')
+[ "$have_n" -eq "$expect" ] || refuse "nvidia-smi lists $have_n GPU(s), the placement expects exactly $expect"
+echo "hnx-strata-precheck: exactly $expect GPU(s) listed"
+row=$(printf '%s\n' "$rows" | awk -F, -v i="$idx" '$1 == i { print; n++ } END { exit n != 1 }') \
+  || refuse "GPU $idx is not listed once by nvidia-smi: its power limit cannot be read"
+for field in 2 3; do
+  w=$(printf '%s' "$row" | cut -d, -f "$field")
+  what=power.limit; [ "$field" -eq 3 ] && what=enforced.power.limit
+  case "$w" in ''|*[!0-9.]*|.*|*.*.*) refuse "GPU $idx's $what is '$w', not a number of watts" ;; esac
+  if ! awk -v w="$w" -v m="$max" 'BEGIN { exit !(w > 0 && w <= m) }'; then
+    refuse "GPU $idx's $what is $w W, not within 0 to $max W"
+  fi
+done
+echo "hnx-strata-precheck: GPU $idx power limit and enforced limit are within $max W"
+
+if [ "$power_only" -eq 1 ]; then exit 0; fi
+if [ -z "$mfile" ] || [ -z "$listing" ] || [ -z "$digest" ] || [ -z "$dir" ]; then usage; fi
+[ -f "$listing" ] || refuse "$listing is missing (run model_store)"
+have=$(sha256sum < "$listing" | cut -d ' ' -f 1)
+[ "sha256:$have" = "$digest" ] || refuse "$listing is sha256:$have, the module pins $digest"
+# every file the server reads is a relative path inside the model directory
+inside() { case "$1" in ''|/*|../*|*/../*|*/..|..|./*|*/./*|*//*) refuse "$1 is not a path inside $dir" ;; esac; }
+listed() { awk -v f="$1" 'length($1) == 64 { p = substr($0, 67); if (substr(p, 1, 1) == "*") p = substr(p, 2); if (p == f || p == "./" f) found = 1 } END { exit !found }' "$listing"; }
+inside "$mfile"
+listed "$mfile" || refuse "$mfile is not in $listing, so its bytes are not pinned"
+# (a loop on the right of a pipe runs in a subshell, where a refusal would end the subshell only: collect, then refuse)
+for f in $(printf '%s' "$also"); do inside "$f"; done
+unlisted=$(printf '%s' "$also" | while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  listed "$f" || printf '%s\n' "$f"
+done)
+[ -z "$unlisted" ] || refuse "$(printf '%s\n' "$unlisted" | head -n 1) is not in $listing, so its bytes are not pinned"
+# a split model: the server is given the first shard and opens the rest beside it, so every shard of the series must be
+# listed (and so checked below); a later shard as --model-file refuses
+case "$mfile" in
+  *-[0-9][0-9][0-9][0-9][0-9]-of-[0-9][0-9][0-9][0-9][0-9].gguf)
+    stem=${mfile%-?????-of-?????.gguf}
+    rest=${mfile#"$stem"-}
+    n=${rest%%-of-*}
+    total=${rest#*-of-}
+    total=${total%.gguf}
+    [ "$n" = 00001 ] || refuse "$mfile is shard $n of a split model; the server must be given the first shard"
+    count=${total#"${total%%[!0]*}"}  # the leading zeros off (a shell reads 00008 as octal)
+    if [ -z "$count" ]; then refuse "$mfile names no shard count"; fi
+    k=1
+    while [ "$k" -le "$count" ]; do
+      shard=$(printf '%s-%05d-of-%s.gguf' "$stem" "$k" "$total")
+      listed "$shard" || refuse "$shard (shard $k of $total) is not in $listing, so its bytes are not pinned"
+      k=$((k + 1))
+    done
+    echo "hnx-strata-precheck: all $count shards of $stem are listed"
+    ;;
+esac
+cd "$dir" || refuse "$dir is missing (run model_store)"
+# every listed file must resolve inside the model directory: a file, or a directory on its path, that links out of it
+# would keep the pinned digest while its bytes live elsewhere
+real_dir=$(pwd -P)
+outside=$(awk 'length($1) == 64 { p = substr($0, 67); if (substr(p, 1, 1) == "*") p = substr(p, 2); print p }' "$listing" \
+  | while IFS= read -r f; do
+      real=$(realpath -e -- "$f" 2>/dev/null) || continue  # a missing file is sha256sum's to report
+      case "$real" in "$real_dir"/*) ;; *) printf '%s\n' "$f" ;; esac
+    done)
+[ -z "$outside" ] || refuse "$(printf '%s\n' "$outside" | head -n 1) resolves outside $dir"
+sha256sum --check --strict --quiet "$listing" >&2 || refuse "$dir does not match $listing"
+echo "hnx-strata-precheck: the weights in $dir are the pinned bytes"

@@ -138,6 +138,21 @@ updates:
     commit-message:
       prefix: "deps"
 
+  # The Strata module's image (sm_80, built by the lab from a pinned release): both bases are pinned by
+  # digest and the CUDA minor is part of the pin, so patch releases only.
+  - package-ecosystem: docker
+    directories:
+      - "/modules/strata/image"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    commit-message:
+      prefix: "deps"
+
   # The context module's image (modules/context) is built FROM the same Python 3.11 slim base: its
   # wheels are cp311 and hash-locked (image/requirements.txt), so patch releases only.
   - package-ecosystem: docker

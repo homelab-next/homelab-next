@@ -2,7 +2,7 @@
 # Fixed spec rules, not settings: role vars outrank inventory, so a deployment cannot loosen them.
 compose_app_service_keys:
   [image, tag, digest, healthcheck, command, user, env_file, environment, ports, volumes,
-   depends_on, restart, cap_add, read_only, mem_limit, privileged, devices, group_add, network_mode, init, tmpfs]
+   depends_on, restart, cap_add, read_only, mem_limit, privileged, devices, group_add, network_mode, init, tmpfs, ulimits]
 compose_app_restart_policies: ["no", always, on-failure, unless-stopped]
 # docker (and its distribution) image grammar, repository part only: optional registry[:port]/
 compose_app_repository_pattern: '^(?:[A-Za-z0-9.-]+(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*\Z'
@@ -70,3 +70,5 @@ compose_app_tmpfs_allowed_exact: [/dev/shm]
 # gid are both set to the service's own non-zero user:group, so a root service, a service with no
 # numeric user, or a mount owned by anyone else keeps /run denied. Nothing else here is loosened.
 compose_app_tmpfs_owned_exact: [/run]
+# `ulimits`: only memlock (a model server pinning RAM for the GPU), -1 (unlimited) or a number of bytes, one value for soft and hard
+compose_app_ulimit_names: [memlock]
