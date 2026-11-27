@@ -814,3 +814,130 @@ def test_every_row_the_log_pipeline_stages_is_one_the_writer_takes(schemas):
                 assert rejects == [], (route, table, rejects)
                 assert len(rows) == 1
     assert "raw_archive" in seen
+
+
+# ------------------------------------------------------------------ one commit per run, snapshot retention
+
+
+class Spy:
+    """A lake that counts its commits and records the expiry it is asked for."""
+
+    def __init__(self, lake, *, expire=None):
+        self._lake, self.commits, self.expiries, self._expire = lake, [], [], expire
+
+    def __getattr__(self, name):
+        return getattr(self._lake, name)
+
+    def write_batch(self, table, rows, **kw):
+        self.commits.append((kw["idempotency_key"], len(rows), kw["high_water"]))
+        return self._lake.write_batch(table, rows, **kw)
+
+    def expire_snapshots(self, table, **kw):
+        self.expiries.append((table, kw))
+        if isinstance(self._expire, Exception):
+            raise self._expire
+        return self._expire or {"expired": 7, "kept": 500, "before": 507}
+
+
+def test_every_staged_object_of_a_run_is_one_commit(lake, store, schemas, tmp_path):
+    for n in range(1, 6):
+        stage(store, "dns_activity", f"b{n}.jsonl", [event("dns_activity", n)])
+    spy = Spy(lake)
+    res = make(spy, store, schemas, tmp_path).run()
+    assert len(spy.commits) == 1 and spy.commits[0][1:] == (5, f"{PREFIX}dns_activity/b5.jsonl")
+    assert res["ok"] and res["batches"] == 5 and res["commits"] == 1 and res["rows_written"] == 5
+    assert staged(store) == [] and count(lake) == 5
+
+
+def test_a_crash_after_a_grouped_commit_replays_the_same_set_with_no_row_added(
+    lake, store, schemas, tmp_path
+):
+    for n in range(1, 4):
+        stage(store, "dns_activity", f"b{n}.jsonl", [event("dns_activity", n)])
+    with pytest.raises(Crash):
+        make(lake, store, schemas, tmp_path, before_delete=_boom).run()
+    assert count(lake) == 3 and len(staged(store)) == 3
+    res = make(lake, store, schemas, tmp_path).run()
+    assert res["ok"] and res["replayed"] == 1 and res["rows_written"] == 0
+    assert count(lake) == 3 and staged(store) == []
+
+
+def test_a_grouped_replay_after_a_new_object_arrived_adds_no_row(lake, store, schemas, tmp_path):
+    for n in range(1, 4):
+        stage(store, "dns_activity", f"b{n}.jsonl", [event("dns_activity", n)])
+    with pytest.raises(Crash):
+        make(lake, store, schemas, tmp_path, before_delete=_boom).run()
+    stage(store, "dns_activity", "b4.jsonl", [event("dns_activity", 4)])  # another set: other id
+    res = make(lake, store, schemas, tmp_path).run()
+    assert res["ok"] and res["rows_written"] == 1 and res["rows_skipped"] == 3
+    assert lake.query("SELECT count(*) AS n, count(DISTINCT uid) AS d FROM dns_activity") == [
+        {"n": 4, "d": 4}
+    ]
+
+
+def test_the_row_cap_splits_a_run_into_as_few_commits_as_it_allows(lake, store, schemas, tmp_path):
+    for n in range(1, 6):
+        stage(store, "dns_activity", f"b{n}.jsonl", [event("dns_activity", n)])
+    spy = Spy(lake)
+    res = make(spy, store, schemas, tmp_path, max_commit_rows=2).run()
+    assert [c[1] for c in spy.commits] == [2, 2, 1] and res["commits"] == 3 and count(lake) == 5
+
+
+def test_a_failed_commit_keeps_every_object_of_the_group_staged(lake, store, schemas, tmp_path):
+    for n in (1, 2, 3):
+        stage(store, "dns_activity", f"b{n}.jsonl", [event("dns_activity", n)])
+    res = make(Flaky(lake, 99), store, schemas, tmp_path).run()
+    assert res["ok"] is False and len(staged(store)) == 3 and "commit of 3 objects" in res["error"]
+
+
+def test_a_run_reports_what_it_expired_and_asks_for_the_configured_retention(
+    lake, store, schemas, tmp_path
+):
+    stage(store, "dns_activity", "b1.jsonl", [event("dns_activity", 1)])
+    spy = Spy(lake)
+    res = make(spy, store, schemas, tmp_path, snapshot_keep=500, snapshot_max_age_hours=72).run()
+    assert spy.expiries == [("dns_activity", {"keep": 500, "max_age_ms": 72 * 3600 * 1000})]
+    assert res["expired"] == 7 and res["snapshots"] == 500 and "expire_error" not in res
+    assert json.loads(json.dumps(res))["expired"] == 7  # the run's JSON line carries it
+    assert lw.last_run(tmp_path / "state", "dns_activity")["expired"] == 7
+
+
+def test_the_json_line_names_expired_on_every_run(lake, store, schemas, tmp_path, capsys):
+    res = make(lake, store, schemas, tmp_path).run()  # nothing staged, no retention configured
+    assert res["expired"] == 0 and res["snapshots"] is None and "expired" in res
+
+
+def test_no_expiry_when_the_run_failed_or_committed_nothing(lake, store, schemas, tmp_path):
+    spy = Spy(lake)
+    make(spy, store, schemas, tmp_path, snapshot_keep=500).run()  # nothing staged: no commit
+    stage(store, "dns_activity", "b1.jsonl", [event("dns_activity", 1)])
+    flaky = Spy(Flaky(lake, 99))
+    res = make(flaky, store, schemas, tmp_path, snapshot_keep=500).run()
+    assert res["ok"] is False and spy.expiries == [] and flaky.expiries == []
+    assert res["expired"] == 0
+
+
+def test_a_failed_expiry_is_recorded_and_never_fails_the_run(lake, store, schemas, tmp_path):
+    stage(store, "dns_activity", "b1.jsonl", [event("dns_activity", 1)])
+    spy = Spy(lake, expire=LakeError("catalog gone"))
+    res = make(spy, store, schemas, tmp_path, snapshot_keep=500).run()
+    assert res["ok"] and "catalog gone" in res["expire_error"] and res["expired"] == 0
+
+
+def test_a_lake_without_expiry_or_a_retention_of_zero_skips_it(lake, store, schemas, tmp_path):
+    stage(store, "dns_activity", "b1.jsonl", [event("dns_activity", 1)])
+    assert make(lake, store, schemas, tmp_path, snapshot_keep=500).run()["expired"] == 0
+    stage(store, "dns_activity", "b2.jsonl", [event("dns_activity", 2)])
+    spy = Spy(lake)
+    make(spy, store, schemas, tmp_path).run()  # keep 0 and age 0: retention off
+    assert spy.expiries == []
+
+
+def test_retention_and_catalog_cap_settings_come_from_the_environment(tmp_path):
+    cfg = lw.Config(_env(tmp_path))
+    assert (cfg.snapshot_keep, cfg.snapshot_max_age_hours) == (500, 72)
+    assert cfg.catalog_max_bytes == 64 * 1024 * 1024 and cfg.max_commit_rows == 100_000
+    cfg = lw.Config(_env(tmp_path, HNX_LW_SNAPSHOT_KEEP="0", HNX_LW_SNAPSHOT_MAX_AGE_HOURS="0.5"))
+    assert (cfg.snapshot_keep, cfg.snapshot_max_age_hours) == (0, 0.5)
+    with pytest.raises(lw.Refused):
+        lw.Config(_env(tmp_path, HNX_LW_SNAPSHOT_KEEP="-1"))

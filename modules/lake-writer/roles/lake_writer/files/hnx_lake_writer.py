@@ -55,6 +55,7 @@ times (the write is replay-safe, so a retry cannot duplicate), then the table's 
 import argparse
 import contextlib
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -113,6 +114,15 @@ def staging_key(prefix, table, when, name, gz=True):
     stamp = when.strftime("dt=%Y-%m-%d/hour=%H")
     return f"{prefix}{table}/{stamp}/{name}.ndjson" + (".gz" if gz else "")
 
+
+#: one commit carries at most this many rows (the staged objects of a run are committed together,
+#: in as few Iceberg snapshots as this allows; the cap bounds the writer's memory)
+DEFAULT_MAX_COMMIT_ROWS = 100_000
+#: snapshot retention defaults: the newest N and the age in hours (0 turns a limit off)
+DEFAULT_SNAPSHOT_KEEP = 500
+DEFAULT_SNAPSHOT_MAX_AGE_HOURS = 72
+#: the catalog reply cap (a table's metadata grows with its snapshots)
+DEFAULT_CATALOG_MAX_BYTES = 64 * 1024 * 1024
 
 EXIT_OK, EXIT_FAILED, EXIT_REFUSED = 0, 1, 2
 #: a reason or an original line is cut to this many characters in a rejected record
@@ -269,6 +279,9 @@ class Writer:
         prefix="",
         max_attempts=5,
         max_batches=0,
+        max_commit_rows=DEFAULT_MAX_COMMIT_ROWS,
+        snapshot_keep=0,
+        snapshot_max_age_hours=0,
         sleep=time.sleep,
         before_checkpoint=None,
         before_delete=None,
@@ -284,6 +297,8 @@ class Writer:
         self.dir = Path(state_dir) / self.table
         self.source = f"lake-writer/{self.table}"
         self.max_attempts, self.max_batches = max_attempts, max_batches
+        self.max_commit_rows = max_commit_rows
+        self.snapshot_keep, self.snapshot_max_age_hours = snapshot_keep, snapshot_max_age_hours
         self._sleep, self._clock = sleep, clock
         self._before_delete = before_delete
         self.checkpoint = Checkpoint(self.dir / "checkpoint.json")
@@ -307,12 +322,12 @@ class Writer:
         return f"{self.prefix}{self.table}/{REJECTED}/{rest.replace('/', '__')}"
 
     # -- one object
-    def _commit(self, rows, key):
+    def _commit(self, rows, key, position=None):
         """Commit ``rows`` under ``key``, retrying only what a retry cannot duplicate."""
         last = None
         for attempt in range(1, self.max_attempts + 1):
             try:
-                return self.ingestor.ingest(rows, batch_id=key, position=key)
+                return self.ingestor.ingest(rows, batch_id=key, position=position or key)
             except (
                 RowRejected,
                 SchemaMismatch,
@@ -327,34 +342,77 @@ class Writer:
                     self._sleep(min(2**attempt, 60))
         raise last
 
-    def _one(self, key, res):
+    def _read(self, key, res):
+        """The rows of one staged object, its rejects dead-lettered and counted."""
         data = self.store.get(self.bucket, key)
         rows, rejects = prepare(self.schema, data)
         if rejects:
             body = "".join(json.dumps(r, sort_keys=True) + "\n" for r in rejects)
             self.store.put(self.bucket, self._rejected_key(key), body.encode("utf-8"))
         res["rows_rejected"] += len(rejects)
+        return rows
+
+    @staticmethod
+    def _batch_id(keys):
+        """The idempotency key of a commit of ``keys``: the object key itself for one object,
+        else the first key and a digest of the whole set, so replaying the same set after a crash
+        is answered ``replayed`` and a different set (a new object arrived) is judged by the rows'
+        content key instead."""
+        if len(keys) == 1:
+            return keys[0]
+        digest = hashlib.sha256("\n".join(keys).encode("utf-8")).hexdigest()[:24]
+        return f"{keys[0]}+{len(keys) - 1}:{digest}"
+
+    def _commit_group(self, keys, rows, res):
+        """ONE commit for every object of ``keys`` (their rows together), then the checkpoint,
+        then the deletes: the order and the crash guarantees of one object, over a group."""
         if rows:
-            out = self._commit(rows, key)
+            out = self._commit(rows, self._batch_id(keys), position=keys[-1])
             res["rows_written"] += out.rows_written
             res["rows_skipped"] += out.rows_skipped
             res["replayed"] += 1 if out.replayed else 0
-        if self._before_delete is not None:
-            self._before_delete()  # test seam: raise here to simulate a crash after the checkpoint
-        self.store.delete(self.bucket, key)
-        res["batches"] += 1
+            res["commits"] += 1
+        for key in keys:
+            if self._before_delete is not None:
+                self._before_delete()  # test seam: raise here to simulate a crash after the checkpoint
+            self.store.delete(self.bucket, key)
+            res["batches"] += 1
+
+    def _expire(self, res):
+        """Snapshot retention, after a run whose commits all succeeded. A failure here is
+        recorded, never raised: the rows are in, and the next run tries again."""
+        expire = getattr(self.lake, "expire_snapshots", None)
+        if expire is None or not (self.snapshot_keep or self.snapshot_max_age_hours):
+            return
+        try:
+            out = expire(
+                self.table,
+                keep=self.snapshot_keep,
+                max_age_ms=int(self.snapshot_max_age_hours * 3600 * 1000),
+            )
+        except LakeError as exc:
+            res["expire_error"] = _cut(f"{type(exc).__name__}: {exc}", 400)
+            return
+        res["expired"] = out.get("expired", 0)
+        res["snapshots"] = out.get("kept")
+        if out.get("skipped"):
+            res["expire_skipped"] = _cut(out["skipped"], 200)
 
     def run(self):
-        """Commit every staged object (up to ``max_batches``), then record the run."""
+        """Commit every staged object (up to ``max_batches``), as few commits as the row cap
+        allows, then record the run."""
         res = {
             "table": self.table,
             "at": self._clock().strftime("%Y-%m-%dT%H:%M:%SZ"),
             "ok": True,
             "batches": 0,
+            "commits": 0,
             "rows_written": 0,
             "rows_skipped": 0,
             "rows_rejected": 0,
             "replayed": 0,
+            "expired": 0,
+            "snapshots": None,
             "failed": [],
             "error": None,
         }
@@ -363,27 +421,48 @@ class Writer:
             keys = self.pending()
             if self.max_batches:
                 keys = keys[: self.max_batches]
+            group, rows = [], []
             for key in keys:
                 try:
-                    self._one(key, res)
-                except LakeError as exc:
-                    # the lake refused after its retries, or the batch cannot be accepted as is:
-                    # stop this table, the object stays staged
-                    res["failed"].append(key)
-                    res["error"] = _cut(f"{type(exc).__name__}: {exc}", 400)
-                    break
+                    got = self._read(key, res)
                 except Exception as exc:  # the store: this object only
                     res["failed"].append(key)
                     res["error"] = _cut(f"{type(exc).__name__}: {exc}", 400)
+                    continue
+                group.append(key)
+                rows.extend(got)
+                if len(rows) >= self.max_commit_rows:
+                    if not self._flush(group, rows, res):
+                        break
+                    group, rows = [], []
+            else:
+                if group:
+                    self._flush(group, rows, res)
         except LakeError as exc:
             res["error"] = _cut(f"{type(exc).__name__}: {exc}", 400)
         res["pending_after"] = len(self.pending()) if res["error"] is None else None
         res["ok"] = res["error"] is None and not (
             res["rows_rejected"] and not (res["rows_written"] or res["rows_skipped"])
         )
+        if res["error"] is None and res["commits"]:
+            self._expire(res)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.record.put("last", res)
         return res
+
+    def _flush(self, group, rows, res):
+        """Commit one group; False when the lake refused it (the objects stay staged and the
+        table's run stops)."""
+        try:
+            self._commit_group(group, rows, res)
+            return True
+        except LakeError as exc:
+            # the lake refused after its retries, or the batch cannot be accepted as is
+            res["failed"].append(group[0])
+            res["error"] = _cut(
+                f"{type(exc).__name__}: {exc} (commit of {len(group)} objects)", 400
+            )
+            return False
 
 
 def run_table(lake, store, schema, **kw):
@@ -460,6 +539,21 @@ class Config:
         self.domain = e.get("HNX_LW_DOMAIN") or "unused"
         self.max_attempts = int(e.get("HNX_LW_MAX_ATTEMPTS", "5"))
         self.max_batches = int(e.get("HNX_LW_MAX_BATCHES", "0"))
+        self.max_commit_rows = int(e.get("HNX_LW_MAX_COMMIT_ROWS", str(DEFAULT_MAX_COMMIT_ROWS)))
+        self.snapshot_keep = int(e.get("HNX_LW_SNAPSHOT_KEEP", str(DEFAULT_SNAPSHOT_KEEP)))
+        self.snapshot_max_age_hours = float(
+            e.get("HNX_LW_SNAPSHOT_MAX_AGE_HOURS", str(DEFAULT_SNAPSHOT_MAX_AGE_HOURS))
+        )
+        self.catalog_max_bytes = int(
+            e.get("HNX_LW_CATALOG_MAX_BYTES", str(DEFAULT_CATALOG_MAX_BYTES))
+        )
+        if min(self.max_commit_rows, self.snapshot_keep, self.snapshot_max_age_hours) < 0 or (
+            self.max_commit_rows < 1 or self.catalog_max_bytes < 1024
+        ):
+            raise Refused(
+                "HNX_LW_MAX_COMMIT_ROWS must be >= 1, HNX_LW_CATALOG_MAX_BYTES >= 1024, "
+                "the snapshot retention settings >= 0 (0 turns a limit off)"
+            )
         self.s3_region_env = e.get("HNX_LW_S3_REGION_VAR", "HNX_LW_S3_REGION")
         self.s3_access_env = e.get(
             "HNX_LW_S3_ACCESS_VAR", "_".join(["HNX", "LW", "S3", "ACCESS", "KEY"])
@@ -491,6 +585,7 @@ def open_lake(cfg, schemas, *, ensure):
         credential=cfg.credential,
         catalog_credential=cfg.catalog_credential,
         ca_file=cfg.ca_file,
+        catalog_max_bytes=cfg.catalog_max_bytes,
     )
     require_namespace(lake_namespace(lake))
     return lake
@@ -532,6 +627,9 @@ def cmd_commit(cfg, tables, schemas, lake=None, store=None):
             state_dir=cfg.state_dir,
             max_attempts=cfg.max_attempts,
             max_batches=cfg.max_batches,
+            max_commit_rows=cfg.max_commit_rows,
+            snapshot_keep=cfg.snapshot_keep,
+            snapshot_max_age_hours=cfg.snapshot_max_age_hours,
         )
         if res is None:
             _say({"table": t, "skipped": "another run holds the table's lock"})

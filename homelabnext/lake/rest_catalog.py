@@ -19,7 +19,7 @@ import urllib.request
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from homelabnext._http import ResponseTooLarge, read_bounded, safe_urlopen
+from homelabnext._http import ResponseTooLarge, safe_urlopen
 
 from .errors import LakeError, UnknownTable
 
@@ -28,6 +28,20 @@ __all__ = ["CommitConflict", "RestCatalog"]
 
 class CommitConflict(LakeError):
     pass
+
+
+def _too_large(limit: int, partial: bytes, path: str) -> str:
+    """The refusal of a reply over ``limit`` bytes. A table's metadata that outgrows the cap is
+    almost always a table whose snapshots were never expired (every snapshot carries a
+    ``manifest-list``), so the message counts the ones in the part already read."""
+    msg = f"response larger than {limit} bytes"
+    n = partial.count(b'"manifest-list"')
+    if n and "/tables/" in path:
+        msg += (
+            f" (the table's metadata holds at least {n} snapshots within the first {limit} bytes:"
+            " expire its snapshots, or raise the catalog reply cap)"
+        )
+    return msg
 
 
 def _q(part: str) -> str:
@@ -83,7 +97,9 @@ class RestCatalog:
         try:
             send = self._opener.open if self._opener is not None else safe_urlopen
             with send(req, timeout=self._timeout) as resp:
-                raw = read_bounded(resp, self.max_bytes)
+                raw = resp.read(self.max_bytes + 1)
+                if len(raw) > self.max_bytes:
+                    raise ResponseTooLarge(_too_large(self.max_bytes, raw, path))
         except urllib.error.HTTPError as exc:
             detail = exc.read(4000)
             msg = detail.decode("utf-8", "replace")[:300]
@@ -201,6 +217,28 @@ class RestCatalog:
         body = {
             "requirements": [{"type": "assert-table-uuid", "uuid": table_uuid}],
             "updates": changes,
+        }
+        doc = self._call("POST", self._ns(namespace) + f"/tables/{_q(table)}", body)
+        return (doc or {}).get("metadata") or {}
+
+    def remove_snapshots(
+        self,
+        namespace: str,
+        table: str,
+        snapshot_ids: list[int],
+        *,
+        main_snapshot_id: int,
+        table_uuid: str,
+    ) -> dict[str, Any]:
+        """Remove ``snapshot_ids`` (metadata only: no data, manifest or metadata file is deleted)
+        in one commit that asserts the table is the one read and ``main`` still points at
+        ``main_snapshot_id``; a commit that lost a race raises :class:`CommitConflict`."""
+        body = {
+            "requirements": [
+                {"type": "assert-table-uuid", "uuid": table_uuid},
+                {"type": "assert-ref-snapshot-id", "ref": "main", "snapshot-id": main_snapshot_id},
+            ],
+            "updates": [{"action": "remove-snapshots", "snapshot-ids": list(snapshot_ids)}],
         }
         doc = self._call("POST", self._ns(namespace) + f"/tables/{_q(table)}", body)
         return (doc or {}).get("metadata") or {}

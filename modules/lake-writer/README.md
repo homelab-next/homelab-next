@@ -57,8 +57,12 @@ whole.
    A line the lake would refuse (not JSON, not an object, a field outside the pinned schema, **no
    canonical label**) is written with its reason under `<prefix>T/_rejected/` and counted; it never
    blocks the rest of its batch and is never given a label.
-3. Commit the good rows with `write_batch(idempotency_key=<object key>, source=lake-writer/T,
-   high_water=<object key>)`, **then** save the checkpoint (`Ingestor`), **then** delete the object.
+3. Commit the good rows of **all the run's objects in one `write_batch`** (up to
+   `lake_writer_max_commit_rows`; one Iceberg snapshot per commit, not one per object), with
+   `idempotency_key=<the object key>` for a single object or `<first key>+<n>:<digest of the key set>`
+   for several, `source=lake-writer/T`, `high_water=<the last key>`, **then** save the checkpoint
+   (`Ingestor`), **then** delete the objects. A replay of the same set is answered `replayed`; a replay
+   of a different set (an object arrived since) adds no row, the rows' `uid` skips what is stored.
 
 A crash between any two steps leaves the object staged and the replay adds no row: the lake's batch
 ledger answers `replayed`; where the ledger was expired, the rows' `uid` skips every row already stored;
@@ -89,6 +93,31 @@ lost checkpoint, the same events under another batch name).
   unit over an empty table).
 * A store that cannot read one object fails that object only.
 * Timers are on the calendar (`*-*-* *:0/10:00 UTC`), never an interval (LL-041).
+
+## Snapshot retention
+
+Every commit is an Iceberg snapshot and nothing removes one, so a table's metadata grows without bound
+(LL-604: `raw_archive` held 5,070 snapshots after 19 h, its metadata passed the catalog reply cap and
+the catalog ran out of memory). After a run whose every commit succeeded (never after a failed one, never
+when nothing was committed) the writer expires, through the catalog's REST `remove-snapshots`:
+
+* snapshots beyond the newest `lake_writer_snapshot_keep` (default 500; 0: no count limit), and
+* snapshots older than `lake_writer_snapshot_max_age_hours` (default 72; 0: no age limit).
+
+Guards: the snapshot `main` points at is never expired; only a table whose refs are exactly `{main}` is
+touched (a tag or branch pins history the writer does not judge: the run says `expire_skipped`); the
+commit asserts the table's uuid and that `main` is unchanged, and retries on fresh metadata after a race.
+It is **metadata only**: no data, manifest or metadata file is deleted (orphan-file cleanup is the lake
+maintenance's job, not this writer's), and expired snapshots can no longer be time-travelled to. An
+expiry that fails is recorded (`expire_error`) and never fails the run; the next run tries again.
+
+The run's JSON line carries `expired` (snapshots removed this run), `snapshots` (left afterwards, `null`
+when no expiry ran) and, when they apply, `expire_skipped` / `expire_error`.
+
+The catalog reply cap is `lake_writer_catalog_max_bytes` (default 64 MiB, was a fixed 16 MiB). A reply
+over it fails with the cap and the number of snapshots seen in the part read, so the table that outgrew it
+is named; trim it once with the catalog's `remove-snapshots` (or temporarily raise the cap), then the
+retention above keeps it small.
 
 ## Hooks
 
@@ -125,8 +154,8 @@ one: a bounded `min/max/count` across the moment the old sender stopped and the 
 
 ## Limits
 
-* Retention and snapshot expiry are declared in the table records; running them is the lake
-  maintenance's job, not this writer's.
+* Snapshot expiry is the writer's (above); row retention and orphan-file cleanup are declared in the
+  table records and run by the lake maintenance, not this writer.
 * A staged object is read whole (the object store client's limit applies); a pipeline stages batches
   of a few MiB, not gigabytes.
 * The writer trusts the pipeline's label. It cannot tell a pipeline that mislabelled an event from one
