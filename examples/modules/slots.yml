@@ -25,7 +25,7 @@ slots:
   hot-index:           {stage: 3, contract: null, stateful: true, export_formats: [jsonl], formats: {in: [ocsf], out: [ocsf]}}
   detections:          {stage: 4, contract: detections.py, stateful: true, export_formats: [sigma], formats: {in: [sigma, ocsf], out: [ocsf]}}
   cases:               {stage: 6, contract: cases.py, stateful: true, export_formats: [jsonl, markdown-tree], formats: {in: [cloudevents], out: [cloudevents]}, egress: true}
-  exposure-management: {stage: 8, contract: null, stateful: false, formats: {in: [], out: [sarif, ocsf]}}
+  exposure-management: {stage: 8, contract: null, stateful: true, export_formats: [object-tree], formats: {in: [], out: [sarif, ocsf]}}
   network-sensor:      {stage: 1, contract: null, stateful: false, formats: {in: [], out: [ocsf]}}
   tunnel:              {stage: null, contract: null, stateful: false, formats: {in: [], out: []}}
   static-hosting:      {stage: 10, contract: null, stateful: false, formats: {in: [], out: []}, egress: true}
