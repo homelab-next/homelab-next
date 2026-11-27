@@ -26,6 +26,34 @@
       letters, digits and . _ : / -, and the gateway's product must be named
       (openwebui_gateway_impls)
 
+- name: The concierge shim's settings are well formed
+  ansible.builtin.assert:
+    that:
+      - openwebui_concierge_enabled is boolean
+      - openwebui_concierge_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\\Z')
+      - openwebui_concierge_link_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\\Z')
+      - openwebui_concierge_link_ref != openwebui_gateway_key_ref
+      - openwebui_concierge_tiers is mapping and openwebui_concierge_tiers | length > 0
+      - openwebui_concierge_tiers.values() | reject('match', '^[a-z][a-z0-9]*(-[a-z0-9]+)*\\Z') | list | length == 0
+      - openwebui_concierge_always_on_tier in openwebui_concierge_tiers
+      - openwebui_concierge_models is sequence and openwebui_concierge_models is not string and openwebui_concierge_models | length > 0
+      - openwebui_concierge_models | map(attribute='id') | reject('match', '^[a-z][a-z0-9]*(-[a-z0-9]+)*\\Z') | list | length == 0
+      - openwebui_concierge_models | map(attribute='id') | list | unique | length == openwebui_concierge_models | length
+      - openwebui_concierge_models | map(attribute='tier') | difference(openwebui_concierge_tiers.keys() | list) | length == 0
+      - openwebui_concierge_persona is string
+      - openwebui_concierge_history_chars | int >= 1000
+      - openwebui_concierge_timeout_s | int >= 10
+      - openwebui_concierge_context_id is string
+      - openwebui_concierge_context_id == '' or (openwebui_concierge_context_link_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\\Z')
+        and openwebui_concierge_context_allowed | length > 0)
+      - openwebui_concierge_context_ceiling in ['clear', 'green', 'amber', 'amber+strict']
+    fail_msg: >-
+      openwebui: the concierge shim needs a pinned image, its own token (never the gateway key), tiers
+      mapped to gateway roles with the always-on tier among them, models of known tiers with unique ids,
+      a history budget of 1000 characters or more, and, when a context service is named, its token and
+      the namespaces the shim may read
+  when: openwebui_concierge_enabled | bool
+
 - name: This instance is the chat row, public at the address sign-in returns to
   ansible.builtin.assert:
     that:

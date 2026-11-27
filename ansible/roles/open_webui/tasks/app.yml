@@ -78,7 +78,9 @@
                  | combine({'WEBUI_URL': open_webui_public_url, 'CORS_ALLOW_ORIGIN': open_webui_public_url}
                            if open_webui_public_url | length > 0 else {})
                  | combine(open_webui_derived_env)
-                 | combine({'OPENAI_API_BASE_URLS': lookup('hnx_registry', open_webui_gateway_id, field='url') ~ '/v1'}) }}
+                 | combine({'OPENAI_API_BASE_URLS': open_webui_connection_url
+                                                                 if open_webui_connection_url | length > 0
+                                                                 else lookup('hnx_registry', open_webui_gateway_id, field='url') ~ '/v1'}) }}
             ports: ["{{ open_webui_bind }}:{{ open_webui_port | int }}:8080"]
             volumes: ["{{ open_webui_dir }}/data:/app/backend/data"]
             mem_limit: "{{ open_webui_mem_limit }}"
@@ -88,4 +90,14 @@
               timeout: 5s
               retries: 5
               start_period: 60s
+  tags: [health, backup, restore, export, upgrade]
+
+# the optional sidecars (the concierge shim): same project, so the same hardening, with only what the
+# extra service's own spec publishes
+- name: Add the extra services to the application spec
+  ansible.builtin.set_fact:
+    open_webui_app: >-
+      {{ open_webui_app | combine({'compose_app_spec': {'services':
+           open_webui_app.compose_app_spec.services | combine(open_webui_extra_services)}}, recursive=true) }}
+  when: open_webui_extra_services | length > 0
   tags: [health, backup, restore, export, upgrade]

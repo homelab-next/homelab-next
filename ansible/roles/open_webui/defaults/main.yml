@@ -58,3 +58,12 @@ open_webui_web_search_id: ""
 open_webui_web_search_capabilities: [web-search]
 # how many results a search puts in front of the model (1 to 20)
 open_webui_web_search_result_count: 5
+# optional front between Open WebUI and the gateway (modules/openwebui's concierge shim): when
+# open_webui_connection_url is set, the one OpenAI connection points there instead of at the gateway's
+# registry URL, with the key at open_webui_connection_key_ref (empty: the gateway key); the extra
+# services join the same compose project, and open_webui_extra_secret_env ({service: {NAME: secret ref}})
+# is read into their 0600 env_files. All empty: Open WebUI talks to the gateway directly.
+open_webui_connection_url: ""
+open_webui_connection_key_ref: ""
+open_webui_extra_services: {}
+open_webui_extra_secret_env: {}

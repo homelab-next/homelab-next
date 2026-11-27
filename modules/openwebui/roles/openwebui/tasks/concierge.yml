@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# The concierge shim's files, before the compose project is rendered: the code (one standard-library
+# file, mounted read-only into the pinned stock Python image) and its settings (no secret: the gateway
+# key and the shim's token reach the container only through its 0600 env_file). The container runs as
+# nobody and writes nothing (read_only).
+- name: The shim's directory
+  ansible.builtin.file:
+    path: "{{ openwebui_dir }}/concierge"
+    state: directory
+    owner: "{{ openwebui_owner }}"
+    group: "{{ openwebui_group }}"
+    mode: "0755"
+
+- name: The shim's code
+  ansible.builtin.copy:
+    src: concierge_shim.py
+    dest: "{{ openwebui_dir }}/concierge/concierge_shim.py"
+    owner: "{{ openwebui_owner }}"
+    group: "{{ openwebui_group }}"
+    mode: "0644"
+
+- name: The shim's settings
+  ansible.builtin.copy:
+    content: "{{ openwebui_concierge_config | to_nice_json }}\n"
+    dest: "{{ openwebui_dir }}/concierge/config.json"
+    owner: "{{ openwebui_owner }}"
+    group: "{{ openwebui_group }}"
+    mode: "0644"

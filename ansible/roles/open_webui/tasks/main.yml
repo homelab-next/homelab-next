@@ -7,16 +7,31 @@
 
 # the key is this app's own (the gateway scopes and limits it); only the env_file holds it, with
 # the session key and, when set, the sign-in client's secret and the break-glass admin's password
+- name: Read the extra services' secrets
+  ansible.builtin.set_fact:
+    open_webui_extra_secret_env_values: >-
+      {%- set out = {} -%}
+      {%- for svc, envs in open_webui_extra_secret_env.items() -%}
+      {%- set _ = out.update({svc: {}}) -%}
+      {%- for name, ref in envs.items() -%}
+      {%- set _ = out[svc].update({name: lookup('hnx_secret', ref)}) -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+  no_log: true
+
 - name: Read this app's secrets
   ansible.builtin.set_fact:
-    open_webui_secret_env:
-      open-webui: >-
-        {{ {'OPENAI_API_KEYS': lookup('hnx_secret', open_webui_gateway_key_ref),
-            'WEBUI_SECRET_KEY': lookup('hnx_secret', open_webui_session_key_ref)}
-           | combine({'OAUTH_CLIENT_SECRET': lookup('hnx_secret', open_webui_oidc_client_secret_ref)}
-                     if open_webui_oidc_issuer_url | length > 0 else {})
-           | combine({'WEBUI_ADMIN_PASSWORD': lookup('hnx_secret', open_webui_admin_password_ref)}
-                     if open_webui_admin_password_ref | length > 0 else {}) }}
+    open_webui_secret_env: >-
+      {{ {'open-webui': {'OPENAI_API_KEYS': lookup('hnx_secret', open_webui_connection_key_ref
+                                                     if open_webui_connection_key_ref | length > 0
+                                                     else open_webui_gateway_key_ref),
+                         'WEBUI_SECRET_KEY': lookup('hnx_secret', open_webui_session_key_ref)}
+                        | combine({'OAUTH_CLIENT_SECRET': lookup('hnx_secret', open_webui_oidc_client_secret_ref)}
+                                  if open_webui_oidc_issuer_url | length > 0 else {})
+                        | combine({'WEBUI_ADMIN_PASSWORD': lookup('hnx_secret', open_webui_admin_password_ref)}
+                                  if open_webui_admin_password_ref | length > 0 else {})}
+         | combine(open_webui_extra_secret_env_values) }}
   no_log: true
 
 - name: Render and start Open WebUI

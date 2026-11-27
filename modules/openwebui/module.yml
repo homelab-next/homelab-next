@@ -37,6 +37,10 @@ credentials:
     identity: password
     holder: provider
     purpose: the break-glass local administrator's password, used only when the database has no user (12 characters or more); the identity provider is the everyday sign-in
+  - secret: secret:openwebui/shim-token
+    identity: token
+    holder: provider
+    purpose: the token Open WebUI presents to the concierge shim (32 characters or more), read only when the shim is on; the shim, not Open WebUI, then holds the gateway key
 identifiers:
   - {kind: secret-name, name: openwebui, on_remove: keep}
 requires:
