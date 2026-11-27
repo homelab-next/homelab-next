@@ -323,7 +323,21 @@ class ApprovalsSite:
 
     def _request_block(self, r: Mapping[str, Any], user: str, now: float, can_decide: bool) -> str:
         rid, digest = str(r.get("request_id", "")), str(r.get("digest", ""))
-        params = json.dumps(r.get("params", {}), indent=2, sort_keys=True, ensure_ascii=False)
+        raw = r.get("params", {})
+        raw = raw if isinstance(raw, Mapping) else {}
+        # a multi-line text param (a proposal's body) is shown as the text it is, one block per
+        # param, so a person can read what they approve; the rest stays JSON.  Display only: the
+        # digest the form carries is the broker's, over the params as filed.
+        long = {k: v for k, v in raw.items() if isinstance(v, str) and "\n" in v}
+        params = json.dumps(
+            {k: v for k, v in raw.items() if k not in long} if long else r.get("params", {}),
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        blocks = "".join(
+            f"<h4>param <code>{_e(k)}</code></h4><pre>{_e(v)}</pre>" for k, v in sorted(long.items())
+        )
         facts = "".join(
             f"<dt>{_e(k)}</dt><dd>{v}</dd>"
             for k, v in (
@@ -339,7 +353,7 @@ class ApprovalsSite:
         state = " (approved, not yet run)" if valid else ""
         out = [
             f'<div class="pane" id="{_e(rid)}"><h3>Request <code>{_e(rid)}</code>{_e(state)}</h3>',
-            f"<dl>{facts}</dl><h4>params</h4><pre>{_e(params)}</pre>",
+            f"<dl>{facts}</dl><h4>params</h4><pre>{_e(params)}</pre>{blocks}",
         ]
         if can_decide and not valid:
             hidden = "".join(
