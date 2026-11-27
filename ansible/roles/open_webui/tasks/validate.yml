@@ -45,6 +45,14 @@
          open_webui_admin_password_ref] | select('!=', '') | list | length
         == [open_webui_gateway_key_ref, open_webui_session_key_ref, open_webui_oidc_client_secret_ref,
             open_webui_admin_password_ref] | select('!=', '') | list | unique | length
+      # the optional front (the concierge shim): its base URL, the key Open WebUI presents to it, extra services
+      - open_webui_connection_url is string
+      - open_webui_connection_url == '' or open_webui_connection_url is match('^http://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[1-9][0-9]{0,4})?/v1\\Z')
+      - open_webui_connection_key_ref is string
+      - open_webui_connection_key_ref == '' or open_webui_connection_key_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\\Z')
+      - open_webui_extra_services is mapping
+      - open_webui_extra_secret_env is mapping
+      - open_webui_extra_services | length == 0 or open_webui_connection_url != ''
       # web search: the registry id of the lab's metasearch service, or empty (off)
       - open_webui_web_search_id is string
       - open_webui_web_search_id == '' or open_webui_web_search_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\\Z')

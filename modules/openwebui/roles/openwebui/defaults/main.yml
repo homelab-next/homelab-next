@@ -36,3 +36,37 @@ openwebui_export_dir: /var/backups/compose/openwebui/export
 openwebui_start: true
 openwebui_validate_with_docker: true
 openwebui_health_timeout: 10
+# --- the concierge shim (optional; off keeps Open WebUI talking to the gateway directly) ---
+# A small OpenAI-compatible front between Open WebUI and the gateway (files/concierge_shim.py, standard
+# library only, run from the pinned stock Python image with the file mounted read-only): named model
+# tiers mapped to gateway roles, a lab persona, bounded history, optional retrieval from the lab's
+# context service. It holds the gateway key (openwebui_gateway_key_ref); Open WebUI holds only the
+# shim's own token, and the shim's port is never published (the compose network only).
+openwebui_concierge_enabled: false
+openwebui_concierge_image: "docker.io/library/python:3.11.17-slim-trixie@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377"
+openwebui_concierge_link_ref: secret:openwebui/shim-token
+openwebui_concierge_mem_limit: 256m
+# the port the shim listens on inside the project's network (never published)
+openwebui_concierge_port: 8900
+# tier name -> gateway role. A tier is offered in the model list only while the gateway lists its role
+# (the main tier always), so fast and deep appear on their own when their roles exist.
+openwebui_concierge_tiers: {fast: fast, main: main-reasoner, deep: deep}
+openwebui_concierge_always_on_tier: main
+# the models Open WebUI shows: id, tier and (optional) persona/context overrides
+openwebui_concierge_models:
+  - {id: concierge-fast, tier: fast}
+  - {id: concierge, tier: main}
+  - {id: concierge-deep, tier: deep}
+# the system prompt every model gets (empty: none); the site's text
+openwebui_concierge_persona: ""
+# the newest turns kept within this many characters of history (the system messages always stay)
+openwebui_concierge_history_chars: 48000
+openwebui_concierge_timeout_s: 600
+# optional retrieval from the lab's context service: its registry id (empty: off), the token's
+# reference, the namespaces the shim may read (the service's `allowed`) and the most restrictive label a
+# passage may carry to be sent to a model; a model sets `context: true` to use it
+openwebui_concierge_context_id: ""
+openwebui_concierge_context_link_ref: secret:context/openwebui-token
+openwebui_concierge_context_allowed: []
+openwebui_concierge_context_ceiling: amber
+openwebui_concierge_context_top_k: 4

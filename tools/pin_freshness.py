@@ -120,6 +120,11 @@ SOURCES: dict[str, tuple[str, str]] = {
         "release parse does not read: compare its tags with the project's release page by hand, "
         "and move only to a release at least 14 days old (playbooks/upgrade.yml)",
     ),
+    "role:openwebui/openwebui_concierge_image": (
+        "none",
+        "the Docker official python image (docker.io/library/python), the same pin as the repository's "
+        "own container images: compare its tags with the release page by hand, within the pinned minor version",
+    ),
     "role:vector/vector_sidecar_image": (
         "none",
         "the Docker official python image (docker.io/library/python), the same pin as the repository's "
@@ -463,6 +468,10 @@ NOTES: dict[str, str] = {
         "modules/vector/module.yml and the lab registry's version; read the release notes of every "
         "version crossed (a changed socket, file or object-store sink option stops the aggregator "
         "at start, and the role validates the configuration with the new image first)"
+    ),
+    "role:openwebui/openwebui_concierge_image": (
+        "an image (modules/openwebui): the interpreter the concierge shim runs on; bump the tag and its "
+        "digest together within the pinned minor version (the shim uses the standard library only)"
     ),
     "role:vector/vector_sidecar_image": (
         "an image (modules/vector): the interpreter the sidecar runs on; bump the tag and its digest "

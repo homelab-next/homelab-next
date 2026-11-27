@@ -74,6 +74,22 @@ argument_specs:
         type: int
         description: "Results a web search puts in front of the model (1 to 20)."
         default: 5
+      open_webui_connection_url:
+        type: str
+        description: "Optional base URL (ending /v1) of a front between Open WebUI and the gateway (the concierge shim); empty: the gateway's registry URL."
+        default: ""
+      open_webui_connection_key_ref:
+        type: str
+        description: "secret:<name> of the key Open WebUI presents on that connection; empty: the gateway key."
+        default: ""
+      open_webui_extra_services:
+        type: dict
+        description: "Extra compose services (sidecars) for the same project, by name."
+        default: {}
+      open_webui_extra_secret_env:
+        type: dict
+        description: "Service name to {VARIABLE: secret:<name>} for the extra services; read at deploy time into their 0600 env_files."
+        default: {}
       open_webui_session_key_ref: &session
         type: str
         description: "secret:<name> of the session signing key (WEBUI_SECRET_KEY)."

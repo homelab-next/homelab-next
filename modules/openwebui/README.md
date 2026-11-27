@@ -150,6 +150,29 @@ returns to) and a stricter `health`.
 - **A migration.** Fresh by the operator's decision; `export`/`restore` handle this instance's own
   data directory only.
 
+## The concierge shim (optional): tiers, persona, bounded memory
+
+`openwebui_concierge_enabled: true` adds one more container to the same compose project: the concierge
+shim (`roles/openwebui/files/concierge_shim.py`, standard library only, run from the pinned stock
+Python image with the file mounted read-only, as nobody, read-only root, no published port). Open WebUI's
+one connection then points at the shim (the sidecar's compose service name, port 8900, path `/v1`) with the shim's own token
+(`secret:openwebui/shim-token`, declared in the manifest); the shim holds the gateway key and calls
+the gateway, so the gateway still sees one caller, the app's key, with the per-user `X-HNX-Tag` and
+`X-HNX-TLP` passed through (the shim refuses a label above its own ceiling; the gateway key's ceiling
+is the real bound).
+
+| Feature | Behaviour |
+|---|---|
+| Tiers | `openwebui_concierge_tiers` maps a tier to a gateway role (`fast`, `main`, `deep` by default) and `openwebui_concierge_models` names what Open WebUI shows. A tier is **listed only while the gateway lists its role** (the always-on tier is the exception), so adding a role to the gateway makes the model appear on its own. A request for a tier that is not live is a 404 naming the live models: never a silent fallback to another tier. |
+| Persona | `openwebui_concierge_persona`, a system prompt the site writes, added to every turn. |
+| Memory | The newest turns within `openwebui_concierge_history_chars` (system messages and the last message always stay). Optionally (`openwebui_concierge_context_id`) passages from the lab's context service for models that set `context: true`: read at a ceiling, passages above `openwebui_concierge_context_ceiling` are never sent to a model, each carries its source id and label. A retrieval failure is not a chat failure. |
+| Auth | Bearer token on every call but `/health`; the gateway key never leaves the shim. |
+| Not here | Agents that run a CLI, a cloud tier (the gateway has none), document archiving and attachment diffing: Open WebUI's own history and RAG cover what they were for. |
+
+The shim's `GET /v1/models` asks the gateway (cached 30 s, the last answer kept through a blip).
+Settings carry no secret (`{openwebui_dir}/concierge/config.json`, 0644); a changed setting or a
+changed shim file recreates the container.
+
 ## Hooks
 
 | Hook | What it checks or does |

@@ -177,6 +177,23 @@ probe exporter mounts). A refusal, a 5xx (the gateway's `upstream_unavailable`) 
 **`LlmDecodeCollapsed` (critical, always rendered)** reads the llama.cpp servers' own metrics: tokens generated per second of generation over `prometheus_alert_llm_decode_window` (15m), below `prometheus_alert_llm_decode_min_tps` (5) for 10m while the server is generating. It exists because a model server that loses its GPU falls back to the CPU and keeps answering: on 2026-11-25 the large model ran at 0.46 tok/s (normal ~19) for 17 h, the one-token probe still passed in time, and only `GpuNotComputing` fired. This alert names the impact (tokens/s) so the page reads as "every AI job is crawling". `prometheus_alert_llm_probe_slow_seconds` for 15m is `LlmProbeSlow` (warning). This is the caller's
 own path; `GpuNotComputing` is the earlier, cheaper signal of a server that fell back to the CPU.
 
+## Reliability alerts
+
+Rendered by default (group `hnx-reliability`) from the host exporter's series; a host without a series never fires its rule. They route like every other alert: the forwarder posts the firing set to the notify topic (ntfy), critical at priority 4, so no routing setting is needed. The families the old lab had, rebuilt after 2026-11-27 (seven `wazuh-agent` units failed for 8 h and four lake writers failed every run for two days, and nothing paged):
+
+| Alert | Severity | Expression (defaults) |
+|---|---|---|
+| `SystemdUnitFailed` | warning | `avg_over_time(node_systemd_unit_state{state="failed", name!~<critical list>}[15m]) > 0.7` |
+| `CriticalUnitFailed` | critical | the same over `5m` for units matching `prometheus_alert_critical_units` (default `hnx-lake-writer@.+`; a site adds its agents, shippers and model servers) |
+| `TimerJobNotSucceeding` | critical | a oneshot failed for `prometheus_alert_timer_job_failing_for` (1h) while its `.timer` fired inside that window: `avg_over_time(...{state="failed", type="oneshot"}[1h]) > 0.9 and on (instance, name) label_replace(changes(node_systemd_timer_last_trigger_seconds[1h]) >= 1, ...)` |
+| `HostOomKill` | warning | `increase(node_vmstat_oom_kill[10m]) > 0` |
+| `FilesystemFillPredicted` | warning | `predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs\|overlay\|..."}[6h], 24*3600) < 0` and under 50% free, for 1h |
+| `CertExpiringSoon` / `CertExpiryCritical` | warning / critical | with probes: `probe_ssl_earliest_cert_expiry - time()` under 14 d / 3 d (an expired certificate stays critical) |
+
+The state is averaged over a window rather than held with `for:` because a timer's oneshot flips to `activating` for seconds at every run, which would reset a `for:` clock; a unit stays `failed` until a run succeeds, so "failed for the whole window while the timer fired" is "every run in the window failed". `prometheus_alert_unit_failed_ignore` is a regex of units the warning skips.
+
+Gaps, stated: (1) the `hnx-last-run` records under `/var/lib/homelabnext/last-run` are JSON files, not metrics, so there is no "minutes since the last success" series; `TimerJobNotSucceeding` uses the systemd state instead (a job that stopped being triggered at all is the timer's own unit going `inactive`, not covered here). (2) No container metrics (cAdvisor or docker) are scraped in this lab, so there is no container OOM alert; `HostOomKill` covers a guest's kernel, not a cgroup limit inside Docker. (3) Nothing scrapes cloudflared, so there is no `CloudflaredTunnel*` rule; it needs a `--metrics` scrape job first.
+
 ## The slot
 
 `metrics` has no contract yet, so it is **provisional** in `examples/modules/slots.yml`

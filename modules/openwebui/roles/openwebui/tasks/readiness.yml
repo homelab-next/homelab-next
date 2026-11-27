@@ -27,4 +27,12 @@
           characters or more, {{ openwebui_admin_login_ref }} 12 or more and
           {{ openwebui_oidc_client_secret_ref }} (the identity provider's client secret) 32 or more
       no_log: true
+    - name: The shim's token resolves (concierge shim on)
+      ansible.builtin.assert:
+        that:
+          - lookup('hnx_secret', openwebui_concierge_link_ref) | length >= 32
+          - openwebui_concierge_context_id == '' or lookup('hnx_secret', openwebui_concierge_context_link_ref) | length >= 16
+        fail_msg: "openwebui: {{ openwebui_concierge_link_ref }} must be 32 characters or more (and the context token set when a context service is named)"
+      when: openwebui_concierge_enabled | bool
+      no_log: true
   tags: [readiness]
