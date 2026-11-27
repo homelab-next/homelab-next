@@ -85,6 +85,7 @@ def mv(tmp_path: Path, **kw) -> dict:
         "media_automation_vpn_outbound_subnets": [SUBNET],
         "media_automation_vpn_input_ports": [51000],
         "media_automation_helpers_enabled": False,
+        "media_automation_helper_account_manage": False,  # the test user is no root: no account is created
         "media_automation_start": False,
         "media_automation_validate_with_docker": False,
         **last_run_vars(tmp_path, "media_automation"),

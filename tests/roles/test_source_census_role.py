@@ -316,6 +316,8 @@ def test_the_installed_unit_runs_the_command_with_the_endpoints_in_its_environme
         source_census_last_run_writer=str(tmp_path / "bin" / "hnx-last-run"),
         source_census_lake_query_id="query-core",
         source_census_lake_catalog_id="lake-catalog",
+        # the example registry has no notify row: any http row stands in for the slot the page is sent to
+        source_census_notify_id="llm-gateway",
     )
     r = run_role(tmp_path, ROLE, "units", v, env=ENV)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -327,7 +329,7 @@ def test_the_installed_unit_runs_the_command_with_the_endpoints_in_its_environme
         "--job timer:source_census/source-census-run" in svc
     )  # its runs reach the last-run record
     env = (tmp_path / "etc" / "census.env").read_text()
-    for name in ("LAKE_QUERY", "LAKE_CATALOG"):
+    for name in ("LAKE_QUERY", "LAKE_CATALOG", "NOTIFY"):
         assert f"HNX_ENDPOINT_{name}=http" in env
     assert PASSWORD not in env and TOKEN not in env
     assert (

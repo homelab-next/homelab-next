@@ -59,6 +59,10 @@ argument_specs:
         type: str
         description: The registry row of the lake catalog.
         default: lake-catalog
+      source_census_notify_id:
+        type: str
+        description: The registry row of the notify slot; its URL is the run's HNX_ENDPOINT_NOTIFY (the page is sent there).
+        default: notify
       source_census_unit_dir:
         type: path
         description: Where the installed units are written.

@@ -6,6 +6,26 @@
 # repair removes only what has not progressed for a full window). They log in with the torrent
 # client password from the secret store (a 0600 env file) and read each app's own API key from its
 # config.xml at run time. The timers are enabled on every run, not only when their units changed.
+# The helper units run as the apps' numeric uid:gid. systemd refuses a numeric User= that has no passwd entry (status=217/USER,
+# "Failed to determine user credentials: No such process"; the containers take the uid from their own user: setting and do not
+# need one), so the guest gets a system account with exactly that id: no login, no home.
+- name: The group the helper units run as
+  ansible.builtin.group:
+    name: hnx-media
+    gid: "{{ media_automation_gid | int }}"
+    system: true
+  when: media_automation_helper_account_manage | bool
+
+- name: The account the helper units run as (the apps' uid, no login, no home)
+  ansible.builtin.user:
+    name: hnx-media
+    uid: "{{ media_automation_uid | int }}"
+    group: hnx-media
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+  when: media_automation_helper_account_manage | bool
+
 - name: Create the helpers directory (root's, the scripts are code the units run)
   ansible.builtin.file:
     path: "{{ media_automation_helpers_dir }}"
