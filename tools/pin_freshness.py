@@ -163,10 +163,22 @@ SOURCES: dict[str, tuple[str, str]] = {
         "CybercentreCanada/assemblyline-docker-compose): compare that with the pin by hand, a release at "
         "least 14 days old",
     ),
-    "role:assemblyline/assemblyline_rust_image": ("none", "the same release as assemblyline_core_image (one tag for all five)"),
-    "role:assemblyline/assemblyline_ui_image": ("none", "the same release as assemblyline_core_image (one tag for all five)"),
-    "role:assemblyline/assemblyline_socketio_image": ("none", "the same release as assemblyline_core_image (one tag for all five)"),
-    "role:assemblyline/assemblyline_frontend_image": ("none", "the same release as assemblyline_core_image (one tag for all five)"),
+    "role:assemblyline/assemblyline_rust_image": (
+        "none",
+        "the same release as assemblyline_core_image (one tag for all five)",
+    ),
+    "role:assemblyline/assemblyline_ui_image": (
+        "none",
+        "the same release as assemblyline_core_image (one tag for all five)",
+    ),
+    "role:assemblyline/assemblyline_socketio_image": (
+        "none",
+        "the same release as assemblyline_core_image (one tag for all five)",
+    ),
+    "role:assemblyline/assemblyline_frontend_image": (
+        "none",
+        "the same release as assemblyline_core_image (one tag for all five)",
+    ),
     "role:assemblyline/assemblyline_elastic_image": (
         "none",
         "docker.elastic.co/elasticsearch: the version the release's compose repository pins (8.10.2 for "

@@ -114,6 +114,7 @@ capabilities:
   cap:graph-store: [read]  # the graph-store slot: a hypergraph of indicators and relationships queried over its API (an agent's query changes nothing unless it holds write rules, which are the site's)
   cap:case-management: [record-write]  # the case-management slot: incident cases, alerts and their notes written through the product's API (the stage-6 `cases` slot keeps the alert-to-case contract; this is the product's own case store)
   cap:enrichment: [read]  # the enrichment slot: a service that looks an observable up in public sources and answers (it changes nothing the lab holds)
+  cap:file-analysis: [record-write]  # the file-analysis slot: a file handed to the analysis stage (ADR-0052) is recorded there with its verdict and indicators; the stage has no egress, so a submission changes nothing outside it
   cap:feed-reader: [read]  # the feed-reader slot: subscribed feeds and their entries read through the Fever and Google Reader APIs
   cap:web-search: [read]  # the web-search slot: a metasearch service asked a query over HTTP; it reads the public web and changes nothing
   cap:threat-intel: [read]  # the threat-intel slot: events, attributes and feeds of a threat-intelligence platform read through its API with a per-user key
