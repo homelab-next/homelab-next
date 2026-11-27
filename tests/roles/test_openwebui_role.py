@@ -15,6 +15,7 @@ contributes), run on localhost against fakes (CI is unprivileged):
 
 from __future__ import annotations
 
+import hashlib
 import http.server
 import json
 import os
@@ -120,6 +121,20 @@ def test_main_renders_the_gateway_only_app_with_its_headers_and_sign_in(first):
     for value in (GW, SES, CLI, ADM):
         assert value not in r.stdout
     assert (tmp / "app" / "docker-compose.yml").read_text().count(GW) == 0
+
+
+def test_shim_off_renders_exactly_what_the_pre_shim_role_rendered(tmp_path):
+    """The digests were taken from the role's render before the shim existed (the temp directory
+    normalised to @TMP@): off must change nothing, byte for byte."""
+    r = run_role(tmp_path, ROLE, "main", vs(tmp_path), env=ENV)
+    assert r.returncode == 0, r.stdout + r.stderr
+    want = json.loads(
+        (ROOT / "tests" / "roles" / "golden" / "chat.shim-off.sha256.json").read_text()
+    )
+    compose = (tmp_path / "app" / "docker-compose.yml").read_text().replace(str(tmp_path), "@TMP@")
+    env = (tmp_path / "app" / "secrets" / "open-webui.env").read_text()
+    assert hashlib.sha256(compose.encode()).hexdigest() == want["docker-compose.yml"]
+    assert hashlib.sha256(env.encode()).hexdigest() == want["open-webui.env"]
 
 
 def test_a_second_run_changes_nothing(tmp_path):

@@ -41,6 +41,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -52,6 +53,8 @@ from typing import Any
 
 TLP_ORDER = ["clear", "green", "amber", "amber+strict", "red"]
 MODEL_CACHE_S = 30.0
+TAG_PATTERN = re.compile(r"^[A-Za-z0-9._:/-]{1,64}\Z")
+MAX_CONCURRENT = 16
 
 
 class ShimError(Exception):
@@ -84,7 +87,8 @@ def trim_history(messages: list[dict], budget_chars: int) -> tuple[list[dict], i
     system = [m for m in messages if m.get("role") == "system"]
     rest = [m for m in messages if m.get("role") != "system"]
     kept: list[dict] = []
-    used = 0
+    # the caller's own system messages count toward the budget (they always stay)
+    used = sum(len(message_text(m.get("content"))) for m in system)
     for m in reversed(rest):
         size = len(message_text(m.get("content")))
         if kept and used + size > budget_chars:
@@ -141,7 +145,8 @@ class Shim:
             with self._request("/v1/models", None, {}, 10) as r:
                 roles = {m["id"] for m in json.loads(r.read())["data"]}
         except (urllib.error.URLError, OSError, ValueError, KeyError):
-            return self._live[1]  # keep the last answer: a gateway blip must not empty the list
+            with self._lock:
+                return self._live[1]  # keep the last answer: a gateway blip must not empty the list
         with self._lock:
             self._live = (time.monotonic(), roles)
         return roles
@@ -197,7 +202,10 @@ class Shim:
         return format_passages(hits, ctx["ceiling"], ctx.get("max_passage_chars", 1500))
 
     def shape(self, body: dict, model: dict, role: str) -> dict:
-        msgs = [dict(m) for m in body.get("messages") or []]
+        raw = body.get("messages") or []
+        if not isinstance(raw, list) or not all(isinstance(m, dict) for m in raw):
+            raise ShimError(400, "messages must be a list of objects")
+        msgs = [dict(m) for m in raw]
         if (
             not msgs
             or msgs[-1].get("role") != "user"
@@ -230,29 +238,41 @@ class Shim:
             raise ShimError(
                 400, f"X-HNX-TLP {tlp!r} is above this front's ceiling {self.cfg['max_tlp']!r}"
             )
-        return {"X-HNX-TLP": tlp, "X-HNX-Tag": inbound.get("X-HNX-Tag") or self.cfg["default_tag"]}
+        default_tag = self.cfg["default_tag"]
+        tag = inbound.get("X-HNX-Tag") or ""
+        # a caller may add to the usage tag's prefix, never forge another one
+        if not (tag.startswith(default_tag) and TAG_PATTERN.match(tag)):
+            tag = default_tag
+        return {"X-HNX-TLP": tlp, "X-HNX-Tag": tag}
 
 
 def make_handler(shim: Shim):
+    slots = threading.BoundedSemaphore(int(shim.cfg.get("max_concurrent", MAX_CONCURRENT)))
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "hnx-concierge"
         protocol_version = "HTTP/1.1"
+        timeout = 30  # a stalled client frees its thread (the socket read timeout)
 
         def log_message(self, fmt: str, *args: Any) -> None:  # no prompt text in the log
             sys.stderr.write("{} {}\n".format(self.command, self.path.split("?")[0]))
 
-        def _json(self, status: int, doc: dict) -> None:
+        def _json(self, status: int, doc: dict, close: bool = False) -> None:
             data = json.dumps(doc).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
+            if close:
+                self.send_header("Connection", "close")
+                self.close_connection = True
             self.end_headers()
             self.wfile.write(data)
 
-        def _error(self, e: ShimError) -> None:
+        def _error(self, e: ShimError, close: bool = False) -> None:
             self._json(
                 e.status,
                 {"error": {"message": e.message, "type": "invalid_request_error", "code": e.code}},
+                close=close,
             )
 
         def do_GET(self) -> None:
@@ -282,17 +302,33 @@ def make_handler(shim: Shim):
                 self._error(e)
 
         def do_POST(self) -> None:
+            # every refusal before the body is read closes the connection: the unread body would
+            # otherwise be parsed as the next request on a kept-alive socket
+            if not slots.acquire(blocking=False):
+                return self._error(
+                    ShimError(503, "too many requests in flight", "overloaded"), True
+                )
+            body_read = False
             try:
                 shim.authorize(self.headers.get("Authorization"))
                 if self.path != "/v1/chat/completions":
                     raise ShimError(404, "not found", "not_found")
-                n = int(self.headers.get("Content-Length") or 0)
-                if n <= 0 or n > int(shim.cfg["max_body_bytes"]):
-                    raise ShimError(413 if n > 0 else 400, "request body missing or too large")
                 try:
-                    body = json.loads(self.rfile.read(n))
+                    n = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    raise ShimError(400, "invalid Content-Length") from None
+                if n <= 0:
+                    raise ShimError(400, "request body missing")
+                if n > int(shim.cfg["max_body_bytes"]):
+                    raise ShimError(413, "request body too large")
+                raw = self.rfile.read(n)
+                body_read = True
+                try:
+                    body = json.loads(raw)
                 except ValueError:
                     raise ShimError(400, "the body is not JSON") from None
+                if not isinstance(body, dict):
+                    raise ShimError(400, "the body must be a JSON object")
                 model, role = shim.resolve(str(body.get("model") or ""))
                 up_body = shim.shape(body, model, role)
                 headers = shim.upstream_headers(
@@ -303,7 +339,11 @@ def make_handler(shim: Shim):
                 )
                 self._forward(up_body, headers, bool(body.get("stream")), model["id"])
             except ShimError as e:
-                self._error(e)
+                self._error(e, close=not body_read)
+            except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                self.close_connection = True
+            finally:
+                slots.release()
 
         def _forward(self, up_body: dict, headers: dict, stream: bool, model_id: str) -> None:
             try:
@@ -311,9 +351,17 @@ def make_handler(shim: Shim):
                     "/v1/chat/completions", up_body, headers, float(shim.cfg["timeout_s"])
                 )
             except urllib.error.HTTPError as e:
-                # the gateway's own refusal (a limit, a ceiling, a role) is passed on as it is
-                data = e.read()
-                self.send_response(e.code)
+                with e:
+                    data = e.read()
+                    code = e.code
+                if code in (401, 403):
+                    # the shim's own gateway key is wrong: not the caller's fault, and not a message to pass on
+                    sys.stderr.write(f"gateway refused the shim's key ({code})\n")
+                    raise ShimError(
+                        502, "the gateway refused the shim's credentials", "upstream_auth_failed"
+                    ) from None
+                # any other refusal of the gateway's (a limit, a ceiling, a role) is passed on as it is
+                self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
@@ -323,20 +371,44 @@ def make_handler(shim: Shim):
                 raise ShimError(502, "the gateway did not answer", "upstream_unavailable") from None
             with resp:
                 if not stream:
-                    doc = json.loads(resp.read())
-                    doc["model"] = model_id
+                    try:
+                        doc = json.loads(resp.read())
+                        doc["model"] = model_id
+                    except (ValueError, TypeError):
+                        raise ShimError(
+                            502,
+                            "the gateway answered with something that is not JSON",
+                            "bad_upstream",
+                        ) from None
                     return self._json(200, doc)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Connection", "close")
                 self.end_headers()
-                for line in resp:  # SSE lines, passed through as they arrive
-                    self.wfile.write(line)
-                    self.wfile.flush()
                 self.close_connection = True
+                try:
+                    for line in resp:  # SSE lines, passed through as they arrive
+                        self.wfile.write(rewrite_sse_model(line, model_id))
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # the client went away; the upstream response closes with the `with`
 
     return Handler
+
+
+def rewrite_sse_model(line: bytes, model_id: str) -> bytes:
+    """A streamed chunk names the tier the caller asked for, not the gateway's role."""
+    if not line.startswith(b"data:") or b"[DONE]" in line:
+        return line
+    try:
+        doc = json.loads(line[5:])
+    except ValueError:
+        return line
+    if isinstance(doc, dict) and "model" in doc:
+        doc["model"] = model_id
+        return b"data: " + json.dumps(doc).encode() + b"\n"
+    return line
 
 
 def load(path: str) -> Shim:
@@ -369,7 +441,8 @@ def healthcheck(port: int) -> int:
 def main(argv: list[str]) -> int:
     path = os.environ.get("CONCIERGE_CONFIG", "/etc/concierge/config.json")
     if "--healthcheck" in argv:
-        return healthcheck(int(json.load(open(path))["port"]))
+        with open(path, encoding="utf-8") as f:
+            return healthcheck(int(json.load(f)["port"]))
     shim = load(path)
     server = ThreadingHTTPServer(
         (shim.cfg.get("bind", "0.0.0.0"), int(shim.cfg["port"])), make_handler(shim)

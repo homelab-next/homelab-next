@@ -44,7 +44,7 @@
           'default_tlp': openwebui_gateway_tlp, 'max_tlp': openwebui_gateway_tlp,
           'default_tag': openwebui_gateway_tag_prefix,
           'history_chars': openwebui_concierge_history_chars | int,
-          'max_body_bytes': 4000000, 'timeout_s': openwebui_concierge_timeout_s | int,
+          'max_body_bytes': (openwebui_concierge_history_chars | int) * 4, 'timeout_s': openwebui_concierge_timeout_s | int,
           'always_on_tier': openwebui_concierge_always_on_tier,
           'tiers': openwebui_concierge_tiers, 'models': openwebui_concierge_models,
           'persona': openwebui_concierge_persona}

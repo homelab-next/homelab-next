@@ -17,6 +17,7 @@ from __future__ import annotations
 import http.server
 import importlib.util
 import json
+import socket
 import threading
 import urllib.error
 import urllib.request
@@ -39,6 +40,10 @@ class _Fake(http.server.BaseHTTPRequestHandler):
     roles: ClassVar[list[str]] = ["main-reasoner"]
     refuse = False
     hits: ClassVar[list[dict]] = []
+    status: ClassVar[int] = 200
+    raw: ClassVar[bytes | None] = None
+    gate: ClassVar[threading.Event | None] = None
+    first_sent: ClassVar[threading.Event] = threading.Event()
 
     def log_message(self, *a):  # quiet
         pass
@@ -70,6 +75,24 @@ class _Fake(http.server.BaseHTTPRequestHandler):
                 "auth": self.headers["Authorization"],
             }
         )
+        if self.status != 200:
+            return self._send(self.status, {"error": {"message": "refused"}})
+        if self.raw is not None:
+            return self._send(200, self.raw)
+        if body.get("stream") and self.gate is not None:
+            # two chunks, the second only after the test saw the first: proves nothing is buffered
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(b'data: {"model":"main-reasoner","n":1}\n\n')
+            self.wfile.flush()
+            _Fake.first_sent.set()
+            self.gate.wait(10)
+            self.wfile.write(b'data: {"model":"main-reasoner","n":2}\n\ndata: [DONE]\n\n')
+            self.wfile.flush()
+            self.close_connection = True
+            return
         if self.refuse:
             return self._send(429, {"error": {"message": "rate limited"}})
         if body.get("stream"):
@@ -86,6 +109,8 @@ class _Fake(http.server.BaseHTTPRequestHandler):
 @pytest.fixture
 def stack(monkeypatch):
     _Fake.seen, _Fake.roles, _Fake.refuse, _Fake.hits = [], ["main-reasoner"], False, []
+    _Fake.status, _Fake.raw, _Fake.gate = 200, None, None
+    _Fake.first_sent = threading.Event()
     fake = http.server.ThreadingHTTPServer(("localhost", 0), _Fake)
     threading.Thread(target=fake.serve_forever, daemon=True).start()
     base = f"http://localhost:{fake.server_port}"
@@ -96,7 +121,7 @@ def stack(monkeypatch):
         "max_tlp": "amber",
         "default_tag": "chat-app",
         "history_chars": 100,
-        "max_body_bytes": 100000,
+        "max_body_bytes": 4000,
         "timeout_s": 10,
         "always_on_tier": "main",
         "tiers": {"fast": "fast", "main": "main-reasoner", "deep": "deep"},
@@ -232,3 +257,130 @@ def test_trim_history_keeps_system_and_the_last_message_even_over_budget():
     msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "x" * 500}]
     out, dropped = cs.trim_history(msgs, 10)
     assert out == msgs and dropped == 0
+
+
+# ----------------------------------------------------------------------------- hardening
+def raw_exchange(url, request: bytes) -> bytes:
+    host, port = url.removeprefix("http://").split(":")
+    with socket.create_connection((host, int(port)), timeout=10) as c:
+        c.sendall(request)
+        c.shutdown(socket.SHUT_WR)
+        out = b""
+        while chunk := c.recv(65536):
+            out += chunk
+    return out
+
+
+def post_raw(url, headers: dict, body: bytes = b"", path="/v1/chat/completions"):
+    h = {"Authorization": "Bearer " + TOKEN, **headers}
+    head = f"POST {path} HTTP/1.1\r\nHost: x\r\n" + "".join(f"{k}: {v}\r\n" for k, v in h.items())
+    return raw_exchange(url, head.encode() + b"\r\n" + body)
+
+
+def test_413_missing_body_and_malformed_length_are_fixed_400s_or_413(stack):
+    _, url = stack
+    assert post_raw(url, {"Content-Length": "10000000"}).startswith(b"HTTP/1.1 413")
+    assert post_raw(url, {"Content-Length": "0"}).startswith(b"HTTP/1.1 400")
+    assert post_raw(url, {}).startswith(b"HTTP/1.1 400")
+    out = post_raw(url, {"Content-Length": "abc"}, b"{}")
+    assert out.startswith(b"HTTP/1.1 400") and b"Traceback" not in out
+
+
+@pytest.mark.parametrize("body", [b"[1,2]", b'"x"', b"not json", b'{"model":"concierge","messages":[1]}',
+                                  b'{"model":"concierge","messages":"x"}'])  # fmt: skip
+def test_malformed_bodies_are_400_never_a_traceback(stack, body):
+    _, url = stack
+    out = post_raw(
+        url, {"Content-Length": str(len(body)), "Content-Type": "application/json"}, body
+    )
+    assert out.startswith(b"HTTP/1.1 400") and b"Traceback" not in out
+
+
+def test_a_refusal_before_the_body_is_read_closes_the_connection(stack):
+    _, url = stack
+    # a bad token on a wrong path, with a body that looks like a second request: it must not be run
+    smuggled = b"GET /v1/models HTTP/1.1\r\nHost: x\r\n\r\n"
+    out = post_raw(
+        url,
+        {"Content-Length": str(len(smuggled)), "Authorization": "Bearer wrong"},
+        smuggled,
+        path="/nope",
+    )
+    assert (
+        out.count(b"HTTP/1.1 ") == 1
+        and out.startswith(b"HTTP/1.1 401")
+        and b"Connection: close" in out
+    )
+    out = post_raw(url, {"Content-Length": str(len(smuggled))}, smuggled, path="/nope")
+    assert out.count(b"HTTP/1.1 ") == 1 and out.startswith(b"HTTP/1.1 404")
+
+
+def test_the_usage_tag_can_extend_the_prefix_but_not_forge_another(stack):
+    _, url = stack
+    for sent in ("chat-app:u1", "other:u1", "chat-app bad tag", "x" * 200, ""):
+        chat(url, headers={"X-HNX-Tag": sent} if sent else None)
+    tags = [s["tag"] for s in _Fake.seen if s["path"] == "chat"]
+    assert tags == ["chat-app:u1", "chat-app", "chat-app", "chat-app", "chat-app"]
+
+
+def test_system_messages_count_toward_the_history_budget(stack):
+    _, url = stack
+    msgs = [{"role": "system", "content": "S" * 90}]
+    msgs += [{"role": "user", "content": "a" * 40}, {"role": "assistant", "content": "b" * 40},
+             {"role": "user", "content": "last"}]  # fmt: skip
+    assert call(url, "/v1/chat/completions", {"model": "concierge", "messages": msgs})[0] == 200
+    sent = next(s for s in _Fake.seen if s["path"] == "chat")["body"]["messages"]
+    assert [m["content"] for m in sent if m["role"] != "system"] == ["last"]  # 90 + history > 100
+
+
+def test_a_gateway_auth_failure_is_a_502_not_a_wrong_token(stack):
+    _, url = stack
+    _Fake.status = 401
+    code, body = chat(url)
+    assert code == 502 and b"upstream_auth_failed" in body
+    _Fake.status = 403
+    assert chat(url)[0] == 502
+
+
+def test_a_non_json_upstream_200_is_a_502(stack):
+    _, url = stack
+    _Fake.raw = b"<html>oops</html>"
+    code, body = chat(url)
+    assert code == 502 and b"Traceback" not in body
+
+
+def test_streaming_is_incremental_and_names_the_tier(stack):
+    _, url = stack
+    _Fake.gate = threading.Event()
+    req = urllib.request.Request(
+        url + "/v1/chat/completions",
+        headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"},
+        data=json.dumps({"model": "concierge", "stream": True, "messages": [{"role": "user", "content": "hi"}]}).encode(),
+    )  # fmt: skip
+    with urllib.request.urlopen(req, timeout=10) as r:
+        first = r.readline()  # arrives while the gateway is still holding the second chunk back
+        assert not _Fake.gate.is_set() and b'"n": 1' in first
+        assert json.loads(first[5:])["model"] == "concierge"  # not the gateway's role name
+        _Fake.gate.set()
+        rest = r.read()
+    assert b'"n": 2' in rest and b'"model": "concierge"' in rest and b"[DONE]" in rest
+    assert b"main-reasoner" not in first + rest
+
+
+def test_too_many_requests_in_flight_is_a_503(stack):
+    shim, _ = stack
+    shim.cfg = {**shim.cfg, "max_concurrent": 1}
+    front = cs.ThreadingHTTPServer(("localhost", 0), cs.make_handler(shim))
+    front.daemon_threads = True
+    threading.Thread(target=front.serve_forever, daemon=True).start()
+    url = f"http://localhost:{front.server_port}"
+    _Fake.gate = threading.Event()
+    held = threading.Thread(target=lambda: call(url, "/v1/chat/completions",
+                                                {"model": "concierge", "stream": True,
+                                                 "messages": [{"role": "user", "content": "hi"}]}))  # fmt: skip
+    held.start()
+    assert _Fake.first_sent.wait(10)
+    assert chat(url)[0] == 503
+    _Fake.gate.set()
+    held.join(10)
+    front.shutdown()
