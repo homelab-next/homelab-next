@@ -177,6 +177,18 @@ def test_the_page_lists_pending_escaped_with_its_csp_and_no_script(served, broke
     assert "decisions are filed as <code>sso:operator</code>" in html
 
 
+def test_a_multi_line_text_param_is_shown_as_text_and_escaped(served, broker):
+    broker.rows[0]["params"] = {"name": "vp-1.md", "content": "line one\nline <b>two</b>\n"}
+    base, _ = served()
+    _, _, body = request(base, "/approvals", headers=APPROVER)
+    html = body.decode()
+    assert (
+        "<h4>param <code>content</code></h4><pre>line one\nline &lt;b&gt;two&lt;/b&gt;\n</pre>"
+        in html
+    )
+    assert "<b>two</b>" not in html and "vp-1.md" in html  # the short param stays in the JSON
+
+
 def test_a_viewer_sees_the_queue_without_forms(served, tmp_path):
     base, _ = served()
     status, _, body = request(base, "/approvals", headers=VIEWER)
