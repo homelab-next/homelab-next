@@ -66,9 +66,14 @@
 # that boots before the SIEM is up (a whole-host power cycle starts every guest at once) times out ONCE and stays failed
 # until someone restarts it (2026-11-26: 7 guests and the hypervisor). The drop-in retries every 30 s without a start limit,
 # so the agent joins as soon as the manager is reachable.
-- name: Name the agent unit and its drop-in directory
+# Two tasks, not one: a set_fact resolves all its values before defining any, so a value naming another
+# fact of the same task fails ("'siem_agent_unit' is undefined", 2026-11-28 on every guest).
+- name: Name the agent unit
   ansible.builtin.set_fact:
     siem_agent_unit: wazuh-agent
+
+- name: Name the agent unit's drop-in directory
+  ansible.builtin.set_fact:
     siem_agent_unit_dropin_dir: "/etc/systemd/system/{{ siem_agent_unit }}.service.d"
 
 - name: Create the agent unit's drop-in directory
@@ -93,6 +98,10 @@
       [Service]
       Restart=on-failure
       RestartSec=30
+      # A hard reset during a start leaves the vendor start script's lock directory behind, and every later start then
+      # waits on it until the unit times out (2026-11-28: hnx-idp-01, hnx-lake-01), so a retry alone never recovers.
+      # Removed only when no agent daemon runs; the lock is the vendor script's own, never one this role makes.
+      ExecStartPre=-/bin/sh -c 'ps -eo comm= | grep -q "^{{ siem_agent_unit.split('-')[0] }}-" || rm -rf -- /var/ossec/var/start-script-lock'
       TimeoutStartSec=120
   # the start task below reloads systemd (daemon_reload) before it starts the unit
 
