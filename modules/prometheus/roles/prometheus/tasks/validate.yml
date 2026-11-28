@@ -41,6 +41,7 @@
       - prometheus_alert_schedule in prometheus_alert_schedules
       - prometheus_alert_readonly_ignore is match(prometheus_alert_ignore_pattern)
       - prometheus_unreachable_after_minutes | int >= 1 and prometheus_unreachable_after_minutes | int <= 1440
+      - prometheus_alert_body_max_bytes | int >= 256 and prometheus_alert_body_max_bytes | int <= 4096
       - prometheus_heartbeat_topic == '' or prometheus_heartbeat_topic is match('^[A-Za-z0-9_-]{1,64}\Z')
       - prometheus_heartbeat_topic != prometheus_notify_topic
       - prometheus_heartbeat_every_minutes | int >= 1 and prometheus_heartbeat_every_minutes | int <= 60
