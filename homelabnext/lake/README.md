@@ -51,6 +51,30 @@ restarted, replayed a rotated log tail from the stale offset, duplicating every 
 3. If the tail is read again anyway (lost checkpoint, expired snapshots, different batching),
    rows whose content key (`uid`) already exist are skipped. Replay is idempotent.
 
+### Content-key lookup
+
+The content key is looked up over the **whole table** by default: a `uid` stored with another
+`time` (a re-emitted finding, an event re-delivered without a time of its own, which the log
+pipeline stamps with its receive time) is still found and skipped. Equal keys do not imply equal
+times in the shipped tables (the pipeline's `uid` is a digest of the event without its receive
+time), so no time range may bound that lookup unless the key itself holds the time column, where
+`IcebergLake` and `TrinoRestLake` bound it to the batch's range (exact).
+
+`TrinoRestLake`'s server-side guard (`INSERT ... WHERE NOT EXISTS`, which makes a re-sent
+statement append nothing) is bounded to **each statement's own** time range (its rows' min and max
+time, one second either side, as typed `TIMESTAMP ... UTC` literals), so the engine reads only those
+day partitions. That changes nothing a write can store: a replayed statement finds its own rows in
+its own range; a key stored at another time is the whole-table lookup's to find; the only other
+row the guard could catch is one a concurrent writer of the same table added in between, which
+the one-writer assumption already excludes. A statement with a row that has no time keeps the
+unbounded guard.
+
+`x-lake.dedupe_window_hours: N` (an integer >= 0, unset in every shipped schema) opts a table into
+a bounded lookup too: a key is looked for only among the stored rows whose time is within `N` hours
+of the batch's own range. That is **not** the same deduplication: a row whose `uid` is stored more
+than `N` hours away is appended a second time. Set it only for a table whose writers re-deliver
+within `N` hours (or never), and say so where it is set.
+
 A batch id is bound to the source that committed it (`errors.check_replay_source`, every
 adapter). A write is judged by the source it claims: its `expect_source` when given, else its
 `source`. It replays only a batch committed under exactly that source; one committed under

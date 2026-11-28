@@ -14,8 +14,10 @@ Who does what:
   1,000,000 by default), then record the batch id and the source's high-water mark as table
   properties through the REST catalog.  Each ``INSERT`` is guarded on the server too: it is
   ``INSERT INTO t SELECT * FROM (VALUES ...) AS v WHERE NOT EXISTS (SELECT 1 FROM t WHERE`` the
-  content key matches ``)``, so the same statement run twice (a coordinator that took a query
-  whose reply was lost, a client that sent it again) appends its rows once.  Every INSERT of a
+  content key matches`` and the time is within the statement's own range ``)``, so the same
+  statement run twice (a coordinator that took a query whose reply was lost, a client that sent it
+  again) appends its rows once, and the engine reads only the day partitions of that range, not
+  the whole table (``_inserts`` says why the bound changes nothing a write stores).  Every INSERT of a
   write carries the client tag ``hnx-batch:<digest of the batch id>``
   (:data:`.trino_http.CLIENT_TAGS`), so the engine's query history ties it to its batch;
 * **setup** (``ensure_tables``) creates the namespace and the pinned tables with the generated
@@ -50,6 +52,7 @@ import json
 import re
 import time
 from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .base import AdapterBase
@@ -74,10 +77,34 @@ KEY_CHUNK = 500
 MAX_QUERY_LENGTH = 900_000
 #: batch ledger entries kept per table (older ones are removed when a batch is recorded)
 LEDGER_SIZE = 1000
+#: the slack on each side of a statement's own time range in its NOT EXISTS guard.  The bounds
+#: are the very values the statement casts its rows from (timestamp(6) with time zone literals in
+#: UTC, compared as instants, so neither the session zone nor the day transform can move them):
+#: zero would be exact; one second is belt and braces and costs at most one more day partition.
+GUARD_MARGIN = timedelta(seconds=1)
+#: the longest timestamp literal (a four-digit year), reserved twice in every bounded statement
+_TS_LITERAL = len(literal(datetime(9999, 12, 31, 23, 59, 59, 999999, tzinfo=UTC)))
 _NS = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 #: setups already done in this process: (catalog root, Trino catalog, namespace, schemas digest).
 #: Only the constructor's ``ensure=True`` consults it; an explicit ``ensure_tables()`` always runs.
 _ENSURED: set[tuple[str, str, str, str]] = set()
+
+
+def _time_range(
+    s: TableSchema, rows: Iterable[Mapping[str, Any]], pad: timedelta
+) -> tuple[datetime, datetime] | None:
+    """``(lo, hi)``: the rows' own time range widened by ``pad`` on each side, or ``None`` (no
+    bound may be used) when the time column is not a timestamp, a row has no time, or the
+    widened range leaves the representable one."""
+    if s.column(s.time_column).type != "timestamp":
+        return None
+    times = [r.get(s.time_column) for r in rows]
+    if not times or not all(isinstance(t, datetime) for t in times):
+        return None
+    try:
+        return min(times) - pad, max(times) + pad
+    except OverflowError:
+        return None
 
 
 def _qi(name: str) -> str:
@@ -360,28 +387,52 @@ class TrinoRestLake(AdapterBase):
                 found.add(tuple(r[k] for k in s.key))
         return found
 
+    @staticmethod
+    def _lookup_range(
+        s: TableSchema, rows: list[dict[str, Any]]
+    ) -> tuple[datetime, datetime] | None:
+        """The time range the content-key lookups of ``rows`` may be bounded to, or ``None``
+        (the whole table).  Exact when the key holds the time column (equal keys, equal times);
+        otherwise only for a schema that opts in with ``x-lake.dedupe_window_hours``, which
+        accepts that a key stored more than that many hours outside the batch's own range is not
+        found (``homelabnext/lake/README.md``, "Content-key lookup")."""
+        if s.time_column in s.key:
+            return _time_range(s, rows, timedelta(0))
+        if s.dedupe_window_hours is not None:
+            return _time_range(s, rows, timedelta(hours=s.dedupe_window_hours))
+        return None
+
     def _key_lookups(self, s: TableSchema, rows: list[dict[str, Any]]) -> list[tuple[str, list]]:
         """The content-key lookups for ``rows``: at most ``KEY_CHUNK`` keys each, and each
-        query text (as sent) within ``max_query_length``, like the INSERTs."""
+        query text (as sent) within ``max_query_length``, like the INSERTs; bounded to
+        :meth:`_lookup_range` when there is one (its two bounds come first in each one's args)."""
         keys = sorted({content_key(s, r) for r in rows}, key=repr)
         cols = ", ".join(_qi(k) for k in s.key)
         head = f"SELECT {cols} FROM {self._fq(s.name)} WHERE "
+        bound = self._lookup_range(s, rows)
+        lead: list[Any] = []
+        close = ""
+        if bound is not None:
+            tc = _qi(s.time_column)
+            head += f"{tc} >= ? AND {tc} <= ? AND ("
+            lead, close = list(bound), ")"
         if len(s.key) == 1:
             one, sep = "?", ", "
             head += f"{_qi(s.key[0])} IN ("
 
             def text(n: int) -> str:
-                return head + ", ".join("?" for _ in range(n)) + ")"
+                return head + ", ".join("?" for _ in range(n)) + ")" + close
         else:
             one, sep = "(" + " AND ".join(f"{_qi(k)} = ?" for k in s.key) + ")", " OR "
 
             def text(n: int) -> str:
-                return head + sep.join(one for _ in range(n))
+                return head + sep.join(one for _ in range(n)) + close
 
-        base = len(execute_immediate(text(0), [None]))  # the frame and one spare separator
+        # the frame, the bounds and one spare separator
+        base = len(execute_immediate(text(0), [*lead, None]))
         per = len(one) + len(sep)
         out: list[tuple[str, list]] = []
-        n, args, size = 0, [], base
+        n, args, size = 0, list(lead), base
         for k in keys:
             cost = per + sum(len(literal(v)) + 2 for v in k)
             if base + cost > self.max_query_length:
@@ -391,7 +442,7 @@ class TrinoRestLake(AdapterBase):
                 )
             if n and (n >= KEY_CHUNK or size + cost > self.max_query_length):
                 out.append((text(n), args))
-                n, args, size = 0, [], base
+                n, args, size = 0, list(lead), base
             n, size = n + 1, size + cost
             args.extend(k)
         if n:
@@ -453,7 +504,9 @@ class TrinoRestLake(AdapterBase):
             query_id = res.query_id
             # the server's own count: a row the NOT EXISTS guard skipped was not written
             written += (
-                res.update_count if res.update_count is not None else len(args) // len(s.columns)
+                res.update_count
+                if res.update_count is not None
+                else (len(args) - (2 if sql.endswith(" <= ?)") else 0)) // len(s.columns)
             )
         snap_id = self._record(s, query_id, idempotency_key, source, high_water)
         return WriteResult(len(norm), written, len(norm) - written, False, snap_id)
@@ -462,19 +515,42 @@ class TrinoRestLake(AdapterBase):
         """``rows`` as guarded INSERT statements (``INSERT INTO t (cols) SELECT * FROM (VALUES
         ...) AS v (cols) WHERE NOT EXISTS`` a row of ``t`` with ``v``'s content key) whose query
         text (as sent: ``EXECUTE IMMEDIATE '<sql>' USING <literals>``) stays within
-        ``max_query_length``; refuses a row that alone exceeds it before anything is sent."""
+        ``max_query_length``; refuses a row that alone exceeds it before anything is sent.
+
+        Each statement's guard is also bounded to the statement's own time range (its rows'
+        min and max time, :data:`GUARD_MARGIN` either side, the last two args), so the engine
+        reads only those day partitions instead of the whole table.  That is the same guard: run
+        again, the statement finds its own rows, which lie in its own range, and appends nothing;
+        a key stored at another time is the client lookup's to find (``write_batch`` looks over
+        the whole table unless the schema opts out), and the guard's only other duty, a row a
+        concurrent writer added in between, is outside the one-writer assumption.  A statement
+        with a row whose time is missing keeps the unbounded guard."""
         cols = ", ".join(_qi(c.name) for c in s.columns)
         one = "(" + ", ".join(f"CAST(? AS {_trino_type(c)})" for c in s.columns) + ")"
         fq = self._fq(s.name)
         match = " AND ".join(f"{_qi('t')}.{_qi(k)} = {_qi('v')}.{_qi(k)}" for k in s.key)
+        tc = f"{_qi('t')}.{_qi(s.time_column)}"
         head = f"INSERT INTO {fq} ({cols}) SELECT * FROM (VALUES "
-        tail = (
+        guard = (
             f") AS {_qi('v')} ({cols}) WHERE NOT EXISTS"
-            f" (SELECT 1 FROM {fq} AS {_qi('t')} WHERE {match})"
+            f" (SELECT 1 FROM {fq} AS {_qi('t')} WHERE {match}"
         )
-        base = len(execute_immediate(head + tail, [None]))  # the frame, head, tail, one ", " spare
+        bounded, plain = guard + f" AND {tc} >= ? AND {tc} <= ?)", guard + ")"
+        # the frame, head, the longer tail, one ", " spare and the two longest bound literals
+        base = len(execute_immediate(head + bounded, [None])) + 2 * (_TS_LITERAL + 2)
         out: list[tuple[str, list[Any]]] = []
-        n, args, size = 0, [], base
+
+        def emit(chunk: list[dict[str, Any]], args: list[Any]) -> None:
+            values = ", ".join(one for _ in chunk)
+            bound = _time_range(s, chunk, GUARD_MARGIN)
+            if bound is None:
+                out.append((head + values + plain, args))
+            else:
+                out.append((head + values + bounded, [*args, *bound]))
+
+        chunk: list[dict[str, Any]] = []
+        args: list[Any] = []
+        size = base
         for r in rows:
             vals = [self._value(c, r[c.name]) for c in s.columns]
             # one more "(CAST(...), ...)" (with its ", ") in the quoted SQL, and its literals
@@ -484,13 +560,14 @@ class TrinoRestLake(AdapterBase):
                     f"a row of {s.name!r} needs {base + cost} characters of query text, more"
                     f" than max_query_length ({self.max_query_length})"
                 )
-            if n and size + cost > self.max_query_length:
-                out.append((head + ", ".join(one for _ in range(n)) + tail, args))
-                n, args, size = 0, [], base
-            n, size = n + 1, size + cost
+            if chunk and size + cost > self.max_query_length:
+                emit(chunk, args)
+                chunk, args, size = [], [], base
+            chunk.append(r)
+            size += cost
             args.extend(vals)
-        if n:
-            out.append((head + ", ".join(one for _ in range(n)) + tail, args))
+        if chunk:
+            emit(chunk, args)
         return out
 
     def _record(

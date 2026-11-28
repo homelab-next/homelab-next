@@ -13,7 +13,9 @@ One server answers both APIs the adapter speaks:
   snapshot whose summary carries ``trino_query_id`` and ``total-records``.  A plain ``INSERT ...
   VALUES`` appends every row, as the engine does (a duplicate content key included); the guarded form
   (``INSERT ... SELECT * FROM (VALUES ...) AS "v" (...) WHERE NOT EXISTS (...)`` matching the
-  content key) appends only the rows whose key is not yet in the table.  Each statement's
+  content key) appends only the rows whose key is not yet in the table, and a guard bounded to a
+  time range (``AND "t"."time" >= ? AND "t"."time" <= ?``, the last two literals) looks only at
+  the stored rows in that range, as a pruned scan does.  Each statement's
   client tags header is kept in ``client_tags``.
 * the Iceberg REST catalog under ``/catalog/v1``: config (prefix), namespace and table listing
   with paging, table metadata (schema in Iceberg JSON with Trino's nullability: nested fields optional) and
@@ -389,12 +391,18 @@ class FakeLab:
             return self._insert(*ins, args, qid)
         return self._select(ns, sql, args)
 
-    def _insert(self, ns, t, cols, guarded, args, qid):
+    def _insert(self, ns, t, cols, guarded, bounded, args, qid):
         schema = self.schemas[t]
         names = [c.strip().strip('"') for c in cols.split(",")]
         assert names == list(schema.column_names)
         if guarded is not None:  # the NOT EXISTS must match on exactly the content key
             assert guarded == list(schema.key), guarded
+        bound = None
+        if bounded is not None:  # ... and be bounded on the time column only
+            assert bounded == schema.time_column, bounded
+            *args, lo, hi = args
+            assert isinstance(lo, datetime) and isinstance(hi, datetime), (lo, hi)
+            bound = (_ts_text(lo), _ts_text(hi))
 
         def unrow(c, v):
             if v is None:
@@ -410,7 +418,7 @@ class FakeLab:
             )
         lake = self._lake(ns)
         if guarded is not None:
-            rows = [r for r in rows if not lake._exists(schema, tuple(r[k] for k in schema.key))]
+            rows = [r for r in rows if not _guard_hit(lake, schema, r, bound)]
         lake._db.execute("BEGIN IMMEDIATE")
         try:  # straight into the table: an engine's INSERT checks no key
             for r in normalize_rows(schema, rows):
@@ -613,21 +621,35 @@ def _target(head):
     return names[1], names[2], cols
 
 
+def _guard_hit(lake, schema, row, bound):
+    """Whether the guard finds ``row``'s content key among the stored rows (in ``bound``, the
+    time range as stored text, when the guard has one)."""
+    key = tuple(row[k] for k in schema.key)
+    if bound is None:
+        return lake._exists(schema, key)
+    where = " AND ".join(f'"{k}" = ?' for k in schema.key)
+    vals = [_ts_text(v) if isinstance(v, datetime) else v for v in key]
+    tc = schema.time_column
+    sql = f'SELECT 1 FROM "{schema.name}" WHERE {where} AND "{tc}" >= ? AND "{tc}" <= ? LIMIT 1'
+    return lake._db.execute(sql, [*vals, *bound]).fetchone() is not None
+
+
 def _parse_insert(sql):
-    """(namespace, table, column list, None) of `INSERT INTO "c"."ns"."t" (cols) VALUES ...`,
-    else None.
+    """(namespace, table, column list, None, None) of `INSERT INTO "c"."ns"."t" (cols) VALUES
+    ...`, else None.
 
     Plain string splitting rather than a regex, so the stand-in's parse is linear on any input.
     """
     head, sep, _ = sql.partition(") VALUES ")
     found = _target(head) if sep else None
-    return None if found is None else (*found, None)
+    return None if found is None else (*found, None, None)
 
 
 def _parse_guarded_insert(sql):
-    """(namespace, table, column list, key columns) of `INSERT INTO "c"."ns"."t" (cols) SELECT *
-    FROM (VALUES ...) AS "v" (cols) WHERE NOT EXISTS (SELECT 1 FROM "c"."ns"."t" AS "t" WHERE
-    "t"."k" = "v"."k" AND ...)`, else None."""
+    """(namespace, table, column list, key columns, bound column or None) of `INSERT INTO
+    "c"."ns"."t" (cols) SELECT * FROM (VALUES ...) AS "v" (cols) WHERE NOT EXISTS (SELECT 1 FROM
+    "c"."ns"."t" AS "t" WHERE "t"."k" = "v"."k" AND ... [AND "t"."tc" >= ? AND "t"."tc" <= ?])`,
+    else None."""
     head, sep, rest = sql.partition(") SELECT * FROM (VALUES ")
     found = _target(head) if sep else None
     if found is None:
@@ -638,10 +660,16 @@ def _parse_guarded_insert(sql):
     target, sep, match = guard[:-1].partition(' AS "t" WHERE ')
     if not sep or target != head[len("INSERT INTO ") :].partition(" (")[0]:
         return None
-    keys = []
-    for cond in match.split(" AND "):
+    keys, bounded = [], None
+    conds = match.split(" AND ")
+    if len(conds) >= 3 and conds[-2].endswith(" >= ?") and conds[-1].endswith(" <= ?"):
+        lo, hi = conds[-2][: -len(" >= ?")], conds[-1][: -len(" <= ?")]
+        if lo != hi or not lo.startswith('"t"."') or not lo.endswith('"'):
+            return None
+        bounded, conds = lo[len('"t".') :].strip('"'), conds[:-2]
+    for cond in conds:
         left, sep, right = cond.partition(" = ")
         if not sep or not left.startswith('"t".') or left[len('"t".') :] != right[len('"v".') :]:
             return None
         keys.append(left[len('"t".') :].strip('"'))
-    return (*found, keys)
+    return (*found, keys, bounded)
