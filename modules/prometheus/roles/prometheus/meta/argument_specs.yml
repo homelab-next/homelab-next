@@ -390,6 +390,10 @@ argument_specs:
         type: int
         description: "Minutes of failed asks in a row before the metrics service is alerted as unreachable."
         default: 5
+      prometheus_alert_body_max_bytes: &alert_body_max_bytes
+        type: int
+        description: "Most UTF-8 bytes of one alert post (the notify service refuses over 4096); over it the body keeps new critical FIRING first, then FIRING, RESOLVED, still-firing, and ends '... and N more'. 256 to 4096."
+        default: 4000
       prometheus_notify_test_on_change: &notify_test_on_change
         type: bool
         description: "Send one test message at deploy when the channel changed; fail the play if it does not deliver."
@@ -514,6 +518,7 @@ argument_specs:
       prometheus_heartbeat_allow_unresolved: *heartbeat_unresolved
       prometheus_alert_schedule: *alert_schedule
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
+      prometheus_alert_body_max_bytes: *alert_body_max_bytes
       prometheus_state_dir: *state_dir
       prometheus_last_run_dir: *last_run_dir
       prometheus_last_run_group: *last_run_group
@@ -615,6 +620,7 @@ argument_specs:
       prometheus_heartbeat_allow_unresolved: *heartbeat_unresolved
       prometheus_alert_schedule: *alert_schedule
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
+      prometheus_alert_body_max_bytes: *alert_body_max_bytes
       prometheus_state_dir: *state_dir
       prometheus_last_run_dir: *last_run_dir
       prometheus_last_run_group: *last_run_group
@@ -714,6 +720,7 @@ argument_specs:
       prometheus_heartbeat_allow_unresolved: *heartbeat_unresolved
       prometheus_alert_schedule: *alert_schedule
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
+      prometheus_alert_body_max_bytes: *alert_body_max_bytes
       prometheus_state_dir: *state_dir
       prometheus_last_run_dir: *last_run_dir
       prometheus_last_run_group: *last_run_group
@@ -818,6 +825,7 @@ argument_specs:
       prometheus_heartbeat_allow_unresolved: *heartbeat_unresolved
       prometheus_alert_schedule: *alert_schedule
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
+      prometheus_alert_body_max_bytes: *alert_body_max_bytes
       prometheus_state_dir: *state_dir
       prometheus_last_run_dir: *last_run_dir
       prometheus_last_run_group: *last_run_group

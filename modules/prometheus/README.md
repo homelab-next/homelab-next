@@ -84,6 +84,9 @@ names a real host, address, VM id or secret value; those live only in the privat
   (an alert manager) is run: this is one rule set and one channel. **It also covers the case the
   service cannot cover itself**: when the service cannot be asked for
   `prometheus_unreachable_after_minutes` in a row, that is posted once, and so is its recovery.
+  **The post is size-capped** (`prometheus_alert_body_max_bytes`, default 4000 bytes; the notify service answers HTTP 400 over 4096):
+  over the cap the body keeps the recovery line, new FIRING (critical first), RESOLVED, then the still-firing
+  summary, and ends `... and N more (see Prometheus /alerts)`.
 - **Who watches the watcher.** The service cannot page about itself, and the forwarder runs on
   the same guest, so three things look from outside or at the forwarder: (1) the forwarder alerts
   once if the service cannot be asked, and on its recovery; (2) every forwarder run writes the

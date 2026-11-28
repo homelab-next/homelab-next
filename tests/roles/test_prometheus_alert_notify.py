@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import re
 import socket
 import socketserver
 import subprocess
@@ -123,6 +124,7 @@ def env(tmp_path):
             "prometheus_alert_interval_seconds": 60,
             "prometheus_heartbeat_topic": "",
             "prometheus_heartbeat_every_minutes": 5,
+            "prometheus_alert_body_max_bytes": 4000,
         }
         values.update(over)
         e = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
@@ -375,3 +377,59 @@ def test_a_failed_heartbeat_is_owed_and_exits_2_without_losing_the_alert_state(
     assert not (tmp_path / "state" / "heartbeat.json").exists()  # owed: tried again next run
     notify.post = 200
     assert run(script).returncode == 0 and (tmp_path / "state" / "heartbeat.json").exists()
+
+
+def test_a_storm_of_60_alerts_is_capped_critical_first_with_a_correct_more_line(
+    tmp_path, env, servers
+):
+    alerts = [
+        alert(f"Warn{i:02d}", severity="warning", summary="w" * 100 + f" {i:02d}")
+        for i in range(45)
+    ]
+    alerts += [
+        alert(f"Crit{i:02d}", severity="critical", summary="c" * 100 + f" {i:02d}")
+        for i in range(15)
+    ]
+    metrics, notify = servers(alerts=alerts), servers()
+    assert run(env(metrics, notify)).returncode == 0
+    ((_m, _p, headers, body),) = notify.posts
+    assert len(body.encode("utf-8")) <= 4000 and headers["Priority"] == "4"
+    lines = body.split("\n")
+    shown = [ln for ln in lines if ln.startswith("FIRING")]
+    assert all("c" * 100 in ln for ln in shown[:15])  # every critical line, before any warning
+    assert not any("c" * 100 in ln for ln in shown[15:])
+    m = re.fullmatch(r"\.\.\. and (\d+) more \(see Prometheus /alerts\)", lines[-1])
+    assert m and int(m.group(1)) == 60 - len(shown) > 0
+
+
+def test_a_small_set_is_posted_unchanged(tmp_path, env, servers):
+    metrics = servers(alerts=[alert("A"), alert("B", instance="b")])
+    notify = servers()
+    script = env(metrics, notify)
+    assert run(script).returncode == 0
+    assert notify.posts[0][3] == "FIRING A on a\nFIRING B on b"
+    metrics.alerts = [alert("B", instance="b"), alert("C", instance="c")]
+    assert run(script).returncode == 0
+    assert notify.posts[1][3] == "FIRING C on c\nRESOLVED A on a\nStill firing: B on b"
+
+
+def test_the_cut_order_and_a_multibyte_body_never_split_a_character(tmp_path, env, servers):
+    import importlib.util
+
+    metrics, notify = servers(alerts=[]), servers()
+    script = env(metrics, notify, prometheus_alert_body_max_bytes=300)
+    spec = importlib.util.spec_from_file_location("fwd", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    firing = {f"N{i}": ("warning", f"\u00e9\u4e2d{i} " + "\u00e9" * 20) for i in range(30)}
+    alerted = {"G1": "gone one", "S1": "still one"}
+    firing["S1"] = ("warning", "still one")
+    _t, body, _p = mod.message(firing, alerted, True)
+    raw = body.encode("utf-8")
+    assert len(raw) <= 300 and raw.decode("utf-8") == body
+    assert body.startswith("The metrics service answers again.\nFIRING ")
+    assert "RESOLVED" not in body and re.search(r"\.\.\. and \d+ more", body)
+    # a limit smaller than one line: the byte cut of last resort stays valid UTF-8
+    mod.BODY_MAX = 7
+    _t, tiny, _p = mod.message({"N": ("warning", "\u00e9" * 20)}, {}, False)
+    assert len(tiny.encode("utf-8")) <= 7

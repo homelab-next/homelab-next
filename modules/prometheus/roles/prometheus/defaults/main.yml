@@ -79,6 +79,10 @@ prometheus_heartbeat_allow_unresolved: false
 # unreachable counter can never disagree with the timer.
 prometheus_alert_schedule: "*-*-* *:*:00 UTC"
 prometheus_unreachable_after_minutes: 5
+# The most UTF-8 bytes one alert post may carry. The notify service refuses a larger body (HTTP 400 "attachments not
+# allowed", limit 4096), so during an alert storm nothing would page. Over the limit, the body keeps the
+# recovery line, new FIRING (critical first), RESOLVED, then the still-firing summary, and ends "... and N more".
+prometheus_alert_body_max_bytes: 4000
 # Run the forwarder's --test (one low-priority message through the real send path) once at deploy
 # when the channel changed, failing the play with the script's error (LL-567). Skipped in --check.
 prometheus_notify_test_on_change: true

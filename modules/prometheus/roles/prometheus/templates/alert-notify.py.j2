@@ -40,6 +40,7 @@ LAB = {{ prometheus_logical_id | to_json }}
 HEARTBEAT_TOPIC = {{ prometheus_heartbeat_topic | to_json }}
 HEARTBEAT_EVERY = {{ (prometheus_heartbeat_every_minutes | int) * 60 }}
 UNREACHABLE_AFTER = {{ ((prometheus_unreachable_after_minutes | int * 60) // (prometheus_alert_interval_seconds | int)) | int }}
+BODY_MAX = {{ prometheus_alert_body_max_bytes | int }}  # the notify service answers HTTP 400 to a body over 4096 bytes (no attachments)
 STATE = os.path.join(STATE_DIR, "alert-state.json")
 SEND_STATUS = os.path.join(STATE_DIR, "send-status.json")
 HEARTBEAT = os.path.join(STATE_DIR, "heartbeat.json")
@@ -206,24 +207,57 @@ def load_state():
     return alerted, misses if isinstance(misses, int) else 0, prev.get("unreachable_posted") is True
 
 
+def fit(items, limit):
+    """The text of the item lines (each (section, line); the "still firing" ones share one
+    "Still firing: a; b" line), in priority order, kept to at most `limit` UTF-8 bytes.  What does
+    not fit is replaced by a last line saying how many were left out; the cut is always at a line
+    (or alert) boundary, and the byte cut of last resort never splits a character."""
+
+    def render(kept):
+        lines = [line for sec, line in kept if sec != "still"]
+        still = [line for sec, line in kept if sec == "still"]
+        if still:
+            lines.append("Still firing: " + "; ".join(still))
+        return "\n".join(lines)
+
+    def size(text):
+        return len(text.encode("utf-8"))
+
+    full = render(items)
+    if size(full) <= limit:
+        return full
+    more = f"... and {len(items)} more (see Prometheus /alerts)"
+    room = limit - size("\n" + more)
+    kept = []
+    for item in items:
+        if size(render(kept + [item])) > room:
+            break
+        kept.append(item)
+    left = len(items) - len(kept)
+    tail = f"... and {left} more (see Prometheus /alerts)"
+    text = "\n".join(part for part in (render(kept), tail) if part)
+    return text.encode("utf-8")[:limit].decode("utf-8", "ignore")
+
+
 def message(firing, alerted, recovered):
     new = sorted(set(firing) - set(alerted))
+    new.sort(key=lambda k: firing[k][0] != "critical")  # critical first (stable: still by key)
     gone = sorted(set(alerted) - set(firing))
     names = sorted({k.split("|")[0] for k in firing})
     if firing:
         title = f"{len(firing)} alert(s) firing on {LAB}: {', '.join(names)}"
     else:
         title = f"alerts cleared on {LAB}"
-    lines = []
+    # priority order when the body must be cut: the recovery line, new alerts (critical first),
+    # resolved ones, then the still-firing summary
+    items = []
     if recovered:
-        lines.append("The metrics service answers again.")
-    lines += [f"FIRING {firing[k][1]}" for k in new]
-    lines += [f"RESOLVED {alerted[k]}" for k in gone]
-    still = sorted(set(firing) & set(alerted))
-    if still:
-        lines.append("Still firing: " + "; ".join(firing[k][1] for k in still))
+        items.append(("head", "The metrics service answers again."))
+    items += [("new", f"FIRING {firing[k][1]}") for k in new]
+    items += [("gone", f"RESOLVED {alerted[k]}") for k in gone]
+    items += [("still", firing[k][1]) for k in sorted(set(firing) & set(alerted))]
     critical = any(firing[k][0] == "critical" for k in new)
-    return title[:200], "\n".join(lines), (CRITICAL if critical else PRIORITY)
+    return title[:200], fit(items, BODY_MAX), (CRITICAL if critical else PRIORITY)
 
 
 def main():
