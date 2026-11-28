@@ -60,6 +60,10 @@ class TableSchema:
     key: tuple[str, ...]
     time_column: str
     partition: str  # e.g. "day(time)"
+    #: ``x-lake.dedupe_window_hours``: when set, a write looks for a row's content key only among
+    #: the stored rows whose time is within this many hours of the batch's own time range (opt-in,
+    #: default unset = the whole table; see ``homelabnext/lake/README.md``, "Content-key lookup")
+    dedupe_window_hours: int | None = None
 
     @property
     def labelled(self) -> bool:
@@ -125,6 +129,9 @@ def schema_from_json(doc: Mapping[str, Any]) -> TableSchema:
     tcol = meta["time_column"]
     if tcol not in names:
         raise LakeError(f"{doc['$id']}: x-lake.time_column is not a column")
+    window = meta.get("dedupe_window_hours")
+    if window is not None and (type(window) is not int or window < 0):
+        raise LakeError(f"{doc['$id']}: x-lake.dedupe_window_hours must be an integer >= 0")
     return TableSchema(
         name=meta["table"],
         schema_id=doc["$id"],
@@ -134,6 +141,7 @@ def schema_from_json(doc: Mapping[str, Any]) -> TableSchema:
         key=key,
         time_column=tcol,
         partition=meta["partition"],
+        dedupe_window_hours=window,
     )
 
 

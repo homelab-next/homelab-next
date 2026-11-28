@@ -30,7 +30,8 @@ Conventions
   (`timestamp`, UTC, microseconds), arrays of scalars (`list<...>`).
 * The `x-lake` block carries what JSON Schema cannot: `table`, `key` (the **content key**, `uid`,
   used for idempotent replay), `time_column`, `partition` (`day(time)`), `ocsf_class_uid`,
-  `ocsf_version`.
+  `ocsf_version`, and the optional `dedupe_window_hours` (unset in every shipped schema: see
+  `homelabnext/lake/README.md`, "Content-key lookup").
 * `tlp` (1.1) is the row's TLP 2.0 label (ADR-0033 decision 5), a top-level string column limited
   to the five canonical spellings. It labels the **row**, set by the writer from the source's
   declaration; it is not OCSF's `osint.tlp`, which is the label an intelligence source gave one

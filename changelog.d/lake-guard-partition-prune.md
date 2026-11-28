@@ -1,0 +1,4 @@
+---
+group: Changed
+---
+The lake's query-engine adapter (`TrinoRestLake`) bounds each INSERT's `NOT EXISTS` content-key guard to that statement's own time range (its rows' min and max time, one second either side, as typed timestamp literals), so the engine reads only those day partitions instead of the whole target table on every statement; a commit's cost no longer grows with the table. The guard keeps its meaning (a re-sent statement appends nothing; a statement with a row without a time keeps the unbounded guard) and the write's client-side content-key lookup stays over the whole table, so nothing a write stores changes. A table may opt into a bounded lookup too with `x-lake.dedupe_window_hours` (unset in every shipped schema; a key stored further away is then appended again), and a key that holds the time column is bounded exactly, as in `IcebergLake`.
