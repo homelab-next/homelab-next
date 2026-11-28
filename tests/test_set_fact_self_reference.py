@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A set_fact resolves every value before it defines any key, so a value that names another key of the
 same task fails at run time ("'x' is undefined"). 2026-11-28 the wazuh_agent drop-in task did exactly
 that and the whole baseline failed on every guest; nothing caught it before a deploy."""
@@ -48,5 +49,7 @@ def test_no_set_fact_value_names_a_key_of_the_same_task():
                     if re.search(r"\{\{[^}]*\b" + re.escape(other) + r"\b", text) or re.search(
                         r"\{%[^%]*\b" + re.escape(other) + r"\b", text
                     ):
-                        bad.append(f"{path.relative_to(ROOT)}: {task.get('name', '?')}: {key} uses {other}")
+                        bad.append(
+                            f"{path.relative_to(ROOT)}: {task.get('name', '?')}: {key} uses {other}"
+                        )
     assert not bad, "set_fact values naming a key of the same task:\n" + "\n".join(bad)
