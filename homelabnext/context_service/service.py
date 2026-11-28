@@ -48,6 +48,7 @@ from homelabnext.context.model import Document
 from homelabnext.state import atomic_write_text
 
 from .config import Caller, Config
+from .docsource import collect_documents
 from .sources import Collected, SourceError, collect, sync
 
 __all__ = ["ContextService", "ReindexBusy", "make_judge", "make_store"]
@@ -144,6 +145,8 @@ class ContextService:
         self._locked = _Locked(self._store, self._lock)
         self._judge = judge if judge is not None else make_judge(cfg, self._env)
         self._runner = runner
+        #: test seam: ``{"opener": ...}`` stands in for the network of a documents source
+        self._doc_kw: dict[str, Any] = {}
         self._clock = clock
         self.monotonic = monotonic
         self._ids: set[str] = set()
@@ -197,6 +200,20 @@ class ContextService:
         self._relabel_dropped = 0
         try:
             for s in self.cfg.sources:
+                if s.type == "documents":
+                    if not fetch:
+                        # the documents stay in the store: there is no copy on disk to index
+                        raise SourceError(
+                            f"source {s.name}: a documents source has no copy on disk"
+                        )
+                    dgot = collect_documents(s, self._env, **self._doc_kw)
+                    collected.extend(dgot.documents)
+                    report["sources"][s.name] = {
+                        "type": "documents",
+                        "documents": len(dgot.documents),
+                        "skipped": dgot.skipped,
+                    }
+                    continue
                 if fetch:
                     kw: dict[str, Any] = {
                         "env": self._env,

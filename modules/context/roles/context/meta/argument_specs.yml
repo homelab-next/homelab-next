@@ -57,8 +57,11 @@ argument_specs:
         default: 61013
       context_sources:
         type: list
-        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
-          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        description: 'The sources: git ones {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?}, and documents ones {name, type:
+          documents, service, tags, kind, tlp, credential, credential_scheme?, host_header?, ca_file?, page_size?,
+          max_doc_bytes?, timeout?, max_documents?}: the document store read through its API, by tag
+          (README.md, "Sources").'
         elements: dict
         default: []
       context_callers:
@@ -233,8 +236,11 @@ argument_specs:
         default: 61013
       context_sources:
         type: list
-        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
-          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        description: 'The sources: git ones {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?}, and documents ones {name, type:
+          documents, service, tags, kind, tlp, credential, credential_scheme?, host_header?, ca_file?, page_size?,
+          max_doc_bytes?, timeout?, max_documents?}: the document store read through its API, by tag
+          (README.md, "Sources").'
         elements: dict
         default: []
       context_callers:
@@ -408,8 +414,11 @@ argument_specs:
         default: 61013
       context_sources:
         type: list
-        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
-          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        description: 'The sources: git ones {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?}, and documents ones {name, type:
+          documents, service, tags, kind, tlp, credential, credential_scheme?, host_header?, ca_file?, page_size?,
+          max_doc_bytes?, timeout?, max_documents?}: the document store read through its API, by tag
+          (README.md, "Sources").'
         elements: dict
         default: []
       context_callers:
@@ -583,8 +592,11 @@ argument_specs:
         default: 61013
       context_sources:
         type: list
-        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
-          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        description: 'The sources: git ones {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?}, and documents ones {name, type:
+          documents, service, tags, kind, tlp, credential, credential_scheme?, host_header?, ca_file?, page_size?,
+          max_doc_bytes?, timeout?, max_documents?}: the document store read through its API, by tag
+          (README.md, "Sources").'
         elements: dict
         default: []
       context_callers:
@@ -757,8 +769,11 @@ argument_specs:
         default: 61013
       context_sources:
         type: list
-        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
-          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        description: 'The sources: git ones {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?}, and documents ones {name, type:
+          documents, service, tags, kind, tlp, credential, credential_scheme?, host_header?, ca_file?, page_size?,
+          max_doc_bytes?, timeout?, max_documents?}: the document store read through its API, by tag
+          (README.md, "Sources").'
         elements: dict
         default: []
       context_callers:
@@ -931,8 +946,11 @@ argument_specs:
         default: 61013
       context_sources:
         type: list
-        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
-          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        description: 'The sources: git ones {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?}, and documents ones {name, type:
+          documents, service, tags, kind, tlp, credential, credential_scheme?, host_header?, ca_file?, page_size?,
+          max_doc_bytes?, timeout?, max_documents?}: the document store read through its API, by tag
+          (README.md, "Sources").'
         elements: dict
         default: []
       context_callers:
@@ -1105,8 +1123,11 @@ argument_specs:
         default: 61013
       context_sources:
         type: list
-        description: 'The git sources: {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
-          title_field?, honour_item_labels?, credential?, credential_scheme?} (README.md, "Sources").'
+        description: 'The sources: git ones {name, url, ref, kind, tlp, paths, format?, records_key?, id_field?,
+          title_field?, honour_item_labels?, credential?, credential_scheme?}, and documents ones {name, type:
+          documents, service, tags, kind, tlp, credential, credential_scheme?, host_header?, ca_file?, page_size?,
+          max_doc_bytes?, timeout?, max_documents?}: the document store read through its API, by tag
+          (README.md, "Sources").'
         elements: dict
         default: []
       context_callers:

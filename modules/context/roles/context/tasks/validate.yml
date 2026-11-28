@@ -55,10 +55,11 @@
     fail_msg: "context: context_sources lists 1 to 64 sources with distinct names (README.md, \"Sources\")"
   tags: [health, backup, restore, export, upgrade, readiness]
 
-- name: Validate each source
+- name: Validate each git source
   ansible.builtin.assert:
     that:
       - item is mapping
+      - item.type | default('git') == 'git'
       - item.keys() | difference(['name', 'url', 'ref', 'kind', 'tlp', 'paths', 'format', 'records_key', 'id_field', 'title_field', 'honour_item_labels', 'credential', 'credential_scheme', 'max_documents']) | list | length == 0
       - item.name | default('') is match('^[a-z][a-z0-9-]{0,39}\Z')
       - >-
@@ -77,13 +78,49 @@
       - item.credential_scheme | default('bearer') in ['bearer', 'basic']
       - item.honour_item_labels | default(false) is boolean
     fail_msg: >-
-      context: source {{ item.name | default('?') }}: a name (a-z, 0-9, -), an https URL with no credential
+      context: git source {{ item.name | default('?') }}: a name (a-z, 0-9, -), an https URL with no credential
       in it (http only with context_allow_plain_http), a branch, tag or 40-hex commit, a kind, a TLP label
       ({{ context_tlp_labels | join(', ') }}), relative globs inside the repository, format files or
       yaml-records, a credential in the module's own secret namespace (context/; bearer or basic), and no other key
-  loop: "{{ context_sources }}"
+  loop: "{{ context_sources | rejectattr('type', 'defined') | list + context_sources | selectattr('type', 'defined') | selectattr('type', 'equalto', 'git') | list }}"
   loop_control:
     label: "{{ item.name | default('?') }}"
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Validate each documents source (the document store's API, indexed by tag; nothing is copied)
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.keys() | difference(['name', 'type', 'service', 'tags', 'kind', 'tlp', 'credential', 'credential_scheme', 'host_header', 'ca_file', 'page_size', 'max_doc_bytes', 'timeout', 'max_documents']) | list | length == 0
+      - item.name | default('') is match('^[a-z][a-z0-9-]{0,39}\Z')
+      - item.service | default('') is match(context_slug_pattern)
+      - item.tags | default([]) is sequence and item.tags | default([]) is not string
+      - item.tags | default([]) | length >= 1 and item.tags | default([]) | length <= 16
+      - item.tags | reject('match', '^[^\x00-\x1f\x7f]{1,128}\Z') | list | length == 0
+      - item.kind | default('') is match('^[a-z][a-z0-9-]{0,31}\Z')
+      - item.tlp | default('') in context_tlp_labels
+      - item.credential | default('') is match(context_store_ref_pattern) and item.credential.split(':', 1)[1].startswith('context/')
+      - item.credential_scheme | default('token') in ['token', 'bearer']
+      - item.host_header | default('') == '' or item.host_header is match('^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?\Z')
+      - item.ca_file | default('') == '' or item.ca_file is match(context_path_pattern)
+      - item.page_size | default(100) | int >= 1 and item.page_size | default(100) | int <= 1000
+      - item.max_doc_bytes | default(1000000) | int >= 1 and item.max_doc_bytes | default(1000000) | int <= 4000000
+      - item.timeout | default(30) | float >= 1 and item.timeout | default(30) | float <= 600
+    fail_msg: >-
+      context: documents source {{ item.name | default('?') }}: a name (a-z, 0-9, -), the document store's
+      registry id (service: the endpoint comes from the registry, never a host written here), 1 to 16
+      tags, a kind, a TLP label ({{ context_tlp_labels | join(', ') }}), a credential in the module's own
+      secret namespace (context/; scheme token or bearer) and only the documented keys
+  loop: "{{ context_sources | selectattr('type', 'defined') | selectattr('type', 'equalto', 'documents') | list }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Every source has a known type
+  ansible.builtin.assert:
+    that:
+      - context_sources | selectattr('type', 'defined') | map(attribute='type') | difference(['git', 'documents']) | list | length == 0
+    fail_msg: "context: a source's type is git (the default) or documents"
   tags: [health, backup, restore, export, upgrade, readiness]
 
 - name: Validate the callers and the canned query
