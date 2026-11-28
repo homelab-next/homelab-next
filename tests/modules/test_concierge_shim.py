@@ -384,3 +384,66 @@ def test_too_many_requests_in_flight_is_a_503(stack):
     _Fake.gate.set()
     held.join(10)
     front.shutdown()
+
+
+def test_scope_allowed_narrows_the_service_scope_and_never_widens_it():
+    svc = ["lab", "tax:", "yardi:kb/"]
+    assert cs.scope_allowed(svc, None) == svc and cs.scope_allowed(svc, []) == svc
+    assert cs.scope_allowed(svc, ["tax:library/"]) == ["tax:library/"]  # inside a namespace
+    assert cs.scope_allowed(svc, ["lab"]) == ["lab"]  # an exact id
+    # not covered: dropped (a "lab:" namespace is not the exact id "lab"; "yardi:" is wider than "yardi:kb/")
+    assert cs.scope_allowed(svc, ["secrets:", "yardi:", "lab:x"]) == []
+
+
+def _persona_model(shim, **over):
+    m = {
+        "id": "concierge-tax",
+        "tier": "main",
+        "persona": "You are the tax research assistant.",
+        "context": True,
+        "context_allowed": ["tax:library/"],
+        "context_top_k": 6,
+        "grounded": True,
+    }
+    m.update(over)
+    shim.models[m["id"]] = m
+    shim.cfg["models"].append(m)
+    shim.cfg["context"]["allowed"] = ["lab", "tax:"]
+
+
+def test_a_persona_model_has_its_own_prompt_and_its_own_retrieval_scope(stack):
+    shim, url = stack
+    _persona_model(shim)
+    _Fake.hits = [{"id": "tax:library/irc-469", "tlp": "amber", "content": "PASSIVEACTIVITY"}]
+    assert chat(url, model="concierge-tax", content="rental losses")[0] == 200
+    q = next(s for s in _Fake.seen if s["path"] == "query")["body"]
+    assert q["allowed"] == ["tax:library/"] and q["budget"] == 6
+    sent = next(s for s in _Fake.seen if s["path"] == "chat")["body"]
+    assert sent["model"] == "main-reasoner"  # the local tier's role: no other binding exists
+    text = json.dumps(sent["messages"])
+    assert "tax research assistant" in text and "You are the concierge." not in text
+    assert "PASSIVEACTIVITY" in text and "tax:library/irc-469" in text
+
+
+def test_a_grounded_persona_is_told_when_nothing_was_retrieved(stack):
+    shim, url = stack
+    _persona_model(shim)
+    _Fake.hits = []
+    assert chat(url, model="concierge-tax", content="rental losses")[0] == 200
+    text = json.dumps(next(s for s in _Fake.seen if s["path"] == "chat")["body"]["messages"])
+    assert "No passages were retrieved" in text
+    # an ungrounded model is not given the note
+    _Fake.seen.clear()
+    assert chat(url, content="hello")[0] == 200
+    assert "No passages were retrieved" not in json.dumps(
+        next(s for s in _Fake.seen if s["path"] == "chat")["body"]["messages"]
+    )
+
+
+def test_a_persona_scope_the_service_does_not_cover_reads_nothing(stack):
+    shim, url = stack
+    _persona_model(shim, context_allowed=["secrets:"])
+    _Fake.hits = [{"id": "x", "tlp": "amber", "content": "LEAK"}]
+    assert chat(url, model="concierge-tax")[0] == 200
+    assert not [s for s in _Fake.seen if s["path"] == "query"]  # never asked
+    assert "LEAK" not in json.dumps(next(s for s in _Fake.seen if s["path"] == "chat")["body"])

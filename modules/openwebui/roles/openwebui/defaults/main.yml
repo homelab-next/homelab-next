@@ -52,7 +52,12 @@ openwebui_concierge_port: 8900
 # (the main tier always), so fast and deep appear on their own when their roles exist.
 openwebui_concierge_tiers: {fast: fast, main: main-reasoner, deep: deep}
 openwebui_concierge_always_on_tier: main
-# the models Open WebUI shows: id, tier and (optional) persona/context overrides
+# the models Open WebUI shows: id, tier and (optional) persona/context overrides. A PERSONA is just another entry: its own
+# system prompt on an existing tier, e.g.
+#   - {id: concierge-tax, tier: main, persona: "<the prompt>", context: true, context_allowed: ["tax:"], grounded: true}
+# context_allowed narrows the service-wide scope below (never widens it, validated); grounded: when retrieval returns
+# nothing the model is told so and must not answer from memory; retrieval needs openwebui_concierge_context_id.
+# A persona's tier decides where its data goes: the tiers here map to local gateway roles only.
 openwebui_concierge_models:
   - {id: concierge-fast, tier: fast}
   - {id: concierge, tier: main}

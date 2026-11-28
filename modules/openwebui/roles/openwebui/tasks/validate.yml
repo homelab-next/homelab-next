@@ -54,6 +54,30 @@
       the namespaces the shim may read
   when: openwebui_concierge_enabled | bool
 
+- name: A model's own persona and retrieval scope are well formed and never wider than the service's
+  ansible.builtin.assert:
+    that:
+      - item.persona is not defined or item.persona is string
+      - item.context is not defined or item.context is boolean
+      - item.grounded is not defined or item.grounded is boolean
+      - item.context_top_k is not defined or (item.context_top_k | int >= 1 and item.context_top_k | int <= 20)
+      - item.context_allowed is not defined or (item.context_allowed is sequence and item.context_allowed is not string
+        and item.context_allowed | length > 0)
+      - item.context_allowed is not defined or (item.context_allowed | reject('string') | list | length == 0)
+      - (item.grounded | default(false)) is false or (item.context | default(false)) is true
+      - >-
+        item.context_allowed is not defined or
+        (item.context_allowed | reject('in', openwebui_concierge_context_allowed) | list
+         | select('match', '^(' ~ (openwebui_concierge_context_allowed | select('match', '.*[:/]$') | map('regex_escape') | join('|') or '(?!)') ~ ')') | list
+         | length) == (item.context_allowed | reject('in', openwebui_concierge_context_allowed) | list | length)
+    fail_msg: >-
+      openwebui: concierge model {{ item.id }}: persona is text, context and grounded are booleans, grounded needs
+      context, context_top_k is 1 to 20, and context_allowed is a non-empty list of namespaces each covered by
+      openwebui_concierge_context_allowed (a model narrows the service's scope, never widens it)
+  loop: "{{ openwebui_concierge_models }}"
+  loop_control: {label: "{{ item.id }}"}
+  when: openwebui_concierge_enabled | bool
+
 - name: This instance is the chat row, public at the address sign-in returns to
   ansible.builtin.assert:
     that:

@@ -29,6 +29,10 @@ Behaviour that matters (each has a test in tests/modules/test_concierge_shim.py)
   not allow (the gateway's key ceiling is the real bound).
 * Inbound ``Authorization: Bearer`` must match the shim token (the connection key Open WebUI holds);
   the gateway key is separate and never leaves the shim. Streaming is passed through unchanged.
+* A model may carry its own ``persona``, ``context`` (retrieval on), ``context_allowed`` (a narrower
+  namespace scope: entries the service-wide scope does not cover are ignored, so a model can narrow
+  retrieval, never widen it), ``context_top_k`` and ``grounded`` (when retrieval returns nothing the
+  model is told so and must not answer from memory as if it had read a source).
 * Retrieved passages are labelled with their source id and TLP, and are dropped (not sent to the
   model) when their label is above the configured ceiling.
 
@@ -112,6 +116,26 @@ def format_passages(hits: list[dict], ceiling: str, max_chars: int) -> str:
     return "\n\n".join(parts)
 
 
+NO_PASSAGES_NOTE = (
+    "No passages were retrieved for this question (nothing in the library matched, or the library is "
+    "not reachable). Do not answer from memory as though you had read a source: say plainly that the "
+    "library held nothing on it, and give at most general orientation labelled as unverified."
+)
+
+
+def scope_allowed(service_allowed: list[str], wanted: list[str] | None) -> list[str]:
+    """The namespaces a model may read: its own list, each entry kept only when the service-wide
+    scope covers it (the same id, or inside a namespace ending in ``:`` or ``/``). A model can narrow
+    the service's scope, never widen it. No list of its own: the service-wide scope."""
+    if not wanted:
+        return list(service_allowed)
+    return [
+        w
+        for w in wanted
+        if any(w == a or (a[-1:] in (":", "/") and w.startswith(a)) for a in service_allowed)
+    ]
+
+
 class Shim:
     def __init__(
         self, cfg: Mapping[str, Any], gateway_key: str, token: str, context_token: str = ""
@@ -176,14 +200,18 @@ class Shim:
             )
         return model, self.tiers[model["tier"]]
 
-    def retrieve(self, query: str) -> str:
+    def retrieve(self, query: str, model: Mapping[str, Any] | None = None) -> str:
         ctx = self.cfg.get("context") or {}
         if not ctx.get("url") or not query.strip():
             return ""
+        model = model or {}
+        allowed = scope_allowed(ctx["allowed"], model.get("context_allowed"))
+        if not allowed:
+            return ""  # a model's scope that shares nothing with the service's: nothing to read
         body = {
             "text": query[:2000],
-            "allowed": ctx["allowed"],
-            "budget": ctx.get("top_k", 4),
+            "allowed": allowed,
+            "budget": int(model.get("context_top_k") or ctx.get("top_k", 4)),
             "ceiling": ctx["ceiling"],
         }
         try:
@@ -218,7 +246,7 @@ class Shim:
         if persona:
             extra.append({"role": "system", "content": persona})
         if model.get("context", False):
-            passages = self.retrieve(message_text(msgs[-1]["content"]))
+            passages = self.retrieve(message_text(msgs[-1]["content"]), model)
             if passages:
                 extra.append(
                     {
@@ -227,6 +255,9 @@ class Shim:
                         + passages,
                     }
                 )
+            elif model.get("grounded", False):
+                # a grounded persona must never answer from memory as if it had read something
+                extra.append({"role": "system", "content": NO_PASSAGES_NOTE})
         out = dict(body)
         out["model"] = role
         out["messages"] = extra + msgs
