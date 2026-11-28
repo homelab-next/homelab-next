@@ -25,6 +25,8 @@ prowler_version: "5.36.0"
 # and written to a root-only file the unit loads; it is never in a variable, a template or a log.
 prowler_login_ref: secret:prowler/aws-credentials
 prowler_default_region: us-east-1
+# the unit's memory cap: an all-regions scan of the honeypot account peaked past 2G and was OOM-killed at the old fixed 2G (seen live 2026-11-27/28)
+prowler_memory_max: 4G
 # empty: scan EVERY region. Deliberate: an attacker with a credential uses the region nobody watches,
 # and a scanner that looks at one reintroduces exactly that blind spot. The calls are read-only.
 prowler_regions: []

@@ -51,4 +51,4 @@ AmbientCapabilities=
 RestrictAddressFamilies=AF_INET AF_INET6
 ReadWritePaths={{ prowler_state_dir }} {{ prowler_output_dir }} {{ prowler_findings_path | dirname }}
 ReadOnlyPaths={{ prowler_venv }} {{ prowler_config_dir }}
-MemoryMax=2G
+MemoryMax={{ prowler_memory_max }}
