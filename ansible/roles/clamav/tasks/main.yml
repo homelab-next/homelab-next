@@ -29,12 +29,15 @@
     path: /usr/lib/systemd/system/clamav-freshclam-once.timer
   register: clamav_freshclam_once
 
+# Both units: the package also enables clamav-freshclam-once.service straight into multi-user.target, so with only the timer
+# masked it still ran at every boot, beside the daemon, and failed the same way (hnx-projects-01/.136/.137 after the 2026-11-28 boot).
 - name: Mask the one-shot updater (the daemon keeps the signatures current)
   ansible.builtin.systemd_service:
-    name: clamav-freshclam-once.timer
+    name: "{{ item }}"
     enabled: false
     masked: true
     state: stopped
+  loop: [clamav-freshclam-once.timer, clamav-freshclam-once.service]
   when: clamav_freshclam_once.stat.exists
 
 - name: Clear the one-shot updater's failed state
