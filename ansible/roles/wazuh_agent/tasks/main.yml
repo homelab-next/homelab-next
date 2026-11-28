@@ -98,6 +98,10 @@
       [Service]
       Restart=on-failure
       RestartSec=30
+      # A hard reset during a start leaves the vendor start script's lock directory behind, and every later start then
+      # waits on it until the unit times out (2026-11-28: hnx-idp-01, hnx-lake-01), so a retry alone never recovers.
+      # Removed only when no agent daemon runs; the lock is the vendor script's own, never one this role makes.
+      ExecStartPre=-/bin/sh -c 'ps -eo comm= | grep -q "^wazuh-" || rm -rf -- /var/ossec/var/start-script-lock'
       TimeoutStartSec=120
   # the start task below reloads systemd (daemon_reload) before it starts the unit
 
