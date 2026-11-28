@@ -20,6 +20,28 @@
       http(s) URL with a host name, and https unless context_allow_plain_http is set
   when: context_gateway_id != ''
 
+- name: Resolve each documents source's endpoint from the registry
+  ansible.builtin.set_fact:
+    context_doc_urls: >-
+      {{ context_doc_urls | default({}) | combine({item.name: lookup('hnx_registry', item.service, field='url')}) }}
+  loop: "{{ context_sources | selectattr('type', 'defined') | selectattr('type', 'equalto', 'documents') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: A documents endpoint is a host name, https unless plain http was allowed
+  ansible.builtin.assert:
+    that:
+      - item.value is match('^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?\Z')
+      - (item.value | urlsplit('hostname')) is not match(context_ipv4_pattern)
+      - (item.value | urlsplit('hostname')) is not match(context_numeric_host_pattern)
+      - item.value is match('^https://') or context_allow_plain_http | bool
+    fail_msg: >-
+      context: documents source {{ item.key }} resolves to {{ item.value }}: it must be an http(s) base URL
+      with a host name (no path), and https unless context_allow_plain_http is set
+  loop: "{{ context_doc_urls | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
 - name: Start the configuration's lists empty
   ansible.builtin.set_fact:
     context_config_callers: []
@@ -40,9 +62,10 @@
   ansible.builtin.set_fact:
     context_config_sources: >-
       {{ context_config_sources
-         + [(item | dict2items | rejectattr('key', 'equalto', 'credential') | list | items2dict)
+         + [(item | dict2items | rejectattr('key', 'in', ['credential', 'service']) | list | items2dict)
             | combine({'credential_env': 'CONTEXT_SOURCE_' ~ (item.name | upper | replace('-', '_'))}
-                      if item.credential | default('') != '' else {})] }}
+                      if item.credential | default('') != '' else {})
+            | combine({'url': context_doc_urls[item.name]} if item.service | default('') != '' else {})] }}
   loop: "{{ context_sources }}"
   loop_control:
     label: "{{ item.name }}"

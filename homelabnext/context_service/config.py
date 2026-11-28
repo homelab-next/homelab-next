@@ -22,6 +22,7 @@ __all__ = [
     "ADMIN_ENV",
     "FORMATS",
     "SCOPES",
+    "SOURCE_TYPES",
     "Caller",
     "Config",
     "ConfigError",
@@ -38,6 +39,8 @@ ADMIN_ENV = "CONTEXT_ADMIN_TOKEN"
 SCOPES = frozenset({"query", "reindex"})
 #: how a source's files become documents
 FORMATS = ("files", "yaml-records")
+#: where a source's documents come from: a git repository, or a document store's REST API
+SOURCE_TYPES = ("git", "documents")
 
 _NAME = re.compile(r"[a-z][a-z0-9-]{0,39}\Z")
 _KIND = re.compile(r"[a-z][a-z0-9-]{0,31}\Z")
@@ -46,6 +49,8 @@ _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _REF = re.compile(r"(?:[0-9a-f]{40}|[A-Za-z0-9][A-Za-z0-9._/-]{0,199})\Z")
 _FIELD = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,63}\Z")
 _URL = re.compile(r"(https?)://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/%+-]*)?\Z")
+_HOST = re.compile(r"[A-Za-z0-9.-]{1,253}(?::[0-9]{1,5})?\Z")
+_TAG = re.compile(r"[^\x00-\x1f\x7f]{1,128}\Z")
 _ROLE = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
 
 
@@ -79,6 +84,14 @@ class Source:
     credential_env: str = ""  # the variable holding the git credential ("" = none)
     credential_scheme: str = "bearer"  # bearer: the value is a token; basic: user:password
     max_documents: int = 20000
+    # -- type "documents": the document store's REST API (url is its base; ref and paths unused) --
+    type: str = "git"
+    tags: tuple[str, ...] = ()  # the tags whose documents are indexed (the union)
+    host_header: str = ""  # an explicit Host header ("" = the URL's own host)
+    ca_file: str = ""  # the lab CA bundle verifying https ("" = the system store)
+    page_size: int = 100
+    max_doc_bytes: int = 4_000_000  # a document with more text than this is skipped
+    timeout: float = 30.0  # seconds, per request
 
 
 @dataclass(frozen=True)
@@ -198,23 +211,81 @@ def _source_url(url: str, where: str, *, allow_file: bool, allow_http: bool) -> 
 _SOURCE_KEYS = set(Source.__dataclass_fields__) - {"label"} | {"tlp"}
 
 
+_DOC_KEYS = {"type", "tags", "host_header", "ca_file", "page_size", "max_doc_bytes", "timeout"}
+
+
+def _documents_source(
+    raw: Mapping[str, Any], where: str, scheme: str, cred: str, *, allow_http: bool
+) -> Source:
+    """A document store source: base URL (https), tags, a token read from the environment."""
+    _only(raw, {"name", "url", "kind", "tlp", "credential_env", "credential_scheme",
+                "max_documents"} | _DOC_KEYS, where)  # fmt: skip
+    if scheme == "basic":
+        raise ConfigError(f"{where}.credential_scheme: a documents source takes bearer or token")
+    if not cred:
+        raise ConfigError(f"{where}.credential_env is required for a documents source")
+    url = _source_url(
+        _str(_need(raw, "url", where), f"{where}.url"), f"{where}.url",
+        allow_file=False, allow_http=allow_http,
+    )  # fmt: skip
+    tags = _need(raw, "tags", where)
+    if not isinstance(tags, list) or not 1 <= len(tags) <= 16:
+        raise ConfigError(f"{where}.tags must list 1 to 16 tag names")
+    host = raw.get("host_header", "")
+    if host != "":
+        _str(host, f"{where}.host_header", _HOST)
+    ca = raw.get("ca_file", "")
+    if ca != "":
+        p = PurePosixPath(_str(ca, f"{where}.ca_file"))
+        if not p.is_absolute() or ".." in p.parts:
+            raise ConfigError(f"{where}.ca_file must be an absolute canonical path")
+    return Source(
+        name=_str(_need(raw, "name", where), f"{where}.name", _NAME),
+        url=url,
+        ref="",
+        kind=_str(_need(raw, "kind", where), f"{where}.kind", _KIND),
+        label=_label(_need(raw, "tlp", where), f"{where}.tlp"),
+        paths=(),
+        credential_env=cred,
+        credential_scheme=scheme,
+        max_documents=_int(raw.get("max_documents", 20000), f"{where}.max_documents", 1, 200000),
+        type="documents",
+        tags=tuple(_str(t, f"{where}.tags[{j}]", _TAG) for j, t in enumerate(tags)),
+        host_header=host,
+        ca_file=ca,
+        page_size=_int(raw.get("page_size", 100), f"{where}.page_size", 1, 1000),
+        max_doc_bytes=_int(
+            raw.get("max_doc_bytes", 4_000_000), f"{where}.max_doc_bytes", 1, 4_000_000
+        ),
+        timeout=_num(raw.get("timeout", 30.0), f"{where}.timeout", 1.0, 600.0),
+    )
+
+
 def _source(raw: Any, i: int, *, allow_file: bool, allow_http: bool) -> Source:
     where = f"sources[{i}]"
     if not isinstance(raw, Mapping):
         raise ConfigError(f"{where} must be a mapping")
     _only(raw, _SOURCE_KEYS, where)
+    stype = raw.get("type", "git")
+    if stype not in SOURCE_TYPES:
+        raise ConfigError(f"{where}.type must be one of {SOURCE_TYPES}")
     fmt = raw.get("format", "files")
     if fmt not in FORMATS:
         raise ConfigError(f"{where}.format must be one of {FORMATS}")
-    paths = _need(raw, "paths", where)
-    if not isinstance(paths, list) or not paths or len(paths) > 64:
-        raise ConfigError(f"{where}.paths must list 1 to 64 globs")
     scheme = raw.get("credential_scheme", "bearer")
-    if scheme not in ("bearer", "basic"):
-        raise ConfigError(f"{where}.credential_scheme must be bearer or basic")
+    if scheme not in ("bearer", "basic", "token"):
+        raise ConfigError(f"{where}.credential_scheme must be bearer, basic or token")
     cred = raw.get("credential_env", "")
     if cred != "":
         _str(cred, f"{where}.credential_env", _ENV)
+    if stype == "documents":
+        return _documents_source(raw, where, scheme, cred, allow_http=allow_http)
+    if scheme == "token":
+        raise ConfigError(f"{where}.credential_scheme token is for a documents source")
+    _only(raw, _SOURCE_KEYS - _DOC_KEYS, where)
+    paths = _need(raw, "paths", where)
+    if not isinstance(paths, list) or not paths or len(paths) > 64:
+        raise ConfigError(f"{where}.paths must list 1 to 64 globs")
     ref = _str(_need(raw, "ref", where), f"{where}.ref", _REF)
     if ".." in ref or ref.endswith(("/", ".lock")) or "//" in ref:
         raise ConfigError(f"{where}.ref is malformed")

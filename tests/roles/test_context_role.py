@@ -458,3 +458,66 @@ def test_upgrade_refuses_an_unpinned_or_foreign_target(tmp_path):
         {"context_target_image": f"docker.io/x/y:0.2.0@{DIGEST}"},
     ])  # fmt: skip
     assert all(f and "the target must be" in m for f, m in results), results
+
+
+DOC_SOURCE = {"name": "taxlib", "type": "documents", "service": "llm-gateway",  # any https row
+              "tags": ["tax-library"], "kind": "doc", "tlp": "amber",
+              "credential": "secret:context/sources/documents"}  # fmt: skip
+DOC_SECRETS = {**SECRETS, "HNX_SECRET_CONTEXT_SOURCES_DOCUMENTS": "tok" + "e" * 30}
+
+
+def _first_a_documents_source_gets_its_endpoint_from_the_registry_and_its_token_from_the_secret_store(
+    tmp_path,
+):
+    v = context_vars(tmp_path, context_sources=[*SOURCES, DOC_SOURCE],
+                     context_docker_cli=logging_fake(tmp_path, "docker"))  # fmt: skip
+    return {"role": ROLE, "tasks_from": "main", "extra_vars": v, "env": DOC_SECRETS}
+
+
+@needs_ansible
+@first_run(
+    _first_a_documents_source_gets_its_endpoint_from_the_registry_and_its_token_from_the_secret_store
+)
+def test_a_documents_source_gets_its_endpoint_from_the_registry_and_its_token_from_the_secret_store(
+    first,
+):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    cfg = json.loads((tmp_path / "app" / "config.json").read_text())
+    doc = cfg["sources"][2]
+    assert urlsplit(doc["url"]).hostname == "gateway-01.example.internal"
+    assert doc["type"] == "documents" and doc["tags"] == ["tax-library"]
+    assert doc["credential_env"] == "CONTEXT_SOURCE_TAXLIB" and "service" not in doc
+    token = DOC_SECRETS["HNX_SECRET_CONTEXT_SOURCES_DOCUMENTS"]
+    env = (tmp_path / "app" / "secrets" / "context.env").read_text()
+    assert f"CONTEXT_SOURCE_TAXLIB='{token}'" in env
+    assert token not in (tmp_path / "app" / "config.json").read_text()
+
+
+@needs_ansible
+def test_a_malformed_documents_source_is_refused_before_anything_is_written(tmp_path):
+    base = context_vars(tmp_path)
+    cases = [
+        {
+            "context_sources": [SOURCES[0], DOC_SOURCE | {"url": "https://docs.example.internal"}]
+        },  # no host here
+        {"context_sources": [SOURCES[0], {k: v for k, v in DOC_SOURCE.items() if k != "service"}]},
+        {"context_sources": [SOURCES[0], DOC_SOURCE | {"tags": []}]},
+        {"context_sources": [SOURCES[0], DOC_SOURCE | {"credential": "secret:other/x"}]},
+        {
+            "context_sources": [
+                SOURCES[0],
+                {k: v for k, v in DOC_SOURCE.items() if k != "credential"},
+            ]
+        },
+        {"context_sources": [SOURCES[0], DOC_SOURCE | {"credential_scheme": "basic"}]},
+        {"context_sources": [SOURCES[0], DOC_SOURCE | {"ref": "main"}]},
+        {"context_sources": [SOURCES[0], DOC_SOURCE | {"host_header": "bad host"}]},
+        {"context_sources": [SOURCES[0], DOC_SOURCE | {"type": "ftp"}]},
+        {"context_sources": [SOURCES[0], DOC_SOURCE | {"tlp": "blue"}]},
+    ]
+    results = run_cases(tmp_path, ROLE, "main", base, cases, env=DOC_SECRETS, parallel=True)
+    assert all(failed for failed, _ in results), [
+        (c, m) for c, (f, m) in zip(cases, results, strict=True) if not f
+    ]
+    assert not (tmp_path / "app" / "config.json").exists()

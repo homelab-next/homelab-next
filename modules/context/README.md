@@ -6,8 +6,9 @@ semantic adapter (`homelabnext/context_semantic.py`, the `semantic` feature) run
 `homelabnext/context_service`, in one `compose_app` container built from this repository. It answers
 "do we already have an answer to this?" over the lab's own registers, runbooks, ADRs and documents:
 
-* the **index** is built from configured **git sources** (each a repository, a ref and path globs),
-  fetched read-only by the service at every reindex;
+* the **index** is built from configured **sources**: **git sources** (each a repository, a ref and
+  path globs), fetched read-only by the service at every reindex, and **documents sources** (the
+  document store's REST API, by tag: the documents stay in the store);
 * **every item carries a TLP label** (ADR-0033): the strictest of its base (the source's declared
   label, or the item's own `tlp` field read against it) and every TLP marker in its content; a
   marker only ever raises it. **Every read is made at the caller's ceiling** (a caller is a token
@@ -93,7 +94,10 @@ token, 403 for a missing scope, 400 for a malformed query (the message never ech
 body over 64 KiB; a connection idle for 30 s is closed. The automation hook is `POST /v1/reindex` with a caller that has the `reindex` scope
 (the rules that call it live with the automation pack, not here).
 
-Document ids: `<kind>:<source>/<path>` for a file, `<kind>:<source>/<record id>` for a register record.
+Document ids: `<kind>:<source>/<path>` for a file, `<kind>:<source>/<record id>` for a register
+record, `<kind>:<source>/<doc id>-<slug>` for a document of the store (the store's numeric id leads,
+so the id is unique and stable; a retitled document gets a new id and the old one is removed).
+A persona's `context_allowed` prefix is the kind plus a colon (`tax:`, `yardi:`).
 
 ## Sources
 
@@ -117,6 +121,37 @@ file too large to be a document (checked by its size before it is read) is skipp
 a credential set, git follows no redirect (the header never travels to another host). A fetch goes to a sibling directory and is renamed into place only when it
 succeeded; removal refuses anything not strictly inside the sources directory.
 
+### Documents sources (`type: documents`): the document store, indexed in place
+
+The lab's document store (the tax library, the property-management knowledge base) holds documents
+that must not be copied into a git repository: a copy is a second place to protect, to keep current
+and to forget. So a `documents` source reads the store through its REST API at every reindex and
+indexes the text in place. Nothing is exported, mirrored or checked out; the index is derived and
+rebuilt by a reindex like every other.
+
+| Key | Meaning |
+|---|---|
+| `name`, `kind`, `tlp` | as for a git source (`kind` is the namespace prefix, e.g. `tax`, `yardi`) |
+| `type` | `documents` |
+| `service` | the document store's **registry id**: the endpoint is the registry's base URL (a host name, never an address; https unless `context_allow_plain_http`); no host is written in the source |
+| `tags` | 1 to 16 tag names; every document carrying any of them is indexed (a document under two is one document) |
+| `credential`, `credential_scheme` | a secret reference in the module's own `context/` namespace (required) holding the store's API token, read from the secret store at deploy time into the owner-only env file; `token` (default: `Authorization: Token ...`) or `bearer`. Never in the config, a URL, a log or an error message |
+| `host_header` | an explicit `Host` header, for a store that answers only to a name it knows (a bare address gets a 400). With https the certificate is still checked against the URL's host, so prefer the registry name |
+| `ca_file` | an absolute path of the lab CA bundle verifying https (empty: the system store) |
+| `page_size` (100), `max_doc_bytes` (4000000), `timeout` (30 s), `max_documents` (20000) | the bounds: documents per request, a document with more text is skipped and counted, seconds per request, a total over this fails the reindex |
+
+Behaviour: the service lists `GET <endpoint>/api/documents/?tags__name__iexact=<tag>&page=N` until
+the last page and takes each document's `id`, `title`, `created` and `content`; the indexed text is
+the title, the created date and the content. **Incremental**: the index compares content digests, so
+an unchanged document is not embedded again (the report counts `added`, `replaced`, `unchanged`,
+`removed`); a document that was deleted or lost its tag is no longer listed and is removed. **Fails
+closed**: a store that does not answer, a refused token, a redirect (never followed, so the token
+cannot travel to another host), a response that is not the expected shape, or a tag that matches no
+document fails the reindex and leaves the index as it was (a mistyped tag must never empty it).
+There is no copy on disk, so the start-up fallback (index the checkouts already on disk) does not
+apply to a documents source: it is reindexed when the store answers. The label is the source's
+`tlp`, raised by any TLP marker in the text.
+
 ## What the overlay sets
 
 * **Selection** (`lab/modules.yml`): `slots: {context: [{provider: context, instance: context, placement:
@@ -125,14 +160,15 @@ succeeded; removal refuses anything not strictly inside the sources directory.
 * **Registry row** (`lab/services.yml`): this module's row as bound (`host` the guest, `version`
   0.1.0, the service's own; the index library is txtai 9.14.0, pinned in the image).
 * **Group variables**: `context_image` (the lab's build, `localhost/hnx-context:<version>-<commit12>@sha256:...`),
-  `context_sources`, `context_callers` (for example `{name: agents, secret: secret:context/agents-token,
+  `context_sources` (git and documents sources), `context_callers` (for example `{name: agents, secret: secret:context/agents-token,
   ceiling: amber, scopes: [query]}` and `{name: automation, secret: secret:context/automation-token,
   ceiling: clear, scopes: [reindex]}`), `context_health_query` (`{text, expect, ceiling}`: a question one
   known item answers), and, for the judge, `context_gateway_id` (the gateway's registry id).
 * **Secrets**: `secret:context/admin-token`; one token per caller; `secret:context/gateway-key` (a
   gateway key whose role list includes the decision role) when the judge is on; one credential per
-  private source.
-* **Firewall**: the row is `tls: none`, so bearer tokens and labelled content cross the LAN in clear;
+  private git source and one API token per documents source.
+* **Firewall**: a documents source needs the context guest to reach the document store's port.
+  The row is `tls: none`, so bearer tokens and labelled content cross the LAN in clear;
   the guest firewall must admit port 8094 from the readers' guests (the agents, the automation
   host) and the metrics scraper only.
 * **Footprint**: 2 vCPU, 3 GiB (the container's `context_mem_limit` is 3g; the model and torch take about
