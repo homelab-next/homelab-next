@@ -47,6 +47,10 @@ argument_specs:
         type: str
         description: The region the credential's API calls are made through (the scan itself covers prowler_regions, or every region).
         default: us-east-1
+      prowler_memory_max:
+        type: str
+        description: The scan unit's MemoryMax (a systemd size). An all-regions scan exceeds 2G.
+        default: 4G
       prowler_regions:
         type: list
         elements: str
