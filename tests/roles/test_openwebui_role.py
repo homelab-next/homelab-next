@@ -250,9 +250,19 @@ def test_the_concierge_shim_is_idempotent_and_off_by_default(tmp_path):
         ({"openwebui_concierge_always_on_tier": "nope"}, "always-on tier"),
         ({"openwebui_concierge_models": [{"id": "x", "tier": "nope"}]}, "known tiers"),
         ({"openwebui_concierge_context_id": "gate"}, "namespaces the shim may read"),
-        ({"openwebui_concierge_models": [{"id": "p", "tier": "main", "context": True, "context_allowed": ["tax:"]}],
-          "openwebui_concierge_context_allowed": ["lab"]}, "never widens it"),
-        ({"openwebui_concierge_models": [{"id": "p", "tier": "main", "grounded": True}]}, "grounded needs"),
+        (
+            {
+                "openwebui_concierge_models": [
+                    {"id": "p", "tier": "main", "context": True, "context_allowed": ["tax:"]}
+                ],
+                "openwebui_concierge_context_allowed": ["lab"],
+            },
+            "never widens it",
+        ),
+        (
+            {"openwebui_concierge_models": [{"id": "p", "tier": "main", "grounded": True}]},
+            "grounded needs",
+        ),
     ],
 )
 @first_run(lambda tmp, over, needle: {"role": ROLE, "tasks_from": "main", "env": SHIM_ENV,
@@ -472,5 +482,11 @@ def test_persona_models_reach_the_shim_settings_with_their_scope(first):
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr
     cfg = json.loads((tmp / "app" / "concierge" / "config.json").read_text())
     by_id = {m["id"]: m for m in cfg["models"]}
-    assert by_id["concierge-tax"]["context_allowed"] == ["tax:library/"] and by_id["concierge-tax"]["grounded"] is True
-    assert by_id["concierge-yardi"]["persona"] == "Yardi prompt." and by_id["concierge-yardi"]["context_top_k"] == 6
+    assert (
+        by_id["concierge-tax"]["context_allowed"] == ["tax:library/"]
+        and by_id["concierge-tax"]["grounded"] is True
+    )
+    assert (
+        by_id["concierge-yardi"]["persona"] == "Yardi prompt."
+        and by_id["concierge-yardi"]["context_top_k"] == 6
+    )
