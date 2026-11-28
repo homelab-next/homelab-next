@@ -127,7 +127,7 @@ argument_specs:
       openwebui_concierge_models:
         type: list
         elements: dict
-        description: "The models Open WebUI shows: {id, tier}, optional persona and context (bool) overrides."
+        description: "The models Open WebUI shows: {id, tier}, optional persona (text), context (bool, retrieval on), context_allowed (namespaces, narrower than openwebui_concierge_context_allowed), context_top_k and grounded (bool: told when retrieval found nothing, must not answer from memory)."
         default: [{id: concierge-fast, tier: fast}, {id: concierge, tier: main}, {id: concierge-deep, tier: deep}]
       openwebui_concierge_persona:
         type: str

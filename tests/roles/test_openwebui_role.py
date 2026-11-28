@@ -250,6 +250,9 @@ def test_the_concierge_shim_is_idempotent_and_off_by_default(tmp_path):
         ({"openwebui_concierge_always_on_tier": "nope"}, "always-on tier"),
         ({"openwebui_concierge_models": [{"id": "x", "tier": "nope"}]}, "known tiers"),
         ({"openwebui_concierge_context_id": "gate"}, "namespaces the shim may read"),
+        ({"openwebui_concierge_models": [{"id": "p", "tier": "main", "context": True, "context_allowed": ["tax:"]}],
+          "openwebui_concierge_context_allowed": ["lab"]}, "never widens it"),
+        ({"openwebui_concierge_models": [{"id": "p", "tier": "main", "grounded": True}]}, "grounded needs"),
     ],
 )
 @first_run(lambda tmp, over, needle: {"role": ROLE, "tasks_from": "main", "env": SHIM_ENV,
@@ -453,3 +456,21 @@ def test_health_fails_when_an_admin_ui_edit_changed_the_running_connection(tmp_p
     r = _health(tmp_path, CONFIG, _edit(mutate))
     assert r.returncode != 0 and "differs from the rendered one" in r.stdout, r.stdout[-1500:]
     assert "k" * 8 not in r.stdout  # the keys the answer carries are never printed
+
+
+@first_run(lambda tmp: {"role": ROLE, "tasks_from": "main", "env": SHIM_ENV,
+                        "extra_vars": vs(tmp, openwebui_concierge_enabled=True,
+                                         openwebui_concierge_context_allowed=["lab", "tax:", "yardi:kb/"],
+                                         openwebui_concierge_models=[
+                                             {"id": "concierge", "tier": "main"},
+                                             {"id": "concierge-tax", "tier": "main", "persona": "Tax prompt.", "context": True,
+                                              "context_allowed": ["tax:library/"], "grounded": True},
+                                             {"id": "concierge-yardi", "tier": "main", "persona": "Yardi prompt.", "context": True,
+                                              "context_allowed": ["yardi:kb/", "lab"], "context_top_k": 6, "grounded": True}])})  # fmt: skip
+def test_persona_models_reach_the_shim_settings_with_their_scope(first):
+    r, tmp = first
+    assert r.returncode == 0, r.stdout[-1500:] + r.stderr
+    cfg = json.loads((tmp / "app" / "concierge" / "config.json").read_text())
+    by_id = {m["id"]: m for m in cfg["models"]}
+    assert by_id["concierge-tax"]["context_allowed"] == ["tax:library/"] and by_id["concierge-tax"]["grounded"] is True
+    assert by_id["concierge-yardi"]["persona"] == "Yardi prompt." and by_id["concierge-yardi"]["context_top_k"] == 6
