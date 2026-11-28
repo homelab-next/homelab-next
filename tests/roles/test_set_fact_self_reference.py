@@ -6,9 +6,10 @@ that and the whole baseline failed on every guest; nothing caught it before a de
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SET_FACT = ("ansible.builtin.set_fact", "set_fact")
 
 
@@ -31,6 +32,7 @@ def _task_files():
                 yield p
 
 
+@pytest.mark.static
 def test_no_set_fact_value_names_a_key_of_the_same_task():
     bad = []
     for path in _task_files():
